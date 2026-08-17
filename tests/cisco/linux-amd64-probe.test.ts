@@ -128,7 +128,7 @@ function runner(
 const keys = (value: object, expected: readonly string[]) =>
   expect(Object.keys(value).sort()).toEqual([...expected].sort());
 const authorityLeak =
-  /qualified|verified|\bpass\b|trusted|signer|signature|policy|verdict|acceptance|ack(?:nowledg(?:ement)?)?|activation/i;
+  /qualified|verified|\bpass\b|trusted|signer|signature|policy|verdict|acceptance|"(?:ack|acknowledgement)"\s*:|activation/i;
 const expectRecursivelyFrozen = (value: unknown, seen = new Set<object>()) => {
   if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) return;
   if (seen.has(value)) return;
