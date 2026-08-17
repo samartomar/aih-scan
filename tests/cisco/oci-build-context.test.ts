@@ -33,8 +33,12 @@ describe("Cisco OCI candidate build context", () => {
       "https://files.pythonhosted.org/packages/93/22/dacc9a0bc8604187a1ba954a3aef8329e4104eb0af772d2c3c634893bd9b/uv-0.12.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
     );
     expect(dockerfile).toContain(uvWheelSha256);
+    expect(dockerfile).toMatch(new RegExp(`python -m pip install[^\\n]*#sha256=${uvWheelSha256}`));
     expect(dockerfile).toContain(ciscoWheelSha256);
     expect(dockerfile).toContain("uv sync --frozen");
+    expect(dockerfile).toContain(pyprojectSha256);
+    expect(dockerfile).toContain(lockSha256);
+    expect(dockerfile).toMatch(/sha256sum -c/);
     expect(dockerfile).toContain("SOURCE_DATE_EPOCH=1785167267");
     expect(dockerfile).toContain("UV_EXCLUDE_NEWER=2026-08-15T00:00:00Z");
     expect(dockerfile).toMatch(/tar[^\n]*--sort=name[^\n]*--mtime=@1785167267/);
@@ -42,6 +46,9 @@ describe("Cisco OCI candidate build context", () => {
     expect(dockerfile).toContain('ENTRYPOINT ["/runtime/.venv/bin/skill-scanner"]');
     expect(dockerfile).not.toMatch(
       /ADD\s+https?:|curl\b|pip install\s+uv\b|latest|credential|policy/i,
+    );
+    expect(read("uv.lock")).toMatch(
+      /cisco-ai-skill-scanner[\s\S]*2\.0\.13[\s\S]*d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837/i,
     );
   });
 });

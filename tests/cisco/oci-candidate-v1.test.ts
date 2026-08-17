@@ -195,31 +195,59 @@ describe("Cisco OCI candidate V1", () => {
     expect(() => canonicalCiscoOciCandidateBytesV1({ ...result } as never)).toThrow();
   });
 
-  it("rejects every bound identity/material mutation, omission, substitution, and forged brands", async () => {
+  it("binds independently valid identity changes without treating them as schema errors", async () => {
     const value = await brandedInput();
-    const cases = [
-      { ...value, unknown: true },
-      { ...value, layout: { ...value.layout } },
-      { ...value, brokerResult: { ...value.brokerResult } },
+    const baseline = createCiscoOciCandidateV1(value);
+    for (const changed of [
       { ...value, runtime: { ...value.runtime, analyzerIdentity: "native.abcdef012345" } },
       {
         ...value,
         runtime: {
           ...value.runtime,
-          adapter: { ...value.runtime.adapter, sha256: digest("other") },
+          adapter: { ...value.runtime.adapter, identity: "adapter.abcdef012345" },
         },
       },
-      { ...value, runtime: { ...value.runtime, observationConfigurationSha256: digest("other") } },
-      { ...value, runtime: { ...value.runtime, executionProfileSha256: digest("other") } },
       {
         ...value,
         runtime: {
           ...value.runtime,
-          supportedPlatforms: [{ os: "windows", architecture: "amd64" }],
+          observationConfigurationSha256: digest("changed-configuration"),
         },
       },
-      { ...value, annexPayloads: [{ descriptorId: "annex.sbom", bytes: Buffer.from("other") }] },
+      {
+        ...value,
+        runtime: { ...value.runtime, executionProfileSha256: digest("changed-execution") },
+      },
       { ...value, broker: { identity: "broker.abcdef012345" } },
+    ]) {
+      const candidate = createCiscoOciCandidateV1(changed);
+      expect(candidate.observationKey.observationKeySha256).not.toBe(
+        baseline.observationKey.observationKeySha256,
+      );
+      expect(canonicalCiscoOciCandidateBytesV1(candidate)).not.toEqual(
+        canonicalCiscoOciCandidateBytesV1(baseline),
+      );
+    }
+  });
+
+  it("rejects cross-binding mismatches, incomplete payloads, and forged brands", async () => {
+    const value = await brandedInput();
+    const cases = [
+      { ...value, unknown: true },
+      { ...value, layout: { ...value.layout } },
+      { ...value, brokerResult: { ...value.brokerResult } },
+      {
+        ...value,
+        runtime: {
+          ...value.runtime,
+          ociImage: { ...value.runtime.ociImage, sha256: digest("other") },
+        },
+      },
+      {
+        ...value,
+        brokerResult: { ...value.brokerResult, configDigestSha256: `sha256:${digest("other")}` },
+      },
+      { ...value, annexPayloads: [{ descriptorId: "annex.sbom", bytes: Buffer.from("other") }] },
     ];
     for (const candidate of cases)
       expect(() => createCiscoOciCandidateV1(candidate as unknown)).toThrow();

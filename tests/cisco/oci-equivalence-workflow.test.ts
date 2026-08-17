@@ -100,11 +100,9 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(text).toContain("local.invalid/aih-scan/cisco@sha256:");
     expect(text).toMatch(/manifest.*config/i);
     expect(text).toMatch(/process\.exitCode\s*=\s*1|throw new TypeError/);
-    expect(text).toMatch(/execFile/);
-    expect(text).toMatch(/(?:uv|docker|tar)/);
-    expect(text).toMatch(/timeout|maxStdout|maxStderr/i);
     expect(text).not.toMatch(
-      /execSync|spawn\b|shell:\s*true|fetch\b|https?\.request|docker\s+build|registry/i,
+      /child_process|exec\b|spawn\b|shell:\s*true|fetch\b|https?\.request|docker\s+build|registry/i,
     );
+    expect(text).toMatch(/digest-summary|summarySha256/i);
   });
 });
