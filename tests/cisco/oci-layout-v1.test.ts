@@ -118,6 +118,31 @@ function fixture(
   };
 }
 
+function rewriteManifest(
+  value: ReturnType<typeof fixture>,
+  mutate: (manifest: {
+    config: Record<string, unknown>;
+    layers: Array<Record<string, unknown>>;
+  }) => void,
+): void {
+  const path = join(value.root, "blobs", "sha256", value.manifestDescriptor.digest.slice(7));
+  const manifest = JSON.parse(readFileSync(path, "utf8")) as {
+    config: Record<string, unknown>;
+    layers: Array<Record<string, unknown>>;
+  };
+  mutate(manifest);
+  const bytes = Buffer.from(JSON.stringify(manifest));
+  const next = descriptor(bytes, ociManifestMediaType);
+  writeBlob(value.root, bytes);
+  const index = JSON.parse(readFileSync(join(value.root, "index.json"), "utf8")) as {
+    manifests: Array<Record<string, unknown>>;
+  };
+  const selected = index.manifests[0];
+  if (selected === undefined) throw new Error("OCI fixture index manifest is missing");
+  index.manifests[0] = { ...selected, digest: next.digest, size: next.size };
+  writeFileSync(join(value.root, "index.json"), JSON.stringify(index));
+}
+
 function recursivelyFrozen(value: unknown, seen = new Set<object>()): void {
   if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) return;
   if (seen.has(value)) return;
@@ -216,6 +241,65 @@ describe("Cisco OCI layout V1", () => {
     for (const run of cases) expect(run).toThrow();
   });
 
+  it("binds descriptor media type and size from index through manifest config and every layer", () => {
+    const cases: Array<() => void> = [];
+    {
+      const value = fixture();
+      const index = JSON.parse(readFileSync(join(value.root, "index.json"), "utf8")) as {
+        manifests: Array<Record<string, unknown>>;
+      };
+      const selected = index.manifests[0];
+      if (selected === undefined) throw new Error("OCI fixture index manifest is missing");
+      selected.mediaType = ociConfigMediaType;
+      writeFileSync(join(value.root, "index.json"), JSON.stringify(index));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      const index = JSON.parse(readFileSync(join(value.root, "index.json"), "utf8")) as {
+        manifests: Array<Record<string, unknown>>;
+      };
+      const selected = index.manifests[0];
+      if (selected === undefined) throw new Error("OCI fixture index manifest is missing");
+      selected.size = Number(selected.size) + 1;
+      writeFileSync(join(value.root, "index.json"), JSON.stringify(index));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      rewriteManifest(value, (manifest) => {
+        manifest.config.mediaType = ociManifestMediaType;
+      });
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      rewriteManifest(value, (manifest) => {
+        manifest.config.size = Number(manifest.config.size) + 1;
+      });
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      rewriteManifest(value, (manifest) => {
+        const layer = manifest.layers[0];
+        if (layer === undefined) throw new Error("OCI fixture layer is missing");
+        layer.mediaType = ociConfigMediaType;
+      });
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      rewriteManifest(value, (manifest) => {
+        const layer = manifest.layers[0];
+        if (layer === undefined) throw new Error("OCI fixture layer is missing");
+        layer.size = Number(layer.size) + 1;
+      });
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    for (const run of cases) expect(run).toThrow();
+  });
+
   it("rejects non-regular, missing, extra, and unsafe layout entries", () => {
     const cases: Array<() => void> = [];
     {
@@ -305,7 +389,28 @@ describe("Cisco OCI layout V1", () => {
     {
       const value = fixture();
       const blob = join(value.root, "blobs", "sha256", value.layerDescriptor.digest.slice(7));
-      linkSync(blob, join(value.root, "outside-hardlink"));
+      const outside = mkdtempSync(join(tmpdir(), "aih-scan-oci-outside-hardlink-"));
+      roots.push(outside);
+      linkSync(blob, join(outside, "layer"));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    for (const run of cases) expect(run).toThrow();
+  });
+
+  it("rejects hidden outside-root hardlinks for required files and referenced blobs", () => {
+    const cases: Array<() => void> = [];
+    for (const select of [
+      (value: ReturnType<typeof fixture>) => join(value.root, "oci-layout"),
+      (value: ReturnType<typeof fixture>) => join(value.root, "index.json"),
+      (value: ReturnType<typeof fixture>) =>
+        join(value.root, "blobs", "sha256", value.configDescriptor.digest.slice(7)),
+      (value: ReturnType<typeof fixture>) =>
+        join(value.root, "blobs", "sha256", value.manifestDescriptor.digest.slice(7)),
+    ]) {
+      const value = fixture();
+      const outside = mkdtempSync(join(tmpdir(), "aih-scan-oci-required-hardlink-"));
+      roots.push(outside);
+      linkSync(select(value), join(outside, "same-bytes"));
       cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
     }
     for (const run of cases) expect(run).toThrow();
