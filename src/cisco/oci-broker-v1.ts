@@ -166,16 +166,20 @@ function response(value: unknown, label: string): DockerResponse {
   };
 }
 
+function normalizedTerminalLine(value: string, label: string): string {
+  if (Buffer.byteLength(value, "utf8") > MAX_STDIO_BYTES || value.includes("\0")) fail(label);
+  const line = value.endsWith("\r\n")
+    ? value.slice(0, -2)
+    : value.endsWith("\n")
+      ? value.slice(0, -1)
+      : value;
+  if (line.includes("\r") || line.includes("\n")) fail(label);
+  return line;
+}
+
 function normalizedImageId(stdout: string): string {
-  if (Buffer.byteLength(stdout, "utf8") > MAX_STDIO_BYTES || stdout.includes("\0"))
-    fail("local image ID mismatch");
-  const line = stdout.endsWith("\r\n")
-    ? stdout.slice(0, -2)
-    : stdout.endsWith("\n")
-      ? stdout.slice(0, -1)
-      : stdout;
-  if (line.includes("\r") || line.includes("\n") || !/^sha256:[a-f0-9]{64}$/.test(line))
-    fail("local image ID mismatch");
+  const line = normalizedTerminalLine(stdout, "local image ID mismatch");
+  if (!/^sha256:[a-f0-9]{64}$/.test(line)) fail("local image ID mismatch");
   return line;
 }
 
@@ -370,7 +374,8 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
         absent.code === 0 ||
         absent.truncated ||
         absent.stdout !== "" ||
-        absent.stderr !== `Error: No such container: ${containerName}`
+        normalizedTerminalLine(absent.stderr, "container cleanup") !==
+          `Error: No such container: ${containerName}`
       )
         fail("container cleanup");
     } catch (error) {

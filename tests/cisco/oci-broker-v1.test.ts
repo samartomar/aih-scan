@@ -503,6 +503,47 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
+  it("accepts only one Docker cleanup absence-diagnostic line terminator", async () => {
+    for (const terminator of ["", "\n", "\r\n"]) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "container" && argv[2] === "inspect")
+          return {
+            code: 1,
+            stdout: "",
+            stderr: `Error: No such container: ${argv.at(-1) ?? ""}${terminator}`,
+          };
+        return original(argv, options);
+      };
+      await expect(executeCiscoOciBrokerV1(value)).resolves.toMatchObject({
+        cleanup: { kind: "clean" },
+      });
+    }
+
+    for (const response of [
+      { code: 1, stdout: "", stderr: "Error: No such container: name\r" },
+      { code: 1, stdout: "", stderr: "Error: No such container: name\n\n" },
+      { code: 1, stdout: "", stderr: "Error: No such container: name " },
+      { code: 1, stdout: "", stderr: "Error: another container: name\n" },
+      { code: 1, stdout: "unexpected", stderr: "Error: No such container: name" },
+      { code: 0, stdout: "", stderr: "Error: No such container: name" },
+      { code: 1, stdout: "", stderr: "Error: No such container: name", truncated: true },
+    ]) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "container" && argv[2] === "inspect")
+          return {
+            ...response,
+            stderr: response.stderr.replace("name", argv.at(-1) ?? ""),
+          };
+        return original(argv, options);
+      };
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+    }
+  });
+
   it("fails closed before run for forged layout, strict-input, host, image-inspect, and mount injection failures", async () => {
     const layout = layoutFixture();
     const sourceRoot = sourceFixture();
