@@ -30,10 +30,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: "0.12.5"
+      - name: Install exact uv 0.12.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$RUNNER_TEMP/uv-0.12.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+          curl --fail --location --silent --show-error --output "$wheel" "https://files.pythonhosted.org/packages/93/22/dacc9a0bc8604187a1ba954a3aef8329e4104eb0af772d2c3c634893bd9b/uv-0.12.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+          echo "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15  $wheel" | sha256sum -c -
+          python -m pip install --no-deps "$wheel"
+          test "$(python -c "from importlib.metadata import version; print(version('uv'))")" = "0.12.5"
+          python -m uv --version >/dev/null
 
       - name: Install aih-scan test dependencies
         shell: bash
