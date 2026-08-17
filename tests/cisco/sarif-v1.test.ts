@@ -47,6 +47,13 @@ const text = (value: unknown) => JSON.stringify(value);
 const exactKeys = (value: object, keys: readonly string[]) =>
   expect(Object.keys(value).sort()).toEqual([...keys].sort());
 const clone = <Value>(value: Value): Value => structuredClone(value);
+const expectRecursivelyFrozen = (value: unknown, seen = new Set<object>()) => {
+  if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  expect(Object.isFrozen(value)).toBe(true);
+  for (const child of Object.values(value)) expectRecursivelyFrozen(child, seen);
+};
 
 /**
  * A future Linux-only capture can pass its raw scanner output here. This proves
@@ -86,10 +93,7 @@ describe("Cisco SARIF V1 projection", () => {
       "endLine",
       "endColumn",
     ]);
-    expect(Object.isFrozen(parsed)).toBe(true);
-    expect(Object.isFrozen(run)).toBe(true);
-    expect(Object.isFrozen(run.results)).toBe(true);
-    expect(Object.isFrozen(run.results[0])).toBe(true);
+    expectRecursivelyFrozen(parsed);
     expect(() => {
       (run.results as unknown as { push: (value: unknown) => void }).push({});
     }).toThrow();
@@ -107,6 +111,7 @@ describe("Cisco SARIF V1 projection", () => {
     expect(forward.runs[0]?.results).toHaveLength(4);
     expect(canonicalCiscoSarifV1Bytes(forward)).toEqual(canonicalCiscoSarifV1Bytes(reverse));
     expect(() => canonicalCiscoSarifV1Bytes({ ...forward })).toThrow(/validated|branded/i);
+    expect(() => canonicalCiscoSarifV1Bytes(clone(forward))).toThrow(/validated|branded/i);
   });
 
   it("makes a caller-captured Linux SARIF document provable against only the observed closed shape", () => {

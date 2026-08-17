@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,6 +86,7 @@ function runner(
     mutateSource?: boolean;
     rawSarif?: string;
     result?: object;
+    results?: readonly object[];
     response?: object;
     writeOutput?: "always" | "first" | "never";
   } = {},
@@ -106,10 +115,11 @@ function runner(
       const shouldWrite =
         (options.writeOutput ?? "always") === "always" ||
         ((options.writeOutput ?? "always") === "first" && calls.length === 1);
+      const result = options.results?.[calls.length - 1] ?? options.result;
       if (shouldWrite && options.rawSarif !== undefined)
         writeFileSync(output, options.rawSarif, "utf8");
-      else if (shouldWrite && options.result !== undefined)
-        writeFileSync(output, JSON.stringify(options.result), "utf8");
+      else if (shouldWrite && result !== undefined)
+        writeFileSync(output, JSON.stringify(result), "utf8");
       return options.response ?? { code: 0, stdout: "", stderr: "" };
     },
   };
@@ -119,6 +129,13 @@ const keys = (value: object, expected: readonly string[]) =>
   expect(Object.keys(value).sort()).toEqual([...expected].sort());
 const authorityLeak =
   /qualified|verified|\bpass\b|trusted|signer|signature|policy|verdict|acceptance|ack(?:nowledg(?:ement)?)?|activation/i;
+const expectRecursivelyFrozen = (value: unknown, seen = new Set<object>()) => {
+  if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  expect(Object.isFrozen(value)).toBe(true);
+  for (const child of Object.values(value)) expectRecursivelyFrozen(child, seen);
+};
 
 describe("Cisco Linux amd64 observation-only probe", () => {
   it("runs the exact pinned offline command twice and emits distinct non-authoritative observation records", async () => {
@@ -189,10 +206,7 @@ describe("Cisco Linux amd64 observation-only probe", () => {
     expect(result.executions[0]?.facts).toEqual(result.executions[1]?.facts);
     expect(result.executions[0]?.annexBytes).toEqual(result.executions[1]?.annexBytes);
     expect(JSON.stringify(result)).not.toMatch(authorityLeak);
-    expect(Object.isFrozen(result)).toBe(true);
-    expect(Object.isFrozen(result.runtime)).toBe(true);
-    expect(Object.isFrozen(result.executions)).toBe(true);
-    expect(Object.isFrozen(result.executions[0])).toBe(true);
+    expectRecursivelyFrozen(result);
     expect(() => {
       (result.runtime as { version: string }).version = "2.0.12";
     }).toThrow();
@@ -326,6 +340,21 @@ describe("Cisco Linux amd64 observation-only probe", () => {
     expect(fake.outputPaths.every((output) => !existsSync(output))).toBe(true);
   });
 
+  it("fails closed when a valid but semantically different second SARIF proves the runs are not repeatable", async () => {
+    const root = fixtureRoot();
+    const second = structuredClone(sarif);
+    const result = second.runs[0]?.results[1];
+    if (result === undefined) throw new Error("Cisco fixture is incomplete");
+    result.message.text = "Pattern detected: different second execution";
+    const fake = runner({ results: [sarif, second] });
+
+    await expect(probeCiscoLinuxAmd64V1({ ...input(root), runner: fake.run })).rejects.toThrow(
+      /repeat|semantic|different|SARIF/i,
+    );
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.outputPaths.every((output) => !existsSync(output))).toBe(true);
+  });
+
   it("rejects invalid selected closure declarations before the runner is reachable", async () => {
     const root = fixtureRoot();
     const selectedClosures = [
@@ -415,6 +444,44 @@ describe("Cisco Linux amd64 observation-only probe", () => {
         }),
       ).rejects.toThrow(/special|source/i);
       expect(fake.calls).toEqual([]);
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "recursively rejects symlink, hardlink, and FIFO descendants before any runner call",
+    async () => {
+      const cases: Array<(root: string) => string> = [
+        (root) => {
+          const nested = join(root, "nested-symlink");
+          mkdirSync(nested);
+          symlinkSync(join(root, "SKILL.md"), join(nested, "linked-SKILL.md"));
+          return "nested-symlink/linked-SKILL.md";
+        },
+        (root) => {
+          const nested = join(root, "nested-hardlink");
+          mkdirSync(nested);
+          linkSync(join(root, "SKILL.md"), join(nested, "hard-linked-SKILL.md"));
+          return "nested-hardlink/hard-linked-SKILL.md";
+        },
+        (root) => {
+          const nested = join(root, "nested-fifo");
+          mkdirSync(nested);
+          execFileSync("mkfifo", [join(nested, "special-pipe")]);
+          return "nested-fifo/special-pipe";
+        },
+      ];
+
+      for (const createDescendant of cases) {
+        const root = fixtureRoot();
+        const selectedPath = createDescendant(root);
+        const fake = runner({ result: sarif });
+        await expect(
+          probeCiscoLinuxAmd64V1({
+            ...input(root, { selectedClosurePaths: [selectedPath], runner: fake.run }),
+          }),
+        ).rejects.toThrow(/symbolic link|hard link|special|source/i);
+        expect(fake.calls).toEqual([]);
+      }
     },
   );
 });
