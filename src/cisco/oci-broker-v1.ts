@@ -315,7 +315,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
         "--mount",
         `type=bind,src=${input.sourceRoot},dst=/source,readonly`,
         "--mount",
-        `type=bind,src=${outputRoot},dst=/output,rw`,
+        `type=bind,src=${outputRoot},dst=/output`,
         "--entrypoint",
         "/runtime/.venv/bin/skill-scanner",
         input.layout.configDigestSha256,

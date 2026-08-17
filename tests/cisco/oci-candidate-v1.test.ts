@@ -131,10 +131,10 @@ async function brandedInput(
       if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
       if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
       const mount = argv.find(
-        (item) => item.startsWith("type=bind,src=") && item.endsWith(",dst=/output,rw"),
+        (item) => item.startsWith("type=bind,src=") && item.endsWith(",dst=/output"),
       );
       if (mount === undefined) throw new Error("missing broker output mount");
-      const output = mount.slice("type=bind,src=".length, -",dst=/output,rw".length);
+      const output = mount.slice("type=bind,src=".length, -",dst=/output".length);
       writeFileSync(join(output, "result.sarif"), sarif(options.sarifResult));
       return { code: 0, stdout: "", stderr: "" };
     },

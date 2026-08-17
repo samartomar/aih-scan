@@ -304,10 +304,10 @@ async function produce(
       if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
       if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
       const mount = argv.find(
-        (value) => value.startsWith("type=bind,src=") && value.endsWith(",dst=/output,rw"),
+        (value) => value.startsWith("type=bind,src=") && value.endsWith(",dst=/output"),
       );
       if (mount === undefined) throw new Error("OCI output mount missing");
-      const outputRoot = mount.slice("type=bind,src=".length, -",dst=/output,rw".length);
+      const outputRoot = mount.slice("type=bind,src=".length, -",dst=/output".length);
       writeFileSync(
         join(outputRoot, "result.sarif"),
         reportBytes(ociKind, "2026-08-17T12:35:56Z", true),

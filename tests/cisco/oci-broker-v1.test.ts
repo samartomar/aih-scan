@@ -146,7 +146,7 @@ function sarif(path = "SKILL.md"): string {
 }
 
 function mountSource(argv: readonly string[], destination: "/source" | "/output"): string {
-  const suffix = destination === "/source" ? ",dst=/source,readonly" : ",dst=/output,rw";
+  const suffix = destination === "/source" ? ",dst=/source,readonly" : ",dst=/output";
   const mount = argv.find((item) => item.startsWith("type=bind,src=") && item.endsWith(suffix));
   if (mount === undefined) throw new Error(`broker did not provide ${destination} mount`);
   const source = mount.slice("type=bind,src=".length, -suffix.length);
@@ -401,7 +401,7 @@ describe("Cisco OCI broker V1", () => {
       "--mount",
       `type=bind,src=${String(value.sourceRoot)},dst=/source,readonly`,
       "--mount",
-      expect.stringMatching(/^type=bind,src=.+,dst=\/output,rw$/),
+      expect.stringMatching(/^type=bind,src=.+,dst=\/output$/),
       "--entrypoint",
       "/runtime/.venv/bin/skill-scanner",
       value.layout.configDigestSha256,
@@ -733,7 +733,7 @@ describe("Cisco OCI broker V1", () => {
       expectCleanup(fake.calls, name);
       const outputMount = fake.calls
         .flatMap((call) => call.argv)
-        .find((item) => item.startsWith("type=bind,src=") && item.endsWith(",dst=/output,rw"));
+        .find((item) => item.startsWith("type=bind,src=") && item.endsWith(",dst=/output"));
       if (outputMount !== undefined)
         expect(existsSync(mountSource([outputMount], "/output"))).toBe(false);
       expectClientRootsRemoved(fake.clientStates);
