@@ -15,6 +15,12 @@ const sarif = {
           locations: [{ physicalLocation: { artifactLocation: { uri: "skills/demo/SKILL.md" } } }],
         },
         {
+          ruleId: "prompt-injection",
+          level: "warning",
+          message: { text: "untrusted instruction" },
+          locations: [{ physicalLocation: { artifactLocation: { uri: "skills/demo/SKILL.md" } } }],
+        },
+        {
           ruleId: "unknown-rule",
           level: "error",
           message: { text: "new rule" },
@@ -36,11 +42,22 @@ describe("Cisco facts-only V1", () => {
     expect(facts.facts.map((fact: { detectorClass: string }) => fact.detectorClass)).toEqual([
       "cisco",
       "cisco",
+      "cisco",
     ]);
-    expect(facts.facts.map((fact: { canonicalOrdinal: number }) => fact.canonicalOrdinal)).toEqual([
-      0, 0,
+    const prompts = facts.facts.filter(
+      (fact: { nativeRuleId: string }) => fact.nativeRuleId === "prompt-injection",
+    );
+    expect(prompts.map((fact: { canonicalOrdinal: number }) => fact.canonicalOrdinal)).toEqual([
+      0, 1,
     ]);
+    expect(prompts.map((fact: { multiplicity: number }) => fact.multiplicity)).toEqual([1, 1]);
+    expect(
+      facts.facts.some((fact: { nativeRuleId: string }) => fact.nativeRuleId === "unknown-rule"),
+    ).toBe(true);
     expect(facts.annexBytes.length).toBeGreaterThan(0);
+    expect(JSON.stringify(facts)).not.toMatch(
+      /trust\.|policy|suppression|disposition|verdict|acceptance|acknowledg|signature/i,
+    );
   });
 
   it("rejects malformed SARIF, missing file identities, unsafe paths, duplicate ambiguity, and policy leakage", () => {
@@ -57,6 +74,20 @@ describe("Cisco facts-only V1", () => {
           {
             ...firstRun,
             results: [{ ...firstResult, ruleId: undefined }],
+          },
+        ],
+      },
+      {
+        ...sarif,
+        runs: [
+          {
+            ...firstRun,
+            results: [
+              {
+                ...firstResult,
+                locations: [{ physicalLocation: { artifactLocation: { uri: "../escape" } } }],
+              },
+            ],
           },
         ],
       },

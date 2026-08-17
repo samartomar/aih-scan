@@ -42,6 +42,29 @@ describe("Cisco facts-only parity", () => {
     const left = createCiscoFactsOnlyV1(input([result("first")]));
     const right = createCiscoFactsOnlyV1(input([result("second")]));
     expect(left.facts[0]?.rawOccurrenceFingerprint).toBe(right.facts[0]?.rawOccurrenceFingerprint);
+    expect(left.facts[0]?.rawOccurrenceFingerprint).toBe(
+      "raw-occurrence-v1:854db687293e3cf1937d1363c6427fc511e28651d3b2964a2c6af1162ac07745",
+    );
     expect(left.annexBytes.equals(right.annexBytes)).toBe(false);
+    const changedRule = createCiscoFactsOnlyV1(
+      input([{ ...result("first"), ruleId: "other-rule" }]),
+    );
+    const changedFile = createCiscoFactsOnlyV1({
+      ...input([result("first")]),
+      fileSha256ByPath: { "skills/demo/SKILL.md": "b".repeat(64) },
+    });
+    expect(changedRule.facts[0]?.rawOccurrenceFingerprint).not.toBe(
+      left.facts[0]?.rawOccurrenceFingerprint,
+    );
+    expect(changedFile.facts[0]?.rawOccurrenceFingerprint).not.toBe(
+      left.facts[0]?.rawOccurrenceFingerprint,
+    );
+  });
+
+  it("allows an exact zero-result coverage claim without inventing a trust conclusion", () => {
+    const zero = createCiscoFactsOnlyV1(input([]));
+    expect(zero.facts).toEqual([]);
+    expect(zero.coverage).toHaveLength(1);
+    expect(JSON.stringify(zero)).not.toMatch(/trust|policy|verdict|acceptance|acknowledg/i);
   });
 });
