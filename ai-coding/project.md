@@ -1,10 +1,17 @@
 # Repository contract
 
 `aih-scan` is a private, publication-deferred TypeScript/Node.js repository.
-It contains dormant internal strict JSON, source observation, evidence, manifest,
-and unverified attestation contracts, plus a caller-fed Cisco SARIF facts adapter.
-There is no public export, scanner CLI, container/process/registry execution,
-network integration, signing authority, remote, or publication setup.
+It implements dormant internal V1 contracts for strict JSON, source sealing and
+observations, evidence annexes, scanner manifests, and cryptographically
+unverified attestations. Its Cisco adapter accepts caller-fed SARIF and source
+file identities only; it emits raw facts and bounded annex evidence without
+running a scanner. The neutral Cisco equivalence test independently compares
+the shared raw-occurrence semantics with AIH using precomputed SARIF.
+
+There is no public export, CLI, scanner, container/process/registry or network
+execution, broker, snapshot transport, signing, qualification, runtime cutover,
+remote, or publication setup. Structural `linux/amd64` facts are not a
+qualification claim.
 
 ## Commands
 
