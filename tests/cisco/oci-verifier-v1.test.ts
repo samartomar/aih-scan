@@ -983,10 +983,6 @@ describe("Cisco OCI candidate verifier V1", () => {
     >;
     const cases = [
       {
-        descriptor: { ...descriptor, platform: { architecture: "amd64", os: "linux" } },
-        reason: "metadata descriptor keys known 101111",
-      },
-      {
         descriptor: { ...descriptor, artifactType: "application/example" },
         reason: "metadata descriptor keys known 111101",
       },
@@ -1008,6 +1004,41 @@ describe("Cisco OCI candidate verifier V1", () => {
         expect(message).toContain(testCase.reason);
         expect(message).not.toContain("hostile");
       }
+    }
+  });
+
+  it("allows only an exact linux amd64 Buildx metadata descriptor platform", () => {
+    const fixture = layoutFixture();
+    const descriptor = fixture.metadata["containerimage.descriptor"] as Readonly<
+      Record<string, unknown>
+    >;
+    expect(
+      verifyCiscoOciCandidateV1({
+        ...input(fixture),
+        metadata: {
+          ...fixture.metadata,
+          "containerimage.descriptor": {
+            ...descriptor,
+            platform: { architecture: "amd64", os: "linux" },
+          },
+        },
+      }),
+    ).toMatchObject({ protocol: "CiscoOciVerifierV1" });
+
+    for (const changedDescriptor of [
+      { ...descriptor, platform: { architecture: "arm64", os: "linux" } },
+      { ...descriptor, platform: { architecture: "amd64", os: "windows" } },
+      { ...descriptor, platform: { architecture: "amd64", os: "linux", variant: "v8" } },
+      { ...descriptor, artifactType: "application/example" },
+      { ...descriptor, data: "AA==" },
+      { ...descriptor, urls: [] },
+    ]) {
+      expect(() =>
+        verifyCiscoOciCandidateV1({
+          ...input(fixture),
+          metadata: { ...fixture.metadata, "containerimage.descriptor": changedDescriptor },
+        }),
+      ).toThrow();
     }
   });
 

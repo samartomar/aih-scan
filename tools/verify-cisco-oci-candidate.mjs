@@ -669,14 +669,19 @@ function metadata(value, layout) {
     jsonData(data["buildx.build.warnings"], "metadata warnings");
   const descriptorValue = data["containerimage.descriptor"];
   const descriptorKeySet = metadataDescriptorKeySet(descriptorValue);
-  if (descriptorKeySet !== "known 101101")
+  if (descriptorKeySet !== "known 101101" && descriptorKeySet !== "known 101111")
     fail(`metadata descriptor keys ${descriptorKeySet}`);
-  const descriptorData = plain(
+  const descriptorData = allowed(
     descriptorValue,
     ["mediaType", "digest", "size", "annotations"],
+    new Set(["annotations", "digest", "mediaType", "platform", "size"]),
     "metadata descriptor",
   );
   const descriptor = descriptorData;
+  const platform =
+    descriptor.platform === undefined
+      ? undefined
+      : manifestPlatform(descriptor.platform, "metadata descriptor platform");
   const annotations = allowed(
     descriptor.annotations,
     ["config.digest"],
@@ -687,6 +692,9 @@ function metadata(value, layout) {
     descriptor.mediaType !== metadataDescriptor.mediaType ||
     descriptor.digest !== metadataDescriptor.digest ||
     descriptor.size !== metadataDescriptor.size ||
+    (platform !== undefined &&
+      (platform.architecture !== layout.manifestPlatform.architecture ||
+        platform.os !== layout.manifestPlatform.os)) ||
     annotations["config.digest"] !== layout.configDigestSha256 ||
     (annotations["org.opencontainers.image.created"] !== undefined &&
       typeof annotations["org.opencontainers.image.created"] !== "string")
