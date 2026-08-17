@@ -71,6 +71,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
 
   it("uses isolated temporary direct/OCI roots and uploads only short-lived sanitized digest summaries", () => {
     const text = workflow();
+    const upload = step(text, "Upload OCI equivalence digest summary");
     expect(text).toMatch(/RUNNER_TEMP[^\n]*(?:direct|oci)/i);
     expect(text).toMatch(/if:\s*\$\{\{ always\(\) \}\}/);
     expect(text).toMatch(/retention-days:\s*[1-7]/);
@@ -80,6 +81,10 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
       /sarif|archive|(?:stdout|stderr)-log|docker\.sock|env:.*(?:TOKEN|PASSWORD|SECRET)/i,
     );
     expect(text).not.toMatch(/qualif|trusted|verified|pass|verdict|acceptance|acknowledgement/i);
+    expect(upload).toMatch(
+      /path:\s*\$\{\{ runner\.temp \}\}\/oci-equivalence\/oci-equivalence-digest-summary\.json/,
+    );
+    expect(upload).not.toMatch(/[|*]/);
   });
 
   it("binds credential-free checkouts and contains execution in named steps", () => {
@@ -93,6 +98,8 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(aih).toContain("path: .candidate-sources/ai-harness");
     expect(execute).toMatch(/RUNNER_TEMP[^\n]*(?:direct|oci)/i);
     expect(execute).toContain("dual-run-equivalence");
+    expect(text.match(/^ {6}- name: Check out /gm) ?? []).toHaveLength(2);
+    expect(text.match(/persist-credentials: false/g) ?? []).toHaveLength(2);
   });
 
   it("keeps the verifier statically bounded and fail-closed", () => {

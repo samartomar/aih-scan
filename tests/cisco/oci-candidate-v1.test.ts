@@ -230,6 +230,13 @@ describe("Cisco OCI candidate V1", () => {
         ...value,
         runtime: {
           ...value.runtime,
+          adapter: { ...value.runtime.adapter, sha256: digest("changed-adapter") },
+        },
+      },
+      {
+        ...value,
+        runtime: {
+          ...value.runtime,
           observationConfigurationSha256: digest("changed-configuration"),
         },
       },
@@ -271,7 +278,31 @@ describe("Cisco OCI candidate V1", () => {
         ...value,
         runtime: {
           ...value.runtime,
+          detectorId: "detector.other",
+        },
+      },
+      {
+        ...value,
+        runtime: {
+          ...value.runtime,
           ociImage: { ...value.runtime.ociImage, sha256: digest("other") },
+        },
+      },
+      {
+        ...value,
+        runtime: {
+          ...value.runtime,
+          supportedPlatforms: [{ os: "windows", architecture: "amd64" }],
+        },
+      },
+      {
+        ...value,
+        runtime: {
+          ...value.runtime,
+          ociImage: {
+            ...value.runtime.ociImage,
+            reference: value.runtime.ociImage.reference.replace("local.invalid", "other.invalid"),
+          },
         },
       },
       {
