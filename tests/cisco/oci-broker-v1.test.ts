@@ -212,17 +212,13 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
       }
       if (argv[1] === "container" && argv[2] === "rm")
         return { code: mode === "cleanup-failure" ? 1 : 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "inspect") {
+      if (argv[1] === "container" && argv[2] === "ls") {
         if (mode === "cleanup-client-error") throw new Error("injected cleanup client failure");
         if (mode === "cleanup-absence-hostile")
-          return { code: 1, stdout: "unexpected", stderr: "" };
+          return { code: 0, stdout: "unexpected", stderr: "" };
         if (mode === "cleanup-absence-truncated")
-          return { code: 1, stdout: "", stderr: "", truncated: true };
-        return {
-          code: 1,
-          stdout: "",
-          stderr: `Error: No such container: ${argv.at(-1) ?? ""}`,
-        };
+          return { code: 0, stdout: "", stderr: "", truncated: true };
+        return { code: 0, stdout: "", stderr: "" };
       }
       if (mode === "spawn-error") throw new Error("injected runner spawn failure");
       const output = mountSource(argv, "/output");
@@ -280,7 +276,7 @@ function recursivelyFrozen(value: unknown, seen = new Set<object>()): void {
 function expectCleanup(calls: readonly { readonly argv: readonly string[] }[], name: string): void {
   expect(calls.slice(-2).map((call) => call.argv)).toEqual([
     ["docker", "container", "rm", "--force", name],
-    ["docker", "container", "inspect", "--format", "{{.Id}}", name],
+    ["docker", "container", "ls", "--all", "--quiet", "--filter", `name=^/${name}$`],
   ]);
 }
 
@@ -503,41 +499,18 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
-  it("accepts only one Docker cleanup absence-diagnostic line terminator", async () => {
-    for (const terminator of ["", "\n", "\r\n"]) {
-      const { value, fake } = input();
-      const original = fake.run;
-      value.runner = async (argv, options) => {
-        if (argv[1] === "container" && argv[2] === "inspect")
-          return {
-            code: 1,
-            stdout: "",
-            stderr: `Error: No such container: ${argv.at(-1) ?? ""}${terminator}`,
-          };
-        return original(argv, options);
-      };
-      await expect(executeCiscoOciBrokerV1(value)).resolves.toMatchObject({
-        cleanup: { kind: "clean" },
-      });
-    }
-
+  it("requires a successful exact-name Docker absence listing with no output", async () => {
     for (const response of [
-      { code: 1, stdout: "", stderr: "Error: No such container: name\r" },
-      { code: 1, stdout: "", stderr: "Error: No such container: name\n\n" },
-      { code: 1, stdout: "", stderr: "Error: No such container: name " },
-      { code: 1, stdout: "", stderr: "Error: another container: name\n" },
-      { code: 1, stdout: "unexpected", stderr: "Error: No such container: name" },
-      { code: 0, stdout: "", stderr: "Error: No such container: name" },
-      { code: 1, stdout: "", stderr: "Error: No such container: name", truncated: true },
+      { code: 1, stdout: "", stderr: "" },
+      { code: 0, stdout: "unexpected", stderr: "" },
+      { code: 0, stdout: "\n", stderr: "" },
+      { code: 0, stdout: "", stderr: "unexpected" },
+      { code: 0, stdout: "", stderr: "", truncated: true },
     ]) {
       const { value, fake } = input();
       const original = fake.run;
       value.runner = async (argv, options) => {
-        if (argv[1] === "container" && argv[2] === "inspect")
-          return {
-            ...response,
-            stderr: response.stderr.replace("name", argv.at(-1) ?? ""),
-          };
+        if (argv[1] === "container" && argv[2] === "ls") return response;
         return original(argv, options);
       };
       await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
@@ -683,8 +656,7 @@ describe("Cisco OCI broker V1", () => {
     malformed.run = async (argv) => {
       if (argv[1] === "image") return { code: 0, stdout: layout.configDigestSha256, stderr: "" };
       if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "inspect")
-        return { code: 1, stdout: "", stderr: "" };
+      if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
       writeFileSync(
         join(mountSource(argv, "/output"), "result.sarif"),
         sarif().replace("endTimeUtc", "missingTime"),
@@ -704,8 +676,7 @@ describe("Cisco OCI broker V1", () => {
     outside.run = async (argv) => {
       if (argv[1] === "image") return { code: 0, stdout: layout.configDigestSha256, stderr: "" };
       if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "inspect")
-        return { code: 1, stdout: "", stderr: "" };
+      if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
       writeFileSync(join(mountSource(argv, "/output"), "result.sarif"), sarif("unselected.md"));
       return { code: 0, stdout: "", stderr: "" };
     };

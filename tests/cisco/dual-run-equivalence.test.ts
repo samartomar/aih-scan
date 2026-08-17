@@ -302,12 +302,7 @@ async function produce(
     runner: async (argv: readonly string[]) => {
       if (argv[1] === "image") return { code: 0, stdout: ociLayout.configDigestSha256, stderr: "" };
       if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "inspect")
-        return {
-          code: 1,
-          stdout: "",
-          stderr: `Error: No such container: ${argv.at(-1) ?? ""}`,
-        };
+      if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
       const mount = argv.find(
         (value) => value.startsWith("type=bind,src=") && value.endsWith(",dst=/output,rw"),
       );

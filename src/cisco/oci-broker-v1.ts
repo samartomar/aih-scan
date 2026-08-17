@@ -365,17 +365,16 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
         "container rm",
       );
       const absent = await invoke(
-        ["docker", "container", "inspect", "--format", "{{.Id}}", containerName],
-        "container inspect",
+        ["docker", "container", "ls", "--all", "--quiet", "--filter", `name=^/${containerName}$`],
+        "container absence",
       );
       if (
         removed.code !== 0 ||
         removed.truncated ||
-        absent.code === 0 ||
+        absent.code !== 0 ||
         absent.truncated ||
         absent.stdout !== "" ||
-        normalizedTerminalLine(absent.stderr, "container cleanup") !==
-          `Error: No such container: ${containerName}`
+        absent.stderr !== ""
       )
         fail("container cleanup");
     } catch (error) {
