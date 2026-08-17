@@ -15,6 +15,11 @@ const step = (text: string, name: string): string => {
   if (match === null) throw new Error(`workflow step missing: ${name}`);
   return match[0];
 };
+const runBody = (text: string, name: string): string => {
+  const body = /^ {8}run: \|\n((?:^ {10}.*(?:\n|$))*)/m.exec(step(text, name))?.[1];
+  if (body === undefined) throw new Error(`workflow run body missing: ${name}`);
+  return body.replace(/^ {10}/gm, "").trimEnd();
+};
 
 const buildxSha256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b";
 const buildkit =
@@ -66,6 +71,61 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(execute).toMatch(/configDigestSha256|config-id/i);
     expect(text).not.toMatch(
       /--push|docker login|registry|cache-(?:from|to)|:latest|sign(?:ing)?|provenance=true|sbom=true/i,
+    );
+  });
+
+  it("keeps the named OCI build as one exact contiguous local export command", () => {
+    const build = runBody(workflow(), "Build OCI layout and local image");
+    const expected = [
+      "docker buildx build \\",
+      "  --platform linux/amd64 \\",
+      "  --pull \\",
+      "  --provenance=false \\",
+      "  --sbom=false \\",
+      "  --tag local.invalid/aih-scan/cisco \\",
+      '  --metadata-file "$RUNNER_TEMP/oci-equivalence/build-metadata.json" \\',
+      '  --output "type=oci,oci-mediatypes=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci.tar" \\',
+      '  --output "type=docker,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \\',
+      "  tools/cisco-oci-candidate",
+    ].join("\n");
+    expect(build).toContain(expected);
+    expect(build.match(/^docker buildx build \\$/gm)).toHaveLength(1);
+    expect(build.split("\n").filter((line) => line.trimStart().startsWith("--output "))).toEqual([
+      '  --output "type=oci,oci-mediatypes=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci.tar" \\',
+      '  --output "type=docker,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \\',
+    ]);
+    expect(build).not.toMatch(/#|--(?:export|load|push)|docker\s+build(?!x build)/);
+  });
+
+  it("uses exact local identity handoff, a pure verifier, an env-gated live test, and always cleanup", () => {
+    const text = workflow();
+    const verify = runBody(text, "Verify OCI layout and local image identity");
+    const execute = runBody(text, "Compare isolated direct and OCI observations");
+    const cleanup = runBody(text, "Clean up OCI equivalence resources");
+    expect(verify).toContain(
+      'docker load --input "$RUNNER_TEMP/oci-equivalence/candidate-image.tar"',
+    );
+    expect(verify).toContain(
+      "docker image inspect --format '{{.Id}}' local.invalid/aih-scan/cisco > \"$RUNNER_TEMP/oci-equivalence/config-id.txt\"",
+    );
+    expect(verify).toContain(
+      [
+        "node tools/verify-cisco-oci-candidate.mjs \\",
+        '  --metadata "$RUNNER_TEMP/oci-equivalence/build-metadata.json" \\',
+        '  --layout "$RUNNER_TEMP/oci-equivalence/candidate-oci.tar" \\',
+        '  --image-id "$RUNNER_TEMP/oci-equivalence/config-id.txt" \\',
+        '  --summary "$RUNNER_TEMP/oci-equivalence/oci-equivalence-digest-summary.json"',
+      ].join("\n"),
+    );
+    expect(verify).not.toMatch(/docker\s+(?:build|pull|push|run)|curl\b|fetch\b|https?:/i);
+    expect(execute).toContain("AIH_SCAN_CISCO_OCI_EQUIVALENCE=1");
+    expect(execute).toContain("AIH_SCAN_CISCO_OCI_CONFIG_DIGEST=");
+    expect(execute).toContain("npm test -- --run tests/cisco/oci-equivalence-live.test.ts");
+    expect(step(text, "Clean up OCI equivalence resources")).toContain("if: $" + "{{ always() }}");
+    expect(cleanup).toContain("docker buildx rm --force aih-scan-cisco-oci-equivalence");
+    expect(cleanup).toContain("docker image rm --force local.invalid/aih-scan/cisco");
+    expect(cleanup).toContain(
+      'rm -f "$RUNNER_TEMP/oci-equivalence/candidate-oci.tar" "$RUNNER_TEMP/oci-equivalence/candidate-image.tar"',
     );
   });
 
