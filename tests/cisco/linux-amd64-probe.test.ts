@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,9 @@ import { probeCiscoLinuxAmd64V1 } from "../../src/cisco/linux-amd64-probe-v1.js"
 const lockSha256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
 const wheelSha256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
 const roots: string[] = [];
+const maxStdioBytes = 64 * 1024;
+const maxSarifBytes = 16 * 1024 * 1024;
+const probeTimeoutMs = 120_000;
 
 const sarif = {
   version: "2.1.0",
@@ -69,22 +73,42 @@ function input(root: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
-function runner(options: { mutateSource?: boolean; result?: object; response?: object } = {}) {
-  const calls: Array<{ argv: readonly string[]; options: Record<string, unknown> | undefined }> =
-    [];
+function runner(
+  options: {
+    mutateSource?: boolean;
+    rawSarif?: string;
+    result?: object;
+    response?: object;
+    writeOutput?: "always" | "first" | "never";
+  } = {},
+) {
+  const calls: Array<{
+    argv: readonly string[];
+    options: Record<string, unknown> | undefined;
+    output: string;
+    outputExistedBeforeRun: boolean;
+  }> = [];
+  const outputPaths: string[] = [];
   return {
     calls,
+    outputPaths,
     run: async (argv: readonly string[], runOptions?: Record<string, unknown>) => {
-      calls.push({ argv, options: runOptions });
       const outputIndex = argv.indexOf("--output-sarif");
       const output = outputIndex < 0 ? undefined : argv[outputIndex + 1];
       if (typeof output !== "string") throw new Error("probe did not request a SARIF output file");
+      calls.push({ argv, options: runOptions, output, outputExistedBeforeRun: existsSync(output) });
+      outputPaths.push(output);
       if (options.mutateSource && calls.length === 1) {
         const source = argv[argv.indexOf("scan") + 1];
         if (typeof source !== "string") throw new Error("probe did not provide a source root");
         writeFileSync(join(source, "SKILL.md"), "changed during probe\n", "utf8");
       }
-      if (options.result !== undefined)
+      const shouldWrite =
+        (options.writeOutput ?? "always") === "always" ||
+        ((options.writeOutput ?? "always") === "first" && calls.length === 1);
+      if (shouldWrite && options.rawSarif !== undefined)
+        writeFileSync(output, options.rawSarif, "utf8");
+      else if (shouldWrite && options.result !== undefined)
         writeFileSync(output, JSON.stringify(options.result), "utf8");
       return options.response ?? { code: 0, stdout: "", stderr: "" };
     },
@@ -101,7 +125,15 @@ describe("Cisco Linux amd64 observation-only probe", () => {
     const root = fixtureRoot();
     const fake = runner({ result: sarif });
 
-    const result = await probeCiscoLinuxAmd64V1({ ...input(root), runner: fake.run });
+    const result = await probeCiscoLinuxAmd64V1({
+      ...input(root, {
+        environment: {
+          AIH_SCAN_CISCO_LINUX_AMD64_PROBE: "1",
+          CREDENTIAL_SHOULD_NOT_REACH_RUNNER: "not-a-secret",
+        },
+        runner: fake.run,
+      }),
+    });
 
     keys(result, [
       "protocol",
@@ -157,11 +189,19 @@ describe("Cisco Linux amd64 observation-only probe", () => {
     expect(result.executions[0]?.facts).toEqual(result.executions[1]?.facts);
     expect(result.executions[0]?.annexBytes).toEqual(result.executions[1]?.annexBytes);
     expect(JSON.stringify(result)).not.toMatch(authorityLeak);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.runtime)).toBe(true);
+    expect(Object.isFrozen(result.executions)).toBe(true);
+    expect(Object.isFrozen(result.executions[0])).toBe(true);
+    expect(() => {
+      (result.runtime as { version: string }).version = "2.0.12";
+    }).toThrow();
 
     expect(fake.calls).toHaveLength(2);
     const outputPaths = new Set<string>();
     for (const call of fake.calls) {
-      expect(call.argv.slice(0, 12)).toEqual([
+      expect(call.outputExistedBeforeRun).toBe(false);
+      expect(call.argv).toEqual([
         "uv",
         "run",
         "--project",
@@ -174,20 +214,25 @@ describe("Cisco Linux amd64 observation-only probe", () => {
         "--no-python-downloads",
         "--no-env-file",
         "skill-scanner",
+        "scan",
+        root,
+        "--format",
+        "sarif",
+        "--output-sarif",
+        call.output,
       ]);
-      expect(call.argv).toContain("scan");
-      expect(call.argv).toContain(root);
-      expect(call.argv).toContain("--format");
-      expect(call.argv).toContain("sarif");
-      const output = call.argv[call.argv.indexOf("--output-sarif") + 1];
-      if (typeof output !== "string") throw new Error("probe output path is missing");
-      expect(output.startsWith(root)).toBe(false);
-      outputPaths.add(output);
-      expect(call.options?.timeoutMs).toBe(120_000);
-      expect(call.options?.cwd).toBe("/opt/aih/tools/cisco-skill-scanner");
-      expect((call.options?.env as Record<string, string> | undefined)?.UV_OFFLINE).toBe("1");
+      expect(call.output.startsWith(root)).toBe(false);
+      outputPaths.add(call.output);
+      expect(call.options).toEqual({
+        cwd: "/opt/aih/tools/cisco-skill-scanner",
+        env: { UV_OFFLINE: "1" },
+        timeoutMs: probeTimeoutMs,
+        maxStdoutBytes: maxStdioBytes,
+        maxStderrBytes: maxStdioBytes,
+      });
     }
     expect(outputPaths.size).toBe(2);
+    expect(fake.outputPaths.every((output) => !existsSync(output))).toBe(true);
   });
 
   it("does not execute unless explicitly opted in and keeps a Windows host deterministic", async () => {
@@ -249,6 +294,63 @@ describe("Cisco Linux amd64 observation-only probe", () => {
       ).rejects.toThrow();
   });
 
+  it("bounds runner output and removes isolated output files after success or failure", async () => {
+    const root = fixtureRoot();
+    for (const response of [
+      { code: 0, stdout: "x".repeat(maxStdioBytes + 1), stderr: "" },
+      { code: 0, stdout: "", stderr: "x".repeat(maxStdioBytes + 1) },
+      { code: 0, stdout: "", stderr: "", truncated: true },
+      { code: 1, stdout: "", stderr: "scanner failed" },
+    ]) {
+      const fake = runner({ result: sarif, response });
+      await expect(probeCiscoLinuxAmd64V1({ ...input(root), runner: fake.run })).rejects.toThrow();
+      expect(fake.outputPaths.every((output) => !existsSync(output))).toBe(true);
+    }
+
+    const oversized = runner({ rawSarif: " ".repeat(maxSarifBytes + 1) });
+    await expect(
+      probeCiscoLinuxAmd64V1({ ...input(root), runner: oversized.run }),
+    ).rejects.toThrow();
+    expect(oversized.outputPaths.every((output) => !existsSync(output))).toBe(true);
+  });
+
+  it("requires each independently created execution output and never reuses a stale first-run SARIF", async () => {
+    const root = fixtureRoot();
+    const fake = runner({ result: sarif, writeOutput: "first" });
+
+    await expect(probeCiscoLinuxAmd64V1({ ...input(root), runner: fake.run })).rejects.toThrow(
+      /output|SARIF|missing/i,
+    );
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[0]?.output).not.toBe(fake.calls[1]?.output);
+    expect(fake.outputPaths.every((output) => !existsSync(output))).toBe(true);
+  });
+
+  it("rejects invalid selected closure declarations before the runner is reachable", async () => {
+    const root = fixtureRoot();
+    const selectedClosures = [
+      ["SKILL.md", "SKILL.md"],
+      ["/absolute/SKILL.md"],
+      ["C:/drive-relative/SKILL.md"],
+      ["skills\\backslash.md"],
+      ["skills/control\u0000.md"],
+      ["skills/re\u0301sume\u0301.md"],
+      ["./SKILL.md"],
+      ["SKILL.md/"],
+      ["skills//SKILL.md"],
+    ];
+
+    for (const selectedClosurePaths of selectedClosures) {
+      const fake = runner({ result: sarif });
+      await expect(
+        probeCiscoLinuxAmd64V1({
+          ...input(root, { selectedClosurePaths, runner: fake.run }),
+        }),
+      ).rejects.toThrow();
+      expect(fake.calls).toEqual([]);
+    }
+  });
+
   it("rejects source drift between or during executions", async () => {
     const root = fixtureRoot();
     await expect(
@@ -260,17 +362,58 @@ describe("Cisco Linux amd64 observation-only probe", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "rejects symlinked source input before any runner call",
+    "rejects symlinked source roots and selected children before any runner call",
     async () => {
       const root = fixtureRoot();
+      const linkParent = mkdtempSync(join(tmpdir(), "aih-scan-cisco-probe-link-"));
+      roots.push(linkParent);
+      const linkedRoot = join(linkParent, "source-root");
+      symlinkSync(root, linkedRoot);
       symlinkSync(join(root, "SKILL.md"), join(root, "linked-SKILL.md"));
+      const rootFake = runner({ result: sarif });
+      const childFake = runner({ result: sarif });
+
+      await expect(
+        probeCiscoLinuxAmd64V1({
+          ...input(linkedRoot, { runner: rootFake.run }),
+        }),
+      ).rejects.toThrow(/symbolic link|source/i);
+      await expect(
+        probeCiscoLinuxAmd64V1({
+          ...input(root, { selectedClosurePaths: ["linked-SKILL.md"], runner: childFake.run }),
+        }),
+      ).rejects.toThrow(/symbolic link|source/i);
+      expect(rootFake.calls).toEqual([]);
+      expect(childFake.calls).toEqual([]);
+    },
+  );
+
+  it("rejects hard-linked source files before any runner call", async () => {
+    const root = fixtureRoot();
+    linkSync(join(root, "SKILL.md"), join(root, "hard-linked-SKILL.md"));
+    const fake = runner({ result: sarif });
+
+    await expect(
+      probeCiscoLinuxAmd64V1({
+        ...input(root, { selectedClosurePaths: ["hard-linked-SKILL.md"], runner: fake.run }),
+      }),
+    ).rejects.toThrow(/hard link|source/i);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it.runIf(process.platform === "linux")(
+    "rejects special source files before any runner call",
+    async () => {
+      const root = fixtureRoot();
+      const special = join(root, "special-pipe");
+      execFileSync("mkfifo", [special]);
       const fake = runner({ result: sarif });
 
       await expect(
         probeCiscoLinuxAmd64V1({
-          ...input(root, { selectedClosurePaths: ["linked-SKILL.md"], runner: fake.run }),
+          ...input(root, { selectedClosurePaths: ["special-pipe"], runner: fake.run }),
         }),
-      ).rejects.toThrow(/symbolic link|source/i);
+      ).rejects.toThrow(/special|source/i);
       expect(fake.calls).toEqual([]);
     },
   );

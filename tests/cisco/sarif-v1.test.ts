@@ -46,6 +46,15 @@ const validSarif = {
 const text = (value: unknown) => JSON.stringify(value);
 const exactKeys = (value: object, keys: readonly string[]) =>
   expect(Object.keys(value).sort()).toEqual([...keys].sort());
+const clone = <Value>(value: Value): Value => structuredClone(value);
+
+/**
+ * A future Linux-only capture can pass its raw scanner output here. This proves
+ * the observed shape through the same closed parser and canonical projection;
+ * it intentionally does not whitelist unobserved SARIF optional fields.
+ */
+const observeCiscoSarifV1Capture = (rawSarif: string) =>
+  JSON.parse(canonicalCiscoSarifV1Bytes(parseCiscoSarifV1(rawSarif)).toString("utf8"));
 
 describe("Cisco SARIF V1 projection", () => {
   it("projects the closed Cisco 2.0.13 SARIF subset into the existing facts-only shape", () => {
@@ -77,20 +86,122 @@ describe("Cisco SARIF V1 projection", () => {
       "endLine",
       "endColumn",
     ]);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(run)).toBe(true);
+    expect(Object.isFrozen(run.results)).toBe(true);
+    expect(Object.isFrozen(run.results[0])).toBe(true);
+    expect(() => {
+      (run.results as unknown as { push: (value: unknown) => void }).push({});
+    }).toThrow();
   });
 
   it("retains duplicate raw results and is byte-stable for semantically repeated input", () => {
-    const repeated = structuredClone(validSarif);
+    const repeated = clone(validSarif);
     const run = repeated.runs[0];
     const first = run?.results[1];
     if (run === undefined || first === undefined) throw new Error("Cisco fixture is incomplete");
-    run.results.push(structuredClone(first));
+    run.results.push(clone(first));
 
     const forward = parseCiscoSarifV1(text(repeated));
     const reverse = parseCiscoSarifV1(text(repeated));
     expect(forward.runs[0]?.results).toHaveLength(4);
     expect(canonicalCiscoSarifV1Bytes(forward)).toEqual(canonicalCiscoSarifV1Bytes(reverse));
     expect(() => canonicalCiscoSarifV1Bytes({ ...forward })).toThrow(/validated|branded/i);
+  });
+
+  it("makes a caller-captured Linux SARIF document provable against only the observed closed shape", () => {
+    const captured = observeCiscoSarifV1Capture(text(validSarif));
+
+    exactKeys(captured, ["runs", "version"]);
+    exactKeys(captured.runs[0] ?? {}, ["results", "tool"]);
+    exactKeys(captured.runs[0]?.tool ?? {}, ["driver"]);
+    expect(captured.runs[0]?.tool.driver.name).toBe("cisco-ai-skill-scanner");
+    expect(() =>
+      observeCiscoSarifV1Capture(
+        text({ ...validSarif, properties: { anUnobservedSarifOptionalField: true } }),
+      ),
+    ).toThrow();
+  });
+
+  it("accepts NFC Unicode in known fields but rejects non-NFC accepted-field data", () => {
+    const run = validSarif.runs[0];
+    const result = run?.results[0];
+    if (run === undefined || result === undefined) throw new Error("Cisco fixture is incomplete");
+    const unicode = {
+      ...validSarif,
+      runs: [
+        {
+          ...run,
+          results: [
+            {
+              ...result,
+              message: { text: "Résumé évidence" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "skills/résumé/SKILL.md" },
+                    region: { startLine: 1, startColumn: 1 },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(parseCiscoSarifV1(text(unicode)).runs[0]?.results[0]?.message.text).toBe(
+      "Résumé évidence",
+    );
+    expect(() => parseCiscoSarifV1(text(unicode).replace(/résumé/g, "résumé"))).toThrow();
+  });
+
+  it("bounds result, location, string, path, and region data before it can feed observations", () => {
+    const run = validSarif.runs[0];
+    const result = run?.results[0];
+    if (run === undefined || result === undefined) throw new Error("Cisco fixture is incomplete");
+    const withResults = (results: unknown[]) =>
+      text({ ...validSarif, runs: [{ ...run, results }] });
+    const withOne = (entry: object) => withResults([{ ...result, ...entry }]);
+    const tooManyLocations = Array.from({ length: 17 }, () => clone(result.locations[0]));
+    const tooManyResults = Array.from({ length: 4097 }, () => clone(result));
+    const cases = [
+      withOne({ ruleId: "r".repeat(257) }),
+      withOne({ level: "l".repeat(65) }),
+      withOne({ message: { text: "m".repeat(4097) } }),
+      withOne({
+        locations: [{ physicalLocation: { artifactLocation: { uri: "p".repeat(1025) } } }],
+      }),
+      withOne({ locations: tooManyLocations }),
+      withOne({
+        locations: [
+          { physicalLocation: { artifactLocation: { uri: "SKILL.md" }, region: { startLine: 0 } } },
+        ],
+      }),
+      withOne({
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: "SKILL.md" },
+              region: { startLine: 10_000_001 },
+            },
+          },
+        ],
+      }),
+      withOne({
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: "SKILL.md" },
+              region: { startLine: 1, startColumn: 1_000_001 },
+            },
+          },
+        ],
+      }),
+      withResults(tooManyResults),
+    ];
+
+    for (const value of cases) expect(() => parseCiscoSarifV1(value)).toThrow();
   });
 
   it("fails closed for malformed JSON, duplicate decoded keys, Unicode ambiguity, and unknown fields", () => {
