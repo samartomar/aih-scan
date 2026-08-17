@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -268,6 +268,31 @@ describe("Cisco OCI candidate verifier V1", () => {
     const fixture = layoutFixture({ legacyManifest: true });
     expect(verifyCiscoOciCandidateV1(input(fixture)).manifestDigestSha256).toBe(fixture.manifest);
     writeFileSync(join(fixture.root, "unexpected"), "extra");
+    expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
+  });
+
+  it("permits only an empty BuildKit ingest directory at the OCI layout root", () => {
+    // Public BuildKit v0.30.0 source compatibility: https://github.com/moby/buildkit/tree/v0.30.0
+    const fixture = layoutFixture();
+    const ingest = join(fixture.root, "ingest");
+    mkdirSync(ingest);
+    expect(verifyCiscoOciCandidateV1(input(fixture)).manifestDigestSha256).toBe(fixture.manifest);
+
+    writeFileSync(join(ingest, "unexpected"), "extra");
+    expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
+    rmSync(ingest, { force: true, recursive: true });
+
+    const linkTarget = mkdtempSync(join(tmpdir(), "aih-scan-oci-ingest-target-"));
+    roots.push(linkTarget);
+    symlinkSync(linkTarget, ingest, process.platform === "win32" ? "junction" : "dir");
+    expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
+    rmSync(ingest, { force: true });
+
+    mkdirSync(join(fixture.root, "unexpected-directory"));
+    expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
+    rmSync(join(fixture.root, "unexpected-directory"), { force: true, recursive: true });
+
+    writeFileSync(join(fixture.root, "unexpected-file"), "extra");
     expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
   });
 

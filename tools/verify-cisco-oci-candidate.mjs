@@ -318,7 +318,7 @@ function layoutFromRoot(layoutRoot) {
   const root = resolve(layoutRoot);
   directory(root, "layout root");
   const rootEntries = readdirSync(root).sort();
-  const permittedRootEntries = new Set(["blobs", "index.json", "manifest.json", "oci-layout"]);
+  const permittedRootEntries = new Set(["blobs", "index.json", "ingest", "manifest.json", "oci-layout"]);
   const inventory = rootInventory(root, rootEntries);
   if (
     rootEntries.some((entry) => !permittedRootEntries.has(entry)) ||
@@ -333,6 +333,11 @@ function layoutFromRoot(layoutRoot) {
   if (layout.imageLayoutVersion !== "1.0.0") fail("oci layout version");
   if (rootEntries.includes("manifest.json"))
     regular(join(root, "manifest.json"), "legacy manifest", total);
+  if (rootEntries.includes("ingest")) {
+    const ingest = join(root, "ingest");
+    directory(ingest, "ingest");
+    if (readdirSync(ingest).length !== 0) fail("ingest entries");
+  }
   directory(join(root, "blobs"), "blobs");
   if (readdirSync(join(root, "blobs")).sort().join("\0") !== "sha256") fail("blob algorithm");
   directory(join(root, "blobs", "sha256"), "blob root");
