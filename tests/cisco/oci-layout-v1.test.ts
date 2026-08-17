@@ -134,6 +134,7 @@ function rewriteManifest(
   const bytes = Buffer.from(JSON.stringify(manifest));
   const next = descriptor(bytes, ociManifestMediaType);
   writeBlob(value.root, bytes);
+  rmSync(path);
   const index = JSON.parse(readFileSync(join(value.root, "index.json"), "utf8")) as {
     manifests: Array<Record<string, unknown>>;
   };

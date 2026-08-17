@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { loadCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
@@ -175,10 +175,29 @@ type RunnerMode =
 function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "success") {
   const calls: Array<{ argv: readonly string[]; options: Record<string, unknown> | undefined }> =
     [];
+  const clientStates: Array<{
+    readonly dockerConfig: string;
+    readonly dockerConfigEntries: readonly string[];
+    readonly home: string;
+    readonly path: string;
+  }> = [];
   return {
     calls,
+    clientStates,
     run: async (argv: readonly string[], options?: Record<string, unknown>) => {
       calls.push({ argv, options });
+      const environment = options?.env as Record<string, string>;
+      const dockerConfig = environment.DOCKER_CONFIG;
+      const home = environment.HOME;
+      const path = environment.PATH;
+      if (dockerConfig === undefined || home === undefined || path === undefined)
+        throw new Error("broker did not provide a complete client environment");
+      clientStates.push({
+        dockerConfig,
+        dockerConfigEntries: readdirSync(dockerConfig),
+        home,
+        path,
+      });
       if (argv[1] === "image" && argv[2] === "inspect") {
         if (mode === "image-nonzero") return { code: 1, stdout: "", stderr: "not found" };
         return {
@@ -254,7 +273,14 @@ function expectCleanup(calls: readonly { readonly argv: readonly string[] }[], n
 
 function expectBoundedDockerCalls(
   calls: readonly { readonly options: Record<string, unknown> | undefined }[],
+  clientStates: readonly {
+    readonly dockerConfig: string;
+    readonly dockerConfigEntries: readonly string[];
+    readonly home: string;
+    readonly path: string;
+  }[],
 ): void {
+  expect(clientStates).toHaveLength(calls.length);
   for (const call of calls) {
     const options = call.options;
     expect(Object.keys(options ?? {}).sort()).toEqual([
@@ -275,6 +301,19 @@ function expectBoundedDockerCalls(
       /docker_host|proxy|token|auth|socket/i,
     );
   }
+  for (const state of clientStates) {
+    expect(state.path).toBe("/usr/bin:/bin");
+    expect(isAbsolute(state.home)).toBe(true);
+    expect(isAbsolute(state.dockerConfig)).toBe(true);
+    expect(relative(tmpdir(), state.home)).not.toMatch(/^(?:\.\.[\\/]|\.\.$)/);
+    expect(relative(tmpdir(), state.dockerConfig)).not.toMatch(/^(?:\.\.[\\/]|\.\.$)/);
+    expect(state.home).not.toBe(process.env.HOME);
+    expect(state.dockerConfig).not.toBe(process.env.DOCKER_CONFIG);
+    expect(state.home).not.toBe(state.dockerConfig);
+    expect(state.dockerConfigEntries).toEqual([]);
+  }
+  expect(new Set(clientStates.map((state) => state.home)).size).toBe(1);
+  expect(new Set(clientStates.map((state) => state.dockerConfig)).size).toBe(1);
 }
 
 function expectNoAuthority(value: unknown): void {
@@ -366,7 +405,7 @@ describe("Cisco OCI broker V1", () => {
     expect(home).not.toBe(process.env.HOME);
     expect(dockerConfig).not.toBe(process.env.DOCKER_CONFIG);
     expect(readdirSync(dockerConfig)).toEqual([]);
-    expectBoundedDockerCalls(fake.calls);
+    expectBoundedDockerCalls(fake.calls, fake.clientStates);
     expectCleanup(fake.calls, containerName);
     expect(Object.keys(result).sort()).toEqual(
       [
@@ -428,15 +467,39 @@ describe("Cisco OCI broker V1", () => {
       expect(fake.calls.some((call) => call.argv[1] === "run")).toBe(false);
   });
 
-  it("rejects an existing comma/newline source path before the runner when the host filesystem permits it", async () => {
+  it("rejects an existing comma-delimited source path before the runner", async () => {
     const layout = layoutFixture();
-    const sourceRoot = sourceFixture("aih-scan,oci-broker-newline-\n");
+    const sourceRoot = sourceFixture("aih-scan,oci-broker-comma-");
     const { value, fake } = input(layout, sourceRoot);
 
     expect(existsSync(sourceRoot)).toBe(true);
     await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
     expect(fake.calls).toHaveLength(0);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects an existing newline-delimited source path before the runner on hosts that represent it",
+    async () => {
+      const layout = layoutFixture();
+      const sourceRoot = sourceFixture("aih-scan-oci-broker-newline-\n");
+      const { value, fake } = input(layout, sourceRoot);
+
+      expect(existsSync(sourceRoot)).toBe(true);
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "rejects a newline selected-closure component before the runner when Windows cannot represent a newline root",
+    async () => {
+      const { value, fake } = input();
+      await expect(
+        executeCiscoOciBrokerV1({ ...value, selectedClosurePaths: ["SKILL.md\n"] }),
+      ).rejects.toThrow();
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
 
   it("rejects NUL mount grammar before the runner because NUL cannot be an existing host path", async () => {
     const { value, fake } = input();
