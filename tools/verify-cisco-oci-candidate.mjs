@@ -29,6 +29,14 @@ const METADATA_KEY_ORDER = [
   "containerimage.descriptor",
   "containerimage.digest",
 ];
+const METADATA_DESCRIPTOR_KEY_ORDER = [
+  "annotations",
+  "artifactType",
+  "digest",
+  "mediaType",
+  "platform",
+  "size",
+];
 const CONTAINERD_IMAGE_NAME_ANNOTATION = "io.containerd.image.name";
 const OCI_CREATED_ANNOTATION = "org.opencontainers.image.created";
 const OCI_REFERENCE_ANNOTATION = "org.opencontainers.image.ref.name";
@@ -446,6 +454,22 @@ function metadataKeySet(value) {
   return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
 }
 
+function metadataDescriptorKeySet(value) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  )
+    return "invalid";
+  const keys = Object.keys(value).sort();
+  const known = new Set(METADATA_DESCRIPTOR_KEY_ORDER);
+  if (keys.every((key) => known.has(key)))
+    return `known ${METADATA_DESCRIPTOR_KEY_ORDER.map((key) => (keys.includes(key) ? "1" : "0")).join("")}`;
+  return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
+}
+
 function layoutFromRoot(layoutRoot) {
   if (
     typeof layoutRoot !== "string" ||
@@ -643,8 +667,12 @@ function metadata(value, layout) {
     jsonData(data["buildx.build.provenance"], "metadata provenance");
   if (data["buildx.build.warnings"] !== undefined)
     jsonData(data["buildx.build.warnings"], "metadata warnings");
+  const descriptorValue = data["containerimage.descriptor"];
+  const descriptorKeySet = metadataDescriptorKeySet(descriptorValue);
+  if (descriptorKeySet !== "known 101101")
+    fail(`metadata descriptor keys ${descriptorKeySet}`);
   const descriptorData = plain(
-    data["containerimage.descriptor"],
+    descriptorValue,
     ["mediaType", "digest", "size", "annotations"],
     "metadata descriptor",
   );
