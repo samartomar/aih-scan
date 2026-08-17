@@ -204,6 +204,56 @@ const rewriteNestedIndex = (
   writeFileSync(join(fixture.root, "index.json"), JSON.stringify(rootIndex));
 };
 
+const replaceLayersBeyondCurrentTotalBound = (fixture: LayoutFixture): void => {
+  const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
+    readonly manifests?: unknown;
+  };
+  if (!Array.isArray(index.manifests) || index.manifests[0] === undefined)
+    throw new Error("test fixture index must contain one manifest descriptor");
+  const rootDescriptor = index.manifests[0] as Record<string, unknown>;
+  const manifestDigest = rootDescriptor.digest;
+  if (typeof manifestDigest !== "string")
+    throw new Error("test fixture manifest digest is required");
+  const manifest = JSON.parse(
+    readFileSync(
+      join(fixture.root, "blobs", "sha256", manifestDigest.slice("sha256:".length)),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  const configDescriptor = manifest.config as Record<string, unknown>;
+  const configDigest = configDescriptor.digest;
+  if (typeof configDigest !== "string") throw new Error("test fixture config digest is required");
+  const config = JSON.parse(
+    readFileSync(
+      join(fixture.root, "blobs", "sha256", configDigest.slice("sha256:".length)),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  const layers = Array.from({ length: 5 }, (_, index) => Buffer.alloc(15 * 1024 * 1024, index + 1));
+  const layerDescriptors = layers.map((layer) => ({
+    digest: hash(layer),
+    mediaType: "application/vnd.oci.image.layer.v1.tar",
+    size: layer.length,
+  }));
+  const rootfs = config.rootfs as Record<string, unknown>;
+  config.rootfs = {
+    ...rootfs,
+    diff_ids: layers.map((layer) => hash(Buffer.concat([Buffer.from("uncompressed"), layer]))),
+  };
+  const configBytes = Buffer.from(JSON.stringify(config));
+  const nextConfigDigest = hash(configBytes);
+  write(fixture.root, nextConfigDigest, configBytes);
+  manifest.config = { ...configDescriptor, digest: nextConfigDigest, size: configBytes.length };
+  manifest.layers = layerDescriptors;
+  const manifestBytes = Buffer.from(JSON.stringify(manifest));
+  const nextManifestDigest = hash(manifestBytes);
+  write(fixture.root, nextManifestDigest, manifestBytes);
+  for (const layer of layers) write(fixture.root, hash(layer), layer);
+  rootDescriptor.digest = nextManifestDigest;
+  rootDescriptor.size = manifestBytes.length;
+  writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
+};
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -529,9 +579,15 @@ describe("Cisco OCI candidate verifier V1", () => {
         },
       },
       {
-        reason: "size range",
+        reason: "size range below-zero cumulative at-most-1MiB",
         mutate: (descriptor) => {
           descriptor.size = -1;
+        },
+      },
+      {
+        reason: "size range at-most-32MiB cumulative at-most-1MiB",
+        mutate: (descriptor) => {
+          descriptor.size = 17 * 1024 * 1024;
         },
       },
     ];
@@ -576,6 +632,39 @@ describe("Cisco OCI candidate verifier V1", () => {
       );
       expect(result.stderr).not.toMatch(/hostile|AAAA|content|Error|stack/i);
     }
+  });
+
+  it("profiles a cumulative layout bound with buckets instead of exact sizes", () => {
+    const fixture = layoutFixture();
+    replaceLayersBeyondCurrentTotalBound(fixture);
+    const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
+    roots.push(invocationRoot);
+    const metadataPath = join(invocationRoot, "metadata.json");
+    const imageIdPath = join(invocationRoot, "image-id.txt");
+    writeFileSync(metadataPath, JSON.stringify(fixture.metadata));
+    writeFileSync(imageIdPath, fixture.config);
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifierPath,
+        "--metadata",
+        metadataPath,
+        "--layout-root",
+        fixture.root,
+        "--image-id",
+        imageIdPath,
+        "--summary",
+        join(invocationRoot, "summary.json"),
+        "--canonical-layout",
+        join(invocationRoot, "layout.json"),
+      ],
+      { encoding: "utf8", shell: false, windowsHide: true },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Cisco OCI verifier rejected input: layout bound at-most-128MiB\n");
+    expect(result.stderr).not.toMatch(/\d{4,}|sha256|Error|stack/i);
   });
 
   it("classifies rejected Docker descriptor media types without echoing them", () => {

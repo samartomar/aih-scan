@@ -17,6 +17,7 @@ const LAYER_MEDIA_TYPES = new Set([
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 64 * 1024 * 1024;
 const MAX_ROOT_ENTRIES = 128;
+const SIZE_BUCKETS_MIB = [1, 32, 64, 128, 256, 512, 1024];
 const CONTAINERD_IMAGE_NAME_ANNOTATION = "io.containerd.image.name";
 const OCI_CREATED_ANNOTATION = "org.opencontainers.image.created";
 const OCI_REFERENCE_ANNOTATION = "org.opencontainers.image.ref.name";
@@ -242,14 +243,23 @@ function mediaTypeClass(value) {
   return "unknown";
 }
 
-function descriptor(value, label, expectedMediaTypes) {
+function sizeBucket(bytes) {
+  if (typeof bytes !== "number" || !Number.isSafeInteger(bytes)) return "invalid";
+  if (bytes < 0) return "below-zero";
+  for (const mib of SIZE_BUCKETS_MIB) {
+    if (bytes <= mib * 1024 * 1024) return `at-most-${mib}MiB`;
+  }
+  return "over-1024MiB";
+}
+
+function descriptor(value, label, expectedMediaTypes, total) {
   const data = plain(value, ["mediaType", "digest", "size"], label);
   if (typeof data.mediaType !== "string" || !expectedMediaTypes.has(data.mediaType))
     fail(`${label} media type ${mediaTypeClass(data.mediaType)}`);
   if (typeof data.digest !== "string" || !SHA256.test(data.digest)) fail(`${label} digest`);
   if (typeof data.size !== "number") fail(`${label} size type`);
   if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > MAX_FILE_BYTES)
-    fail(`${label} size range`);
+    fail(`${label} size range ${sizeBucket(data.size)} cumulative ${sizeBucket(total.value)}`);
   return data;
 }
 
@@ -263,7 +273,7 @@ function regular(path, label, total) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES)
     fail(`${label} file`);
   total.value += stat.size;
-  if (total.value > MAX_LAYOUT_BYTES) fail("layout bound");
+  if (total.value > MAX_LAYOUT_BYTES) fail(`layout bound ${sizeBucket(total.value)}`);
   const bytes = readFileSync(path);
   if (bytes.length !== stat.size) fail(`${label} changed`);
   return bytes;
@@ -458,6 +468,7 @@ function layoutFromRoot(layoutRoot) {
     { mediaType: selected.mediaType, digest: selected.digest, size: selected.size },
     "index manifest",
     new Set([INDEX_MEDIA_TYPE, MANIFEST_MEDIA_TYPE]),
+    total,
   );
   const annotations = manifestAnnotations(selected.annotations, "manifest annotations");
   let manifestDescriptor;
@@ -492,6 +503,7 @@ function layoutFromRoot(layoutRoot) {
       { mediaType: nestedSelected.mediaType, digest: nestedSelected.digest, size: nestedSelected.size },
       "nested manifest",
       new Set([MANIFEST_MEDIA_TYPE]),
+      total,
     );
     manifestDescriptor = {
       ...nestedDescriptor,
@@ -503,7 +515,7 @@ function layoutFromRoot(layoutRoot) {
   const manifest = plain(jsonFromBytes(manifestBytes, "manifest"), ["schemaVersion", "mediaType", "config", "layers"], "manifest");
   if (manifest.schemaVersion !== 2 || manifest.mediaType !== MANIFEST_MEDIA_TYPE || !Array.isArray(manifest.layers) || manifest.layers.length < 1 || manifest.layers.length > 128)
     fail("manifest");
-  const configDescriptor = descriptor(manifest.config, "config", new Set([CONFIG_MEDIA_TYPE]));
+  const configDescriptor = descriptor(manifest.config, "config", new Set([CONFIG_MEDIA_TYPE]), total);
   const configBytes = readBlob(root, configDescriptor, "config", total);
   const config = allowed(
     jsonFromBytes(configBytes, "config"),
@@ -534,7 +546,7 @@ function layoutFromRoot(layoutRoot) {
     fail("config rootfs");
   const referenced = new Set([rootDescriptor.digest, manifestDescriptor.digest, configDescriptor.digest]);
   for (const layerInput of manifest.layers) {
-    const layer = descriptor(layerInput, "layer", LAYER_MEDIA_TYPES);
+    const layer = descriptor(layerInput, "layer", LAYER_MEDIA_TYPES, total);
     if (referenced.has(layer.digest)) fail("duplicate layer");
     readBlob(root, layer, "layer", total);
     referenced.add(layer.digest);
