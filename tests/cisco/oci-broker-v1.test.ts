@@ -499,6 +499,55 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
+  it("discards bounded scanner-run diagnostics after strict response validation", async () => {
+    const stdout = "scanner-run-stdout-distinctive";
+    const stderr = "scanner-run-stderr-distinctive";
+    const { value, fake } = input();
+    const original = fake.run;
+    value.runner = async (argv, options) => {
+      if (argv[1] === "run") {
+        await original(argv, options);
+        return { code: 0, stdout, stderr };
+      }
+      return original(argv, options);
+    };
+
+    const result = await executeCiscoOciBrokerV1(value);
+    const serialized = JSON.stringify(result);
+    expect(result.annexBytes.toString("utf8")).not.toContain(stdout);
+    expect(result.annexBytes.toString("utf8")).not.toContain(stderr);
+    expect(JSON.stringify(result.evidenceAnnex)).not.toContain(stdout);
+    expect(JSON.stringify(result.evidenceAnnex)).not.toContain(stderr);
+    expect(result.sarifSha256).not.toContain(stdout);
+    expect(result.sarifSha256).not.toContain(stderr);
+    expect(serialized).not.toContain(stdout);
+    expect(serialized).not.toContain(stderr);
+
+    for (const response of [
+      { code: 0, stdout: "x".repeat(64 * 1024 + 1), stderr: "" },
+      { code: 0, stdout: "", stderr: "x".repeat(64 * 1024 + 1) },
+      { code: 0, stdout: "", stderr: "", extra: true },
+      { code: 1, stdout, stderr },
+      { code: 0, stdout, stderr, truncated: true },
+    ]) {
+      const { value: invalid, fake: invalidFake } = input();
+      const invalidOriginal = invalidFake.run;
+      invalid.runner = async (argv, options) => {
+        if (argv[1] === "run") return response;
+        return invalidOriginal(argv, options);
+      };
+      let error: unknown;
+      try {
+        await executeCiscoOciBrokerV1(invalid);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String(error)).not.toContain(stdout);
+      expect(String(error)).not.toContain(stderr);
+    }
+  });
+
   it("requires a successful exact-name Docker absence listing with no output", async () => {
     for (const response of [
       { code: 1, stdout: "", stderr: "" },

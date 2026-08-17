@@ -321,8 +321,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
       ],
       "run",
     );
-    if (run.code !== 0 || run.truncated || run.stdout !== "" || run.stderr !== "")
-      fail("scanner run");
+    if (run.code !== 0 || run.truncated) fail("scanner run");
     const rawSarif = output(outputRoot);
     const parsedSarif = parseCiscoSarifV1(rawSarif.toString("utf8"), {
       sourceRoot: input.sourceRoot,
