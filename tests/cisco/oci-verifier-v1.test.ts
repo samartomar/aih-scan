@@ -54,11 +54,16 @@ describe("Cisco OCI candidate verifier V1", () => {
   });
 
   it("fails closed for bad paths, tar boundary/missing metadata, and any identity substitution", () => {
+    const missingMetadata = { ...input() } as { metadata?: unknown };
+    delete missingMetadata.metadata;
     const cases = [
       { ...input(), unknown: true },
       { ...input(), dockerTarPath: "../candidate-image.tar" },
       { ...input(), dockerTarPath: "candidate\u0000image.tar" },
       { ...input(), loadedImageId: manifest },
+      missingMetadata,
+      { ...input(), metadata: { "containerimage.config.digest": config } },
+      { ...input(), metadata: { "containerimage.digest": manifest } },
       {
         ...input(),
         metadata: { "containerimage.digest": manifest, "containerimage.config.digest": manifest },

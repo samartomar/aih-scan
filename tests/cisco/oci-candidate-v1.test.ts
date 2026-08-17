@@ -381,41 +381,62 @@ describe("Cisco OCI candidate V1", () => {
     const provenanceBytes = Buffer.from(
       '{"_type":"https://in-toto.io/Statement/v1","changed":true}',
     );
-    const changedInput = {
+    const originalSbom = value.annexPayloads.find((entry) => entry.descriptorId === "annex.sbom");
+    const originalProvenance = value.annexPayloads.find(
+      (entry) => entry.descriptorId === "annex.provenance",
+    );
+    if (originalSbom === undefined || originalProvenance === undefined)
+      throw new Error("candidate fixture is missing an immutable annex payload");
+    const sbomChanged = {
+      ...value,
+      runtime: { ...value.runtime, sbom: { ...value.runtime.sbom, sha256: sha256(sbomBytes) } },
+      annexPayloads: [
+        { descriptorId: "annex.sbom", bytes: sbomBytes },
+        { descriptorId: "annex.provenance", bytes: originalProvenance.bytes },
+      ],
+    };
+    const provenanceChanged = {
       ...value,
       runtime: {
         ...value.runtime,
-        sbom: { ...value.runtime.sbom, sha256: sha256(sbomBytes) },
         provenance: { ...value.runtime.provenance, sha256: sha256(provenanceBytes) },
       },
       annexPayloads: [
-        { descriptorId: "annex.sbom", bytes: sbomBytes },
+        { descriptorId: "annex.sbom", bytes: originalSbom.bytes },
         { descriptorId: "annex.provenance", bytes: provenanceBytes },
       ],
     };
-    const changed = createCiscoOciCandidateV1(changedInput);
-    expect(changed.evidenceAnnex).not.toEqual(baseline.evidenceAnnex);
-    expect(changed.scannerManifest.scannerManifestSha256).not.toBe(
-      baseline.scannerManifest.scannerManifestSha256,
-    );
-    expect(canonicalCiscoOciCandidateBytesV1(changed)).not.toEqual(
-      canonicalCiscoOciCandidateBytesV1(baseline),
-    );
+    for (const changedInput of [sbomChanged, provenanceChanged]) {
+      const changed = createCiscoOciCandidateV1(changedInput);
+      expect(changed.evidenceAnnex).not.toEqual(baseline.evidenceAnnex);
+      expect(changed.scannerManifest.scannerManifestSha256).not.toBe(
+        baseline.scannerManifest.scannerManifestSha256,
+      );
+      expect(changed.scannerManifest.detectors[0]?.scannerManifestEntrySha256).not.toBe(
+        baseline.scannerManifest.detectors[0]?.scannerManifestEntrySha256,
+      );
+      expect(changed.observationKey.observationKeySha256).not.toBe(
+        baseline.observationKey.observationKeySha256,
+      );
+      expect(canonicalCiscoOciCandidateBytesV1(changed)).not.toEqual(
+        canonicalCiscoOciCandidateBytesV1(baseline),
+      );
+    }
     expect(() =>
       createCiscoOciCandidateV1({
-        ...changedInput,
+        ...sbomChanged,
         annexPayloads: [
           { descriptorId: "annex.sbom", bytes: Buffer.from("mismatched") },
-          { descriptorId: "annex.provenance", bytes: provenanceBytes },
+          { descriptorId: "annex.provenance", bytes: originalProvenance.bytes },
         ],
       }),
     ).toThrow();
     expect(() =>
       createCiscoOciCandidateV1({
-        ...changedInput,
+        ...sbomChanged,
         runtime: {
-          ...changedInput.runtime,
-          sbom: { ...changedInput.runtime.sbom, sha256: digest("mismatched") },
+          ...sbomChanged.runtime,
+          sbom: { ...sbomChanged.runtime.sbom, sha256: digest("mismatched") },
         },
       }),
     ).toThrow();
