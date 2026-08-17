@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
+  canonicalStrictJsonBytesV1,
 } from "../contract/strict-json-v1.js";
 import {
   describeNativeObservationSourceV1,
@@ -14,7 +15,7 @@ import {
   sealNativeObservationSourceV1,
 } from "../observation/native-observation-v1.js";
 import { createCiscoFactsOnlyV1 } from "./facts-only-v1.js";
-import { canonicalCiscoSarifV1Bytes, parseCiscoSarifV1 } from "./sarif-v1.js";
+import { type CiscoSarifV1, parseCiscoSarifV1 } from "./sarif-v1.js";
 
 const LOCK_SHA256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
 const WHEEL_SHA256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
@@ -168,7 +169,43 @@ function sameSeal(left: SourceSealV1, right: SourceSealV1): boolean {
 }
 
 function sourceFileSha256(snapshot: SealedSourceSnapshotV1): Record<string, string> {
-  return Object.fromEntries(snapshot.sourceFiles.map((file) => [file.path, file.sha256]));
+  return Object.fromEntries(snapshot.selectedClosureFiles.map((file) => [file.path, file.sha256]));
+}
+
+function compareStrictJson(left: unknown, right: unknown): number {
+  return canonicalStrictJsonBytesV1(left).compare(canonicalStrictJsonBytesV1(right));
+}
+
+function normalizeSarifSemantics(value: CiscoSarifV1): CiscoSarifV1 {
+  const run = value.runs[0];
+  if (run === undefined) fail("SARIF run");
+  const results = run.results
+    .map((result) => ({
+      ruleId: result.ruleId,
+      ...(result.level === undefined ? {} : { level: result.level }),
+      message: { text: result.message.text },
+      locations: [...result.locations].sort(compareStrictJson),
+    }))
+    .sort(compareStrictJson);
+  return parseCiscoSarifV1(
+    canonicalStrictJsonBytesV1({
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "cisco-ai-skill-scanner" } }, results }],
+    }).toString("utf8"),
+  );
+}
+
+function repeatabilitySemantics(factsOnly: {
+  readonly facts: unknown;
+  readonly coverage: unknown;
+  readonly evidenceAnnex: unknown;
+}): Buffer {
+  return canonicalStrictJsonBytesV1({
+    protocol: "CiscoLinuxAmd64RepeatabilityV1",
+    facts: factsOnly.facts,
+    coverage: factsOnly.coverage,
+    evidenceAnnex: factsOnly.evidenceAnnex,
+  });
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: this internal probe returns a branded, closed runtime record.
@@ -196,7 +233,7 @@ export async function probeCiscoLinuxAmd64V1(input: unknown): Promise<any> {
   const sourceSnapshot = describeNativeObservationSourceV1(sourceInput);
   const sourceSeal = sealNativeObservationSourceV1(sourceInput);
   const executions: unknown[] = [];
-  let previousCanonicalSarif: Buffer | undefined;
+  let previousRepeatabilitySemantics: Buffer | undefined;
 
   for (let ordinal = 0; ordinal < 2; ordinal += 1) {
     const beforeSourceSeal = sealNativeObservationSourceV1(sourceInput);
@@ -235,18 +272,22 @@ export async function probeCiscoLinuxAmd64V1(input: unknown): Promise<any> {
       );
       const bytes = outputBytes(outputPath);
       const parsedSarif = parseCiscoSarifV1(strictUtf8(bytes));
-      const canonicalSarif = canonicalCiscoSarifV1Bytes(parsedSarif);
-      if (previousCanonicalSarif !== undefined && !previousCanonicalSarif.equals(canonicalSarif))
-        fail("semantic SARIF repeatability mismatch");
-      previousCanonicalSarif = canonicalSarif;
+      const normalizedSarif = normalizeSarifSemantics(parsedSarif);
       const afterSourceSeal = sealNativeObservationSourceV1(sourceInput);
       if (!sameSeal(beforeSourceSeal, afterSourceSeal)) fail("source changed during probe");
       const factsOnly = createCiscoFactsOnlyV1({
         protocol: "CiscoFactsOnlyV1",
-        sarif: parsedSarif,
+        sarif: normalizedSarif,
         fileSha256ByPath: sourceFileSha256(sourceSnapshot),
         platform: { os: "linux", architecture: "amd64" },
       });
+      const currentRepeatabilitySemantics = repeatabilitySemantics(factsOnly);
+      if (
+        previousRepeatabilitySemantics !== undefined &&
+        !previousRepeatabilitySemantics.equals(currentRepeatabilitySemantics)
+      )
+        fail("semantic SARIF repeatability mismatch");
+      previousRepeatabilitySemantics = currentRepeatabilitySemantics;
       executions.push({
         executionOrdinal: ordinal,
         beforeSourceSeal,
