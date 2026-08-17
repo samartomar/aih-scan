@@ -1,0 +1,24 @@
+{
+  "files": {
+    "skills/demo/SKILL.md": "# Demo\n\nNeutral fixture.\n"
+  },
+  "sarif": {
+    "version": "2.1.0",
+    "runs": [
+      {
+        "tool": { "driver": { "name": "cisco-ai-skill-scanner" } },
+        "results": [
+          { "ruleId": "skill-metadata-license", "level": "warning", "message": { "text": "license metadata missing" }, "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "skills/demo/SKILL.md" }, "region": { "startLine": 1 } } }] },
+          { "ruleId": "prompt-injection", "level": "error", "message": { "text": "untrusted instruction" }, "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "skills/demo/SKILL.md" }, "region": { "startLine": 3 } } }] },
+          { "ruleId": "prompt-injection", "level": "error", "message": { "text": "untrusted instruction" }, "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "skills/demo/SKILL.md" }, "region": { "startLine": 3 } } }] },
+          { "ruleId": "prompt-injection", "level": "error", "message": { "text": "different diagnostic" }, "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "skills/demo/SKILL.md" }, "region": { "startLine": 4 } } }] },
+          { "ruleId": "future-rule", "level": "note", "message": { "text": "unknown remains raw" }, "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "skills/demo/SKILL.md" }, "region": { "startLine": 5 } } }] }
+        ]
+      }
+    ]
+  },
+  "zeroSarif": {
+    "version": "2.1.0",
+    "runs": [{ "tool": { "driver": { "name": "cisco-ai-skill-scanner" } }, "results": [] }]
+  }
+}
