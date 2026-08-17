@@ -14,6 +14,7 @@ const LAYER_MEDIA_TYPES = new Set([
 ]);
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 64 * 1024 * 1024;
+const MAX_ROOT_ENTRIES = 128;
 const summaries = new WeakMap();
 
 const fail = (message) => {
@@ -284,6 +285,27 @@ function jsonFromBytes(bytes, label) {
   return parseJson(text, label);
 }
 
+function rootInventory(root, entries) {
+  if (entries.length > MAX_ROOT_ENTRIES) fail("layout entries bound");
+  const required = ["blobs", "index.json", "oci-layout"];
+  let files = 0;
+  let directories = 0;
+  let other = 0;
+  for (const entry of entries) {
+    let stat;
+    try {
+      stat = lstatSync(join(root, entry));
+    } catch {
+      fail("layout entries");
+    }
+    if (stat.isFile()) files += 1;
+    else if (stat.isDirectory()) directories += 1;
+    else other += 1;
+  }
+  const bits = required.map((entry) => (entries.includes(entry) ? "1" : "0")).join("");
+  return { bits, files, directories, other, total: entries.length };
+}
+
 function layoutFromRoot(layoutRoot) {
   if (
     typeof layoutRoot !== "string" ||
@@ -297,11 +319,14 @@ function layoutFromRoot(layoutRoot) {
   directory(root, "layout root");
   const rootEntries = readdirSync(root).sort();
   const permittedRootEntries = new Set(["blobs", "index.json", "manifest.json", "oci-layout"]);
+  const inventory = rootInventory(root, rootEntries);
   if (
     rootEntries.some((entry) => !permittedRootEntries.has(entry)) ||
     !["blobs", "index.json", "oci-layout"].every((entry) => rootEntries.includes(entry))
   )
-    fail("layout entries");
+    fail(
+      `layout entries required ${inventory.bits} total ${inventory.total} files ${inventory.files} directories ${inventory.directories} other ${inventory.other}`,
+    );
   const total = { value: 0 };
   const ociLayout = jsonFromBytes(regular(join(root, "oci-layout"), "oci layout", total), "oci layout");
   const layout = plain(ociLayout, ["imageLayoutVersion"], "oci layout");

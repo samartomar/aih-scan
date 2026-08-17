@@ -209,6 +209,42 @@ describe("Cisco OCI candidate verifier V1", () => {
     expect(result.stderr).toBe("Cisco OCI verifier rejected input: metadata digest\n");
   });
 
+  it("profiles a rejected root inventory without exposing hostile entry names", () => {
+    const fixture = layoutFixture();
+    const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
+    roots.push(invocationRoot);
+    const metadataPath = join(invocationRoot, "metadata.json");
+    const imageIdPath = join(invocationRoot, "image-id.txt");
+    const hostileName = "unexpected-do-not-leak-digest-content";
+    writeFileSync(join(fixture.root, hostileName), "unexpected");
+    writeFileSync(metadataPath, JSON.stringify(fixture.metadata));
+    writeFileSync(imageIdPath, fixture.config);
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifierPath,
+        "--metadata",
+        metadataPath,
+        "--layout-root",
+        fixture.root,
+        "--image-id",
+        imageIdPath,
+        "--summary",
+        join(invocationRoot, "summary.json"),
+        "--canonical-layout",
+        join(invocationRoot, "layout.json"),
+      ],
+      { encoding: "utf8", shell: false, windowsHide: true },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe(
+      "Cisco OCI verifier rejected input: layout entries required 111 total 4 files 3 directories 1 other 0\n",
+    );
+    expect(result.stderr).not.toMatch(/do-not-leak|digest|content|unexpected|Error|stack/i);
+  });
+
   it("loads a real local OCI layout with documented Buildx metadata, binds the loaded config ID, and emits canonical layout bytes", () => {
     const fixture = layoutFixture();
     const result = verifyCiscoOciCandidateV1(input(fixture));
