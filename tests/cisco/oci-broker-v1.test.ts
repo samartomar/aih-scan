@@ -476,6 +476,33 @@ describe("Cisco OCI broker V1", () => {
     expectNoAuthority(result);
   });
 
+  it("accepts only one Docker image-ID line terminator before exact digest binding", async () => {
+    for (const terminator of ["\n", "\r\n"]) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "image" && argv[2] === "inspect")
+          return { code: 0, stdout: `${value.layout.configDigestSha256}${terminator}`, stderr: "" };
+        return original(argv, options);
+      };
+      await expect(executeCiscoOciBrokerV1(value)).resolves.toMatchObject({
+        configDigestSha256: value.layout.configDigestSha256,
+      });
+    }
+
+    for (const suffix of ["\r", "\n\n", " ", "\n ", "\0"]) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "image" && argv[2] === "inspect")
+          return { code: 0, stdout: `${value.layout.configDigestSha256}${suffix}`, stderr: "" };
+        return original(argv, options);
+      };
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expect(fake.calls.some((call) => call.argv[1] === "run")).toBe(false);
+    }
+  });
+
   it("fails closed before run for forged layout, strict-input, host, image-inspect, and mount injection failures", async () => {
     const layout = layoutFixture();
     const sourceRoot = sourceFixture();

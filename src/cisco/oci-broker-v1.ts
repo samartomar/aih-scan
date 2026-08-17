@@ -166,6 +166,19 @@ function response(value: unknown, label: string): DockerResponse {
   };
 }
 
+function normalizedImageId(stdout: string): string {
+  if (Buffer.byteLength(stdout, "utf8") > MAX_STDIO_BYTES || stdout.includes("\0"))
+    fail("local image ID mismatch");
+  const line = stdout.endsWith("\r\n")
+    ? stdout.slice(0, -2)
+    : stdout.endsWith("\n")
+      ? stdout.slice(0, -1)
+      : stdout;
+  if (line.includes("\r") || line.includes("\n") || !/^sha256:[a-f0-9]{64}$/.test(line))
+    fail("local image ID mismatch");
+  return line;
+}
+
 function output(path: string): Buffer {
   const names = readdirSync(path).sort();
   if (names.length !== 1 || names[0] !== "result.sarif") fail("SARIF output stale or extra");
@@ -256,7 +269,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     if (
       inspected.code !== 0 ||
       inspected.truncated ||
-      inspected.stdout !== input.layout.configDigestSha256 ||
+      normalizedImageId(inspected.stdout) !== input.layout.configDigestSha256 ||
       inspected.stderr !== ""
     )
       fail("local image ID mismatch");
