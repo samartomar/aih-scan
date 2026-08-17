@@ -59,7 +59,10 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     expect(installUv).toMatch(/curl .*--fail .*--location .*--silent .*--show-error .*--output/);
     expect(installUv).toMatch(/sha256sum -c/);
     expect(installUv).toMatch(/python -m pip install --no-deps/);
-    expect(installUv).toContain('test "$(python -m uv --version)" = "uv 0.12.5"');
+    expect(installUv).toContain(
+      'test "$(python -c "from importlib.metadata import version; print(version(\'uv\'))")" = "0.12.5"',
+    );
+    expect(installUv).toContain("python -m uv --version >/dev/null");
     expect(workflow).not.toMatch(/astral-sh\/setup-uv|versions-manifest/i);
     expect(workflow).toContain("ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41");
     expect(workflow).toContain("3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3");

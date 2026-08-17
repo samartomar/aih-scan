@@ -224,7 +224,10 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(installUv).toContain("curl --fail --location --silent --show-error --output");
     expect(installUv).toMatch(/sha256sum -c/);
     expect(installUv).toMatch(/python -m pip install --no-deps/);
-    expect(installUv).toContain('test "$(python -m uv --version)" = "uv 0.12.5"');
+    expect(installUv).toContain(
+      'test "$(python -c "from importlib.metadata import version; print(version(\'uv\'))")" = "0.12.5"',
+    );
+    expect(installUv).toContain("python -m uv --version >/dev/null");
     expect(text).not.toMatch(/astral-sh\/setup-uv|versions-manifest/i);
     expect(prepare).toContain("npm ci");
     expect(prepare).toMatch(/mkdir -p[^\n]*\$RUNNER_TEMP[^\n]*(?:direct|oci)/i);
