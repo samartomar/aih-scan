@@ -276,7 +276,7 @@ const replaceWithSingleLayer = (fixture: LayoutFixture, layer: Buffer): string =
 
 const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number): string => {
   const mib = 1024 * 1024;
-  const target = 256 * mib + extraBytes;
+  const target = 512 * mib + extraBytes;
   const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
     readonly manifests?: unknown;
   };
@@ -303,17 +303,36 @@ const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number)
     ),
   ) as Record<string, unknown>;
   const originalLayers = originalManifest.layers as ReadonlyArray<Record<string, unknown>>;
-  const firstLength = 128 * mib;
-  let first = Buffer.alloc(firstLength, 1);
-  const firstDigest = hash(first);
-  write(fixture.root, firstDigest, first);
-  first = Buffer.alloc(0);
-  const build = (secondDigest: string, secondLength: number) => {
+  const fixedLayers: Array<{
+    readonly digest: string;
+    readonly mediaType: "application/vnd.oci.image.layer.v1.tar";
+    readonly size: number;
+  }> = [];
+  for (let value = 1; value <= 3; value += 1) {
+    let bytes = Buffer.alloc(128 * mib, value);
+    const digest = hash(bytes);
+    write(fixture.root, digest, bytes);
+    bytes = Buffer.alloc(0);
+    fixedLayers.push({
+      digest,
+      mediaType: "application/vnd.oci.image.layer.v1.tar",
+      size: 128 * mib,
+    });
+  }
+  const build = (finalDigest: string, finalLength: number) => {
+    const layers = [
+      ...fixedLayers,
+      {
+        digest: finalDigest,
+        mediaType: "application/vnd.oci.image.layer.v1.tar",
+        size: finalLength,
+      },
+    ];
     const config = structuredClone(originalConfig) as Record<string, unknown>;
     const rootfs = config.rootfs as Record<string, unknown>;
     config.rootfs = {
       ...rootfs,
-      diff_ids: [hash(`uncompressed:${firstDigest}`), hash(`uncompressed:${secondDigest}`)],
+      diff_ids: layers.map((layer) => hash(`uncompressed:${layer.digest}`)),
     };
     const configBytes = Buffer.from(JSON.stringify(config));
     const configDigest = hash(configBytes);
@@ -323,18 +342,7 @@ const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number)
       digest: configDigest,
       size: configBytes.length,
     };
-    manifest.layers = [
-      {
-        digest: firstDigest,
-        mediaType: "application/vnd.oci.image.layer.v1.tar",
-        size: firstLength,
-      },
-      {
-        digest: secondDigest,
-        mediaType: "application/vnd.oci.image.layer.v1.tar",
-        size: secondLength,
-      },
-    ];
+    manifest.layers = layers;
     const manifestBytes = Buffer.from(JSON.stringify(manifest));
     const manifestDigest = hash(manifestBytes);
     const nextIndex = structuredClone(index) as Record<string, unknown>;
@@ -349,16 +357,19 @@ const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number)
     provisional.indexBytes.length +
     provisional.configBytes.length +
     provisional.manifestBytes.length;
-  const secondLength = target - firstLength - overhead;
-  if (secondLength < 1 || secondLength > 128 * mib)
+  const fixedLength = fixedLayers.reduce((sum, layer) => sum + layer.size, 0);
+  const finalLength = target - fixedLength - overhead;
+  if (finalLength < 1 || finalLength > 128 * mib)
     throw new Error("test fixture total layout construction is out of bounds");
-  let second = Buffer.alloc(secondLength, 2);
-  const secondDigest = hash(second);
-  const output = build(secondDigest, secondLength);
+  let finalLayer = Buffer.alloc(finalLength, 4);
+  const finalDigest = hash(finalLayer);
+  const output = build(finalDigest, finalLength);
+  const exactTotal = fixedLength + finalLength + overhead;
+  if (exactTotal !== target) throw new Error("test fixture total layout construction is not exact");
   write(fixture.root, output.configDigest, output.configBytes);
   write(fixture.root, output.manifestDigest, output.manifestBytes);
-  write(fixture.root, secondDigest, second);
-  second = Buffer.alloc(0);
+  write(fixture.root, finalDigest, finalLayer);
+  finalLayer = Buffer.alloc(0);
   const oldDigests = new Set([originalManifestDigest, originalConfigDigest]);
   for (const layer of originalLayers) {
     if (typeof layer.digest === "string") oldDigests.add(layer.digest);
@@ -775,7 +786,7 @@ describe("Cisco OCI candidate verifier V1", () => {
     );
   });
 
-  it("accepts an exact 256MiB layout and rejects one byte beyond the aggregate bound", () => {
+  it("accepts an exact 512MiB layout and rejects one byte beyond the aggregate bound", () => {
     const exact = layoutFixture();
     const exactConfigDigest = replaceWithExactTotalLayout(exact, 0);
     expect(
@@ -787,7 +798,7 @@ describe("Cisco OCI candidate verifier V1", () => {
     const aboveConfigDigest = replaceWithExactTotalLayout(above, 1);
     expect(() =>
       verifyCiscoOciCandidateV1({ ...input(above), loadedImageId: aboveConfigDigest }),
-    ).toThrow("layout bound at-most-512MiB");
+    ).toThrow("layout bound at-most-1024MiB");
   });
 
   it("classifies rejected Docker descriptor media types without echoing them", () => {
