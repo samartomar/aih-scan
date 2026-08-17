@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 const root = resolve(import.meta.dirname, "..", "..");
 const workflowPath = resolve(root, ".github", "workflows", "cisco-linux-amd64-probe.yml");
 const readWorkflow = () => readFileSync(workflowPath, "utf8");
+const uvWheelUrl =
+  "https://files.pythonhosted.org/packages/93/22/dacc9a0bc8604187a1ba954a3aef8329e4104eb0af772d2c3c634893bd9b/uv-0.12.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl";
+const uvWheelSha256 = "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15";
 const stepBlocks = (workflow: string) => workflow.split(/^\s*-\s+name:\s*/m).slice(1);
 const blockContaining = (workflow: string, text: string) =>
   stepBlocks(workflow).find((step) => step.includes(text));
@@ -31,16 +34,16 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)\s*(?:#.*)?$/gm)].map(
       (match) => match[1] ?? "",
     );
-    expect(uses).toHaveLength(5);
+    expect(uses).toHaveLength(4);
     for (const action of uses) {
       expect(action).toMatch(
-        /^(?:actions\/checkout|actions\/setup-python|astral-sh\/setup-uv|actions\/upload-artifact)@[a-f0-9]{40}$/,
+        /^(?:actions\/checkout|actions\/setup-python|actions\/upload-artifact)@[a-f0-9]{40}$/,
       );
     }
     expect(uses.filter((action) => action.startsWith("actions/checkout@"))).toHaveLength(2);
     expect(uses).toContain("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
     expect(uses).toContain("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97");
-    expect(uses).toContain("astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d");
+    expect(uses).not.toContain("astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d");
     expect(uses).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
     const checkoutSteps = stepBlocks(workflow).filter((step) => step.includes("actions/checkout@"));
     expect(checkoutSteps).toHaveLength(2);
@@ -50,7 +53,14 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     expect(aihCheckout).toContain("path: .candidate-sources/ai-harness");
     expect(aihCheckout).toMatch(/persist-credentials:\s*false/);
     expect(workflow).toMatch(/python-version:\s*["']?3\.12["']?/);
-    expect(workflow).toMatch(/version:\s*["']?0\.12\.5["']?/);
+    const installUv = blockContaining(workflow, "Install exact uv 0.12.5");
+    expect(installUv).toContain(uvWheelUrl);
+    expect(installUv).toContain(uvWheelSha256);
+    expect(installUv).toMatch(/curl .*--fail .*--location .*--silent .*--show-error .*--output/);
+    expect(installUv).toMatch(/sha256sum -c/);
+    expect(installUv).toMatch(/python -m pip install --no-deps/);
+    expect(installUv).toContain('test "$(uv --version)" = "uv 0.12.5"');
+    expect(workflow).not.toMatch(/astral-sh\/setup-uv|versions-manifest/i);
     expect(workflow).toContain("ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41");
     expect(workflow).toContain("3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3");
     expect(workflow).toContain("d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837");

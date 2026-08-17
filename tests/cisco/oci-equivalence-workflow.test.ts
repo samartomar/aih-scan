@@ -26,10 +26,12 @@ const runBody = (text: string, name: string): string => {
 const buildxSha256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b";
 const buildkit =
   "moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f";
+const uvWheelUrl =
+  "https://files.pythonhosted.org/packages/93/22/dacc9a0bc8604187a1ba954a3aef8329e4104eb0af772d2c3c634893bd9b/uv-0.12.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl";
+const uvWheelSha256 = "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15";
 const allowedActions = new Set([
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
   "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
-  "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 ]);
 
@@ -160,6 +162,12 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(execute).toContain("npm test -- --run tests/cisco/oci-equivalence-live.test.ts");
     expect(step(text, "Clean up OCI equivalence resources")).toContain("if: $" + "{{ always() }}");
     expect(cleanup).toContain("docker buildx rm --force aih-scan-cisco-oci-equivalence");
+    expect(cleanup).toContain(
+      "if docker buildx inspect aih-scan-cisco-oci-equivalence >/dev/null 2>&1; then",
+    );
+    expect(cleanup).toContain("builders=\"$(docker buildx ls --format '{{.Name}}')\"");
+    expect(cleanup).toContain("grep -Fxq aih-scan-cisco-oci-equivalence");
+    expect(cleanup).toContain("existing OCI equivalence builder failed inspection");
     expect(cleanup).toContain("docker image rm --force local.invalid/aih-scan/cisco");
     expect(cleanup).toContain(
       'rm -rf "$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" "$RUNNER_TEMP/oci-equivalence/candidate-image.tar"',
@@ -202,6 +210,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
   it("installs and uses the pinned Buildx builder and supplies every live-test prerequisite from isolated temporary paths", () => {
     const text = workflow();
     const install = runBody(text, "Install pinned Buildx and BuildKit");
+    const installUv = runBody(text, "Install exact uv 0.12.5");
     const prepare = runBody(text, "Prepare isolated OCI equivalence prerequisites");
     const execute = runBody(text, "Compare isolated direct and OCI observations");
     expect(install).toContain("buildx-v0.34.1.linux-amd64");
@@ -210,6 +219,13 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(install).toContain(
       `docker buildx create --name aih-scan-cisco-oci-equivalence --driver docker-container --driver-opt image=${buildkit} --use`,
     );
+    expect(installUv).toContain(uvWheelUrl);
+    expect(installUv).toContain(uvWheelSha256);
+    expect(installUv).toContain("curl --fail --location --silent --show-error --output");
+    expect(installUv).toMatch(/sha256sum -c/);
+    expect(installUv).toMatch(/python -m pip install --no-deps/);
+    expect(installUv).toContain('test "$(uv --version)" = "uv 0.12.5"');
+    expect(text).not.toMatch(/astral-sh\/setup-uv|versions-manifest/i);
     expect(prepare).toContain("npm ci");
     expect(prepare).toMatch(/mkdir -p[^\n]*\$RUNNER_TEMP[^\n]*(?:direct|oci)/i);
     expect(prepare).toContain('printf "" > "$RUNNER_TEMP/aih-scan-cisco-empty-uv.toml"');
