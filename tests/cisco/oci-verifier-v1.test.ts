@@ -1,6 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,6 +50,7 @@ const layoutFixture = (
     readonly rawManifest?: Buffer;
     readonly rootfs?: unknown;
     readonly legacyManifest?: boolean;
+    readonly nestedIndex?: boolean;
   } = {},
 ): LayoutFixture => {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-oci-layout-"));
@@ -80,13 +89,39 @@ const layoutFixture = (
       }),
     );
   const manifestDigest = hash(manifest);
-  const descriptor = {
+  const manifestDescriptor = {
     mediaType: manifestMediaType,
     digest: manifestDigest,
     size: manifest.length,
     platform: { os: "linux", architecture: "amd64" },
     annotations: { "org.opencontainers.image.ref.name": "candidate" },
   };
+  const nestedIndex =
+    options.nestedIndex === true
+      ? Buffer.from(
+          JSON.stringify({
+            schemaVersion: 2,
+            mediaType: indexMediaType,
+            manifests: [
+              {
+                digest: manifestDigest,
+                mediaType: manifestMediaType,
+                platform: { architecture: "amd64", os: "linux" },
+                size: manifest.length,
+              },
+            ],
+          }),
+        )
+      : undefined;
+  const descriptor =
+    nestedIndex === undefined
+      ? manifestDescriptor
+      : {
+          annotations: { "org.opencontainers.image.ref.name": "candidate" },
+          digest: hash(nestedIndex),
+          mediaType: indexMediaType,
+          size: nestedIndex.length,
+        };
   writeFileSync(join(root, "oci-layout"), JSON.stringify({ imageLayoutVersion: "1.0.0" }));
   const index = { schemaVersion: 2, mediaType: indexMediaType, manifests: [descriptor] };
   writeFileSync(join(root, "index.json"), JSON.stringify(index));
@@ -95,6 +130,7 @@ const layoutFixture = (
   write(root, layerDigest, layer);
   write(root, configDigest, config);
   write(root, manifestDigest, manifest);
+  if (nestedIndex !== undefined) write(root, descriptor.digest, nestedIndex);
   return {
     root,
     manifest: manifestDigest,
@@ -104,12 +140,12 @@ const layoutFixture = (
       "buildx.build.provenance": {},
       "buildx.build.ref": "aih-scan-cisco-oci-equivalence/build0/example",
       "buildx.build.warnings": {},
-      "containerimage.digest": manifestDigest,
+      "containerimage.digest": descriptor.digest,
       "containerimage.config.digest": configDigest,
       "containerimage.descriptor": {
-        mediaType: manifestMediaType,
-        digest: manifestDigest,
-        size: manifest.length,
+        mediaType: descriptor.mediaType,
+        digest: descriptor.digest,
+        size: descriptor.size,
         annotations: {
           "config.digest": configDigest,
           "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
@@ -125,6 +161,35 @@ const input = (fixture = layoutFixture()) => ({
   metadata: fixture.metadata,
   loadedImageId: fixture.config,
 });
+
+const rewriteNestedIndex = (
+  fixture: LayoutFixture,
+  mutate: (index: Record<string, unknown>) => void,
+): void => {
+  const rootIndex = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
+    readonly manifests?: unknown;
+  };
+  if (!Array.isArray(rootIndex.manifests) || rootIndex.manifests[0] === undefined)
+    throw new Error("test fixture must contain one root index descriptor");
+  const rootDescriptor = rootIndex.manifests[0] as Record<string, unknown>;
+  const priorDigest = rootDescriptor.digest;
+  if (typeof priorDigest !== "string")
+    throw new Error("test fixture root descriptor digest is required");
+  const nested = JSON.parse(
+    readFileSync(
+      join(fixture.root, "blobs", "sha256", priorDigest.slice("sha256:".length)),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  mutate(nested);
+  const bytes = Buffer.from(JSON.stringify(nested));
+  const nextDigest = hash(bytes);
+  write(fixture.root, nextDigest, bytes);
+  unlinkSync(join(fixture.root, "blobs", "sha256", priorDigest.slice("sha256:".length)));
+  rootDescriptor.digest = nextDigest;
+  rootDescriptor.size = bytes.length;
+  writeFileSync(join(fixture.root, "index.json"), JSON.stringify(rootIndex));
+};
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -262,6 +327,83 @@ describe("Cisco OCI candidate verifier V1", () => {
     expect(result.logicalReference).toBe(`local.invalid/aih-scan/cisco@${fixture.manifest}`);
     expect(canonicalCiscoOciVerifierBytesV1(result)).toBeInstanceOf(Buffer);
     expect(canonicalCiscoOciVerifierLayoutBytesV1(result)).toBeInstanceOf(Buffer);
+  });
+
+  it("resolves the pinned BuildKit nested OCI index to its sole linux amd64 manifest", () => {
+    const fixture = layoutFixture({ nestedIndex: true });
+    const result = verifyCiscoOciCandidateV1(input(fixture));
+    expect(result.manifestDigestSha256).toBe(fixture.manifest);
+    expect(result.configDigestSha256).toBe(fixture.config);
+    expect(result.logicalReference).toBe(`local.invalid/aih-scan/cisco@${fixture.manifest}`);
+  });
+
+  it("rejects Docker, artifact, and ambiguous nested OCI index descriptor shapes", () => {
+    const docker = layoutFixture({ nestedIndex: true });
+    const dockerRoot = JSON.parse(readFileSync(join(docker.root, "index.json"), "utf8")) as {
+      readonly manifests?: unknown;
+    };
+    if (!Array.isArray(dockerRoot.manifests) || dockerRoot.manifests[0] === undefined)
+      throw new Error("test fixture must contain one root index descriptor");
+    (dockerRoot.manifests[0] as Record<string, unknown>).mediaType =
+      "application/vnd.docker.distribution.manifest.list.v2+json";
+    writeFileSync(join(docker.root, "index.json"), JSON.stringify(dockerRoot));
+    expect(() => verifyCiscoOciCandidateV1(input(docker))).toThrow();
+
+    const artifact = layoutFixture({ nestedIndex: true });
+    const artifactRoot = JSON.parse(readFileSync(join(artifact.root, "index.json"), "utf8")) as {
+      readonly manifests?: unknown;
+    };
+    if (!Array.isArray(artifactRoot.manifests) || artifactRoot.manifests[0] === undefined)
+      throw new Error("test fixture must contain one root index descriptor");
+    (artifactRoot.manifests[0] as Record<string, unknown>).mediaType =
+      "application/vnd.oci.artifact.manifest.v1+json";
+    writeFileSync(join(artifact.root, "index.json"), JSON.stringify(artifactRoot));
+    expect(() => verifyCiscoOciCandidateV1(input(artifact))).toThrow();
+
+    const multiple = layoutFixture({ nestedIndex: true });
+    rewriteNestedIndex(multiple, (nested) => {
+      const manifests = nested.manifests as unknown[];
+      nested.manifests = [...manifests, structuredClone(manifests[0])];
+    });
+    expect(() => verifyCiscoOciCandidateV1(input(multiple))).toThrow();
+
+    const wrongPlatform = layoutFixture({ nestedIndex: true });
+    rewriteNestedIndex(wrongPlatform, (nested) => {
+      const manifests = nested.manifests as Array<Record<string, unknown>>;
+      manifests[0] = { ...manifests[0], platform: { architecture: "amd64", os: "windows" } };
+    });
+    expect(() => verifyCiscoOciCandidateV1(input(wrongPlatform))).toThrow();
+
+    const digestSubstitution = layoutFixture({ nestedIndex: true });
+    const substitutionRoot = JSON.parse(
+      readFileSync(join(digestSubstitution.root, "index.json"), "utf8"),
+    ) as { readonly manifests?: unknown };
+    if (!Array.isArray(substitutionRoot.manifests) || substitutionRoot.manifests[0] === undefined)
+      throw new Error("test fixture must contain one root index descriptor");
+    const substituted = substitutionRoot.manifests[0] as Record<string, unknown>;
+    substituted.digest = digestSubstitution.manifest;
+    substituted.size = readFileSync(
+      join(
+        digestSubstitution.root,
+        "blobs",
+        "sha256",
+        digestSubstitution.manifest.slice("sha256:".length),
+      ),
+    ).length;
+    writeFileSync(join(digestSubstitution.root, "index.json"), JSON.stringify(substitutionRoot));
+    expect(() => verifyCiscoOciCandidateV1(input(digestSubstitution))).toThrow();
+
+    const sizeSubstitution = layoutFixture({ nestedIndex: true });
+    const sizeRoot = JSON.parse(
+      readFileSync(join(sizeSubstitution.root, "index.json"), "utf8"),
+    ) as {
+      readonly manifests?: unknown;
+    };
+    if (!Array.isArray(sizeRoot.manifests) || sizeRoot.manifests[0] === undefined)
+      throw new Error("test fixture must contain one root index descriptor");
+    (sizeRoot.manifests[0] as Record<string, unknown>).size = 0;
+    writeFileSync(join(sizeSubstitution.root, "index.json"), JSON.stringify(sizeRoot));
+    expect(() => verifyCiscoOciCandidateV1(input(sizeSubstitution))).toThrow();
   });
 
   it("permits only a bounded regular legacy manifest.json root entry when present", () => {

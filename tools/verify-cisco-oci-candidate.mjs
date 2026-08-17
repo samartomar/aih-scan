@@ -16,6 +16,7 @@ const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 64 * 1024 * 1024;
 const MAX_ROOT_ENTRIES = 128;
 const summaries = new WeakMap();
+const metadataDescriptors = new WeakMap();
 
 const fail = (message) => {
   throw new TypeError(`invalid Cisco OCI verifier V1: ${message}`);
@@ -301,6 +302,28 @@ function rootInventory(root, entries) {
   return { bits, files, directories, other, total: entries.length };
 }
 
+function manifestPlatform(value, label) {
+  const platform = plain(value, ["os", "architecture"], label);
+  if (platform.os !== "linux" || platform.architecture !== "amd64") fail(label);
+  return { architecture: "amd64", os: "linux" };
+}
+
+function manifestAnnotations(value, label) {
+  const annotations = allowed(
+    value,
+    ["org.opencontainers.image.ref.name"],
+    new Set(["io.containerd.image.name", "org.opencontainers.image.ref.name"]),
+    label,
+  );
+  const reference = annotations["org.opencontainers.image.ref.name"];
+  if (typeof reference !== "string" || !/^[a-z0-9][a-z0-9._/-]{0,255}$/u.test(reference))
+    fail("manifest reference");
+  const imageName = annotations["io.containerd.image.name"];
+  if (imageName !== undefined && (typeof imageName !== "string" || imageName.length === 0 || imageName.length > 255))
+    fail(label);
+  return { "org.opencontainers.image.ref.name": reference };
+}
+
 function layoutFromRoot(layoutRoot) {
   if (
     typeof layoutRoot !== "string" ||
@@ -343,21 +366,58 @@ function layoutFromRoot(layoutRoot) {
   );
   if (index.schemaVersion !== 2 || index.mediaType !== INDEX_MEDIA_TYPE || !Array.isArray(index.manifests) || index.manifests.length !== 1)
     fail("index");
-  const selected = plain(index.manifests[0], ["mediaType", "digest", "size", "platform", "annotations"], "index manifest");
-  const manifestDescriptor = descriptor(
+  const selected = allowed(
+    index.manifests[0],
+    ["mediaType", "digest", "size"],
+    new Set(["mediaType", "digest", "size", "platform", "annotations"]),
+    "index manifest",
+  );
+  const rootDescriptor = descriptor(
     { mediaType: selected.mediaType, digest: selected.digest, size: selected.size },
     "index manifest",
-    new Set([MANIFEST_MEDIA_TYPE]),
+    new Set([INDEX_MEDIA_TYPE, MANIFEST_MEDIA_TYPE]),
   );
-  const platform = plain(selected.platform, ["os", "architecture"], "manifest platform");
-  if (platform.os !== "linux" || platform.architecture !== "amd64") fail("manifest platform");
-  const annotations = plain(selected.annotations, ["org.opencontainers.image.ref.name"], "manifest annotations");
-  if (
-    typeof annotations["org.opencontainers.image.ref.name"] !== "string" ||
-    !/^[a-z0-9][a-z0-9._/-]{0,255}$/u.test(annotations["org.opencontainers.image.ref.name"])
-  )
-    fail("manifest reference");
-  const manifestBytes = readBlob(root, manifestDescriptor, "manifest", total);
+  const annotations = manifestAnnotations(selected.annotations, "manifest annotations");
+  let manifestDescriptor;
+  let manifestBytes;
+  if (rootDescriptor.mediaType === MANIFEST_MEDIA_TYPE) {
+    manifestDescriptor = {
+      ...rootDescriptor,
+      annotations,
+      platform: manifestPlatform(selected.platform, "manifest platform"),
+    };
+    manifestBytes = readBlob(root, manifestDescriptor, "manifest", total);
+  } else {
+    if (selected.platform !== undefined) manifestPlatform(selected.platform, "manifest platform");
+    const nestedIndex = plain(
+      jsonFromBytes(readBlob(root, rootDescriptor, "nested index", total), "nested index"),
+      ["schemaVersion", "mediaType", "manifests"],
+      "nested index",
+    );
+    if (
+      nestedIndex.schemaVersion !== 2 ||
+      nestedIndex.mediaType !== INDEX_MEDIA_TYPE ||
+      !Array.isArray(nestedIndex.manifests) ||
+      nestedIndex.manifests.length !== 1
+    )
+      fail("nested index");
+    const nestedSelected = plain(
+      nestedIndex.manifests[0],
+      ["mediaType", "digest", "size", "platform"],
+      "nested manifest",
+    );
+    const nestedDescriptor = descriptor(
+      { mediaType: nestedSelected.mediaType, digest: nestedSelected.digest, size: nestedSelected.size },
+      "nested manifest",
+      new Set([MANIFEST_MEDIA_TYPE]),
+    );
+    manifestDescriptor = {
+      ...nestedDescriptor,
+      annotations,
+      platform: manifestPlatform(nestedSelected.platform, "nested manifest platform"),
+    };
+    manifestBytes = readBlob(root, manifestDescriptor, "manifest", total);
+  }
   const manifest = plain(jsonFromBytes(manifestBytes, "manifest"), ["schemaVersion", "mediaType", "config", "layers"], "manifest");
   if (manifest.schemaVersion !== 2 || manifest.mediaType !== MANIFEST_MEDIA_TYPE || !Array.isArray(manifest.layers) || manifest.layers.length < 1 || manifest.layers.length > 128)
     fail("manifest");
@@ -390,7 +450,7 @@ function layoutFromRoot(layoutRoot) {
     !rootfsData.diff_ids.every((item) => typeof item === "string" && SHA256.test(item))
   )
     fail("config rootfs");
-  const referenced = new Set([manifestDescriptor.digest, configDescriptor.digest]);
+  const referenced = new Set([rootDescriptor.digest, manifestDescriptor.digest, configDescriptor.digest]);
   for (const layerInput of manifest.layers) {
     const layer = descriptor(layerInput, "layer", LAYER_MEDIA_TYPES);
     if (referenced.has(layer.digest)) fail("duplicate layer");
@@ -400,20 +460,22 @@ function layoutFromRoot(layoutRoot) {
   const blobNames = readdirSync(join(root, "blobs", "sha256")).sort();
   if (blobNames.length !== referenced.size || blobNames.some((name) => !referenced.has(`sha256:${name}`)))
     fail("blob inventory");
-  return {
+  const resultLayout = {
     protocol: "CiscoOciLayoutV1",
     manifestDigestSha256: manifestDescriptor.digest,
     configDigestSha256: configDescriptor.digest,
     logicalReference: `${LOGICAL_REFERENCE_PREFIX}${manifestDescriptor.digest.slice("sha256:".length)}`,
     manifestPlatform: { architecture: "amd64", os: "linux" },
     manifestDescriptor: {
-      annotations: { "org.opencontainers.image.ref.name": annotations["org.opencontainers.image.ref.name"] },
+      annotations,
       digest: manifestDescriptor.digest,
       mediaType: manifestDescriptor.mediaType,
       platform: { architecture: "amd64", os: "linux" },
       size: manifestDescriptor.size,
     },
   };
+  metadataDescriptors.set(resultLayout, rootDescriptor);
+  return resultLayout;
 }
 
 function metadata(value, layout) {
@@ -430,7 +492,8 @@ function metadata(value, layout) {
     ]),
     "metadata",
   );
-  if (data["containerimage.digest"] !== layout.manifestDigestSha256 || data["containerimage.config.digest"] !== layout.configDigestSha256)
+  const metadataDescriptor = metadataDescriptors.get(layout) ?? layout.manifestDescriptor;
+  if (data["containerimage.digest"] !== metadataDescriptor.digest || data["containerimage.config.digest"] !== layout.configDigestSha256)
     fail("metadata digest");
   if (
     (data["buildx.build.ref"] !== undefined &&
@@ -464,9 +527,9 @@ function metadata(value, layout) {
     "metadata descriptor annotations",
   );
   if (
-    descriptor.mediaType !== layout.manifestDescriptor.mediaType ||
-    descriptor.digest !== layout.manifestDescriptor.digest ||
-    descriptor.size !== layout.manifestDescriptor.size ||
+    descriptor.mediaType !== metadataDescriptor.mediaType ||
+    descriptor.digest !== metadataDescriptor.digest ||
+    descriptor.size !== metadataDescriptor.size ||
     annotations["config.digest"] !== layout.configDigestSha256 ||
     (annotations["org.opencontainers.image.created"] !== undefined &&
       typeof annotations["org.opencontainers.image.created"] !== "string")
