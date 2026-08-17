@@ -1,0 +1,94 @@
+name: Cisco Linux amd64 candidate evidence
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out aih-scan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out public ai-harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: samartomar/ai-harness
+          ref: c0b4931d1f5435f10dc5d2bc57480f9275ed3eff
+          path: .candidate-sources/ai-harness
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+
+      - name: Install aih-scan test dependencies
+        shell: bash
+        run: npm ci --ignore-scripts
+
+      - name: Prepare controlled probe environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/aih-scan-cisco-artifacts"
+          mkdir -p "$RUNNER_TEMP/aih-scan-cisco-child-bin"
+          mkdir -p "$RUNNER_TEMP/aih-scan-cisco-child-home"
+          mkdir -p "$RUNNER_TEMP/aih-scan-cisco-uv-cache"
+          ln -s "$(command -v uv)" "$RUNNER_TEMP/aih-scan-cisco-child-bin/uv"
+
+      - name: Verify exact runtime inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime=".candidate-sources/ai-harness/tools/cisco-skill-scanner"
+          wheel="$RUNNER_TEMP/cisco_ai_skill_scanner-2.0.13-py3-none-any.whl"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/cisco_ai_skill_scanner-2.0.13-py3-none-any.whl" "https://files.pythonhosted.org/packages/8d/72/e10809b1205523427364c526f806bc1db5c0eeb434c78a133743b24cc5f5/cisco_ai_skill_scanner-2.0.13-py3-none-any.whl"
+          cat > "$RUNNER_TEMP/cisco-runtime-inputs.sha256" <<EOF
+          ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41  $runtime/pyproject.toml
+          3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3  $runtime/uv.lock
+          d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837  $RUNNER_TEMP/cisco_ai_skill_scanner-2.0.13-py3-none-any.whl
+          EOF
+          sha256sum -c "$RUNNER_TEMP/cisco-runtime-inputs.sha256"
+
+      - name: Warm exact Cisco runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_CACHE_DIR="$RUNNER_TEMP/aih-scan-cisco-uv-cache" HOME="$RUNNER_TEMP/aih-scan-cisco-child-home" uv sync --project .candidate-sources/ai-harness/tools/cisco-skill-scanner --locked --isolated --python 3.12 --no-env-file
+
+      - name: Capture Linux observation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AIH_SCAN_CISCO_LINUX_AMD64_PROBE=1
+          export UV_OFFLINE=1
+          export AIH_SCAN_CISCO_RUNTIME_PROJECT="$GITHUB_WORKSPACE/.candidate-sources/ai-harness/tools/cisco-skill-scanner"
+          export AIH_SCAN_CISCO_ARTIFACT_DIR="$RUNNER_TEMP/aih-scan-cisco-artifacts"
+          export AIH_SCAN_CISCO_CHILD_PATH="$RUNNER_TEMP/aih-scan-cisco-child-bin"
+          export AIH_SCAN_CISCO_CHILD_HOME="$RUNNER_TEMP/aih-scan-cisco-child-home"
+          export AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR="$RUNNER_TEMP/aih-scan-cisco-uv-cache"
+          npm test -- --run tests/cisco/linux-amd64-probe.test.ts
+
+      - name: Upload sanitized observation artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cisco-linux-amd64-candidate-evidence
+          path: |
+            ${{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-sarif-*.json
+            ${{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-observation-summary.json
+          if-no-files-found: warn
+          retention-days: 3
