@@ -6,11 +6,12 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { loadCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
@@ -546,6 +547,34 @@ describe("Cisco OCI broker V1", () => {
       expect(String(error)).not.toContain(stdout);
       expect(String(error)).not.toContain(stderr);
     }
+  });
+
+  it("binds a UID-writable output child inside a private temporary parent", async () => {
+    const { value, fake } = input();
+    const original = fake.run;
+    let outputRoot: string | undefined;
+    let outputParent: string | undefined;
+    value.runner = async (argv, options) => {
+      if (argv[1] === "run") {
+        outputRoot = mountSource(argv, "/output");
+        outputParent = dirname(outputRoot);
+        expect(basename(outputRoot)).toBe("output");
+        if (process.platform !== "win32") {
+          expect(statSync(outputParent).mode & 0o777).toBe(0o700);
+          expect(statSync(outputRoot).mode & 0o777).toBe(0o777);
+        }
+        expect(readdirSync(outputParent)).toEqual(["output"]);
+      }
+      return original(argv, options);
+    };
+
+    await expect(executeCiscoOciBrokerV1(value)).resolves.toMatchObject({
+      cleanup: { kind: "clean" },
+    });
+    if (outputRoot === undefined || outputParent === undefined)
+      throw new Error("broker did not invoke the scanner runner");
+    expect(existsSync(outputRoot)).toBe(false);
+    expect(existsSync(outputParent)).toBe(false);
   });
 
   it("requires a successful exact-name Docker absence listing with no output", async () => {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -245,6 +246,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   const clientRoot = mkdtempSync(join(temporaryBase, "aih-scan-oci-client-"));
   const home = join(clientRoot, "home");
   const dockerConfig = join(clientRoot, "docker-config");
+  let outputParent: string | undefined;
   let outputRoot: string | undefined;
   const env = Object.freeze({ PATH: "/usr/bin:/bin", HOME: home, DOCKER_CONFIG: dockerConfig });
   const options = Object.freeze({
@@ -264,7 +266,12 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     temporaryPath(clientRoot, "client root");
     mkdirSync(home, { recursive: true });
     mkdirSync(dockerConfig, { recursive: true });
-    outputRoot = mkdtempSync(join(temporaryBase, "aih-scan-oci-output-"));
+    outputParent = mkdtempSync(join(temporaryBase, "aih-scan-oci-output-"));
+    temporaryPath(outputParent, "output parent");
+    chmodSync(outputParent, 0o700);
+    outputRoot = join(outputParent, "output");
+    mkdirSync(outputRoot);
+    chmodSync(outputRoot, 0o777);
     temporaryPath(outputRoot, "output root");
     const inspected = await invoke(
       ["docker", "image", "inspect", "--format", "{{.Id}}", input.layout.configDigestSha256],
@@ -380,7 +387,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
       cleanupError = error;
     }
   }
-  for (const temporaryRoot of [outputRoot, clientRoot]) {
+  for (const temporaryRoot of [outputParent, clientRoot]) {
     if (temporaryRoot === undefined) continue;
     try {
       rmSync(temporaryRoot, { recursive: true, force: true });
