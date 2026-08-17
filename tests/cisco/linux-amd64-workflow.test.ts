@@ -93,6 +93,9 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
       "$" + "{{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-sarif-*.json",
     );
     expect(upload).toContain(
+      "$" + "{{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-runner-failure-*.json",
+    );
+    expect(upload).toContain(
       "$" + "{{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-observation-summary.json",
     );
     expect(upload).not.toMatch(/raw|workspace|\*\*/i);

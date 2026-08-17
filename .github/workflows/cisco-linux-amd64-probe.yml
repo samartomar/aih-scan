@@ -90,6 +90,7 @@ jobs:
           name: cisco-linux-amd64-candidate-evidence
           path: |
             ${{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-sarif-*.json
+            ${{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-runner-failure-*.json
             ${{ runner.temp }}/aih-scan-cisco-artifacts/sanitized-observation-summary.json
           if-no-files-found: warn
           retention-days: 3

@@ -20,6 +20,7 @@ const wheelSha256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d62
 const roots: string[] = [];
 const maxStdioBytes = 64 * 1024;
 const maxSarifBytes = 16 * 1024 * 1024;
+const maxFailureDiagnosticBytes = 64 * 1024;
 const probeTimeoutMs = 120_000;
 const liveLinuxProbe =
   process.env.AIH_SCAN_CISCO_LINUX_AMD64_PROBE === "1" &&
@@ -147,7 +148,10 @@ function controlledLiveEnvironment(options: { readonly env: Readonly<Record<stri
 }
 
 function artifactPath(artifactRoot: string, name: string): string {
-  if (!/^sanitized-sarif-[01]\.json$/.test(name) && name !== "sanitized-observation-summary.json")
+  if (
+    !/^sanitized-(?:sarif|runner-failure)-[01]\.json$/.test(name) &&
+    name !== "sanitized-observation-summary.json"
+  )
     throw new Error("only sanitized diagnostic artifacts are allowed");
   const target = resolve(artifactRoot, name);
   if (relative(artifactRoot, target) !== name)
@@ -166,6 +170,80 @@ function sanitizedDiagnostic(raw: Buffer, sourceRoot: string, runtimeProjectRoot
   if (/(?:[A-Za-z]:[\\/]|\/(?:tmp|home|workspace|opt)\/)/.test(text))
     return Buffer.from('{"kind":"absolute-path-sarif-rejected"}\n', "utf8");
   return Buffer.from(text, "utf8");
+}
+
+function sanitizedRunnerFailure(
+  exitCode: number,
+  stderr: string,
+  sourceRoot: string,
+  runtimeProjectRoot: string,
+  cwd: string,
+): Buffer {
+  if (!Number.isSafeInteger(exitCode) || exitCode < 0)
+    throw new Error("runner failure exit code must be a non-negative safe integer");
+  const ansiEscape = String.fromCharCode(27);
+  let diagnostic = stderr.replace(new RegExp(`${ansiEscape}\\[[0-?]*[ -/]*[@-~]`, "g"), "");
+  diagnostic = [...diagnostic]
+    .map((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 31 || code === 127 ? " " : character;
+    })
+    .join("");
+  for (const path of [sourceRoot, runtimeProjectRoot, cwd, tmpdir()]) {
+    diagnostic = diagnostic.replaceAll(path, "<redacted-path>");
+    diagnostic = diagnostic.replaceAll(path.replaceAll("\\", "/"), "<redacted-path>");
+  }
+  diagnostic = diagnostic.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s"'`]+/g, "<redacted-path>");
+  if (diagnostic.length === 0) diagnostic = "runner exited without SARIF output";
+  let artifact = Buffer.alloc(0);
+  do {
+    while (Buffer.byteLength(diagnostic, "utf8") > maxFailureDiagnosticBytes)
+      diagnostic = diagnostic.slice(0, -1);
+    artifact = Buffer.from(
+      JSON.stringify({
+        protocol: "CiscoLinuxAmd64ProbeFailureV1",
+        kind: "runner-failure",
+        exitCode,
+        diagnostic,
+      }),
+      "utf8",
+    );
+    if (artifact.length > maxFailureDiagnosticBytes) diagnostic = diagnostic.slice(0, -1);
+  } while (artifact.length > maxFailureDiagnosticBytes);
+  return artifact;
+}
+
+function persistRunnerArtifact(input: {
+  readonly diagnosticsRoot: string;
+  readonly executionOrdinal: number;
+  readonly output: string;
+  readonly exitCode: number;
+  readonly stderr: string;
+  readonly sourceRoot: string;
+  readonly runtimeProjectRoot: string;
+  readonly cwd: string;
+}): void {
+  if (existsSync(input.output)) {
+    const raw = readFileSync(input.output);
+    writeFileSync(
+      artifactPath(input.diagnosticsRoot, `sanitized-sarif-${String(input.executionOrdinal)}.json`),
+      sanitizedDiagnostic(raw, input.sourceRoot, input.runtimeProjectRoot),
+    );
+  } else if (input.exitCode !== 0) {
+    writeFileSync(
+      artifactPath(
+        input.diagnosticsRoot,
+        `sanitized-runner-failure-${String(input.executionOrdinal)}.json`,
+      ),
+      sanitizedRunnerFailure(
+        input.exitCode,
+        input.stderr,
+        input.sourceRoot,
+        input.runtimeProjectRoot,
+        input.cwd,
+      ),
+    );
+  }
 }
 
 function liveRunner(sourceRoot: string, runtimeProjectRoot: string, diagnosticsRoot: string) {
@@ -238,13 +316,16 @@ function liveRunner(sourceRoot: string, runtimeProjectRoot: string, diagnosticsR
         });
         child.once("close", (code) => {
           try {
-            if (existsSync(output)) {
-              const raw = readFileSync(output);
-              writeFileSync(
-                artifactPath(diagnosticsRoot, `sanitized-sarif-${String(current)}.json`),
-                sanitizedDiagnostic(raw, sourceRoot, runtimeProjectRoot),
-              );
-            }
+            persistRunnerArtifact({
+              diagnosticsRoot,
+              executionOrdinal: current,
+              output,
+              exitCode: code ?? 1,
+              stderr: Buffer.concat(stderr).toString("utf8"),
+              sourceRoot,
+              runtimeProjectRoot,
+              cwd: options.cwd,
+            });
             finish({
               code: code ?? 1,
               stdout: Buffer.concat(stdout).toString("utf8"),
@@ -320,6 +401,53 @@ const expectRecursivelyFrozen = (value: unknown, seen = new Set<object>()) => {
 };
 
 describe("Cisco Linux amd64 observation-only probe", () => {
+  it("records a bounded closed runner-failure artifact without paths or execution metadata", () => {
+    const sourceRoot = fixtureRoot();
+    const runtimeProjectRoot = "/opt/public-cisco-runtime";
+    const diagnosticsRoot = mkdtempSync(join(tmpdir(), "aih-scan-cisco-artifacts-"));
+    roots.push(diagnosticsRoot);
+    persistRunnerArtifact({
+      diagnosticsRoot,
+      executionOrdinal: 0,
+      output: join(diagnosticsRoot, "missing.sarif"),
+      exitCode: 17,
+      stderr: `\u001b[31mfailed\u001b[0m ${sourceRoot} ${runtimeProjectRoot} ${process.cwd()} ${tmpdir()} /var/private \u0000 ${"x".repeat(maxFailureDiagnosticBytes + 1)}`,
+      sourceRoot,
+      runtimeProjectRoot,
+      cwd: process.cwd(),
+    });
+    const artifactBytes = readFileSync(
+      artifactPath(diagnosticsRoot, "sanitized-runner-failure-0.json"),
+    );
+    expect(artifactBytes.length).toBeLessThanOrEqual(maxFailureDiagnosticBytes);
+    const artifact = JSON.parse(artifactBytes.toString("utf8")) as Record<string, unknown>;
+
+    expect(Object.keys(artifact).sort()).toEqual(["diagnostic", "exitCode", "kind", "protocol"]);
+    expect(artifact).toMatchObject({
+      protocol: "CiscoLinuxAmd64ProbeFailureV1",
+      kind: "runner-failure",
+      exitCode: 17,
+    });
+    const diagnostic = artifact.diagnostic;
+    expect(typeof diagnostic).toBe("string");
+    if (typeof diagnostic !== "string") throw new Error("runner failure diagnostic must be text");
+    expect(Buffer.byteLength(diagnostic, "utf8")).toBeLessThanOrEqual(maxFailureDiagnosticBytes);
+    expect(diagnostic).not.toContain(sourceRoot);
+    expect(diagnostic).not.toContain(runtimeProjectRoot);
+    expect(diagnostic).not.toContain(process.cwd());
+    expect(diagnostic).not.toContain(String.fromCharCode(27));
+    expect(
+      [...diagnostic].every((character) => {
+        const code = character.charCodeAt(0);
+        return code > 31 && code !== 127;
+      }),
+    ).toBe(true);
+    expect(diagnostic).not.toMatch(/(?:[A-Za-z]:[\\/]|\/(?:tmp|home|workspace|opt|var)\/)/);
+    expect(JSON.stringify(artifact)).not.toMatch(
+      /argv|environment|token|credential|auth|proxy|docker|socket/i,
+    );
+  });
+
   it("runs the exact pinned offline command twice and emits distinct non-authoritative observation records", async () => {
     const root = fixtureRoot();
     const fake = runner({ result: sarif });
