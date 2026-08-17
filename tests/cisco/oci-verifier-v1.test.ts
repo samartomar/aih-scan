@@ -204,56 +204,6 @@ const rewriteNestedIndex = (
   writeFileSync(join(fixture.root, "index.json"), JSON.stringify(rootIndex));
 };
 
-const replaceLayersBeyondCurrentTotalBound = (fixture: LayoutFixture): void => {
-  const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
-    readonly manifests?: unknown;
-  };
-  if (!Array.isArray(index.manifests) || index.manifests[0] === undefined)
-    throw new Error("test fixture index must contain one manifest descriptor");
-  const rootDescriptor = index.manifests[0] as Record<string, unknown>;
-  const manifestDigest = rootDescriptor.digest;
-  if (typeof manifestDigest !== "string")
-    throw new Error("test fixture manifest digest is required");
-  const manifest = JSON.parse(
-    readFileSync(
-      join(fixture.root, "blobs", "sha256", manifestDigest.slice("sha256:".length)),
-      "utf8",
-    ),
-  ) as Record<string, unknown>;
-  const configDescriptor = manifest.config as Record<string, unknown>;
-  const configDigest = configDescriptor.digest;
-  if (typeof configDigest !== "string") throw new Error("test fixture config digest is required");
-  const config = JSON.parse(
-    readFileSync(
-      join(fixture.root, "blobs", "sha256", configDigest.slice("sha256:".length)),
-      "utf8",
-    ),
-  ) as Record<string, unknown>;
-  const layers = Array.from({ length: 5 }, (_, index) => Buffer.alloc(15 * 1024 * 1024, index + 1));
-  const layerDescriptors = layers.map((layer) => ({
-    digest: hash(layer),
-    mediaType: "application/vnd.oci.image.layer.v1.tar",
-    size: layer.length,
-  }));
-  const rootfs = config.rootfs as Record<string, unknown>;
-  config.rootfs = {
-    ...rootfs,
-    diff_ids: layers.map((layer) => hash(Buffer.concat([Buffer.from("uncompressed"), layer]))),
-  };
-  const configBytes = Buffer.from(JSON.stringify(config));
-  const nextConfigDigest = hash(configBytes);
-  write(fixture.root, nextConfigDigest, configBytes);
-  manifest.config = { ...configDescriptor, digest: nextConfigDigest, size: configBytes.length };
-  manifest.layers = layerDescriptors;
-  const manifestBytes = Buffer.from(JSON.stringify(manifest));
-  const nextManifestDigest = hash(manifestBytes);
-  write(fixture.root, nextManifestDigest, manifestBytes);
-  for (const layer of layers) write(fixture.root, hash(layer), layer);
-  rootDescriptor.digest = nextManifestDigest;
-  rootDescriptor.size = manifestBytes.length;
-  writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
-};
-
 const replaceWithSingleLayer = (fixture: LayoutFixture, layer: Buffer): string => {
   const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
     readonly manifests?: unknown;
@@ -322,6 +272,112 @@ const replaceWithSingleLayer = (fixture: LayoutFixture, layer: Buffer): string =
   };
   writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
   return nextConfigDigest;
+};
+
+const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number): string => {
+  const mib = 1024 * 1024;
+  const target = 256 * mib + extraBytes;
+  const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
+    readonly manifests?: unknown;
+  };
+  if (!Array.isArray(index.manifests) || index.manifests[0] === undefined)
+    throw new Error("test fixture index must contain one manifest descriptor");
+  const rootDescriptor = index.manifests[0] as Record<string, unknown>;
+  const originalManifestDigest = rootDescriptor.digest;
+  if (typeof originalManifestDigest !== "string")
+    throw new Error("test fixture manifest digest is required");
+  const originalManifest = JSON.parse(
+    readFileSync(
+      join(fixture.root, "blobs", "sha256", originalManifestDigest.slice("sha256:".length)),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  const originalConfigDescriptor = originalManifest.config as Record<string, unknown>;
+  const originalConfigDigest = originalConfigDescriptor.digest;
+  if (typeof originalConfigDigest !== "string")
+    throw new Error("test fixture config digest is required");
+  const originalConfig = JSON.parse(
+    readFileSync(
+      join(fixture.root, "blobs", "sha256", originalConfigDigest.slice("sha256:".length)),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  const originalLayers = originalManifest.layers as ReadonlyArray<Record<string, unknown>>;
+  const firstLength = 128 * mib;
+  let first = Buffer.alloc(firstLength, 1);
+  const firstDigest = hash(first);
+  write(fixture.root, firstDigest, first);
+  first = Buffer.alloc(0);
+  const build = (secondDigest: string, secondLength: number) => {
+    const config = structuredClone(originalConfig) as Record<string, unknown>;
+    const rootfs = config.rootfs as Record<string, unknown>;
+    config.rootfs = {
+      ...rootfs,
+      diff_ids: [hash(`uncompressed:${firstDigest}`), hash(`uncompressed:${secondDigest}`)],
+    };
+    const configBytes = Buffer.from(JSON.stringify(config));
+    const configDigest = hash(configBytes);
+    const manifest = structuredClone(originalManifest) as Record<string, unknown>;
+    manifest.config = {
+      ...originalConfigDescriptor,
+      digest: configDigest,
+      size: configBytes.length,
+    };
+    manifest.layers = [
+      {
+        digest: firstDigest,
+        mediaType: "application/vnd.oci.image.layer.v1.tar",
+        size: firstLength,
+      },
+      {
+        digest: secondDigest,
+        mediaType: "application/vnd.oci.image.layer.v1.tar",
+        size: secondLength,
+      },
+    ];
+    const manifestBytes = Buffer.from(JSON.stringify(manifest));
+    const manifestDigest = hash(manifestBytes);
+    const nextIndex = structuredClone(index) as Record<string, unknown>;
+    const descriptors = nextIndex.manifests as Array<Record<string, unknown>>;
+    descriptors[0] = { ...rootDescriptor, digest: manifestDigest, size: manifestBytes.length };
+    const indexBytes = Buffer.from(JSON.stringify(nextIndex));
+    return { configBytes, configDigest, indexBytes, manifestBytes, manifestDigest, nextIndex };
+  };
+  const provisional = build(hash("provisional-layer"), 128 * mib - 4096);
+  const overhead =
+    readFileSync(join(fixture.root, "oci-layout")).length +
+    provisional.indexBytes.length +
+    provisional.configBytes.length +
+    provisional.manifestBytes.length;
+  const secondLength = target - firstLength - overhead;
+  if (secondLength < 1 || secondLength > 128 * mib)
+    throw new Error("test fixture total layout construction is out of bounds");
+  let second = Buffer.alloc(secondLength, 2);
+  const secondDigest = hash(second);
+  const output = build(secondDigest, secondLength);
+  write(fixture.root, output.configDigest, output.configBytes);
+  write(fixture.root, output.manifestDigest, output.manifestBytes);
+  write(fixture.root, secondDigest, second);
+  second = Buffer.alloc(0);
+  const oldDigests = new Set([originalManifestDigest, originalConfigDigest]);
+  for (const layer of originalLayers) {
+    if (typeof layer.digest === "string") oldDigests.add(layer.digest);
+  }
+  for (const digest of oldDigests) {
+    unlinkSync(join(fixture.root, "blobs", "sha256", digest.slice("sha256:".length)));
+  }
+  writeFileSync(join(fixture.root, "index.json"), output.indexBytes);
+  const metadata = fixture.metadata as Record<string, unknown>;
+  metadata["containerimage.digest"] = output.manifestDigest;
+  metadata["containerimage.config.digest"] = output.configDigest;
+  const metadataDescriptor = metadata["containerimage.descriptor"] as Record<string, unknown>;
+  metadataDescriptor.digest = output.manifestDigest;
+  metadataDescriptor.size = output.manifestBytes.length;
+  metadataDescriptor.annotations = {
+    "config.digest": output.configDigest,
+    "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
+  };
+  return output.configDigest;
 };
 
 afterEach(() => {
@@ -704,51 +760,34 @@ describe("Cisco OCI candidate verifier V1", () => {
     }
   });
 
-  it("profiles a cumulative layout bound with buckets instead of exact sizes", () => {
-    const fixture = layoutFixture();
-    replaceLayersBeyondCurrentTotalBound(fixture);
-    const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
-    roots.push(invocationRoot);
-    const metadataPath = join(invocationRoot, "metadata.json");
-    const imageIdPath = join(invocationRoot, "image-id.txt");
-    writeFileSync(metadataPath, JSON.stringify(fixture.metadata));
-    writeFileSync(imageIdPath, fixture.config);
-    const result = spawnSync(
-      process.execPath,
-      [
-        verifierPath,
-        "--metadata",
-        metadataPath,
-        "--layout-root",
-        fixture.root,
-        "--image-id",
-        imageIdPath,
-        "--summary",
-        join(invocationRoot, "summary.json"),
-        "--canonical-layout",
-        join(invocationRoot, "layout.json"),
-      ],
-      { encoding: "utf8", shell: false, windowsHide: true },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe("Cisco OCI verifier rejected input: layout bound at-most-128MiB\n");
-    expect(result.stderr).not.toMatch(/\d{4,}|sha256|Error|stack/i);
-  });
-
-  it("accepts an exact 128MiB layer at the per-file gate but retains the 64MiB total bound", () => {
+  it("accepts an exact 128MiB layer and rejects one byte beyond the file bound", () => {
     const exact = layoutFixture();
     const exactConfigDigest = replaceWithSingleLayer(exact, Buffer.alloc(128 * 1024 * 1024, 1));
-    expect(() =>
-      verifyCiscoOciCandidateV1({ ...input(exact), loadedImageId: exactConfigDigest }),
-    ).toThrow("layout bound at-most-256MiB");
+    expect(
+      verifyCiscoOciCandidateV1({ ...input(exact), loadedImageId: exactConfigDigest })
+        .manifestDigestSha256,
+    ).toMatch(/^sha256:[a-f0-9]{64}$/);
 
     const above = layoutFixture();
     replaceWithSingleLayer(above, Buffer.alloc(128 * 1024 * 1024 + 1, 2));
     expect(() => verifyCiscoOciCandidateV1(input(above))).toThrow(
       "layer size range at-most-256MiB",
     );
+  });
+
+  it("accepts an exact 256MiB layout and rejects one byte beyond the aggregate bound", () => {
+    const exact = layoutFixture();
+    const exactConfigDigest = replaceWithExactTotalLayout(exact, 0);
+    expect(
+      verifyCiscoOciCandidateV1({ ...input(exact), loadedImageId: exactConfigDigest })
+        .manifestDigestSha256,
+    ).toMatch(/^sha256:[a-f0-9]{64}$/);
+
+    const above = layoutFixture();
+    const aboveConfigDigest = replaceWithExactTotalLayout(above, 1);
+    expect(() =>
+      verifyCiscoOciCandidateV1({ ...input(above), loadedImageId: aboveConfigDigest }),
+    ).toThrow("layout bound at-most-512MiB");
   });
 
   it("classifies rejected Docker descriptor media types without echoing them", () => {
