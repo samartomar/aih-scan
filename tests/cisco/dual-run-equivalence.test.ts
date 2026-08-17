@@ -14,8 +14,8 @@ import { parseCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
 const lockSha256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
 const wheelSha256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
 const fixtureBytes = "# Demo\n\nNeutral fixture.\n";
-const fixtureSha256 = "0e3b428e3a31f70f929c5bcbf43892519e4b4c5466a12f75e99128c496b0d64d";
-const coverageSha256 = "5d83c254e1aa62c5a86809df6967b42eb5219f0f3c99ee42e884d5840382124e";
+const fixtureSha256 = "57b1967dfe7f3b898c1ec24f1f9057de112ba1aa346c1ba37c72106a5e0b6985";
+const coverageSha256 = "35239b0b0ae7907a5ddbb6af273cb356dd547327c21724122a22df53dbc8773d";
 const roots: string[] = [];
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const digest = (seed: string) => sha256(`dual-run-red:${seed}`);
@@ -54,7 +54,7 @@ const expectedNeutralTable: readonly ExpectedRow[] = [
     canonicalOrdinal: 0,
     multiplicity: 1,
     rawOccurrenceFingerprint: raw(
-      "d268d2dbe48037534b1e1391e5eb4786717d3380c190e3ab17ad187126a2e7fe",
+      "9a5a2f9de3a409ad42a5ccc769a8c32637e51f7d1540d3d9be1e73bd44efdd5a",
     ),
   },
   {
@@ -70,7 +70,7 @@ const expectedNeutralTable: readonly ExpectedRow[] = [
     canonicalOrdinal: 1,
     multiplicity: 1,
     rawOccurrenceFingerprint: raw(
-      "57c7b5fbd787984625503b4b608538819d18db8b3649df1a1bd3fbd6c9919d10",
+      "e8fd27b6231588ff6036c3936532a608e2a754369eb413a7d72c61414fab421e",
     ),
   },
   {
@@ -87,7 +87,7 @@ const expectedNeutralTable: readonly ExpectedRow[] = [
     canonicalOrdinal: 2,
     multiplicity: 1,
     rawOccurrenceFingerprint: raw(
-      "4823ca889d6ba4c25478443a55a1be9953250a9301a0da918ba2ca3d06db2565",
+      "e3a76ff5c42b3025351f436f3c229a56bde9e3a87077fc72c5b68e950e1a96f0",
     ),
   },
   {
@@ -103,7 +103,7 @@ const expectedNeutralTable: readonly ExpectedRow[] = [
     canonicalOrdinal: 0,
     multiplicity: 1,
     rawOccurrenceFingerprint: raw(
-      "048a30ff65d86b980e227804a58dc50bfc6cd1f89bdad8df754b5ec6b186232f",
+      "952e95bd3fcaf99a66647a3c23d04070ed0c61fb6fc1102f7ce1595091a9ec70",
     ),
   },
   {
@@ -119,7 +119,7 @@ const expectedNeutralTable: readonly ExpectedRow[] = [
     canonicalOrdinal: 0,
     multiplicity: 1,
     rawOccurrenceFingerprint: raw(
-      "34f875ffa9cf941d3e5ab227f89b6854e9ad889e5a77641870a403d10f61d817",
+      "1cf8a64f60f4a85fbcb15c8d1e1d643a6f2d9ce4cc355f1a4a13979053f5a3b7",
     ),
   },
 ];
@@ -127,16 +127,8 @@ const expectedFacts = expectedNeutralTable.map(
   ({ level: _level, message: _message, locations: _locations, ...fact }) => fact,
 );
 const expectedAnnexBytes = Buffer.from(
-  JSON.stringify(
-    expectedNeutralTable.map(
-      ({
-        canonicalOrdinal: _canonicalOrdinal,
-        multiplicity: _multiplicity,
-        rawOccurrenceFingerprint: _rawOccurrenceFingerprint,
-        ...detail
-      }) => detail,
-    ),
-  ),
+  "W3siZGV0ZWN0b3JDbGFzcyI6ImNpc2NvIiwiZmlsZVNoYTI1NiI6IjU3YjE5NjdkZmU3ZjNiODk4YzFlYzI0ZjFmOTA1N2RlMTEyYmExYWEzNDZjMWJhMzdjNzIxMDZhNWUwYjY5ODUiLCJsZXZlbCI6ImVycm9yIiwibG9jYXRpb25zIjpbeyJwaHlzaWNhbExvY2F0aW9uIjp7ImFydGlmYWN0TG9jYXRpb24iOnsidXJpIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSwicmVnaW9uIjp7InN0YXJ0TGluZSI6M319fV0sIm1lc3NhZ2UiOiJ1bnRydXN0ZWQgaW5zdHJ1Y3Rpb24iLCJuYXRpdmVSdWxlSWQiOiJwcm9tcHQtaW5qZWN0aW9uIiwicGF0aCI6InNraWxscy9kZW1vL1NLSUxMLm1kIn0seyJkZXRlY3RvckNsYXNzIjoiY2lzY28iLCJmaWxlU2hhMjU2IjoiNTdiMTk2N2RmZTdmM2I4OThjMWVjMjRmMWY5MDU3ZGUxMTJiYTFhYTM0NmMxYmEzN2M3MjEwNmE1ZTBiNjk4NSIsImxldmVsIjoiZXJyb3IiLCJsb2NhdGlvbnMiOlt7InBoeXNpY2FsTG9jYXRpb24iOnsiYXJ0aWZhY3RMb2NhdGlvbiI6eyJ1cmkiOiJza2lsbHMvZGVtby9TS0lMTC5tZCJ9LCJyZWdpb24iOnsic3RhcnRMaW5lIjozfX19XSwibWVzc2FnZSI6InVudHJ1c3RlZCBpbnN0cnVjdGlvbiIsIm5hdGl2ZVJ1bGVJZCI6InByb21wdC1pbmplY3Rpb24iLCJwYXRoIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSx7ImRldGVjdG9yQ2xhc3MiOiJjaXNjbyIsImZpbGVTaGEyNTYiOiI1N2IxOTY3ZGZlN2YzYjg5OGMxZWMyNGYxZjkwNTdkZTExMmJhMWFhMzQ2YzFiYTM3YzcyMTA2YTVlMGI2OTg1IiwibGV2ZWwiOiJlcnJvciIsImxvY2F0aW9ucyI6W3sicGh5c2ljYWxMb2NhdGlvbiI6eyJhcnRpZmFjdExvY2F0aW9uIjp7InVyaSI6InNraWxscy9kZW1vL1NLSUxMLm1kIn0sInJlZ2lvbiI6eyJzdGFydExpbmUiOjR9fX0seyJwaHlzaWNhbExvY2F0aW9uIjp7ImFydGlmYWN0TG9jYXRpb24iOnsidXJpIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSwicmVnaW9uIjp7InN0YXJ0TGluZSI6NX19fV0sIm1lc3NhZ2UiOiJkaWZmZXJlbnQgZGlhZ25vc3RpYyIsIm5hdGl2ZVJ1bGVJZCI6InByb21wdC1pbmplY3Rpb24iLCJwYXRoIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSx7ImRldGVjdG9yQ2xhc3MiOiJjaXNjbyIsImZpbGVTaGEyNTYiOiI1N2IxOTY3ZGZlN2YzYjg5OGMxZWMyNGYxZjkwNTdkZTExMmJhMWFhMzQ2YzFiYTM3YzcyMTA2YTVlMGI2OTg1IiwibGV2ZWwiOiJub3RlIiwibG9jYXRpb25zIjpbeyJwaHlzaWNhbExvY2F0aW9uIjp7ImFydGlmYWN0TG9jYXRpb24iOnsidXJpIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSwicmVnaW9uIjp7InN0YXJ0TGluZSI6NX19fV0sIm1lc3NhZ2UiOiJ1bmtub3duIHJlbWFpbnMgcmF3IiwibmF0aXZlUnVsZUlkIjoiZnV0dXJlLXJ1bGUiLCJwYXRoIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSx7ImRldGVjdG9yQ2xhc3MiOiJjaXNjbyIsImZpbGVTaGEyNTYiOiI1N2IxOTY3ZGZlN2YzYjg5OGMxZWMyNGYxZjkwNTdkZTExMmJhMWFhMzQ2YzFiYTM3YzcyMTA2YTVlMGI2OTg1IiwibGV2ZWwiOiJ3YXJuaW5nIiwibG9jYXRpb25zIjpbeyJwaHlzaWNhbExvY2F0aW9uIjp7ImFydGlmYWN0TG9jYXRpb24iOnsidXJpIjoic2tpbGxzL2RlbW8vU0tJTEwubWQifSwicmVnaW9uIjp7InN0YXJ0TGluZSI6MX19fV0sIm1lc3NhZ2UiOiJsaWNlbnNlIG1ldGFkYXRhIG1pc3NpbmciLCJuYXRpdmVSdWxlSWQiOiJza2lsbC1tZXRhZGF0YS1saWNlbnNlIiwicGF0aCI6InNraWxscy9kZW1vL1NLSUxMLm1kIn1d",
+  "base64",
 );
 const expectedCoverage = [{ coverageKind: "selected-closure", coverageSha256 }];
 
