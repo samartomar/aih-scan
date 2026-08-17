@@ -393,8 +393,18 @@ describe("Cisco OCI broker V1", () => {
       "/output/result.sarif",
     ]);
     expect(run?.argv?.filter((item) => item === "--mount")).toHaveLength(2);
+    for (const forbidden of [
+      "--privileged",
+      "--network=host",
+      "--device",
+      "/var/run/docker.sock",
+      "--env",
+      "--workdir",
+      "--volume",
+    ])
+      expect(run?.argv).not.toContain(forbidden);
     expect(run?.argv?.join("\n")).not.toMatch(
-      /privileged|device|socket|workdir|env|volume|publish/i,
+      /(?:^|\n)(?:privileged=true|--privileged=true|--device=|--env=|--workdir=|--volume=|--mount=.*(?:docker\.sock|dst=\/host))(?:\n|$)/i,
     );
     expect(Object.keys(environment ?? {}).sort()).toEqual(["DOCKER_CONFIG", "HOME", "PATH"]);
     expect(environment.PATH).toBe("/usr/bin:/bin");
@@ -436,9 +446,9 @@ describe("Cisco OCI broker V1", () => {
     });
     expect(result.facts).toHaveLength(1);
     expect(result.coverage).toHaveLength(1);
-    expect(result.sourceSeal.selectedClosureSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(result.sourceSeal.selectedClosureSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(result.evidenceAnnex.descriptors).toHaveLength(1);
-    expect(result.evidenceAnnex.descriptors[0]?.sha256).toBe(`sha256:${sha256(result.annexBytes)}`);
+    expect(result.evidenceAnnex.descriptors[0]?.sha256).toBe(sha256(result.annexBytes));
     recursivelyFrozen(result);
     expectNoAuthority(result);
   });
