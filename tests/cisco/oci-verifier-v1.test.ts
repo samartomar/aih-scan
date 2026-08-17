@@ -162,6 +162,19 @@ const input = (fixture = layoutFixture()) => ({
   loadedImageId: fixture.config,
 });
 
+const setRootManifestAnnotations = (
+  fixture: LayoutFixture,
+  annotations: Readonly<Record<string, string>>,
+): void => {
+  const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
+    readonly manifests?: unknown;
+  };
+  if (!Array.isArray(index.manifests) || index.manifests[0] === undefined)
+    throw new Error("test fixture index must contain one manifest descriptor");
+  (index.manifests[0] as Record<string, unknown>).annotations = annotations;
+  writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
+};
+
 const rewriteNestedIndex = (
   fixture: LayoutFixture,
   mutate: (index: Record<string, unknown>) => void,
@@ -619,13 +632,6 @@ describe("Cisco OCI candidate verifier V1", () => {
         reason: "manifest annotations keys containerd",
       },
       {
-        annotations: {
-          "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
-          "org.opencontainers.image.ref.name": "candidate",
-        },
-        reason: "manifest annotations keys reference created",
-      },
-      {
         annotations: { "hostile.annotation.name": "hostile-annotation-value" },
         reason: `manifest annotations keys unknown 1 key digest ${createHash("sha256")
           .update("hostile.annotation.name")
@@ -669,6 +675,46 @@ describe("Cisco OCI candidate verifier V1", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toBe(`Cisco OCI verifier rejected input: ${testCase.reason}\n`);
       expect(result.stderr).not.toMatch(/hostile|value|Error|stack/i);
+    }
+  });
+
+  it("accepts an RFC3339 created annotation but excludes it from canonical layout identity", () => {
+    const first = layoutFixture();
+    const second = layoutFixture();
+    setRootManifestAnnotations(first, {
+      "io.containerd.image.name": "local.invalid/aih-scan/cisco",
+      "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
+      "org.opencontainers.image.ref.name": "candidate",
+    });
+    setRootManifestAnnotations(second, {
+      "io.containerd.image.name": "local.invalid/aih-scan/cisco",
+      "org.opencontainers.image.created": "2026-08-17T00:00:00.123456789+05:30",
+      "org.opencontainers.image.ref.name": "candidate",
+    });
+    const firstResult = verifyCiscoOciCandidateV1(input(first));
+    const secondResult = verifyCiscoOciCandidateV1(input(second));
+    expect(firstResult).toEqual(secondResult);
+    expect(canonicalCiscoOciVerifierLayoutBytesV1(firstResult)).toEqual(
+      canonicalCiscoOciVerifierLayoutBytesV1(secondResult),
+    );
+  });
+
+  it("rejects malformed or out-of-range created annotation timestamps", () => {
+    for (const created of [
+      "2026-02-30T00:00:00Z",
+      "2026-08-17T24:00:00Z",
+      "2026-08-17T00:00:00+14:30",
+      "2026-08-17T00:00:00",
+      "2026-08-17T00:00:00z",
+      "not-a-timestamp",
+    ]) {
+      const fixture = layoutFixture();
+      setRootManifestAnnotations(fixture, {
+        "io.containerd.image.name": "local.invalid/aih-scan/cisco",
+        "org.opencontainers.image.created": created,
+        "org.opencontainers.image.ref.name": "candidate",
+      });
+      expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
     }
   });
 

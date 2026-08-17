@@ -348,14 +348,51 @@ function annotationKeySet(value) {
   return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
 }
 
+function assertRfc3339Timestamp(value, label) {
+  if (typeof value !== "string" || value.length < 20 || value.length > 35)
+    fail(`${label} timestamp`);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-](\d{2}):(\d{2}))$/u.exec(
+    value,
+  );
+  if (match === null) fail(`${label} timestamp`);
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, zone, offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
+  const offsetMinute = offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > (days[month - 1] ?? 0) ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    (zone !== "Z" && (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)))
+  )
+    fail(`${label} timestamp`);
+}
+
 function manifestAnnotations(value, label) {
   const keySet = annotationKeySet(value);
-  if (keySet !== undefined && keySet !== "reference" && keySet !== "reference containerd")
+  if (
+    keySet !== undefined &&
+    keySet !== "reference" &&
+    keySet !== "reference containerd" &&
+    keySet !== "reference created" &&
+    keySet !== "reference containerd created"
+  )
     fail(`${label} keys ${keySet}`);
   const annotations = allowed(
     value,
     [OCI_REFERENCE_ANNOTATION],
-    new Set([CONTAINERD_IMAGE_NAME_ANNOTATION, OCI_REFERENCE_ANNOTATION]),
+    new Set([CONTAINERD_IMAGE_NAME_ANNOTATION, OCI_CREATED_ANNOTATION, OCI_REFERENCE_ANNOTATION]),
     label,
   );
   const reference = annotations[OCI_REFERENCE_ANNOTATION];
@@ -364,6 +401,8 @@ function manifestAnnotations(value, label) {
   const imageName = annotations[CONTAINERD_IMAGE_NAME_ANNOTATION];
   if (imageName !== undefined && (typeof imageName !== "string" || imageName.length === 0 || imageName.length > 255))
     fail(label);
+  const created = annotations[OCI_CREATED_ANNOTATION];
+  if (created !== undefined) assertRfc3339Timestamp(created, label);
   return { [OCI_REFERENCE_ANNOTATION]: reference };
 }
 
