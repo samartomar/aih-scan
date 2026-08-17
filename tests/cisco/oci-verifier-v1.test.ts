@@ -1042,6 +1042,41 @@ describe("Cisco OCI candidate verifier V1", () => {
     }
   });
 
+  it("classifies Buildx metadata descriptor annotation keys before rejecting noncanonical annotations", () => {
+    const fixture = layoutFixture();
+    const descriptor = fixture.metadata["containerimage.descriptor"] as Readonly<
+      Record<string, unknown>
+    >;
+    const annotations = descriptor.annotations as Readonly<Record<string, unknown>>;
+    const cases = [
+      {
+        annotations: { ...annotations, "org.opencontainers.image.ref.name": "latest" },
+        reason: "metadata descriptor annotations keys known 1011",
+      },
+      {
+        annotations: { ...annotations, "hostile.annotation.key": "hostile-annotation-value" },
+        reason: "metadata descriptor annotations keys unknown 3 key digest",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      try {
+        verifyCiscoOciCandidateV1({
+          ...input(fixture),
+          metadata: {
+            ...fixture.metadata,
+            "containerimage.descriptor": { ...descriptor, annotations: testCase.annotations },
+          },
+        });
+        throw new Error("test fixture must be rejected");
+      } catch (error) {
+        expect(error).toBeInstanceOf(TypeError);
+        const message = error instanceof Error ? error.message : "";
+        expect(message).toContain(testCase.reason);
+        expect(message).not.toContain("hostile");
+      }
+    }
+  });
+
   it("requires the exact containerd root name, OCI reference, and Buildx metadata name triple", () => {
     const fixture = layoutFixture();
     expect(verifyCiscoOciCandidateV1(input(fixture))).toMatchObject({

@@ -37,6 +37,12 @@ const METADATA_DESCRIPTOR_KEY_ORDER = [
   "platform",
   "size",
 ];
+const METADATA_DESCRIPTOR_ANNOTATION_KEY_ORDER = [
+  "config.digest",
+  "io.containerd.image.name",
+  "org.opencontainers.image.created",
+  "org.opencontainers.image.ref.name",
+];
 const CONTAINERD_IMAGE_NAME_ANNOTATION = "io.containerd.image.name";
 const OCI_CREATED_ANNOTATION = "org.opencontainers.image.created";
 const OCI_REFERENCE_ANNOTATION = "org.opencontainers.image.ref.name";
@@ -470,6 +476,22 @@ function metadataDescriptorKeySet(value) {
   return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
 }
 
+function metadataDescriptorAnnotationKeySet(value) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  )
+    return "invalid";
+  const keys = Object.keys(value).sort();
+  const known = new Set(METADATA_DESCRIPTOR_ANNOTATION_KEY_ORDER);
+  if (keys.every((key) => known.has(key)))
+    return `known ${METADATA_DESCRIPTOR_ANNOTATION_KEY_ORDER.map((key) => (keys.includes(key) ? "1" : "0")).join("")}`;
+  return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
+}
+
 function layoutFromRoot(layoutRoot) {
   if (
     typeof layoutRoot !== "string" ||
@@ -682,8 +704,12 @@ function metadata(value, layout) {
     descriptor.platform === undefined
       ? undefined
       : manifestPlatform(descriptor.platform, "metadata descriptor platform");
+  const annotationValue = descriptor.annotations;
+  const annotationKeySet = metadataDescriptorAnnotationKeySet(annotationValue);
+  if (annotationKeySet !== "known 1010")
+    fail(`metadata descriptor annotations keys ${annotationKeySet}`);
   const annotations = allowed(
-    descriptor.annotations,
+    annotationValue,
     ["config.digest"],
     new Set(["config.digest", "org.opencontainers.image.created"]),
     "metadata descriptor annotations",
