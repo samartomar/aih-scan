@@ -497,7 +497,7 @@ describe("Cisco OCI candidate verifier V1", () => {
       readonly mutate: (descriptor: Record<string, unknown>) => void;
     }> = [
       {
-        reason: "media type",
+        reason: "media type unknown",
         mutate: (descriptor) => {
           descriptor.mediaType = "hostile-media-type-content";
         },
@@ -562,6 +562,53 @@ describe("Cisco OCI candidate verifier V1", () => {
         `Cisco OCI verifier rejected input: index manifest ${testCase.reason}\n`,
       );
       expect(result.stderr).not.toMatch(/hostile|AAAA|content|Error|stack/i);
+    }
+  });
+
+  it("classifies rejected Docker descriptor media types without echoing them", () => {
+    const cases = [
+      ["application/vnd.docker.distribution.manifest.v2+json", "docker manifest"],
+      ["application/vnd.docker.distribution.manifest.list.v2+json", "docker manifest list"],
+    ] as const;
+    for (const [mediaType, classification] of cases) {
+      const fixture = layoutFixture();
+      const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
+      roots.push(invocationRoot);
+      const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
+        readonly manifests?: unknown;
+      };
+      if (!Array.isArray(index.manifests) || index.manifests[0] === undefined)
+        throw new Error("test fixture index must contain one manifest descriptor");
+      (index.manifests[0] as Record<string, unknown>).mediaType = mediaType;
+      writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
+      const metadataPath = join(invocationRoot, "metadata.json");
+      const imageIdPath = join(invocationRoot, "image-id.txt");
+      writeFileSync(metadataPath, JSON.stringify(fixture.metadata));
+      writeFileSync(imageIdPath, fixture.config);
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifierPath,
+          "--metadata",
+          metadataPath,
+          "--layout-root",
+          fixture.root,
+          "--image-id",
+          imageIdPath,
+          "--summary",
+          join(invocationRoot, "summary.json"),
+          "--canonical-layout",
+          join(invocationRoot, "layout.json"),
+        ],
+        { encoding: "utf8", shell: false, windowsHide: true },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        `Cisco OCI verifier rejected input: index manifest media type ${classification}\n`,
+      );
+      expect(result.stderr).not.toContain(mediaType);
     }
   });
 

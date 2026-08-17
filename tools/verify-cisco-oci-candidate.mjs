@@ -7,6 +7,8 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
 const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
 const CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
+const DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json";
+const DOCKER_MANIFEST_LIST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.list.v2+json";
 const LOGICAL_REFERENCE_PREFIX = "local.invalid/aih-scan/cisco@sha256:";
 const LAYER_MEDIA_TYPES = new Set([
   "application/vnd.oci.image.layer.v1.tar",
@@ -229,10 +231,18 @@ function jsonData(value, label, depth = 0) {
   fail(`${label} JSON`);
 }
 
+function mediaTypeClass(value) {
+  if (value === INDEX_MEDIA_TYPE) return "oci index";
+  if (value === MANIFEST_MEDIA_TYPE) return "oci manifest";
+  if (value === DOCKER_MANIFEST_MEDIA_TYPE) return "docker manifest";
+  if (value === DOCKER_MANIFEST_LIST_MEDIA_TYPE) return "docker manifest list";
+  return "unknown";
+}
+
 function descriptor(value, label, expectedMediaTypes) {
   const data = plain(value, ["mediaType", "digest", "size"], label);
   if (typeof data.mediaType !== "string" || !expectedMediaTypes.has(data.mediaType))
-    fail(`${label} media type`);
+    fail(`${label} media type ${mediaTypeClass(data.mediaType)}`);
   if (typeof data.digest !== "string" || !SHA256.test(data.digest)) fail(`${label} digest`);
   if (typeof data.size !== "number") fail(`${label} size type`);
   if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > MAX_FILE_BYTES)
