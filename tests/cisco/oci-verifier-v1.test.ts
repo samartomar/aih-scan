@@ -612,6 +612,66 @@ describe("Cisco OCI candidate verifier V1", () => {
     }
   });
 
+  it("classifies manifest annotation key sets without exposing annotation names or values", () => {
+    const cases = [
+      {
+        annotations: { "io.containerd.image.name": "local.invalid/aih-scan/cisco" },
+        reason: "manifest annotations keys containerd",
+      },
+      {
+        annotations: {
+          "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
+          "org.opencontainers.image.ref.name": "candidate",
+        },
+        reason: "manifest annotations keys reference created",
+      },
+      {
+        annotations: { "hostile.annotation.name": "hostile-annotation-value" },
+        reason: `manifest annotations keys unknown 1 key digest ${createHash("sha256")
+          .update("hostile.annotation.name")
+          .digest("hex")}`,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const fixture = layoutFixture();
+      const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
+      roots.push(invocationRoot);
+      const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
+        readonly manifests?: unknown;
+      };
+      if (!Array.isArray(index.manifests) || index.manifests[0] === undefined)
+        throw new Error("test fixture index must contain one manifest descriptor");
+      (index.manifests[0] as Record<string, unknown>).annotations = testCase.annotations;
+      writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
+      const metadataPath = join(invocationRoot, "metadata.json");
+      const imageIdPath = join(invocationRoot, "image-id.txt");
+      writeFileSync(metadataPath, JSON.stringify(fixture.metadata));
+      writeFileSync(imageIdPath, fixture.config);
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifierPath,
+          "--metadata",
+          metadataPath,
+          "--layout-root",
+          fixture.root,
+          "--image-id",
+          imageIdPath,
+          "--summary",
+          join(invocationRoot, "summary.json"),
+          "--canonical-layout",
+          join(invocationRoot, "layout.json"),
+        ],
+        { encoding: "utf8", shell: false, windowsHide: true },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(`Cisco OCI verifier rejected input: ${testCase.reason}\n`);
+      expect(result.stderr).not.toMatch(/hostile|value|Error|stack/i);
+    }
+  });
+
   it("fails closed for malformed layout paths, raw blobs, metadata, platform, reference, or loaded-image substitutions", () => {
     const fixture = layoutFixture();
     const cases = [

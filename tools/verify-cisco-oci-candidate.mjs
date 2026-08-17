@@ -17,6 +17,9 @@ const LAYER_MEDIA_TYPES = new Set([
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 64 * 1024 * 1024;
 const MAX_ROOT_ENTRIES = 128;
+const CONTAINERD_IMAGE_NAME_ANNOTATION = "io.containerd.image.name";
+const OCI_CREATED_ANNOTATION = "org.opencontainers.image.created";
+const OCI_REFERENCE_ANNOTATION = "org.opencontainers.image.ref.name";
 const summaries = new WeakMap();
 const metadataDescriptors = new WeakMap();
 
@@ -318,20 +321,50 @@ function manifestPlatform(value, label) {
   return { architecture: "amd64", os: "linux" };
 }
 
+function annotationKeySet(value) {
+  if (value === undefined) return "missing";
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  )
+    return undefined;
+  const keys = Object.keys(value).sort();
+  if (keys.length === 0) return "empty";
+  const known = new Set([
+    CONTAINERD_IMAGE_NAME_ANNOTATION,
+    OCI_CREATED_ANNOTATION,
+    OCI_REFERENCE_ANNOTATION,
+  ]);
+  if (keys.every((key) => known.has(key))) {
+    const names = [];
+    if (keys.includes(OCI_REFERENCE_ANNOTATION)) names.push("reference");
+    if (keys.includes(CONTAINERD_IMAGE_NAME_ANNOTATION)) names.push("containerd");
+    if (keys.includes(OCI_CREATED_ANNOTATION)) names.push("created");
+    return names.join(" ");
+  }
+  return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
+}
+
 function manifestAnnotations(value, label) {
+  const keySet = annotationKeySet(value);
+  if (keySet !== undefined && keySet !== "reference" && keySet !== "reference containerd")
+    fail(`${label} keys ${keySet}`);
   const annotations = allowed(
     value,
-    ["org.opencontainers.image.ref.name"],
-    new Set(["io.containerd.image.name", "org.opencontainers.image.ref.name"]),
+    [OCI_REFERENCE_ANNOTATION],
+    new Set([CONTAINERD_IMAGE_NAME_ANNOTATION, OCI_REFERENCE_ANNOTATION]),
     label,
   );
-  const reference = annotations["org.opencontainers.image.ref.name"];
+  const reference = annotations[OCI_REFERENCE_ANNOTATION];
   if (typeof reference !== "string" || !/^[a-z0-9][a-z0-9._/-]{0,255}$/u.test(reference))
     fail("manifest reference");
-  const imageName = annotations["io.containerd.image.name"];
+  const imageName = annotations[CONTAINERD_IMAGE_NAME_ANNOTATION];
   if (imageName !== undefined && (typeof imageName !== "string" || imageName.length === 0 || imageName.length > 255))
     fail(label);
-  return { "org.opencontainers.image.ref.name": reference };
+  return { [OCI_REFERENCE_ANNOTATION]: reference };
 }
 
 function layoutFromRoot(layoutRoot) {
