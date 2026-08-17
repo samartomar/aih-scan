@@ -56,10 +56,9 @@ jobs:
             --pull \
             --provenance=false \
             --sbom=false \
-            --rewrite-timestamp=true \
             --tag local.invalid/aih-scan/cisco \
             --metadata-file "$RUNNER_TEMP/oci-equivalence/oci-build-metadata.json" \
-            --output "type=oci,oci-mediatypes=true,tar=false,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \
+            --output "type=oci,oci-mediatypes=true,tar=false,rewrite-timestamp=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \
             tools/cisco-oci-candidate
       - name: Build local Docker image
         run: |
@@ -68,9 +67,8 @@ jobs:
             --pull \
             --provenance=false \
             --sbom=false \
-            --rewrite-timestamp=true \
             --tag local.invalid/aih-scan/cisco \
-            --output "type=docker,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \
+            --output "type=docker,rewrite-timestamp=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \
             tools/cisco-oci-candidate
       - name: Verify OCI layout and local image identity
         run: |

@@ -65,13 +65,13 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
       expect(build).toContain("--pull");
       expect(build).toContain("--provenance=false");
       expect(build).toContain("--sbom=false");
-      expect(build).toContain("--rewrite-timestamp=true");
+      expect(build).not.toMatch(/^\s+--rewrite-timestamp=true\s*\\?$/m);
       expect(build).toContain("--tag local.invalid/aih-scan/cisco");
       expect(build).toMatch(/tools\/cisco-oci-candidate\s*$/m);
     }
     expect(ociBuild).toMatch(/type=oci,[^\n]*oci-mediatypes=true[^\n]*dest=\$RUNNER_TEMP\//);
     expect(ociBuild).not.toMatch(/type=docker/);
-    expect(dockerBuild).toMatch(/type=docker,dest=\$RUNNER_TEMP\//);
+    expect(dockerBuild).toMatch(/type=docker,rewrite-timestamp=true,dest=\$RUNNER_TEMP\//);
     expect(dockerBuild).not.toMatch(/type=oci/);
     expect(verify).toMatch(/docker load[^\n]*\$RUNNER_TEMP/);
     expect(verify).toContain("verify-cisco-oci-candidate.mjs");
@@ -93,10 +93,9 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
       "  --pull \\",
       "  --provenance=false \\",
       "  --sbom=false \\",
-      "  --rewrite-timestamp=true \\",
       "  --tag local.invalid/aih-scan/cisco \\",
       '  --metadata-file "$RUNNER_TEMP/oci-equivalence/oci-build-metadata.json" \\',
-      '  --output "type=oci,oci-mediatypes=true,tar=false,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \\',
+      '  --output "type=oci,oci-mediatypes=true,tar=false,rewrite-timestamp=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \\',
       "  tools/cisco-oci-candidate",
     ].join("\n");
     const expectedDocker = [
@@ -105,9 +104,8 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
       "  --pull \\",
       "  --provenance=false \\",
       "  --sbom=false \\",
-      "  --rewrite-timestamp=true \\",
       "  --tag local.invalid/aih-scan/cisco \\",
-      '  --output "type=docker,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \\',
+      '  --output "type=docker,rewrite-timestamp=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \\',
       "  tools/cisco-oci-candidate",
     ].join("\n");
     expect(ociBuild).toContain(expectedOci);
@@ -116,13 +114,13 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(dockerBuild.match(/^docker buildx build \\$/gm)).toHaveLength(1);
     expect(ociBuild.split("\n").filter((line) => line.trimStart().startsWith("--output "))).toEqual(
       [
-        '  --output "type=oci,oci-mediatypes=true,tar=false,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \\',
+        '  --output "type=oci,oci-mediatypes=true,tar=false,rewrite-timestamp=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \\',
       ],
     );
     expect(
       dockerBuild.split("\n").filter((line) => line.trimStart().startsWith("--output ")),
     ).toEqual([
-      '  --output "type=docker,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \\',
+      '  --output "type=docker,rewrite-timestamp=true,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \\',
     ]);
     expect(`${ociBuild}\n${dockerBuild}`).not.toMatch(
       /#|--(?:export|load|push)|docker\s+build(?!x build)/,
