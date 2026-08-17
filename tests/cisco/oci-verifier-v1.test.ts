@@ -901,6 +901,71 @@ describe("Cisco OCI candidate verifier V1", () => {
     }
   });
 
+  it("classifies root Buildx metadata key sets without exposing unknown names or values", () => {
+    const cases = [
+      {
+        metadata: (fixture: LayoutFixture) => {
+          const metadata = { ...fixture.metadata } as Record<string, unknown>;
+          delete metadata["containerimage.digest"];
+          return metadata;
+        },
+        reason: "metadata keys known 111110",
+      },
+      {
+        metadata: (fixture: LayoutFixture) => ({
+          ...fixture.metadata,
+          "hostile.metadata.key": "hostile-metadata-value",
+        }),
+        reason: `metadata keys unknown 7 key digest ${createHash("sha256")
+          .update(
+            [
+              "buildx.build.provenance",
+              "buildx.build.ref",
+              "buildx.build.warnings",
+              "containerimage.config.digest",
+              "containerimage.descriptor",
+              "containerimage.digest",
+              "hostile.metadata.key",
+            ]
+              .sort()
+              .join("\n"),
+          )
+          .digest("hex")}`,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const fixture = layoutFixture();
+      const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
+      roots.push(invocationRoot);
+      const metadataPath = join(invocationRoot, "metadata.json");
+      const imageIdPath = join(invocationRoot, "image-id.txt");
+      writeFileSync(metadataPath, JSON.stringify(testCase.metadata(fixture)));
+      writeFileSync(imageIdPath, fixture.config);
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifierPath,
+          "--metadata",
+          metadataPath,
+          "--layout-root",
+          fixture.root,
+          "--image-id",
+          imageIdPath,
+          "--summary",
+          join(invocationRoot, "summary.json"),
+          "--canonical-layout",
+          join(invocationRoot, "layout.json"),
+        ],
+        { encoding: "utf8", shell: false, windowsHide: true },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(`Cisco OCI verifier rejected input: ${testCase.reason}\n`);
+      expect(result.stderr).not.toMatch(/hostile|value|Error|stack/i);
+    }
+  });
+
   it("accepts an RFC3339 created annotation but excludes it from canonical layout identity", () => {
     const first = layoutFixture();
     const second = layoutFixture();

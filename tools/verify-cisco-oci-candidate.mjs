@@ -18,6 +18,14 @@ const MAX_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 512 * 1024 * 1024;
 const MAX_ROOT_ENTRIES = 128;
 const SIZE_BUCKETS_MIB = [1, 32, 64, 128, 256, 512, 1024];
+const METADATA_KEY_ORDER = [
+  "buildx.build.provenance",
+  "buildx.build.ref",
+  "buildx.build.warnings",
+  "containerimage.config.digest",
+  "containerimage.descriptor",
+  "containerimage.digest",
+];
 const CONTAINERD_IMAGE_NAME_ANNOTATION = "io.containerd.image.name";
 const OCI_CREATED_ANNOTATION = "org.opencontainers.image.created";
 const OCI_REFERENCE_ANNOTATION = "org.opencontainers.image.ref.name";
@@ -416,6 +424,23 @@ function manifestAnnotations(value, label) {
   return { [OCI_REFERENCE_ANNOTATION]: reference };
 }
 
+function metadataKeySet(value) {
+  if (value === undefined) return "missing";
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  )
+    return undefined;
+  const keys = Object.keys(value).sort();
+  const known = new Set(METADATA_KEY_ORDER);
+  if (keys.every((key) => known.has(key)))
+    return `known ${METADATA_KEY_ORDER.map((key) => (keys.includes(key) ? "1" : "0")).join("")}`;
+  return `unknown ${keys.length} key digest ${createHash("sha256").update(keys.join("\n")).digest("hex")}`;
+}
+
 function layoutFromRoot(layoutRoot) {
   if (
     typeof layoutRoot !== "string" ||
@@ -573,17 +598,16 @@ function layoutFromRoot(layoutRoot) {
 }
 
 function metadata(value, layout) {
+  const keySet = metadataKeySet(value);
+  if (
+    keySet !== undefined &&
+    (!keySet.startsWith("known ") || !keySet.endsWith("111"))
+  )
+    fail(`metadata keys ${keySet}`);
   const data = allowed(
     value,
     ["containerimage.digest", "containerimage.config.digest", "containerimage.descriptor"],
-    new Set([
-      "buildx.build.provenance",
-      "buildx.build.ref",
-      "buildx.build.warnings",
-      "containerimage.digest",
-      "containerimage.config.digest",
-      "containerimage.descriptor",
-    ]),
+    new Set(METADATA_KEY_ORDER),
     "metadata",
   );
   const metadataDescriptor = metadataDescriptors.get(layout) ?? layout.manifestDescriptor;
