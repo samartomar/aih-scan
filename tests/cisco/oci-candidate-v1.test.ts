@@ -13,11 +13,21 @@ import {
   canonicalCiscoOciLayoutBytesV1,
   parseCiscoOciLayoutV1,
 } from "../../src/cisco/oci-layout-v1.js";
-import { verifyEvidenceAnnexBytesV1 } from "../../src/observation/observation-evidence-v1.js";
+import {
+  createObservationKeyV1,
+  createObservationSetV1,
+  verifyEvidenceAnnexBytesV1,
+} from "../../src/observation/observation-evidence-v1.js";
+import { createScanAttestationV1 } from "../../src/observation/scan-attestation-v1.js";
+import {
+  createScannerManifestV1,
+  type ScannerManifestEntryV1,
+} from "../../src/observation/scanner-manifest-v1.js";
 
 const roots: string[] = [];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const digest = (seed: string) => sha256(`candidate:${seed}`);
+type ManifestDetectorInput = Omit<ScannerManifestEntryV1, "scannerManifestEntrySha256">;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -174,6 +184,63 @@ function appliedFacts(brokerResult: {
     rawOccurrenceFingerprint,
     multiplicity,
   }));
+}
+
+function rehashedWire(
+  candidate: ReturnType<typeof createCiscoOciCandidateV1>,
+  detectors: readonly ManifestDetectorInput[],
+) {
+  const scannerManifest = createScannerManifestV1({ protocol: "ScannerManifestV1", detectors });
+  const detector = scannerManifest.detectors[0];
+  if (detector === undefined) throw new Error("candidate scanner detector is missing");
+  const observationKeyInput = {
+    protocol: "ObservationKeyV1",
+    sourceSeal: candidate.observationKey.sourceSeal,
+    nativeAnalyzerIdentity: candidate.observationKey.nativeAnalyzerIdentity,
+    observationConfigurationSha256: candidate.observationKey.observationConfigurationSha256,
+    platform: candidate.observationKey.platform,
+    scannerManifestEntrySha256: detector.scannerManifestEntrySha256,
+  };
+  const observationKey = createObservationKeyV1(observationKeyInput);
+  const observationSet = createObservationSetV1({
+    protocol: "ObservationSetV1",
+    observationKey: observationKeyInput,
+    facts: candidate.observationSet.facts,
+    coverage: candidate.observationSet.coverage,
+  });
+  const predicate = candidate.attestation.statement.predicate;
+  const attestation = createScanAttestationV1({
+    protocol: "ScanAttestationV1",
+    sourceTarget: {
+      name: "source-tree",
+      sha256: candidate.observationKey.sourceSeal.sourceTreeSha256,
+    },
+    scannerManifestSha256: scannerManifest.scannerManifestSha256,
+    observations: [
+      {
+        detectorId: "detector.cisco",
+        observationKeySha256: observationKey.observationKeySha256,
+        observationSetSha256: observationSet.observationSetSha256,
+      },
+    ],
+    brokerEnforcement: predicate.brokerEnforcement,
+    cleanup: predicate.cleanup,
+    annexDescriptors: candidate.evidenceAnnex.descriptors,
+  });
+  return {
+    ...JSON.parse(canonicalCiscoOciCandidateBytesV1(candidate).toString("utf8")),
+    scannerManifest,
+    observationKey,
+    observationSet,
+    attestation,
+  };
+}
+
+function manifestDetector(candidate: ReturnType<typeof createCiscoOciCandidateV1>) {
+  const detector = candidate.scannerManifest.detectors[0];
+  if (detector === undefined) throw new Error("candidate scanner detector is missing");
+  const { scannerManifestEntrySha256: _entrySha256, ...input } = detector;
+  return input;
 }
 
 describe("Cisco OCI candidate V1", () => {
@@ -488,6 +555,129 @@ describe("Cisco OCI candidate V1", () => {
     if (first === undefined) throw new Error("candidate annex payload missing");
     first.payload = `${first.payload}=`;
     expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(noncanonical))).toThrow();
+  });
+
+  it("rejects internally coherent attestations that substitute either outer observation identity", async () => {
+    const candidate = createCiscoOciCandidateV1(await brandedInput());
+    const canonical = canonicalCiscoOciCandidateBytesV1(candidate).toString("utf8");
+    const wire = JSON.parse(canonical) as {
+      attestation: unknown;
+      evidenceAnnex: { descriptors: unknown[] };
+      observationKey: { observationKeySha256: string; sourceSeal: { sourceTreeSha256: string } };
+      observationSet: { observationSetSha256: string };
+      scannerManifest: { scannerManifestSha256: string };
+    };
+    const predicate = candidate.attestation.statement.predicate;
+    const replace = (observationKeySha256: string, observationSetSha256: string) =>
+      createScanAttestationV1({
+        protocol: "ScanAttestationV1",
+        sourceTarget: {
+          name: "source-tree",
+          sha256: wire.observationKey.sourceSeal.sourceTreeSha256,
+        },
+        scannerManifestSha256: wire.scannerManifest.scannerManifestSha256,
+        observations: [
+          { detectorId: "detector.cisco", observationKeySha256, observationSetSha256 },
+        ],
+        brokerEnforcement: predicate.brokerEnforcement,
+        cleanup: predicate.cleanup,
+        annexDescriptors: wire.evidenceAnnex.descriptors,
+      });
+    const substitutions = [
+      [digest("substituted-observation-key"), wire.observationSet.observationSetSha256],
+      [wire.observationKey.observationKeySha256, digest("substituted-observation-set")],
+    ] as const;
+    for (const [observationKeySha256, observationSetSha256] of substitutions) {
+      wire.attestation = replace(observationKeySha256, observationSetSha256);
+      expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(wire))).toThrow();
+    }
+  });
+
+  it("rejects an internally coherent attestation with substituted annex descriptors", async () => {
+    const candidate = createCiscoOciCandidateV1(await brandedInput());
+    const wire = JSON.parse(canonicalCiscoOciCandidateBytesV1(candidate).toString("utf8")) as {
+      attestation: unknown;
+      observationKey: { observationKeySha256: string; sourceSeal: { sourceTreeSha256: string } };
+      observationSet: { observationSetSha256: string };
+      scannerManifest: { scannerManifestSha256: string };
+    };
+    const predicate = candidate.attestation.statement.predicate;
+    wire.attestation = createScanAttestationV1({
+      protocol: "ScanAttestationV1",
+      sourceTarget: {
+        name: "source-tree",
+        sha256: wire.observationKey.sourceSeal.sourceTreeSha256,
+      },
+      scannerManifestSha256: wire.scannerManifest.scannerManifestSha256,
+      observations: [
+        {
+          detectorId: "detector.cisco",
+          observationKeySha256: wire.observationKey.observationKeySha256,
+          observationSetSha256: wire.observationSet.observationSetSha256,
+        },
+      ],
+      brokerEnforcement: predicate.brokerEnforcement,
+      cleanup: predicate.cleanup,
+      annexDescriptors: [
+        {
+          descriptorId: "annex.substituted",
+          mediaType: "application/json",
+          sha256: digest("substituted-annex"),
+          byteLength: 1,
+          uri: "annex/substituted.json",
+        },
+      ],
+    });
+    expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(wire))).toThrow();
+  });
+
+  it("rejects rehashed scanner runtime identities that disagree with layout or annex evidence", async () => {
+    const candidate = createCiscoOciCandidateV1(await brandedInput());
+    const detector = manifestDetector(candidate);
+    const changedOciDigest = digest("substituted-oci");
+    const variants = [
+      rehashedWire(candidate, [
+        {
+          ...detector,
+          ociImage: {
+            reference: `local.invalid/aih-scan/cisco@sha256:${changedOciDigest}`,
+            sha256: changedOciDigest,
+          },
+        },
+      ]),
+      rehashedWire(candidate, [
+        { ...detector, sbom: { ...detector.sbom, sha256: digest("substituted-sbom") } },
+      ]),
+      rehashedWire(candidate, [
+        {
+          ...detector,
+          provenance: { ...detector.provenance, sha256: digest("substituted-provenance") },
+        },
+      ]),
+    ];
+    for (const wire of variants)
+      expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(wire))).toThrow();
+  });
+
+  it("rejects zero, multiple, or non-Cisco manifest detector rows", async () => {
+    const candidate = createCiscoOciCandidateV1(await brandedInput());
+    const detector = manifestDetector(candidate);
+    const other = {
+      ...detector,
+      detectorId: "detector.other",
+      ociImage: {
+        reference: `local.invalid/aih-scan/other@sha256:${digest("other-image")}`,
+        sha256: digest("other-image"),
+      },
+    };
+    const zero = JSON.parse(canonicalCiscoOciCandidateBytesV1(candidate).toString("utf8"));
+    zero.scannerManifest.detectors = [];
+    for (const wire of [
+      zero,
+      rehashedWire(candidate, [detector, other]),
+      rehashedWire(candidate, [other]),
+    ])
+      expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(wire))).toThrow();
   });
 
   it("rejects cross-binding mismatches, incomplete payloads, and forged brands", async () => {

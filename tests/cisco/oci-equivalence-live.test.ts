@@ -210,6 +210,7 @@ describe("Cisco OCI equivalence live seam", () => {
         uvRunner: controlledRunner("uv", runtimeProjectRoot, uvBase),
         dockerRunner: controlledRunner("docker", runnerTemp),
       });
+      if (!("validationState" in result)) throw new Error("live producer did not run");
       expect(result.validationState).toBe("cryptographically-unverified");
       expect(readFileSync(summaryPath, "utf8")).toMatch(/digest|sha256/i);
       expect(JSON.stringify(result)).not.toMatch(

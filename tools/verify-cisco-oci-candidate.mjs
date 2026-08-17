@@ -1,0 +1,524 @@
+import { createHash } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const SHA256 = /^sha256:[a-f0-9]{64}$/;
+const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
+const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
+const CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
+const LOGICAL_REFERENCE_PREFIX = "local.invalid/aih-scan/cisco@sha256:";
+const LAYER_MEDIA_TYPES = new Set([
+  "application/vnd.oci.image.layer.v1.tar",
+  "application/vnd.oci.image.layer.v1.tar+gzip",
+]);
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_LAYOUT_BYTES = 64 * 1024 * 1024;
+const summaries = new WeakMap();
+
+const fail = (message) => {
+  throw new TypeError(`invalid Cisco OCI verifier V1: ${message}`);
+};
+const sha256 = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+
+function assertUnicode(value, label) {
+  if (value.normalize("NFC") !== value) fail(`${label} NFC`);
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) fail(`${label} surrogate`);
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      fail(`${label} surrogate`);
+    }
+  }
+}
+
+function parseJson(text, label) {
+  let index = 0;
+  const whitespace = () => {
+    while (/\s/u.test(text[index] ?? "")) index += 1;
+  };
+  const string = () => {
+    const start = index;
+    if (text[index] !== '"') fail(`${label} JSON`);
+    index += 1;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === '"') {
+        index += 1;
+        let parsed;
+        try {
+          parsed = JSON.parse(text.slice(start, index));
+        } catch {
+          fail(`${label} JSON`);
+        }
+        if (typeof parsed !== "string") fail(`${label} JSON`);
+        assertUnicode(parsed, label);
+        return parsed;
+      }
+      if (char === "\\") {
+        index += 1;
+        const escape = text[index];
+        if (escape === undefined) fail(`${label} JSON`);
+        if (escape === "u") index += 4;
+      } else if (char === undefined || char < " ") {
+        fail(`${label} JSON`);
+      }
+      index += 1;
+    }
+    fail(`${label} JSON`);
+  };
+  const value = () => {
+    whitespace();
+    const char = text[index];
+    if (char === "{") {
+      index += 1;
+      whitespace();
+      const output = {};
+      const keys = new Set();
+      if (text[index] === "}") {
+        index += 1;
+        return output;
+      }
+      while (true) {
+        whitespace();
+        const key = string();
+        if (keys.has(key)) fail(`${label} duplicate key`);
+        keys.add(key);
+        whitespace();
+        if (text[index] !== ":") fail(`${label} JSON`);
+        index += 1;
+        const child = value();
+        Object.defineProperty(output, key, {
+          configurable: true,
+          enumerable: true,
+          value: child,
+          writable: true,
+        });
+        whitespace();
+        if (text[index] === "}") {
+          index += 1;
+          return output;
+        }
+        if (text[index] !== ",") fail(`${label} JSON`);
+        index += 1;
+      }
+    }
+    if (char === "[") {
+      index += 1;
+      whitespace();
+      const output = [];
+      if (text[index] === "]") {
+        index += 1;
+        return output;
+      }
+      while (true) {
+        output.push(value());
+        whitespace();
+        if (text[index] === "]") {
+          index += 1;
+          return output;
+        }
+        if (text[index] !== ",") fail(`${label} JSON`);
+        index += 1;
+      }
+    }
+    if (char === '"') return string();
+    for (const [raw, parsed] of [["true", true], ["false", false], ["null", null]]) {
+      if (text.startsWith(raw, index)) {
+        index += raw.length;
+        return parsed;
+      }
+    }
+    const match = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/u.exec(
+      text.slice(index),
+    );
+    if (match === null || match.index !== 0) fail(`${label} JSON`);
+    index += match[0].length;
+    const number = Number(match[0]);
+    if (!Number.isFinite(number) || Object.is(number, -0)) fail(`${label} JSON`);
+    return number;
+  };
+  const parsed = value();
+  whitespace();
+  if (index !== text.length) fail(`${label} JSON`);
+  return parsed;
+}
+
+function canonical(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "number")
+    return JSON.stringify(value);
+  if (typeof value === "string") {
+    assertUnicode(value, "canonical JSON");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype)
+    fail("canonical JSON");
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${canonical(key)}:${canonical(value[key])}`)
+    .join(",")}}`;
+}
+
+function plain(value, fields, label) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  )
+    fail(`${label} object`);
+  const keys = Object.keys(value);
+  if (keys.length !== fields.length || fields.some((field) => !Object.hasOwn(value, field)))
+    fail(`${label} fields`);
+  for (const key of keys) {
+    if (!Object.hasOwn(Object.getOwnPropertyDescriptor(value, key) ?? {}, "value"))
+      fail(`${label} accessor`);
+  }
+  return value;
+}
+
+function allowed(value, required, permitted, label) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  )
+    fail(`${label} object`);
+  const keys = Object.keys(value);
+  if (
+    required.some((field) => !Object.hasOwn(value, field)) ||
+    keys.some((field) => !permitted.has(field))
+  )
+    fail(`${label} fields`);
+  for (const key of keys) {
+    if (!Object.hasOwn(Object.getOwnPropertyDescriptor(value, key) ?? {}, "value"))
+      fail(`${label} accessor`);
+  }
+  return value;
+}
+
+function jsonData(value, label, depth = 0) {
+  if (depth > 32 || value === null || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    assertUnicode(value, label);
+    return;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) jsonData(item, label, depth + 1);
+    return;
+  }
+  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    for (const key of Object.keys(value)) {
+      const item = Object.getOwnPropertyDescriptor(value, key);
+      if (item === undefined || !("value" in item)) fail(`${label} accessor`);
+      assertUnicode(key, label);
+      jsonData(item.value, label, depth + 1);
+    }
+    return;
+  }
+  fail(`${label} JSON`);
+}
+
+function descriptor(value, label, expectedMediaTypes) {
+  const data = plain(value, ["mediaType", "digest", "size"], label);
+  if (
+    typeof data.mediaType !== "string" ||
+    !expectedMediaTypes.has(data.mediaType) ||
+    typeof data.digest !== "string" ||
+    !SHA256.test(data.digest) ||
+    typeof data.size !== "number" ||
+    !Number.isSafeInteger(data.size) ||
+    data.size < 0 ||
+    data.size > MAX_FILE_BYTES
+  )
+    fail(`${label} descriptor`);
+  return data;
+}
+
+function regular(path, label, total) {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    fail(`${label} missing`);
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES)
+    fail(`${label} file`);
+  total.value += stat.size;
+  if (total.value > MAX_LAYOUT_BYTES) fail("layout bound");
+  const bytes = readFileSync(path);
+  if (bytes.length !== stat.size) fail(`${label} changed`);
+  return bytes;
+}
+
+function directory(path, label) {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    fail(`${label} missing`);
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} directory`);
+}
+
+function readBlob(root, item, label, total) {
+  const digest = item.digest;
+  const name = digest.slice("sha256:".length);
+  if (!/^[a-f0-9]{64}$/u.test(name)) fail(`${label} digest`);
+  const content = regular(join(root, "blobs", "sha256", name), label, total);
+  if (content.length !== item.size || sha256(content) !== digest) fail(`${label} binding`);
+  return content;
+}
+
+function jsonFromBytes(bytes, label) {
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
+  return parseJson(text, label);
+}
+
+function layoutFromRoot(layoutRoot) {
+  if (
+    typeof layoutRoot !== "string" ||
+    !isAbsolute(layoutRoot) ||
+    layoutRoot.includes("\0") ||
+    layoutRoot.includes("\r") ||
+    layoutRoot.includes("\n")
+  )
+    fail("layout root");
+  const root = resolve(layoutRoot);
+  directory(root, "layout root");
+  const rootEntries = readdirSync(root).sort();
+  const permittedRootEntries = new Set(["blobs", "index.json", "manifest.json", "oci-layout"]);
+  if (
+    rootEntries.some((entry) => !permittedRootEntries.has(entry)) ||
+    !["blobs", "index.json", "oci-layout"].every((entry) => rootEntries.includes(entry))
+  )
+    fail("layout entries");
+  const total = { value: 0 };
+  const ociLayout = jsonFromBytes(regular(join(root, "oci-layout"), "oci layout", total), "oci layout");
+  const layout = plain(ociLayout, ["imageLayoutVersion"], "oci layout");
+  if (layout.imageLayoutVersion !== "1.0.0") fail("oci layout version");
+  if (rootEntries.includes("manifest.json"))
+    regular(join(root, "manifest.json"), "legacy manifest", total);
+  directory(join(root, "blobs"), "blobs");
+  if (readdirSync(join(root, "blobs")).sort().join("\0") !== "sha256") fail("blob algorithm");
+  directory(join(root, "blobs", "sha256"), "blob root");
+  const index = plain(
+    jsonFromBytes(regular(join(root, "index.json"), "index", total), "index"),
+    ["schemaVersion", "mediaType", "manifests"],
+    "index",
+  );
+  if (index.schemaVersion !== 2 || index.mediaType !== INDEX_MEDIA_TYPE || !Array.isArray(index.manifests) || index.manifests.length !== 1)
+    fail("index");
+  const selected = plain(index.manifests[0], ["mediaType", "digest", "size", "platform", "annotations"], "index manifest");
+  const manifestDescriptor = descriptor(
+    { mediaType: selected.mediaType, digest: selected.digest, size: selected.size },
+    "index manifest",
+    new Set([MANIFEST_MEDIA_TYPE]),
+  );
+  const platform = plain(selected.platform, ["os", "architecture"], "manifest platform");
+  if (platform.os !== "linux" || platform.architecture !== "amd64") fail("manifest platform");
+  const annotations = plain(selected.annotations, ["org.opencontainers.image.ref.name"], "manifest annotations");
+  if (
+    typeof annotations["org.opencontainers.image.ref.name"] !== "string" ||
+    !/^[a-z0-9][a-z0-9._/-]{0,255}$/u.test(annotations["org.opencontainers.image.ref.name"])
+  )
+    fail("manifest reference");
+  const manifestBytes = readBlob(root, manifestDescriptor, "manifest", total);
+  const manifest = plain(jsonFromBytes(manifestBytes, "manifest"), ["schemaVersion", "mediaType", "config", "layers"], "manifest");
+  if (manifest.schemaVersion !== 2 || manifest.mediaType !== MANIFEST_MEDIA_TYPE || !Array.isArray(manifest.layers) || manifest.layers.length < 1 || manifest.layers.length > 128)
+    fail("manifest");
+  const configDescriptor = descriptor(manifest.config, "config", new Set([CONFIG_MEDIA_TYPE]));
+  const configBytes = readBlob(root, configDescriptor, "config", total);
+  const config = allowed(
+    jsonFromBytes(configBytes, "config"),
+    ["architecture", "os", "rootfs"],
+    new Set(["architecture", "config", "created", "history", "os", "rootfs"]),
+    "config",
+  );
+  if (config.os !== "linux" || config.architecture !== "amd64")
+    fail("config platform");
+  if (
+    (config.created !== undefined &&
+      (typeof config.created !== "string" || config.created.length === 0 || config.created.length > 128)) ||
+    (config.config !== undefined &&
+      (typeof config.config !== "object" || config.config === null || Array.isArray(config.config))) ||
+    (config.history !== undefined && (!Array.isArray(config.history) || config.history.length > 4096))
+  )
+    fail("config standard fields");
+  if (config.config !== undefined) jsonData(config.config, "config standard fields");
+  if (config.history !== undefined) jsonData(config.history, "config standard fields");
+  const rootfs = config.rootfs;
+  const rootfsData = plain(rootfs, ["type", "diff_ids"], "config rootfs");
+  if (
+    rootfsData.type !== "layers" ||
+    !Array.isArray(rootfsData.diff_ids) ||
+    rootfsData.diff_ids.length !== manifest.layers.length ||
+    !rootfsData.diff_ids.every((item) => typeof item === "string" && SHA256.test(item))
+  )
+    fail("config rootfs");
+  const referenced = new Set([manifestDescriptor.digest, configDescriptor.digest]);
+  for (const layerInput of manifest.layers) {
+    const layer = descriptor(layerInput, "layer", LAYER_MEDIA_TYPES);
+    if (referenced.has(layer.digest)) fail("duplicate layer");
+    readBlob(root, layer, "layer", total);
+    referenced.add(layer.digest);
+  }
+  const blobNames = readdirSync(join(root, "blobs", "sha256")).sort();
+  if (blobNames.length !== referenced.size || blobNames.some((name) => !referenced.has(`sha256:${name}`)))
+    fail("blob inventory");
+  return {
+    protocol: "CiscoOciLayoutV1",
+    manifestDigestSha256: manifestDescriptor.digest,
+    configDigestSha256: configDescriptor.digest,
+    logicalReference: `${LOGICAL_REFERENCE_PREFIX}${manifestDescriptor.digest.slice("sha256:".length)}`,
+    manifestPlatform: { architecture: "amd64", os: "linux" },
+    manifestDescriptor: {
+      annotations: { "org.opencontainers.image.ref.name": annotations["org.opencontainers.image.ref.name"] },
+      digest: manifestDescriptor.digest,
+      mediaType: manifestDescriptor.mediaType,
+      platform: { architecture: "amd64", os: "linux" },
+      size: manifestDescriptor.size,
+    },
+  };
+}
+
+function metadata(value, layout) {
+  const data = allowed(
+    value,
+    ["containerimage.digest", "containerimage.config.digest", "containerimage.descriptor"],
+    new Set([
+      "buildx.build.provenance",
+      "buildx.build.ref",
+      "buildx.build.warnings",
+      "containerimage.digest",
+      "containerimage.config.digest",
+      "containerimage.descriptor",
+    ]),
+    "metadata",
+  );
+  if (data["containerimage.digest"] !== layout.manifestDigestSha256 || data["containerimage.config.digest"] !== layout.configDigestSha256)
+    fail("metadata digest");
+  if (
+    (data["buildx.build.ref"] !== undefined &&
+      (typeof data["buildx.build.ref"] !== "string" ||
+        data["buildx.build.ref"].length === 0 ||
+        data["buildx.build.ref"].length > 1024)) ||
+    (data["buildx.build.provenance"] !== undefined &&
+      (typeof data["buildx.build.provenance"] !== "object" ||
+        data["buildx.build.provenance"] === null ||
+        Array.isArray(data["buildx.build.provenance"]))) ||
+    (data["buildx.build.warnings"] !== undefined &&
+      (typeof data["buildx.build.warnings"] !== "object" ||
+        data["buildx.build.warnings"] === null ||
+        Array.isArray(data["buildx.build.warnings"])))
+  )
+    fail("metadata buildx");
+  if (data["buildx.build.provenance"] !== undefined)
+    jsonData(data["buildx.build.provenance"], "metadata provenance");
+  if (data["buildx.build.warnings"] !== undefined)
+    jsonData(data["buildx.build.warnings"], "metadata warnings");
+  const descriptorData = plain(
+    data["containerimage.descriptor"],
+    ["mediaType", "digest", "size", "annotations"],
+    "metadata descriptor",
+  );
+  const descriptor = descriptorData;
+  const annotations = allowed(
+    descriptor.annotations,
+    ["config.digest"],
+    new Set(["config.digest", "org.opencontainers.image.created"]),
+    "metadata descriptor annotations",
+  );
+  if (
+    descriptor.mediaType !== layout.manifestDescriptor.mediaType ||
+    descriptor.digest !== layout.manifestDescriptor.digest ||
+    descriptor.size !== layout.manifestDescriptor.size ||
+    annotations["config.digest"] !== layout.configDigestSha256 ||
+    (annotations["org.opencontainers.image.created"] !== undefined &&
+      typeof annotations["org.opencontainers.image.created"] !== "string")
+  )
+    fail("metadata descriptor");
+}
+
+export function verifyCiscoOciCandidateV1(value) {
+  const input = plain(value, ["protocol", "layoutRoot", "metadata", "loadedImageId"], "input");
+  if (input.protocol !== "CiscoOciVerifierV1" || typeof input.loadedImageId !== "string" || !SHA256.test(input.loadedImageId))
+    fail("input");
+  const layout = layoutFromRoot(input.layoutRoot);
+  metadata(input.metadata, layout);
+  if (input.loadedImageId !== layout.configDigestSha256 || layout.configDigestSha256 === layout.manifestDigestSha256)
+    fail("loaded image identity");
+  const withoutHash = {
+    configDigestSha256: layout.configDigestSha256,
+    logicalReference: layout.logicalReference,
+    manifestDigestSha256: layout.manifestDigestSha256,
+    protocol: "CiscoOciVerifierV1",
+  };
+  const summary = Object.freeze({
+    ...withoutHash,
+    summarySha256: createHash("sha256").update(canonical(withoutHash)).digest("hex"),
+  });
+  summaries.set(summary, {
+    layout: Buffer.from(canonical(layout)),
+    summary: Buffer.from(canonical(summary)),
+  });
+  return summary;
+}
+
+export function canonicalCiscoOciVerifierBytesV1(value) {
+  const stored = summaries.get(value);
+  if (stored === undefined) fail("summary brand");
+  return Buffer.from(stored.summary);
+}
+
+export function canonicalCiscoOciVerifierLayoutBytesV1(value) {
+  const stored = summaries.get(value);
+  if (stored === undefined) fail("summary brand");
+  return Buffer.from(stored.layout);
+}
+
+function cliArguments(values) {
+  const expected = ["metadata", "layout-root", "image-id", "summary", "canonical-layout"];
+  if (values.length !== expected.length * 2) fail("CLI arguments");
+  const result = {};
+  for (let index = 0; index < values.length; index += 2) {
+    const flag = values[index];
+    const path = values[index + 1];
+    if (typeof flag !== "string" || !flag.startsWith("--") || typeof path !== "string") fail("CLI arguments");
+    const key = flag.slice(2);
+    if (!expected.includes(key) || Object.hasOwn(result, key) || !isAbsolute(path)) fail("CLI arguments");
+    result[key] = path;
+  }
+  if (Object.keys(result).length !== expected.length) fail("CLI arguments");
+  return result;
+}
+
+const invokedPath = process.argv[1];
+if (
+  typeof invokedPath === "string" &&
+  resolve(invokedPath) === resolve(fileURLToPath(import.meta.url))
+) {
+  try {
+    const args = cliArguments(process.argv.slice(2));
+    const metadataBytes = readFileSync(args.metadata);
+    const result = verifyCiscoOciCandidateV1({
+      protocol: "CiscoOciVerifierV1",
+      layoutRoot: args["layout-root"],
+      metadata: jsonFromBytes(metadataBytes, "metadata"),
+      loadedImageId: readFileSync(args["image-id"], "utf8").trim(),
+    });
+    writeFileSync(args.summary, canonicalCiscoOciVerifierBytesV1(result));
+    writeFileSync(args["canonical-layout"], canonicalCiscoOciVerifierLayoutBytesV1(result));
+  } catch {
+    process.exitCode = 1;
+  }
+}
