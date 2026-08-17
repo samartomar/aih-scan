@@ -14,7 +14,7 @@ const LAYER_MEDIA_TYPES = new Set([
   "application/vnd.oci.image.layer.v1.tar",
   "application/vnd.oci.image.layer.v1.tar+gzip",
 ]);
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 64 * 1024 * 1024;
 const MAX_ROOT_ENTRIES = 128;
 const SIZE_BUCKETS_MIB = [1, 32, 64, 128, 256, 512, 1024];
