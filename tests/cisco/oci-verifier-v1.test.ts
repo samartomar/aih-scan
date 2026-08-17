@@ -169,6 +169,46 @@ describe("Cisco OCI candidate verifier V1", () => {
     expect(result.stderr).not.toMatch(/do-not-leak|digest|metadata|content|Error|stack/i);
   });
 
+  it("emits a bounded verifier-owned reason for known internal validation failures", () => {
+    const fixture = layoutFixture();
+    const invocationRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-verifier-invocation-"));
+    roots.push(invocationRoot);
+    const metadataPath = join(invocationRoot, "metadata.json");
+    const imageIdPath = join(invocationRoot, "image-id.txt");
+    const summaryPath = join(invocationRoot, "summary.json");
+    const canonicalLayoutPath = join(invocationRoot, "layout.json");
+    writeFileSync(
+      metadataPath,
+      JSON.stringify({
+        ...fixture.metadata,
+        "containerimage.config.digest":
+          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      }),
+    );
+    writeFileSync(imageIdPath, fixture.config);
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifierPath,
+        "--metadata",
+        metadataPath,
+        "--layout-root",
+        fixture.root,
+        "--image-id",
+        imageIdPath,
+        "--summary",
+        summaryPath,
+        "--canonical-layout",
+        canonicalLayoutPath,
+      ],
+      { encoding: "utf8", shell: false, windowsHide: true },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Cisco OCI verifier rejected input: metadata digest\n");
+  });
+
   it("loads a real local OCI layout with documented Buildx metadata, binds the loaded config ID, and emits canonical layout bytes", () => {
     const fixture = layoutFixture();
     const result = verifyCiscoOciCandidateV1(input(fixture));

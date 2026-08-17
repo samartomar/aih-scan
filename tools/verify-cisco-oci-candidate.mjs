@@ -504,7 +504,10 @@ function cliArguments(values) {
 
 function cliFailureReason(error) {
   const prefix = "invalid Cisco OCI verifier V1: ";
-  if (error instanceof TypeError && error.message === `${prefix}CLI arguments`) return "CLI arguments";
+  if (error instanceof TypeError && error.message.startsWith(prefix)) {
+    const reason = error.message.slice(prefix.length);
+    if (/^[A-Za-z0-9 -]{1,128}$/.test(reason)) return reason;
+  }
   return "rejected";
 }
 
