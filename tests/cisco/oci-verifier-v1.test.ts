@@ -284,7 +284,7 @@ const replaceWithSingleLayer = (fixture: LayoutFixture, layer: Buffer): string =
   const rootfs = config.rootfs as Record<string, unknown>;
   config.rootfs = {
     ...rootfs,
-    diff_ids: [hash(Buffer.concat([Buffer.from("uncompressed"), layer]))],
+    diff_ids: [hash(`uncompressed:${layerDigest}`)],
   };
   const configBytes = Buffer.from(JSON.stringify(config));
   const nextConfigDigest = hash(configBytes);
@@ -655,9 +655,9 @@ describe("Cisco OCI candidate verifier V1", () => {
         },
       },
       {
-        reason: "size range at-most-64MiB cumulative at-most-1MiB",
+        reason: "size range at-most-256MiB cumulative at-most-1MiB",
         mutate: (descriptor) => {
-          descriptor.size = 32 * 1024 * 1024 + 1;
+          descriptor.size = 128 * 1024 * 1024 + 1;
         },
       },
     ];
@@ -737,17 +737,18 @@ describe("Cisco OCI candidate verifier V1", () => {
     expect(result.stderr).not.toMatch(/\d{4,}|sha256|Error|stack/i);
   });
 
-  it("accepts an exact 32MiB layer but rejects one byte beyond it without changing the total bound", () => {
+  it("accepts an exact 128MiB layer at the per-file gate but retains the 64MiB total bound", () => {
     const exact = layoutFixture();
-    const exactConfigDigest = replaceWithSingleLayer(exact, Buffer.alloc(32 * 1024 * 1024, 1));
-    expect(
-      verifyCiscoOciCandidateV1({ ...input(exact), loadedImageId: exactConfigDigest })
-        .manifestDigestSha256,
-    ).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const exactConfigDigest = replaceWithSingleLayer(exact, Buffer.alloc(128 * 1024 * 1024, 1));
+    expect(() =>
+      verifyCiscoOciCandidateV1({ ...input(exact), loadedImageId: exactConfigDigest }),
+    ).toThrow("layout bound at-most-256MiB");
 
     const above = layoutFixture();
-    replaceWithSingleLayer(above, Buffer.alloc(32 * 1024 * 1024 + 1, 2));
-    expect(() => verifyCiscoOciCandidateV1(input(above))).toThrow();
+    replaceWithSingleLayer(above, Buffer.alloc(128 * 1024 * 1024 + 1, 2));
+    expect(() => verifyCiscoOciCandidateV1(input(above))).toThrow(
+      "layer size range at-most-256MiB",
+    );
   });
 
   it("classifies rejected Docker descriptor media types without echoing them", () => {
