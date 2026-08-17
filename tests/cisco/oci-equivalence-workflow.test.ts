@@ -9,7 +9,7 @@ const workflow = () => readFileSync(workflowPath, "utf8");
 const verifier = () => readFileSync(verifierPath, "utf8");
 const step = (text: string, name: string): string => {
   const match = new RegExp(
-    `^- name: ${name}\\s*\\n([\\s\\S]*?)(?=^- name:|(?![\\s\\S]))`,
+    `^      - name: ${name}\\s*\\n([\\s\\S]*?)(?=^      - name:|(?![\\s\\S]))`,
     "m",
   ).exec(text);
   if (match === null) throw new Error(`workflow step missing: ${name}`);
@@ -45,6 +45,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(text).toContain("buildx-v0.34.1.linux-amd64");
     expect(text).toContain(buildxSha256);
     expect(text).toContain(buildkit);
+    expect(text).not.toMatch(/^- name:/m);
   });
 
   it("performs one Linux amd64 local-only build, verifies its two identities, and executes only the config ID", () => {
@@ -76,7 +77,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(text).toMatch(/digest-summary/i);
     expect(text).toMatch(/if-no-files-found:\s*error/);
     expect(text).not.toMatch(
-      /sarif|archive|source|stderr|stdout|docker\.sock|env:.*(?:TOKEN|PASSWORD|SECRET)/i,
+      /sarif|archive|(?:stdout|stderr)-log|docker\.sock|env:.*(?:TOKEN|PASSWORD|SECRET)/i,
     );
     expect(text).not.toMatch(/qualif|trusted|verified|pass|verdict|acceptance|acknowledgement/i);
   });

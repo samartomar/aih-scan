@@ -13,6 +13,7 @@ import {
   canonicalCiscoOciLayoutBytesV1,
   parseCiscoOciLayoutV1,
 } from "../../src/cisco/oci-layout-v1.js";
+import { verifyEvidenceAnnexBytesV1 } from "../../src/observation/observation-evidence-v1.js";
 
 const roots: string[] = [];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -191,6 +192,24 @@ describe("Cisco OCI candidate V1", () => {
     ).toEqual(["annex.cisco-raw", "annex.provenance", "annex.sbom"]);
     expect(result.attestation.envelope.signatures).toEqual([]);
     expect(result.validationState).toBe("cryptographically-unverified");
+    const supplied = result.annexPayloads.map(
+      (entry: { descriptorId: string; payload: string }) => ({
+        descriptorId: entry.descriptorId,
+        bytes: Buffer.from(entry.payload, "base64"),
+      }),
+    );
+    expect(
+      verifyEvidenceAnnexBytesV1({ annex: result.evidenceAnnex, descriptors: supplied }),
+    ).toEqual({
+      kind: "complete",
+    });
+    for (const [index, descriptor] of result.evidenceAnnex.descriptors.entries()) {
+      const payload = supplied[index];
+      if (payload === undefined) throw new Error("candidate annex payload missing");
+      expect(descriptor.descriptorId).toBe(payload.descriptorId);
+      expect(descriptor.byteLength).toBe(payload.bytes.byteLength);
+      expect(descriptor.sha256).toBe(sha256(payload.bytes));
+    }
     recursivelyFrozen(result);
     expect(() => canonicalCiscoOciCandidateBytesV1({ ...result } as never)).toThrow();
   });
@@ -218,7 +237,6 @@ describe("Cisco OCI candidate V1", () => {
         ...value,
         runtime: { ...value.runtime, executionProfileSha256: digest("changed-execution") },
       },
-      { ...value, broker: { identity: "broker.abcdef012345" } },
     ]) {
       const candidate = createCiscoOciCandidateV1(changed);
       expect(candidate.observationKey.observationKeySha256).not.toBe(
@@ -228,6 +246,19 @@ describe("Cisco OCI candidate V1", () => {
         canonicalCiscoOciCandidateBytesV1(baseline),
       );
     }
+    const brokerChanged = createCiscoOciCandidateV1({
+      ...value,
+      broker: { identity: "broker.abcdef012345" },
+    });
+    expect(brokerChanged.observationKey.observationKeySha256).toBe(
+      baseline.observationKey.observationKeySha256,
+    );
+    expect(brokerChanged.attestation.scanAttestationSha256).not.toBe(
+      baseline.attestation.scanAttestationSha256,
+    );
+    expect(canonicalCiscoOciCandidateBytesV1(brokerChanged)).not.toEqual(
+      canonicalCiscoOciCandidateBytesV1(baseline),
+    );
   });
 
   it("rejects cross-binding mismatches, incomplete payloads, and forged brands", async () => {
