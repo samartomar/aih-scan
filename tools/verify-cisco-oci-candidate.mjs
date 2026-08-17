@@ -9,8 +9,8 @@ const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
 const CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
 const DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json";
 const DOCKER_MANIFEST_LIST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.list.v2+json";
-const WORKFLOW_REFERENCE_NAME = "local.invalid/aih-scan/cisco";
-const WORKFLOW_IMAGE_NAME = `${WORKFLOW_REFERENCE_NAME}:latest`;
+const WORKFLOW_REFERENCE_NAME = "latest";
+const WORKFLOW_IMAGE_NAME = "local.invalid/aih-scan/cisco:latest";
 const LOGICAL_REFERENCE_PREFIX = "local.invalid/aih-scan/cisco@sha256:";
 const LAYER_MEDIA_TYPES = new Set([
   "application/vnd.oci.image.layer.v1.tar",
@@ -404,23 +404,25 @@ function manifestAnnotations(value, label) {
   const keySet = annotationKeySet(value);
   if (
     keySet !== undefined &&
-    keySet !== "reference" &&
     keySet !== "reference containerd" &&
-    keySet !== "reference created" &&
     keySet !== "reference containerd created"
   )
     fail(`${label} keys ${keySet}`);
   const annotations = allowed(
     value,
-    [OCI_REFERENCE_ANNOTATION],
+    [CONTAINERD_IMAGE_NAME_ANNOTATION, OCI_REFERENCE_ANNOTATION],
     new Set([CONTAINERD_IMAGE_NAME_ANNOTATION, OCI_CREATED_ANNOTATION, OCI_REFERENCE_ANNOTATION]),
     label,
   );
   const reference = annotations[OCI_REFERENCE_ANNOTATION];
-  if (typeof reference !== "string" || !/^[a-z0-9][a-z0-9._/-]{0,255}$/u.test(reference))
+  if (
+    typeof reference !== "string" ||
+    !/^[a-z0-9][a-z0-9._/-]{0,255}$/u.test(reference) ||
+    reference !== WORKFLOW_REFERENCE_NAME
+  )
     fail("manifest reference");
   const imageName = annotations[CONTAINERD_IMAGE_NAME_ANNOTATION];
-  if (imageName !== undefined && (typeof imageName !== "string" || imageName.length === 0 || imageName.length > 255))
+  if (imageName !== WORKFLOW_IMAGE_NAME)
     fail(label);
   const created = annotations[OCI_CREATED_ANNOTATION];
   if (created !== undefined) assertRfc3339Timestamp(created, label);
@@ -609,7 +611,7 @@ function metadata(value, layout) {
     fail(`metadata keys ${keySet}`);
   const data = allowed(
     value,
-    ["containerimage.digest", "containerimage.config.digest", "containerimage.descriptor"],
+    ["containerimage.digest", "containerimage.config.digest", "containerimage.descriptor", "image.name"],
     new Set(METADATA_KEY_ORDER),
     "metadata",
   );
