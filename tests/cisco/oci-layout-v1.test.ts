@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalCiscoOciLayoutBytesV1,
@@ -23,6 +24,7 @@ const ociIndexMediaType = "application/vnd.oci.image.index.v1+json";
 const ociManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const ociConfigMediaType = "application/vnd.oci.image.config.v1+json";
 const ociLayerMediaType = "application/vnd.oci.image.layer.v1.tar";
+const ociGzipLayerMediaType = "application/vnd.oci.image.layer.v1.tar+gzip";
 const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const descriptor = (bytes: Buffer, mediaType: string) => ({
   mediaType,
@@ -46,21 +48,31 @@ function fixture(
   options: {
     readonly annotation?: string;
     readonly configArchitecture?: string;
+    readonly configOs?: string;
+    readonly diffIds?: readonly string[];
     readonly extraIndexManifest?: boolean;
+    readonly layerMediaType?: string;
     readonly platform?: { readonly architecture: string; readonly os: string };
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-oci-layout-"));
   roots.push(root);
   writeFileSync(join(root, "oci-layout"), JSON.stringify({ imageLayoutVersion: "1.0.0" }));
-  const layer = Buffer.from("synthetic immutable layer\n", "utf8");
-  const layerDescriptor = descriptor(layer, ociLayerMediaType);
+  const uncompressedLayer = Buffer.from("synthetic immutable layer\n", "utf8");
+  const layer =
+    options.layerMediaType === ociGzipLayerMediaType
+      ? gzipSync(uncompressedLayer)
+      : uncompressedLayer;
+  const layerDescriptor = descriptor(layer, options.layerMediaType ?? ociLayerMediaType);
   writeBlob(root, layer);
   const config = Buffer.from(
     JSON.stringify({
       architecture: options.configArchitecture ?? "amd64",
-      os: "linux",
-      rootfs: { type: "layers", diff_ids: [layerDescriptor.digest] },
+      os: options.configOs ?? "linux",
+      rootfs: {
+        type: "layers",
+        diff_ids: options.diffIds ?? [`sha256:${sha256(uncompressedLayer)}`],
+      },
     }),
     "utf8",
   );
@@ -78,16 +90,15 @@ function fixture(
   const manifestDescriptor = descriptor(manifest, ociManifestMediaType);
   writeBlob(root, manifest);
   const platform = options.platform ?? { architecture: "amd64", os: "linux" };
+  const selectedManifestDescriptor = {
+    ...manifestDescriptor,
+    platform,
+    annotations: { "org.opencontainers.image.ref.name": options.annotation ?? "candidate" },
+  };
   const index = {
     schemaVersion: 2,
     mediaType: ociIndexMediaType,
-    manifests: [
-      {
-        ...manifestDescriptor,
-        platform,
-        annotations: { "org.opencontainers.image.ref.name": options.annotation ?? "candidate" },
-      },
-    ],
+    manifests: [selectedManifestDescriptor],
   };
   if (options.extraIndexManifest) {
     const first = index.manifests[0];
@@ -98,7 +109,13 @@ function fixture(
     });
   }
   writeFileSync(join(root, "index.json"), JSON.stringify(index));
-  return { root, manifestDescriptor, configDescriptor, layerDescriptor };
+  return {
+    root,
+    manifestDescriptor,
+    configDescriptor,
+    layerDescriptor,
+    selectedManifestDescriptor,
+  };
 }
 
 function recursivelyFrozen(value: unknown, seen = new Set<object>()): void {
@@ -119,6 +136,7 @@ describe("Cisco OCI layout V1", () => {
         "configDigestSha256",
         "logicalReference",
         "manifestDigestSha256",
+        "manifestDescriptor",
         "manifestPlatform",
         "protocol",
       ].sort(),
@@ -131,6 +149,7 @@ describe("Cisco OCI layout V1", () => {
       `local.invalid/aih-scan/cisco@${value.manifestDescriptor.digest}`,
     );
     expect(layout.manifestPlatform).toEqual({ architecture: "amd64", os: "linux" });
+    expect(layout.manifestDescriptor).toEqual(value.selectedManifestDescriptor);
     recursivelyFrozen(layout);
     expect(() => {
       (layout as { logicalReference: string }).logicalReference = "mutable";
@@ -168,6 +187,14 @@ describe("Cisco OCI layout V1", () => {
       cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
     }
     {
+      const value = fixture({ configArchitecture: "arm64" });
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture({ configOs: "darwin" });
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
       const value = fixture({ annotation: "candidate\u0301" });
       cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
     }
@@ -198,6 +225,21 @@ describe("Cisco OCI layout V1", () => {
     }
     {
       const value = fixture();
+      writeFileSync(join(value.root, "blobs", "sha256", "G".repeat(64)), "invalid name");
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      writeFileSync(join(value.root, "blobs", "sha256", "a".repeat(64)), "unreferenced");
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      writeFileSync(join(value.root, "blobs", "sha256", "z".repeat(63)), "invalid name");
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
       rmSync(join(value.root, "blobs", "sha256", value.configDescriptor.digest.slice(7)));
       cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
     }
@@ -217,9 +259,106 @@ describe("Cisco OCI layout V1", () => {
     for (const run of cases) expect(run).toThrow();
   });
 
+  it("rejects symlinks and hardlinks at every required layout boundary", () => {
+    const cases: Array<() => void> = [];
+    {
+      const value = fixture();
+      const replacement = join(value.root, "replacement-layout");
+      writeFileSync(replacement, "replacement");
+      rmSync(join(value.root, "oci-layout"));
+      symlinkSync(replacement, join(value.root, "oci-layout"));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      const replacement = join(value.root, "replacement-index");
+      writeFileSync(replacement, "replacement");
+      rmSync(join(value.root, "index.json"));
+      symlinkSync(replacement, join(value.root, "index.json"));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      const replacement = join(value.root, "replacement-blobs");
+      mkdirSync(join(replacement, "sha256"), { recursive: true });
+      rmSync(join(value.root, "blobs"), { recursive: true });
+      symlinkSync(replacement, join(value.root, "blobs"), "junction");
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      const replacement = join(value.root, "replacement-sha256");
+      mkdirSync(replacement);
+      rmSync(join(value.root, "blobs", "sha256"), { recursive: true });
+      symlinkSync(replacement, join(value.root, "blobs", "sha256"), "junction");
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      const blob = join(value.root, "blobs", "sha256", value.configDescriptor.digest.slice(7));
+      const replacement = join(value.root, "replacement-blob");
+      writeFileSync(replacement, "replacement");
+      rmSync(blob);
+      symlinkSync(replacement, blob);
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    {
+      const value = fixture();
+      const blob = join(value.root, "blobs", "sha256", value.layerDescriptor.digest.slice(7));
+      linkSync(blob, join(value.root, "outside-hardlink"));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    for (const run of cases) expect(run).toThrow();
+  });
+
   it.runIf(process.platform === "linux")("rejects a special file anywhere in the layout", () => {
     const value = fixture();
     execFileSync("mkfifo", [join(value.root, "blobs", "sha256", "a".repeat(64))]);
     expect(() => loadCiscoOciLayoutV1({ layoutRoot: value.root })).toThrow();
+  });
+
+  it("accepts OCI gzip and uncompressed layer descriptors while keeping rootfs diff IDs distinct", () => {
+    const compressed = fixture({ layerMediaType: ociGzipLayerMediaType });
+    const uncompressed = fixture();
+    const compressedLayout = loadCiscoOciLayoutV1({ layoutRoot: compressed.root });
+    const uncompressedLayout = loadCiscoOciLayoutV1({ layoutRoot: uncompressed.root });
+
+    expect(compressedLayout.manifestDescriptor.mediaType).toBe(ociManifestMediaType);
+    expect(compressedLayout.configDigestSha256).not.toBe(compressed.layerDescriptor.digest);
+    expect(uncompressedLayout.configDigestSha256).not.toBe(uncompressed.layerDescriptor.digest);
+  });
+
+  it("rejects unknown input, forged brands, unsafe roots, and bounded overlong raw layout data", () => {
+    const value = fixture();
+    const rootLink = `${value.root}-link`;
+    symlinkSync(value.root, rootLink, "junction");
+    roots.push(rootLink);
+    writeFileSync(join(value.root, "index.json"), Buffer.alloc(1024 * 1024 + 1));
+
+    expect(() =>
+      loadCiscoOciLayoutV1({ layoutRoot: value.root, extra: true } as unknown),
+    ).toThrow();
+    expect(() => loadCiscoOciLayoutV1({ layoutRoot: rootLink })).toThrow();
+    expect(() => parseCiscoOciLayoutV1({ protocol: "CiscoOciLayoutV1" })).toThrow();
+    expect(() => canonicalCiscoOciLayoutBytesV1({})).toThrow();
+  });
+
+  it("bounds each raw document/blob and the complete layout before identity construction", () => {
+    const cases: Array<() => void> = [];
+    for (const target of ["index.json", "oci-layout"]) {
+      const value = fixture();
+      writeFileSync(join(value.root, target), Buffer.alloc(1024 * 1024 + 1));
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    for (const select of ["configDescriptor", "layerDescriptor", "manifestDescriptor"] as const) {
+      const value = fixture();
+      const descriptor = value[select];
+      writeFileSync(
+        join(value.root, "blobs", "sha256", descriptor.digest.slice(7)),
+        Buffer.alloc(1024 * 1024 + 1),
+      );
+      cases.push(() => loadCiscoOciLayoutV1({ layoutRoot: value.root }));
+    }
+    for (const run of cases) expect(run).toThrow();
   });
 });
