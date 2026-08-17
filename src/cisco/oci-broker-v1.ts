@@ -9,7 +9,7 @@ import {
   type Stats,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
@@ -191,6 +191,18 @@ function output(path: string): Buffer {
   return bytes;
 }
 
+function temporaryPath(path: string, label: string): void {
+  if (
+    !isAbsolute(path) ||
+    !path ||
+    path.includes("\0") ||
+    path.includes("\r") ||
+    path.includes("\n") ||
+    path.includes(",")
+  )
+    fail(`${label} path`);
+}
+
 function freeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (value === null || typeof value !== "object" || ArrayBuffer.isView(value) || seen.has(value))
     return value;
@@ -211,10 +223,12 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   const selectedFiles = Object.fromEntries(
     snapshot.selectedClosureFiles.map((file) => [file.path, file.sha256]),
   );
-  const clientRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-client-"));
+  const temporaryBase = tmpdir();
+  temporaryPath(temporaryBase, "temporary base");
+  const clientRoot = mkdtempSync(join(temporaryBase, "aih-scan-oci-client-"));
   const home = join(clientRoot, "home");
   const dockerConfig = join(clientRoot, "docker-config");
-  const outputRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-output-"));
+  let outputRoot: string | undefined;
   const env = Object.freeze({ PATH: "/usr/bin:/bin", HOME: home, DOCKER_CONFIG: dockerConfig });
   const options = Object.freeze({
     env,
@@ -230,8 +244,11 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   let operationError: unknown;
   let cleanupError: unknown;
   try {
+    temporaryPath(clientRoot, "client root");
     mkdirSync(home, { recursive: true });
     mkdirSync(dockerConfig, { recursive: true });
+    outputRoot = mkdtempSync(join(temporaryBase, "aih-scan-oci-output-"));
+    temporaryPath(outputRoot, "output root");
     const inspected = await invoke(
       ["docker", "image", "inspect", "--format", "{{.Id}}", input.layout.configDigestSha256],
       "image inspect",
@@ -331,16 +348,30 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
         "container rm",
       );
       const absent = await invoke(
-        ["docker", "container", "inspect", containerName],
+        ["docker", "container", "inspect", "--format", "{{.Id}}", containerName],
         "container inspect",
       );
-      if (removed.code !== 0 || removed.truncated || absent.code === 0 || absent.truncated)
+      if (
+        removed.code !== 0 ||
+        removed.truncated ||
+        absent.code === 0 ||
+        absent.truncated ||
+        absent.stdout !== "" ||
+        absent.stderr !== `Error: No such container: ${containerName}`
+      )
         fail("container cleanup");
     } catch (error) {
       cleanupError = error;
     }
   }
-  rmSync(outputRoot, { recursive: true, force: true });
+  for (const temporaryRoot of [outputRoot, clientRoot]) {
+    if (temporaryRoot === undefined) continue;
+    try {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    } catch (error) {
+      if (cleanupError === undefined) cleanupError = error;
+    }
+  }
   if (cleanupError !== undefined) throw cleanupError;
   if (operationError !== undefined) throw operationError;
   return result;

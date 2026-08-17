@@ -449,6 +449,51 @@ describe("Cisco OCI layout V1", () => {
     expect(() => canonicalCiscoOciLayoutBytesV1({})).toThrow();
   });
 
+  it("exact-closes every parsed identity level and keeps manifest and config identities distinct", () => {
+    const layout = loadCiscoOciLayoutV1({ layoutRoot: fixture().root });
+    const parsed = JSON.parse(canonicalCiscoOciLayoutBytesV1(layout).toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    const cases: Array<(value: Record<string, unknown>) => void> = [
+      (value) => {
+        (value.manifestPlatform as Record<string, unknown>).extra = true;
+      },
+      (value) => {
+        (value.manifestDescriptor as Record<string, unknown>).extra = true;
+      },
+      (value) => {
+        (
+          (value.manifestDescriptor as Record<string, unknown>).platform as Record<string, unknown>
+        ).extra = true;
+      },
+      (value) => {
+        (
+          (value.manifestDescriptor as Record<string, unknown>).annotations as Record<
+            string,
+            unknown
+          >
+        ).extra = true;
+      },
+      (value) => {
+        (
+          (value.manifestDescriptor as Record<string, unknown>).annotations as Record<
+            string,
+            unknown
+          >
+        )["org.opencontainers.image.ref.name"] = "candidate/hostile";
+      },
+      (value) => {
+        value.configDigestSha256 = value.manifestDigestSha256;
+      },
+    ];
+    for (const mutate of cases) {
+      const candidate = structuredClone(parsed);
+      mutate(candidate);
+      expect(() => parseCiscoOciLayoutV1(Buffer.from(JSON.stringify(candidate)))).toThrow();
+    }
+  });
+
   it("bounds each raw document/blob and the complete layout before identity construction", () => {
     const cases: Array<() => void> = [];
     for (const target of ["index.json", "oci-layout"]) {

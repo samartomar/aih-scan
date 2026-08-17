@@ -18,6 +18,7 @@ const LAYER_MEDIA_TYPES = new Set([
 const MAX_ITEM_BYTES = 1024 * 1024;
 const MAX_LAYOUT_BYTES = 4 * 1024 * 1024;
 const digest = /^sha256:[a-f0-9]{64}$/;
+const reference = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const brand = new WeakMap<object, Buffer>();
 
 export type CiscoOciLayoutV1 = Readonly<{
@@ -192,7 +193,7 @@ export function loadCiscoOciLayoutV1(value: unknown): CiscoOciLayoutV1 {
   exact(annotations, ["org.opencontainers.image.ref.name"], "manifest annotations");
   if (
     typeof annotations["org.opencontainers.image.ref.name"] !== "string" ||
-    !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(annotations["org.opencontainers.image.ref.name"] as string)
+    !reference.test(annotations["org.opencontainers.image.ref.name"] as string)
   )
     fail("manifest reference annotation");
   const selectedDescriptor: IndexDescriptor = {
@@ -293,21 +294,31 @@ export function parseCiscoOciLayoutV1(value: unknown): CiscoOciLayoutV1 {
   )
     fail("canonical layout identity");
   const platform = object(parsed.manifestPlatform, "canonical platform");
+  exact(platform, ["architecture", "os"], "canonical platform");
   const selected = object(parsed.manifestDescriptor, "canonical manifest descriptor");
+  exact(
+    selected,
+    ["mediaType", "digest", "size", "platform", "annotations"],
+    "canonical manifest descriptor",
+  );
   const parsedDescriptor = descriptor(
     { mediaType: selected.mediaType, digest: selected.digest, size: selected.size },
     "canonical manifest descriptor",
   );
   const selectedPlatform = object(selected.platform, "canonical selected platform");
+  exact(selectedPlatform, ["architecture", "os"], "canonical selected platform");
   const annotations = object(selected.annotations, "canonical annotations");
+  exact(annotations, ["org.opencontainers.image.ref.name"], "canonical annotations");
   if (
     platform.architecture !== "amd64" ||
     platform.os !== "linux" ||
     selectedPlatform.architecture !== "amd64" ||
     selectedPlatform.os !== "linux" ||
+    parsed.configDigestSha256 === parsed.manifestDigestSha256 ||
     parsedDescriptor.digest !== parsed.manifestDigestSha256 ||
     parsedDescriptor.mediaType !== MANIFEST_MEDIA_TYPE ||
-    typeof annotations["org.opencontainers.image.ref.name"] !== "string"
+    typeof annotations["org.opencontainers.image.ref.name"] !== "string" ||
+    !reference.test(annotations["org.opencontainers.image.ref.name"] as string)
   )
     fail("canonical layout manifest");
   return freeze({

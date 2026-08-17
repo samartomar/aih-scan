@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { loadCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
@@ -155,6 +155,9 @@ function mountSource(argv: readonly string[], destination: "/source" | "/output"
 
 type RunnerMode =
   | "cleanup-failure"
+  | "cleanup-absence-hostile"
+  | "cleanup-absence-truncated"
+  | "cleanup-client-error"
   | "image-mismatch"
   | "image-nonzero"
   | "malformed"
@@ -209,8 +212,18 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
       }
       if (argv[1] === "container" && argv[2] === "rm")
         return { code: mode === "cleanup-failure" ? 1 : 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "inspect")
-        return { code: 1, stdout: "", stderr: "" };
+      if (argv[1] === "container" && argv[2] === "inspect") {
+        if (mode === "cleanup-client-error") throw new Error("injected cleanup client failure");
+        if (mode === "cleanup-absence-hostile")
+          return { code: 1, stdout: "unexpected", stderr: "" };
+        if (mode === "cleanup-absence-truncated")
+          return { code: 1, stdout: "", stderr: "", truncated: true };
+        return {
+          code: 1,
+          stdout: "",
+          stderr: `Error: No such container: ${argv.at(-1) ?? ""}`,
+        };
+      }
       if (mode === "spawn-error") throw new Error("injected runner spawn failure");
       const output = mountSource(argv, "/output");
       if (mode === "source-drift")
@@ -267,8 +280,18 @@ function recursivelyFrozen(value: unknown, seen = new Set<object>()): void {
 function expectCleanup(calls: readonly { readonly argv: readonly string[] }[], name: string): void {
   expect(calls.slice(-2).map((call) => call.argv)).toEqual([
     ["docker", "container", "rm", "--force", name],
-    ["docker", "container", "inspect", name],
+    ["docker", "container", "inspect", "--format", "{{.Id}}", name],
   ]);
+}
+
+function expectClientRootsRemoved(
+  states: readonly { readonly dockerConfig: string; readonly home: string }[],
+): void {
+  for (const state of states) {
+    expect(existsSync(state.home)).toBe(false);
+    expect(existsSync(state.dockerConfig)).toBe(false);
+    expect(existsSync(dirname(state.home))).toBe(false);
+  }
 }
 
 function expectBoundedDockerCalls(
@@ -414,9 +437,9 @@ describe("Cisco OCI broker V1", () => {
       throw new Error("broker client environment is incomplete");
     expect(home).not.toBe(process.env.HOME);
     expect(dockerConfig).not.toBe(process.env.DOCKER_CONFIG);
-    expect(readdirSync(dockerConfig)).toEqual([]);
     expectBoundedDockerCalls(fake.calls, fake.clientStates);
     expectCleanup(fake.calls, containerName);
+    expectClientRootsRemoved(fake.clientStates);
     expect(Object.keys(result).sort()).toEqual(
       [
         "annexBytes",
@@ -519,9 +542,34 @@ describe("Cisco OCI broker V1", () => {
     expect(fake.calls).toHaveLength(0);
   });
 
+  it("rejects comma-bearing generated temporary roots before Docker and removes them", async () => {
+    const layout = layoutFixture();
+    const sourceRoot = sourceFixture();
+    const tempBase = mkdtempSync(join(tmpdir(), "aih-scan,oci-broker-temp-"));
+    roots.push(tempBase);
+    const names = ["TMPDIR", "TEMP", "TMP"] as const;
+    const previous = new Map(names.map((name) => [name, process.env[name]]));
+    const { value, fake } = input(layout, sourceRoot);
+    try {
+      for (const name of names) process.env[name] = tempBase;
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expect(fake.calls).toHaveLength(0);
+      expect(readdirSync(tempBase)).toEqual([]);
+    } finally {
+      for (const name of names) {
+        const prior = previous.get(name);
+        if (prior === undefined) delete process.env[name];
+        else process.env[name] = prior;
+      }
+    }
+  });
+
   it("cleans and verifies named-container absence after every execution or output failure", async () => {
     for (const mode of [
       "cleanup-failure",
+      "cleanup-absence-hostile",
+      "cleanup-absence-truncated",
+      "cleanup-client-error",
       "malformed",
       "missing",
       "non-utf8",
@@ -547,6 +595,7 @@ describe("Cisco OCI broker V1", () => {
         .find((item) => item.startsWith("type=bind,src=") && item.endsWith(",dst=/output,rw"));
       if (outputMount !== undefined)
         expect(existsSync(mountSource([outputMount], "/output"))).toBe(false);
+      expectClientRootsRemoved(fake.clientStates);
     }
   });
 
