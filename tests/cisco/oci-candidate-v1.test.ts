@@ -108,6 +108,8 @@ async function brandedInput(
   options: {
     readonly sourceBytes?: string | Uint8Array;
     readonly sarifResult?: Record<string, unknown>;
+    readonly sbomBytes?: Buffer;
+    readonly provenanceBytes?: Buffer;
   } = {},
 ) {
   const sourceRoot = mkdtempSync(join(tmpdir(), "aih-scan-oci-candidate-"));
@@ -138,8 +140,9 @@ async function brandedInput(
       return { code: 0, stdout: "", stderr: "" };
     },
   });
-  const sbomBytes = Buffer.from('{"spdxVersion":"SPDX-2.3"}');
-  const provenanceBytes = Buffer.from('{"_type":"https://in-toto.io/Statement/v1"}');
+  const sbomBytes = options.sbomBytes ?? Buffer.from('{"spdxVersion":"SPDX-2.3"}');
+  const provenanceBytes =
+    options.provenanceBytes ?? Buffer.from('{"_type":"https://in-toto.io/Statement/v1"}');
   return {
     protocol: "CiscoOciCandidateV1",
     layout: ociLayout,
@@ -556,6 +559,58 @@ describe("Cisco OCI candidate V1", () => {
     first.payload = `${first.payload}=`;
     expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(noncanonical))).toThrow();
   });
+
+  it("bounds raw candidate JSON and canonical base64 payloads before decoding", async () => {
+    const maxCandidateBytes = 48 * 1024 * 1024;
+    const maxPayloadBytes = 16 * 1024 * 1024;
+    const maxPayloadBase64Chars = 32 * 1024 * 1024;
+    const boundary = createCiscoOciCandidateV1(
+      await brandedInput({ sbomBytes: Buffer.alloc(maxPayloadBytes, 0x61) }),
+    );
+    const boundaryJson = canonicalCiscoOciCandidateBytesV1(boundary).toString("utf8");
+    expect(
+      sha256(canonicalCiscoOciCandidateBytesV1(parseCiscoOciCandidateV1Json(boundaryJson))),
+    ).toBe(sha256(boundaryJson));
+
+    const candidate = createCiscoOciCandidateV1(await brandedInput());
+    const canonical = canonicalCiscoOciCandidateBytesV1(candidate).toString("utf8");
+    const rawBoundary = `${canonical}${" ".repeat(maxCandidateBytes - Buffer.byteLength(canonical))}`;
+    expect(Buffer.byteLength(rawBoundary)).toBe(maxCandidateBytes);
+    expect(parseCiscoOciCandidateV1Json(rawBoundary)).toEqual(candidate);
+    expect(() => parseCiscoOciCandidateV1Json(`${rawBoundary} `)).toThrow(
+      "candidate JSON exceeds bounded size",
+    );
+
+    const decodedOversized = JSON.parse(canonical) as {
+      annexPayloads: { payload: string }[];
+    };
+    const decodedPayload = decodedOversized.annexPayloads[0];
+    if (decodedPayload === undefined) throw new Error("candidate annex payload missing");
+    decodedPayload.payload = "A".repeat(Math.ceil(maxPayloadBytes / 3) * 4 + 4);
+    expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(decodedOversized))).toThrow(
+      "candidate payload decoded size",
+    );
+
+    const encodedOversized = JSON.parse(canonical) as {
+      annexPayloads: { payload: string }[];
+    };
+    const encodedPayload = encodedOversized.annexPayloads[0];
+    if (encodedPayload === undefined) throw new Error("candidate annex payload missing");
+    encodedPayload.payload = "A".repeat(maxPayloadBase64Chars + 4);
+    expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(encodedOversized))).toThrow(
+      "candidate payload encoded size",
+    );
+
+    for (const payload of ["AAAA\n", "AB==", "AAB="]) {
+      const malformed = JSON.parse(canonical) as { annexPayloads: { payload: string }[] };
+      const malformedPayload = malformed.annexPayloads[0];
+      if (malformedPayload === undefined) throw new Error("candidate annex payload missing");
+      malformedPayload.payload = payload;
+      expect(() => parseCiscoOciCandidateV1Json(JSON.stringify(malformed))).toThrow(
+        "candidate payload base64 grammar",
+      );
+    }
+  }, 60_000);
 
   it("rejects internally coherent attestations that substitute either outer observation identity", async () => {
     const candidate = createCiscoOciCandidateV1(await brandedInput());

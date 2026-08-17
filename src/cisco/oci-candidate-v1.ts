@@ -27,6 +27,14 @@ import {
 } from "./oci-layout-v1.js";
 
 const MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+// Two maximum binary payloads expand to less than 45 MiB in Base64; the remaining
+// 3 MiB covers the immutable candidate envelope without admitting unbounded JSON.
+const MAX_CANDIDATE_JSON_BYTES = 48 * 1024 * 1024;
+// This textual ceiling is checked before decode. The decoded payload ceiling remains
+// authoritative, so a syntactically valid but oversized Base64 value never allocates.
+const MAX_BASE64_PAYLOAD_CHARS = 32 * 1024 * 1024;
+const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const base64Characters = /^[A-Za-z0-9+/]*$(?![\s\S])/;
 const fields = [
   "protocol",
   "layout",
@@ -114,6 +122,27 @@ const candidates = new WeakMap<object, Buffer>();
 
 const fail = (message: string): never => {
   throw new TypeError(`invalid Cisco OCI candidate V1: ${message}`);
+};
+const decodeCanonicalBase64Payload = (payload: string): Buffer => {
+  if (payload.length > MAX_BASE64_PAYLOAD_CHARS) fail("candidate payload encoded size");
+  if (payload.length % 4 !== 0) fail("candidate payload base64 grammar");
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  const contentLength = payload.length - padding;
+  if (
+    !base64Characters.test(payload.slice(0, contentLength)) ||
+    payload.slice(contentLength) !== "=".repeat(padding)
+  )
+    fail("candidate payload base64 grammar");
+  const decodedSize = (payload.length / 4) * 3 - padding;
+  if (decodedSize > MAX_PAYLOAD_BYTES) fail("candidate payload decoded size");
+  if (
+    (padding === 2 && (base64Alphabet.indexOf(payload.at(-3) ?? "") & 0x0f) !== 0) ||
+    (padding === 1 && (base64Alphabet.indexOf(payload.at(-2) ?? "") & 0x03) !== 0)
+  )
+    fail("candidate payload base64 grammar");
+  const bytes = Buffer.from(payload, "base64");
+  if (bytes.length !== decodedSize) fail("candidate payload base64 grammar");
+  return bytes;
 };
 const ownData = (value: object, key: string): unknown => {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -467,6 +496,8 @@ function inputWithoutHash(
 }
 
 export function parseCiscoOciCandidateV1Json(text: string): Candidate {
+  if (Buffer.byteLength(text, "utf8") > MAX_CANDIDATE_JSON_BYTES)
+    fail("candidate JSON exceeds bounded size");
   const parsed = outputSchema.parse(
     parseStrictJsonObjectV1(text, "Cisco OCI candidate"),
   ) as unknown as CandidateWire;
@@ -504,8 +535,7 @@ export function parseCiscoOciCandidateV1Json(text: string): Candidate {
   if (!same(attestation.statement.predicate.annexDescriptors, evidenceAnnex.descriptors))
     fail("candidate attestation annex binding");
   const payloads = parsed.annexPayloads.map((entry) => {
-    const bytes = Buffer.from(entry.payload, "base64");
-    if (bytes.toString("base64") !== entry.payload) fail("candidate payload base64");
+    const bytes = decodeCanonicalBase64Payload(entry.payload);
     return { descriptorId: entry.descriptorId, bytes };
   });
   if (
