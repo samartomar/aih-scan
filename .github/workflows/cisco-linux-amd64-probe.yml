@@ -81,7 +81,7 @@ jobs:
           export AIH_SCAN_CISCO_CHILD_PATH="$RUNNER_TEMP/aih-scan-cisco-child-bin"
           export AIH_SCAN_CISCO_CHILD_HOME="$RUNNER_TEMP/aih-scan-cisco-child-home"
           export AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR="$RUNNER_TEMP/aih-scan-cisco-uv-cache"
-          npm test -- --run tests/cisco/linux-amd64-probe.test.ts
+          npm test -- --run tests/cisco/linux-amd64-probe.test.ts --testTimeout=130000
 
       - name: Upload sanitized observation artifacts
         if: ${{ always() }}

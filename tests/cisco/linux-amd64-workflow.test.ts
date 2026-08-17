@@ -82,6 +82,8 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     expect(live).toMatch(/AIH_SCAN_CISCO_CHILD_HOME=/);
     expect(live).toMatch(/AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR=/);
     expect(live).toMatch(/npm test -- --run tests\/cisco\/linux-amd64-probe\.test\.ts/);
+    expect(live).toMatch(/--testTimeout=130000/);
+    expect(workflow).not.toMatch(/(?:VITEST|TEST)_TIMEOUT|--testTimeout=(?!130000\b)/);
     expect(workflow.indexOf(verification ?? "")).toBeLessThan(workflow.indexOf(warm ?? ""));
     expect(workflow.indexOf(warm ?? "")).toBeLessThan(workflow.indexOf(live ?? ""));
     const upload = blockContaining(workflow, "actions/upload-artifact@");
