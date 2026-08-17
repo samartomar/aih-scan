@@ -48,7 +48,7 @@ jobs:
           test -f .candidate-sources/ai-harness/tools/cisco-skill-scanner/pyproject.toml
           test -f .candidate-sources/ai-harness/tools/cisco-skill-scanner/uv.lock
           HOME="$RUNNER_TEMP/oci-equivalence/child-home" PATH="$RUNNER_TEMP/oci-equivalence/child-bin:$PATH" UV_CACHE_DIR="$RUNNER_TEMP/oci-equivalence/child-uv-cache" UV_CONFIG_FILE="$RUNNER_TEMP/aih-scan-cisco-empty-uv.toml" uv sync --frozen --project .candidate-sources/ai-harness/tools/cisco-skill-scanner
-      - name: Build OCI layout and local image
+      - name: Build strict OCI layout
         run: |
           mkdir -p "$RUNNER_TEMP/oci-equivalence"
           docker buildx build \
@@ -56,31 +56,43 @@ jobs:
             --pull \
             --provenance=false \
             --sbom=false \
+            --rewrite-timestamp=true \
             --tag local.invalid/aih-scan/cisco \
-            --metadata-file "$RUNNER_TEMP/oci-equivalence/build-metadata.json" \
+            --metadata-file "$RUNNER_TEMP/oci-equivalence/oci-build-metadata.json" \
             --output "type=oci,oci-mediatypes=true,tar=false,dest=$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \
+            tools/cisco-oci-candidate
+      - name: Build local Docker image
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --pull \
+            --provenance=false \
+            --sbom=false \
+            --rewrite-timestamp=true \
+            --tag local.invalid/aih-scan/cisco \
             --output "type=docker,dest=$RUNNER_TEMP/oci-equivalence/candidate-image.tar" \
             tools/cisco-oci-candidate
       - name: Verify OCI layout and local image identity
         run: |
           docker load --input "$RUNNER_TEMP/oci-equivalence/candidate-image.tar"
-          docker image inspect --format '{{.Id}}' local.invalid/aih-scan/cisco > "$RUNNER_TEMP/oci-equivalence/config-id.txt"
+          docker image inspect --format '{{.Id}}' local.invalid/aih-scan/cisco > "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt"
           node tools/verify-cisco-oci-candidate.mjs \
-            --metadata "$RUNNER_TEMP/oci-equivalence/build-metadata.json" \
+            --metadata "$RUNNER_TEMP/oci-equivalence/oci-build-metadata.json" \
             --layout-root "$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" \
-            --image-id "$RUNNER_TEMP/oci-equivalence/config-id.txt" \
+            --image-id "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt" \
             --summary "$RUNNER_TEMP/oci-equivalence/oci-equivalence-digest-summary.json" \
             --canonical-layout "$RUNNER_TEMP/oci-equivalence/candidate-layout-v1.json"
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; const summary = JSON.parse(readFileSync(process.argv[1], "utf8")); const id = readFileSync(process.argv[2], "utf8").trim(); if (summary.configDigestSha256 !== id) process.exitCode = 1;' "$RUNNER_TEMP/oci-equivalence/oci-equivalence-digest-summary.json" "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt"
       - name: Compare isolated direct and OCI observations
         run: |
           : dual-run-equivalence
-          AIH_SCAN_CISCO_OCI_EQUIVALENCE=1 AIH_SCAN_CISCO_DUAL_RUN_EQUIVALENCE=1 AIH_SCAN_CISCO_OCI_CONFIG_DIGEST=$(cat "$RUNNER_TEMP/oci-equivalence/config-id.txt") AIH_SCAN_CISCO_RUNTIME_PROJECT="$GITHUB_WORKSPACE/.candidate-sources/ai-harness/tools/cisco-skill-scanner" AIH_SCAN_CISCO_CHILD_PATH="$RUNNER_TEMP/oci-equivalence/child-bin" AIH_SCAN_CISCO_CHILD_HOME="$RUNNER_TEMP/oci-equivalence/child-home" AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR="$RUNNER_TEMP/oci-equivalence/child-uv-cache" AIH_SCAN_CISCO_ARTIFACT_DIR="$RUNNER_TEMP/oci-equivalence/artifacts" AIH_SCAN_CISCO_OCI_DIRECT_ROOT="$RUNNER_TEMP/oci-equivalence/direct-root" AIH_SCAN_CISCO_OCI_ROOT="$RUNNER_TEMP/oci-equivalence/oci-root" AIH_SCAN_CISCO_OCI_LAYOUT_PATH="$RUNNER_TEMP/oci-equivalence/candidate-layout-v1.json" npm test -- --run tests/cisco/oci-equivalence-live.test.ts
+          AIH_SCAN_CISCO_OCI_EQUIVALENCE=1 AIH_SCAN_CISCO_DUAL_RUN_EQUIVALENCE=1 AIH_SCAN_CISCO_OCI_CONFIG_DIGEST=$(cat "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt") AIH_SCAN_CISCO_RUNTIME_PROJECT="$GITHUB_WORKSPACE/.candidate-sources/ai-harness/tools/cisco-skill-scanner" AIH_SCAN_CISCO_CHILD_PATH="$RUNNER_TEMP/oci-equivalence/child-bin" AIH_SCAN_CISCO_CHILD_HOME="$RUNNER_TEMP/oci-equivalence/child-home" AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR="$RUNNER_TEMP/oci-equivalence/child-uv-cache" AIH_SCAN_CISCO_ARTIFACT_DIR="$RUNNER_TEMP/oci-equivalence/artifacts" AIH_SCAN_CISCO_OCI_DIRECT_ROOT="$RUNNER_TEMP/oci-equivalence/direct-root" AIH_SCAN_CISCO_OCI_ROOT="$RUNNER_TEMP/oci-equivalence/oci-root" AIH_SCAN_CISCO_OCI_LAYOUT_PATH="$RUNNER_TEMP/oci-equivalence/candidate-layout-v1.json" npm test -- --run tests/cisco/oci-equivalence-live.test.ts
       - name: Clean up OCI equivalence resources
         if: ${{ always() }}
         run: |
           docker buildx rm --force aih-scan-cisco-oci-equivalence
           docker image rm --force local.invalid/aih-scan/cisco
-          rm -rf "$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" "$RUNNER_TEMP/oci-equivalence/candidate-image.tar" "$RUNNER_TEMP/oci-equivalence/candidate-layout-v1.json" "$RUNNER_TEMP/oci-equivalence/direct-root" "$RUNNER_TEMP/oci-equivalence/oci-root" "$RUNNER_TEMP/oci-equivalence/child-bin" "$RUNNER_TEMP/oci-equivalence/child-home" "$RUNNER_TEMP/oci-equivalence/child-uv-cache"
+          rm -rf "$RUNNER_TEMP/oci-equivalence/candidate-oci-layout" "$RUNNER_TEMP/oci-equivalence/candidate-image.tar" "$RUNNER_TEMP/oci-equivalence/candidate-layout-v1.json" "$RUNNER_TEMP/oci-equivalence/direct-root" "$RUNNER_TEMP/oci-equivalence/oci-root" "$RUNNER_TEMP/oci-equivalence/child-bin" "$RUNNER_TEMP/oci-equivalence/child-home" "$RUNNER_TEMP/oci-equivalence/child-uv-cache" "$RUNNER_TEMP/oci-equivalence/oci-build-metadata.json" "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt"
       - name: Upload OCI equivalence digest summary
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
