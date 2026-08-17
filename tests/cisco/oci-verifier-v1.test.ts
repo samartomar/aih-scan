@@ -140,7 +140,33 @@ describe("Cisco OCI candidate verifier V1", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toBe("");
+    expect(result.stderr).toBe("Cisco OCI verifier rejected input: CLI arguments\n");
+  });
+
+  it("emits only a static rejection reason when hostile CLI values reach a filesystem boundary", () => {
+    const hostile = "C:\\do-not-leak\\digest-sha256-deadbeef\\metadata-content.json";
+    const result = spawnSync(
+      process.execPath,
+      [
+        verifierPath,
+        "--metadata",
+        hostile,
+        "--layout-root",
+        hostile,
+        "--image-id",
+        hostile,
+        "--summary",
+        hostile,
+        "--canonical-layout",
+        hostile,
+      ],
+      { encoding: "utf8", shell: false, windowsHide: true },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Cisco OCI verifier rejected input: rejected\n");
+    expect(result.stderr).not.toMatch(/do-not-leak|digest|metadata|content|Error|stack/i);
   });
 
   it("loads a real local OCI layout with documented Buildx metadata, binds the loaded config ID, and emits canonical layout bytes", () => {

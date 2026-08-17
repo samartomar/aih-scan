@@ -502,6 +502,12 @@ function cliArguments(values) {
   return result;
 }
 
+function cliFailureReason(error) {
+  const prefix = "invalid Cisco OCI verifier V1: ";
+  if (error instanceof TypeError && error.message === `${prefix}CLI arguments`) return "CLI arguments";
+  return "rejected";
+}
+
 const invokedPath = process.argv[1];
 if (
   typeof invokedPath === "string" &&
@@ -518,7 +524,8 @@ if (
     });
     writeFileSync(args.summary, canonicalCiscoOciVerifierBytesV1(result));
     writeFileSync(args["canonical-layout"], canonicalCiscoOciVerifierLayoutBytesV1(result));
-  } catch {
+  } catch (error) {
+    process.stderr.write(`Cisco OCI verifier rejected input: ${cliFailureReason(error)}\n`);
     process.exitCode = 1;
   }
 }
