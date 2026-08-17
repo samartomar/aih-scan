@@ -21,6 +21,15 @@ const callerIdentities = {
     { coverageKind: "selected-closure", coverageSha256: sha("0") },
     { coverageKind: "source-tree", coverageSha256: sha("1") },
   ],
+  ociImage: {
+    reference: `example.invalid/cisco@sha256:${sha("2")}`,
+    sha256: sha("2"),
+  },
+  adapter: { identity: "adapter.0123456789ab", sha256: sha("3") },
+  executionProfileSha256: sha("4"),
+  supportedPlatforms: [{ os: "linux", architecture: "amd64" }],
+  sbom: { mediaType: "application/spdx+json", sha256: sha("5") },
+  provenance: { mediaType: "application/vnd.in-toto+json", sha256: sha("6") },
 };
 const sarif = {
   version: "2.1.0",
@@ -170,6 +179,112 @@ describe("Cisco facts-only V1", () => {
     ).toThrow();
   });
 
+  it("accepts only the closed, bounded Cisco SARIF profile and never reads hostile maps", () => {
+    const firstRun = sarif.runs[0];
+    if (firstRun === undefined) throw new Error("fixture is missing a SARIF run");
+    const firstResult = firstRun.results[0];
+    if (firstResult === undefined) throw new Error("fixture is missing a SARIF result");
+    const base = {
+      protocol: "CiscoFactsOnlyV1",
+      sarif,
+      fileSha256ByPath: { "skills/demo/SKILL.md": sha("a") },
+      platform: { os: "linux", architecture: "amd64" },
+    };
+    const invalid = [
+      { ...base, unexpected: true },
+      { ...base, sarif: { ...sarif, unexpected: true } },
+      { ...base, sarif: { ...sarif, runs: [{ ...firstRun, unexpected: true }] } },
+      {
+        ...base,
+        sarif: {
+          ...sarif,
+          runs: [
+            { ...firstRun, tool: { driver: { name: "cisco-ai-skill-scanner", extra: true } } },
+          ],
+        },
+      },
+      {
+        ...base,
+        sarif: {
+          ...sarif,
+          runs: [
+            {
+              ...firstRun,
+              results: [
+                {
+                  ...firstResult,
+                  locations: [
+                    ...firstResult.locations,
+                    { physicalLocation: { artifactLocation: { uri: "../escape" } } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        ...base,
+        sarif: { ...sarif, runs: [{ ...firstRun, results: [{ ...firstResult, extra: true }] }] },
+      },
+      {
+        ...base,
+        sarif: {
+          ...sarif,
+          runs: [
+            {
+              ...firstRun,
+              results: [{ ...firstResult, message: { ...firstResult.message, extra: true } }],
+            },
+          ],
+        },
+      },
+      {
+        ...base,
+        sarif: {
+          ...sarif,
+          runs: [
+            {
+              ...firstRun,
+              results: [
+                {
+                  ...firstResult,
+                  locations: [
+                    {
+                      physicalLocation: {
+                        artifactLocation: {
+                          uri: "skills/demo/SKILL.md",
+                          extra: true,
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        ...base,
+        sarif: {
+          ...sarif,
+          runs: [{ ...firstRun, results: [{ ...firstResult, ruleId: "x".repeat(257) }] }],
+        },
+      },
+    ];
+    for (const value of invalid) expect(() => createCiscoFactsOnlyV1(value)).toThrow();
+
+    const accessorDigest = { ...base.fileSha256ByPath } as Record<string, unknown>;
+    Object.defineProperty(accessorDigest, "skills/demo/SKILL.md", {
+      enumerable: true,
+      get: () => {
+        throw new Error("must not execute a digest accessor");
+      },
+    });
+    expect(() => createCiscoFactsOnlyV1({ ...base, fileSha256ByPath: accessorDigest })).toThrow();
+  });
+
   it("keeps an unknown Cisco rule as a raw fact without mapping it into another namespace", () => {
     const firstRun = sarif.runs[0];
     if (firstRun === undefined) throw new Error("fixture is missing a SARIF run");
@@ -185,6 +300,27 @@ describe("Cisco facts-only V1", () => {
       platform: { os: "linux", architecture: "amd64" },
     });
     expect(result.facts[0]?.nativeRuleId).toBe("future-rule");
+  });
+
+  it("rejects inherited or accessor-backed file maps without reading attacker-controlled properties", () => {
+    const inherited = Object.create({ "skills/demo/SKILL.md": sha("a") });
+    const accessor: Record<string, unknown> = {};
+    Object.defineProperty(accessor, "skills/demo/SKILL.md", {
+      enumerable: true,
+      get: () => {
+        throw new Error("must not execute accessor");
+      },
+    });
+    for (const fileSha256ByPath of [inherited, accessor]) {
+      expect(() =>
+        createCiscoFactsOnlyV1({
+          protocol: "CiscoFactsOnlyV1",
+          sarif,
+          fileSha256ByPath,
+          platform: { os: "linux", architecture: "amd64" },
+        }),
+      ).toThrow();
+    }
   });
 
   it("binds caller-provided analyzer version, lock, configuration, source seal, and coverage into its entry and key", () => {
@@ -210,7 +346,27 @@ describe("Cisco facts-only V1", () => {
       observationConfigurationSha256: sha("3"),
     });
     expect(base.scannerManifestEntrySha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(base.scannerManifest.protocol).toBe("ScannerManifestV1");
+    expect(base.scannerManifest.detectors).toHaveLength(1);
+    const detector = base.scannerManifest.detectors[0];
+    expect(detector).toMatchObject({
+      detectorId: "detector.cisco",
+      analyzerIdentity: callerIdentities.analyzer.identity,
+      ociImage: callerIdentities.ociImage,
+      adapter: callerIdentities.adapter,
+      executionProfileSha256: callerIdentities.executionProfileSha256,
+      supportedPlatforms: [{ os: "linux", architecture: "amd64" }],
+      sbom: callerIdentities.sbom,
+      provenance: callerIdentities.provenance,
+    });
+    expect(detector?.observationConfigurationSha256).not.toBe(
+      callerIdentities.observationConfigurationSha256,
+    );
+    expect(base.scannerManifestEntrySha256).toBe(detector?.scannerManifestEntrySha256);
     expect(base.observationKey.scannerManifestEntrySha256).toBe(base.scannerManifestEntrySha256);
+    expect(base.observationKey.observationConfigurationSha256).toBe(
+      detector?.observationConfigurationSha256,
+    );
     expect(base.observationKey.sourceSeal).toEqual(sourceSeal);
     expect(base.observationSet.coverage).toEqual(callerIdentities.coverage);
     for (const changed of [changedVersion, changedLock, changedConfiguration]) {
@@ -219,5 +375,18 @@ describe("Cisco facts-only V1", () => {
         base.observationKey.observationKeySha256,
       );
     }
+  });
+
+  it("requires complete immutable caller manifest identities when identities are present", () => {
+    const { provenance: _provenance, ...incomplete } = callerIdentities;
+    expect(() =>
+      createCiscoFactsOnlyV1({
+        protocol: "CiscoFactsOnlyV1",
+        sarif,
+        fileSha256ByPath: { "skills/demo/SKILL.md": sha("a") },
+        platform: { os: "linux", architecture: "amd64" },
+        identities: incomplete,
+      }),
+    ).toThrow();
   });
 });

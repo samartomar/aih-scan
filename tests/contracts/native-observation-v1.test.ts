@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import {
   describeNativeObservationSourceV1,
   sealNativeObservationSourceV1,
 } from "../../src/observation/native-observation-v1.js";
+import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
 
 const sha = (digit: string) => digit.repeat(64);
 const snapshotInput = {
@@ -304,6 +306,110 @@ describe("NativeObservationV1", () => {
       });
     } finally {
       tree.cleanup();
+    }
+  });
+
+  it("uses source-tree and component hashes that preserve directory entries and reject normalized duplicate roots", () => {
+    const sourceRoot = mkdtempSync(join(tmpdir(), "aih-scan-source-hash-"));
+    try {
+      mkdirSync(join(sourceRoot, "alpha"), { recursive: true });
+      writeFileSync(join(sourceRoot, "alpha", "note.txt"), "ASCII\n");
+      const source = hashSourceTreeV1(sourceRoot);
+      const component = hashComponentTreeV1(sourceRoot, ["alpha"]);
+      expect(source.files).toEqual([
+        {
+          path: "alpha/note.txt",
+          bytes: 6,
+          sha256: createHash("sha256").update("ASCII\n", "utf8").digest("hex"),
+        },
+      ]);
+      expect(component.files).toEqual(source.files);
+      expect(() => hashComponentTreeV1(sourceRoot, ["alpha", "alpha/./"])).toThrow();
+    } finally {
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces public V1 collection bounds", () => {
+    const sourceFile = snapshotInput.sourceFiles[0];
+    const selectedFile = snapshotInput.selectedClosureFiles[0];
+    if (sourceFile === undefined || selectedFile === undefined)
+      throw new Error("snapshot fixture missing");
+    const files = Array.from({ length: 100_001 }, (_, index) => ({
+      ...sourceFile,
+      path: `files/${String(index)}.txt`,
+    }));
+    expect(() =>
+      createSealedSourceSnapshotV1({
+        ...snapshotInput,
+        sourceFiles: files,
+        selectedClosureFiles: [{ ...selectedFile, path: "files/0.txt" }],
+      }),
+    ).toThrow();
+    const seal = {
+      protocol: "SourceSealV1",
+      sourceTreeSha256: sha("0"),
+      selectedClosureSha256: sha("1"),
+      sealedSnapshotSha256: sha("2"),
+    };
+    const fact = { rawOccurrenceFingerprint: `raw-occurrence-v1:${sha("3")}`, multiplicity: 1 };
+    const coverage = { coverageKind: "selected-closure" as const, coverageSha256: sha("4") };
+    expect(() =>
+      createNativeObservationV1({
+        ...keyContext,
+        sourceSeal: seal,
+        facts: Array.from({ length: 4097 }, (_, index) => ({
+          ...fact,
+          rawOccurrenceFingerprint: `raw-occurrence-v1:${index.toString(16).padStart(64, "0")}`,
+        })),
+        coverage: [coverage],
+      }),
+    ).toThrow();
+    expect(() =>
+      createNativeObservationV1({
+        ...keyContext,
+        sourceSeal: seal,
+        facts: [],
+        coverage: Array.from({ length: 4097 }, () => coverage),
+      }),
+    ).toThrow();
+  });
+
+  it("returns expected-key-context-required without reading hostile context properties", () => {
+    const fixture = liveFixture();
+    try {
+      const base = {
+        observation: fixture.observation,
+        sealedSnapshot: fixture.sealedSnapshot,
+        sourceRoot: fixture.sourceRoot,
+        selectedClosurePaths: fixture.selectedClosurePaths,
+      };
+      const accessor: Record<string, unknown> = {};
+      Object.defineProperty(accessor, "protocol", {
+        enumerable: true,
+        get: () => {
+          throw new Error("must not execute accessor");
+        },
+      });
+      for (const expectedKeyContext of [
+        Object.create({ protocol: "NativeObservationV1" }),
+        accessor,
+        { protocol: "NativeObservationV1", nativeAnalyzerIdentity: 1 },
+        { protocol: "NativeObservationV1", nativeAnalyzerIdentity: "native.bad" },
+        {
+          protocol: "NativeObservationV1",
+          nativeAnalyzerIdentity: "native.0123456789ab",
+          observationConfigurationSha256: "bad",
+        },
+      ]) {
+        expect(assessNativeObservationReuseV1({ ...base, expectedKeyContext } as never)).toEqual({
+          kind: "required",
+          code: "NATIVE_OBSERVATION_REQUIRED",
+          reason: "expected-key-context-required",
+        });
+      }
+    } finally {
+      fixture.cleanup();
     }
   });
 });

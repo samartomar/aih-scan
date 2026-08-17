@@ -8,6 +8,17 @@ const result = (message: string) => ({
   message: { text: message },
   locations: [{ physicalLocation: { artifactLocation: { uri: "skills/demo/SKILL.md" } } }],
 });
+const locatedResult = (line: number) => ({
+  ...result("same diagnostic"),
+  locations: [
+    {
+      physicalLocation: {
+        artifactLocation: { uri: "skills/demo/SKILL.md" },
+        region: { startLine: line, startColumn: 1, endLine: line, endColumn: 2 },
+      },
+    },
+  ],
+});
 const input = (results: unknown[]) => ({
   protocol: "CiscoFactsOnlyV1",
   sarif: {
@@ -71,6 +82,13 @@ describe("Cisco facts-only parity", () => {
       0, 1,
     ]);
     expect(ordered[0]?.rawOccurrenceFingerprint).not.toBe(ordered[1]?.rawOccurrenceFingerprint);
+  });
+
+  it("sorts full diagnostic detail before assigning ordinals, including regions and locations", () => {
+    const forward = createCiscoFactsOnlyV1(input([locatedResult(9), locatedResult(3)]));
+    const reverse = createCiscoFactsOnlyV1(input([locatedResult(3), locatedResult(9)]));
+    expect(forward.annexBytes).toEqual(reverse.annexBytes);
+    expect(forward.facts).toEqual(reverse.facts);
   });
 
   it("allows an exact zero-result coverage claim without inventing a trust conclusion", () => {

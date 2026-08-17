@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalEvidenceAnnexBytesV1,
+  canonicalObservationKeyBytesV1,
+  canonicalObservationSetBytesV1,
   createEvidenceAnnexV1,
   createObservationKeyV1,
   createObservationSetV1,
+  parseEvidenceAnnexV1Json,
+  parseObservationKeyV1Json,
+  parseObservationSetV1Json,
   verifyEvidenceAnnexBytesV1,
 } from "../../src/observation/observation-evidence-v1.js";
 
@@ -51,6 +57,12 @@ describe("ObservationKey/Set/EvidenceAnnex V1", () => {
     ]);
     expect(set.observationKey).toEqual(observationKey);
     expect(Object.isFrozen(set.facts)).toBe(true);
+    expect(canonicalObservationKeyBytesV1(observationKey).toString("utf8")).toContain(
+      '"protocol":"ObservationKeyV1"',
+    );
+    expect(canonicalObservationSetBytesV1(set).toString("utf8")).toContain(
+      '"protocol":"ObservationSetV1"',
+    );
     expect(() =>
       createObservationSetV1({
         protocol: "ObservationSetV1",
@@ -84,6 +96,20 @@ describe("ObservationKey/Set/EvidenceAnnex V1", () => {
       "sha256",
       "uri",
     ]);
+    expect(annex.evidenceAnnexSha256).toBe(
+      "b78abfca3a2728f50fe39cab3ca0b5d0e2407fe5a2ca328e98b43013ddfc35e1",
+    );
+    expect(canonicalEvidenceAnnexBytesV1(annex).toString("utf8")).toContain(
+      '"protocol":"EvidenceAnnexV1"',
+    );
+    expect(
+      parseEvidenceAnnexV1Json(
+        JSON.stringify({
+          protocol: "EvidenceAnnexV1",
+          descriptors: annex.descriptors,
+        }),
+      ),
+    ).toEqual(annex);
     expect(
       verifyEvidenceAnnexBytesV1({
         annex,
@@ -105,6 +131,18 @@ describe("ObservationKey/Set/EvidenceAnnex V1", () => {
         kind: "required",
       });
     }
+    expect(
+      verifyEvidenceAnnexBytesV1({
+        annex,
+        descriptors: [{ descriptorId: "annex.unknown", bytes }],
+      }),
+    ).toMatchObject({ reason: "unknown-descriptor" });
+    expect(
+      verifyEvidenceAnnexBytesV1({
+        annex,
+        descriptors: [{ descriptorId: "annex.cisco-raw", bytes: Buffer.from("substitution") }],
+      }),
+    ).toMatchObject({ reason: "length-mismatch" });
     expect(() =>
       createEvidenceAnnexV1({
         protocol: "EvidenceAnnexV1",
@@ -117,6 +155,45 @@ describe("ObservationKey/Set/EvidenceAnnex V1", () => {
             uri: "../escape",
           },
         ],
+      }),
+    ).toThrow();
+  });
+
+  it("matches the public AIH fixed wire vectors and parser contract", () => {
+    const observationKey = createObservationKeyV1(key);
+    const observationSet = createObservationSetV1({
+      protocol: "ObservationSetV1",
+      observationKey: key,
+      facts: [],
+      coverage: [{ coverageKind: "selected-closure", coverageSha256: sha("a") }],
+    });
+    expect(observationKey.observationKeySha256).toBe(
+      "5eb8d6d81f9b1bdcc2d6542d4111984c8e9fce7e8c0ad219dacc77eb4ebd76f5",
+    );
+    expect(observationSet.observationSetSha256).toBe(
+      "d934812586941b98c714b914fb62f56e0ec17e480dfcb4849547f7f61a674ebc",
+    );
+    expect(parseObservationKeyV1Json(JSON.stringify(key))).toEqual(observationKey);
+    expect(
+      parseObservationSetV1Json(
+        JSON.stringify({
+          protocol: "ObservationSetV1",
+          observationKey: key,
+          facts: [],
+          coverage: [{ coverageKind: "selected-closure", coverageSha256: sha("a") }],
+        }),
+      ),
+    ).toEqual(observationSet);
+    expect(() =>
+      createEvidenceAnnexV1({
+        protocol: "EvidenceAnnexV1",
+        descriptors: Array.from({ length: 129 }, (_, index) => ({
+          descriptorId: `annex.vector-${String(index)}`,
+          mediaType: "application/json",
+          sha256: sha("a"),
+          byteLength: 1,
+          uri: `annex/${String(index)}.json`,
+        })),
       }),
     ).toThrow();
   });

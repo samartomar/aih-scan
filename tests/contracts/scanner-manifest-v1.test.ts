@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalScannerManifestBytesV1,
+  canonicalScannerManifestSha256V1,
   createScannerManifestV1,
   parseScannerManifestV1Json,
 } from "../../src/observation/scanner-manifest-v1.js";
 
 const sha = (digit: string) => digit.repeat(64);
-type ManifestDetector = {
-  detectorId: string;
-  scannerManifestEntrySha256: string;
-  ociImage: Record<string, unknown>;
-  adapter: Record<string, unknown>;
-};
 const entry = {
   detectorId: "detector.cisco",
   analyzerIdentity: "native.0123456789ab",
@@ -38,10 +34,8 @@ describe("ScannerManifestV1", () => {
       protocol: "ScannerManifestV1",
       detectors: [entry, { ...unrelated, adapter: { ...unrelated.adapter, sha256: sha("1") } }],
     });
-    const cisco = (one.detectors as ManifestDetector[]).find(
-      (detector) => detector.detectorId === "detector.cisco",
-    );
-    const changedCisco = (changed.detectors as ManifestDetector[]).find(
+    const cisco = one.detectors.find((detector) => detector.detectorId === "detector.cisco");
+    const changedCisco = changed.detectors.find(
       (detector) => detector.detectorId === "detector.cisco",
     );
     if (cisco === undefined || changedCisco === undefined)
@@ -66,11 +60,17 @@ describe("ScannerManifestV1", () => {
     expect(cisco.scannerManifestEntrySha256).toBe(changedCisco.scannerManifestEntrySha256);
     expect(Object.isFrozen(cisco)).toBe(true);
     expect(Object.isFrozen(cisco.ociImage)).toBe(true);
+    expect(canonicalScannerManifestBytesV1(one).toString("utf8")).toContain(
+      '"protocol":"ScannerManifestV1"',
+    );
+    expect(canonicalScannerManifestSha256V1(one)).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("rejects mutable OCI identity, malformed digests, duplicate/ambiguous rows, and unknown fields", () => {
     for (const input of [
       { ...entry, ociImage: { ...entry.ociImage, reference: "example.invalid/cisco:latest" } },
+      { ...entry, ociImage: { ...entry.ociImage, reference: `@sha256:${sha("a")}` } },
+      { ...entry, ociImage: { ...entry.ociImage, reference: `repository@sha256:${sha("a")}` } },
       { ...entry, ociImage: { ...entry.ociImage, sha256: sha("A") } },
       {
         ...entry,
@@ -111,5 +111,38 @@ describe("ScannerManifestV1", () => {
       os: "windows",
       architecture: "amd64",
     });
+  });
+
+  it("matches the public AIH fixed entry and aggregate digest vectors", () => {
+    const manifest = createScannerManifestV1({ protocol: "ScannerManifestV1", detectors: [entry] });
+    expect(manifest.detectors[0]?.scannerManifestEntrySha256).toBe(
+      "192a40633b6db10b9fc9c0e2102137810d94d7625f39c91fb4d4a0f675067bb2",
+    );
+    expect(manifest.scannerManifestSha256).toBe(
+      "f54a5e451231b4c48db5607e05c1c82f4dd8d610d08852b8634d5060b2cc97d6",
+    );
+    expect(() =>
+      createScannerManifestV1({
+        protocol: "ScannerManifestV1",
+        detectors: Array.from({ length: 129 }, (_, index) => ({
+          ...entry,
+          detectorId: `detector.vector-${String(index)}`,
+        })),
+      }),
+    ).toThrow();
+    expect(() =>
+      createScannerManifestV1({
+        protocol: "ScannerManifestV1",
+        detectors: [
+          {
+            ...entry,
+            supportedPlatforms: Array.from({ length: 17 }, () => ({
+              os: "linux" as const,
+              architecture: "amd64" as const,
+            })),
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });

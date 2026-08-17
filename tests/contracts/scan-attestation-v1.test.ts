@@ -93,5 +93,36 @@ describe("ScanAttestationV1", () => {
     const mutatedStatement = structuredClone(current);
     mutatedStatement.statement.predicate.cleanup.outcome = "failed";
     expect(() => parse(mutatedStatement)).toThrow();
+    const mismatchedDigest = structuredClone(current) as { scanAttestationSha256: string };
+    mismatchedDigest.scanAttestationSha256 = sha("0");
+    expect(() => parse(mismatchedDigest)).toThrow();
+  });
+
+  it("matches the public AIH fixed statement-and-envelope digest vector", () => {
+    const attestation = createScanAttestationV1(input);
+    expect(attestation.scanAttestationSha256).toBe(
+      "d655c6b9fe6ac6fa33eb587ade6b232358eb9e9e8df2a7d655373622a3a12c71",
+    );
+    expect(() =>
+      createScanAttestationV1({
+        ...input,
+        observations: Array.from({ length: 129 }, (_, index) => ({
+          ...input.observations[0],
+          detectorId: `detector.vector-${String(index)}`,
+        })),
+      }),
+    ).toThrow();
+    expect(() =>
+      createScanAttestationV1({
+        ...input,
+        annexDescriptors: Array.from({ length: 129 }, (_, index) => ({
+          descriptorId: `annex.vector-${String(index)}`,
+          mediaType: "application/json" as const,
+          sha256: sha("a"),
+          byteLength: 1,
+          uri: `annex/${String(index)}.json`,
+        })),
+      }),
+    ).toThrow();
   });
 });

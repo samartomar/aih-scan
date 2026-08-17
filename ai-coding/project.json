@@ -3,7 +3,7 @@
   "name": "aih-scan",
   "contextDir": "ai-coding",
   "targets": ["claude", "codex"],
-  "description": "Private, publication-deferred TypeScript bootstrap for the future aih-scan scanner runtime.",
+  "description": "Private, publication-deferred TypeScript repository with dormant internal scan-observation contracts and a caller-fed Cisco facts adapter.",
   "languages": ["TypeScript/Node.js"],
   "packageManager": "npm",
   "entrypoints": [],
