@@ -52,8 +52,8 @@ function livePrerequisites(): boolean {
 
 function controlledRunner(
   expectedCommand: "docker" | "uv",
-  cwd: string,
-  environment: Readonly<Record<string, string>>,
+  fallbackCwd: string,
+  uvBase?: Readonly<Record<string, string>>,
 ) {
   return async (
     argv: readonly string[],
@@ -69,13 +69,31 @@ function controlledRunner(
     expect(options.timeoutMs).toBe(timeoutMs);
     expect(options.maxStdoutBytes).toBe(maxStdioBytes);
     expect(options.maxStderrBytes).toBe(maxStdioBytes);
-    expect(options.env).toEqual(environment);
+    const childEnvironment =
+      expectedCommand === "uv"
+        ? (() => {
+            expect(options.cwd).toBe(fallbackCwd);
+            expect(options.env).toEqual({ UV_OFFLINE: "1" });
+            if (uvBase === undefined) throw new Error("controlled uv environment missing");
+            return { ...uvBase, ...options.env };
+          })()
+        : (() => {
+            expect(options.cwd).toBeUndefined();
+            expect(Object.keys(options.env).sort()).toEqual(["DOCKER_CONFIG", "HOME", "PATH"]);
+            expect(options.env.PATH).toBe("/usr/bin:/bin");
+            expect(options.env.HOME).toMatch(/^.+$/);
+            expect(options.env.DOCKER_CONFIG).toMatch(/^.+$/);
+            return { ...options.env };
+          })();
+    expect(Object.keys(childEnvironment).sort()).not.toContainEqual(
+      expect.stringMatching(/token|credential|auth|proxy|socket/i),
+    );
     const file = argv[0];
     if (file === undefined) throw new Error("runner command missing");
     try {
       const result = await execFileAsync(file, [...argv.slice(1)], {
-        cwd: options.cwd ?? cwd,
-        env: environment,
+        cwd: options.cwd ?? fallbackCwd,
+        env: childEnvironment,
         shell: false,
         timeout: timeoutMs,
         maxBuffer: maxStdioBytes,
@@ -172,15 +190,13 @@ describe("Cisco OCI equivalence live seam", () => {
       );
       const layoutPath = requiredAbsoluteEnvironment("AIH_SCAN_CISCO_OCI_LAYOUT_PATH");
       const summaryPath = join(artifactRoot, "oci-equivalence-digest-summary.json");
-      const uvEnvironment = {
+      const uvConfigFile = join(runnerTemp, "aih-scan-cisco-empty-uv.toml");
+      expect(existsSync(uvConfigFile)).toBe(true);
+      const uvBase = {
         HOME: childHome,
         PATH: childPath,
         UV_CACHE_DIR: uvCache,
-        UV_OFFLINE: "1",
-      };
-      const dockerEnvironment = {
-        HOME: childHome,
-        PATH: "/usr/bin:/bin",
+        UV_CONFIG_FILE: uvConfigFile,
       };
       const result = await runCiscoOciEquivalenceLiveV1({
         protocol: "CiscoOciEquivalenceLiveV1",
@@ -191,8 +207,8 @@ describe("Cisco OCI equivalence live seam", () => {
         layoutBytes: readFileSync(layoutPath),
         configDigestSha256: configDigest,
         summaryPath,
-        uvRunner: controlledRunner("uv", runtimeProjectRoot, uvEnvironment),
-        dockerRunner: controlledRunner("docker", runnerTemp, dockerEnvironment),
+        uvRunner: controlledRunner("uv", runtimeProjectRoot, uvBase),
+        dockerRunner: controlledRunner("docker", runnerTemp),
       });
       expect(result.validationState).toBe("cryptographically-unverified");
       expect(readFileSync(summaryPath, "utf8")).toMatch(/digest|sha256/i);
