@@ -706,12 +706,12 @@ function metadata(value, layout) {
       : manifestPlatform(descriptor.platform, "metadata descriptor platform");
   const annotationValue = descriptor.annotations;
   const annotationKeySet = metadataDescriptorAnnotationKeySet(annotationValue);
-  if (annotationKeySet !== "known 1010")
+  if (annotationKeySet !== "known 0010")
     fail(`metadata descriptor annotations keys ${annotationKeySet}`);
   const annotations = allowed(
     annotationValue,
-    ["config.digest"],
-    new Set(["config.digest", "org.opencontainers.image.created"]),
+    [OCI_CREATED_ANNOTATION],
+    new Set([OCI_CREATED_ANNOTATION]),
     "metadata descriptor annotations",
   );
   if (
@@ -721,11 +721,10 @@ function metadata(value, layout) {
     (platform !== undefined &&
       (platform.architecture !== layout.manifestPlatform.architecture ||
         platform.os !== layout.manifestPlatform.os)) ||
-    annotations["config.digest"] !== layout.configDigestSha256 ||
-    (annotations["org.opencontainers.image.created"] !== undefined &&
-      typeof annotations["org.opencontainers.image.created"] !== "string")
+    typeof annotations[OCI_CREATED_ANNOTATION] !== "string"
   )
     fail("metadata descriptor");
+  assertRfc3339Timestamp(annotations[OCI_CREATED_ANNOTATION], "metadata descriptor annotations");
 }
 
 export function verifyCiscoOciCandidateV1(value) {

@@ -156,7 +156,6 @@ const layoutFixture = (
         digest: descriptor.digest,
         size: descriptor.size,
         annotations: {
-          "config.digest": configDigest,
           "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
         },
       },
@@ -276,7 +275,6 @@ const replaceWithSingleLayer = (fixture: LayoutFixture, layer: Buffer): string =
   metadataDescriptor.digest = nextManifestDigest;
   metadataDescriptor.size = manifestBytes.length;
   metadataDescriptor.annotations = {
-    "config.digest": nextConfigDigest,
     "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
   };
   writeFileSync(join(fixture.root, "index.json"), JSON.stringify(index));
@@ -394,7 +392,6 @@ const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number)
   metadataDescriptor.digest = output.manifestDigest;
   metadataDescriptor.size = output.manifestBytes.length;
   metadataDescriptor.annotations = {
-    "config.digest": output.configDigest,
     "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
   };
   return output.configDigest;
@@ -1050,12 +1047,16 @@ describe("Cisco OCI candidate verifier V1", () => {
     const annotations = descriptor.annotations as Readonly<Record<string, unknown>>;
     const cases = [
       {
+        annotations: { ...annotations, "config.digest": fixture.config },
+        reason: "metadata descriptor annotations keys known 1010",
+      },
+      {
         annotations: { ...annotations, "org.opencontainers.image.ref.name": "latest" },
-        reason: "metadata descriptor annotations keys known 1011",
+        reason: "metadata descriptor annotations keys known 0011",
       },
       {
         annotations: { ...annotations, "hostile.annotation.key": "hostile-annotation-value" },
-        reason: "metadata descriptor annotations keys unknown 3 key digest",
+        reason: "metadata descriptor annotations keys unknown 2 key digest",
       },
     ] as const;
     for (const testCase of cases) {
@@ -1074,6 +1075,42 @@ describe("Cisco OCI candidate verifier V1", () => {
         expect(message).toContain(testCase.reason);
         expect(message).not.toContain("hostile");
       }
+    }
+  });
+
+  it("requires exactly a strict created annotation in the Buildx metadata descriptor", () => {
+    const fixture = layoutFixture();
+    const descriptor = fixture.metadata["containerimage.descriptor"] as Readonly<
+      Record<string, unknown>
+    >;
+    expect(verifyCiscoOciCandidateV1(input(fixture))).toMatchObject({
+      protocol: "CiscoOciVerifierV1",
+    });
+    for (const annotations of [
+      {},
+      { "org.opencontainers.image.created": "not-a-timestamp" },
+      {
+        "config.digest": fixture.config,
+        "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
+      },
+      {
+        "io.containerd.image.name": workflowImageName,
+        "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
+      },
+      {
+        "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
+        "org.opencontainers.image.ref.name": workflowReferenceName,
+      },
+    ]) {
+      expect(() =>
+        verifyCiscoOciCandidateV1({
+          ...input(fixture),
+          metadata: {
+            ...fixture.metadata,
+            "containerimage.descriptor": { ...descriptor, annotations },
+          },
+        }),
+      ).toThrow();
     }
   });
 
