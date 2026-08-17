@@ -8,9 +8,10 @@ implementation. For repository helper tooling, also read
 ## Repository facts
 
 - TypeScript/Node.js, npm, ESM, Vitest, and Biome.
-- This is private and publication-deferred. It has dormant internal contracts
-  and a caller-fed Cisco facts adapter, but no scanner CLI, public API, remote,
-  container/process/registry execution, or release lifecycle.
+- This is private and publication-deferred. It has a private GitHub remote,
+  dormant internal contracts, and a caller-fed Cisco facts adapter, but no
+  scanner CLI, public API, container/process/registry execution, or release
+  lifecycle.
 - Never run an installed aih-scan against this checkout.
 
 ## Verification

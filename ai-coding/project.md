@@ -10,8 +10,8 @@ the shared raw-occurrence semantics with AIH using precomputed SARIF.
 
 There is no public export, CLI, scanner, container/process/registry or network
 execution, broker, snapshot transport, signing, qualification, runtime cutover,
-remote, or publication setup. Structural `linux/amd64` facts are not a
-qualification claim.
+or publication setup. The private GitHub remote provides no public API or
+release surface. Structural `linux/amd64` facts are not a qualification claim.
 
 ## Commands
 
