@@ -624,7 +624,7 @@ export async function runCiscoOciEquivalenceLiveV1(
   const direct = await probeCiscoLinuxAmd64V1({
     protocol: "CiscoLinuxAmd64ProbeV1",
     sourceRoot: value.directRoot,
-    selectedClosurePaths: ["skills/demo/SKILL.md"],
+    selectedClosurePaths: ["SKILL.md"],
     runtimeProjectRoot: value.runtimeProjectRoot,
     platform: { os: "linux", architecture: "amd64" },
     runtime: {
@@ -642,7 +642,7 @@ export async function runCiscoOciEquivalenceLiveV1(
     protocol: "CiscoOciBrokerV1",
     layout,
     sourceRoot: value.ociRoot,
-    selectedClosurePaths: ["skills/demo/SKILL.md"],
+    selectedClosurePaths: ["SKILL.md"],
     host,
     runner: value.dockerRunner as LiveRunner,
   });
