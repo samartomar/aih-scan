@@ -8,6 +8,7 @@ import { runCiscoOciEquivalenceLiveV1 } from "../../src/cisco/dual-run-equivalen
 const execFileAsync = promisify(execFile);
 const maxStdioBytes = 64 * 1024;
 const timeoutMs = 120_000;
+const liveTestTimeoutMs = 130_000;
 const configDigest = process.env.AIH_SCAN_CISCO_OCI_CONFIG_DIGEST;
 const liveEnabled =
   process.env.AIH_SCAN_CISCO_OCI_EQUIVALENCE === "1" &&
@@ -217,5 +218,6 @@ describe("Cisco OCI equivalence live seam", () => {
         /policy|verdict|authority|acceptance|acknowledg|qualified|trusted|signature/i,
       );
     },
+    liveTestTimeoutMs,
   );
 });
