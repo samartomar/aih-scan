@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+echo "[aih-scan] pre-commit: typecheck + lint + test"
+npm run typecheck
+npm run lint
+npm test
