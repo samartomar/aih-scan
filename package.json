@@ -1,0 +1,27 @@
+{
+  "name": "aih-scan",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local bootstrap for the deferred aih-scan scanner runtime.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "biome check .",
+    "repo:doctor": "node tools/repo-ai-tools.mjs doctor-codex",
+    "repo:init": "node tools/repo-ai-tools.mjs setup-codex",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.1",
+    "@types/node": "26.1.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
