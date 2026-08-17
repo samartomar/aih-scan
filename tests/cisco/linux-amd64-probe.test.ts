@@ -40,27 +40,83 @@ const neutralCiscoSkillFixture = [
 ].join("\n");
 
 const sarif = {
+  $schema:
+    "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
   version: "2.1.0",
   runs: [
     {
-      tool: { driver: { name: "cisco-ai-skill-scanner" } },
+      tool: {
+        driver: {
+          name: "skill-scanner",
+          version: "1.0.0",
+          informationUri: "https://github.com/cisco-ai-defense/skill-scanner",
+          rules: [
+            {
+              id: "MANIFEST_MISSING_LICENSE",
+              name: "Manifest Missing License",
+              shortDescription: { text: "Skill manifest is missing a license." },
+              fullDescription: { text: "Skill manifest does not include a license field." },
+              defaultConfiguration: { level: "warning" },
+              properties: {
+                category: "metadata",
+                severity: "medium",
+                tags: ["metadata", "security"],
+              },
+            },
+            {
+              id: "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
+              name: "Prompt Injection Ignore Instructions",
+              shortDescription: { text: "Prompt injection pattern." },
+              fullDescription: { text: "Pattern detected: Ignore previous instructions" },
+              defaultConfiguration: { level: "error" },
+              properties: {
+                category: "prompt-injection",
+                severity: "high",
+                tags: ["prompt-injection", "security"],
+              },
+            },
+            {
+              id: "FUTURE_CISCO_RULE",
+              name: "Future Cisco Rule",
+              shortDescription: { text: "Future scanner fact." },
+              fullDescription: { text: "unmapped scanner fact remains visible" },
+              defaultConfiguration: { level: "warning" },
+              properties: { category: "future", severity: "info", tags: ["future", "security"] },
+            },
+          ],
+        },
+      },
+      invocations: [{ executionSuccessful: true, endTimeUtc: "2026-08-17T12:34:56Z" }],
       results: [
         {
           ruleId: "MANIFEST_MISSING_LICENSE",
           level: "warning",
           message: { text: "Skill manifest does not include a license field." },
-          locations: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+          properties: { category: "metadata", severity: "medium" },
+          fingerprints: { primaryLocationLineHash: "finding-license" },
+          locations: [
+            { physicalLocation: { artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" } } },
+          ],
         },
         {
           ruleId: "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
           level: "error",
           message: { text: "Pattern detected: Ignore previous instructions" },
-          locations: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+          properties: { category: "prompt-injection", severity: "high" },
+          fingerprints: { primaryLocationLineHash: "finding-prompt" },
+          locations: [
+            { physicalLocation: { artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" } } },
+          ],
         },
         {
           ruleId: "FUTURE_CISCO_RULE",
+          level: "warning",
           message: { text: "unmapped scanner fact remains visible" },
-          locations: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+          properties: { category: "future", severity: "info" },
+          fingerprints: { primaryLocationLineHash: "finding-future" },
+          locations: [
+            { physicalLocation: { artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" } } },
+          ],
         },
       ],
     },
@@ -168,17 +224,56 @@ function artifactPath(artifactRoot: string, name: string): string {
   return target;
 }
 
-function sanitizedDiagnostic(raw: Buffer, sourceRoot: string, runtimeProjectRoot: string): Buffer {
+function diagnosticKeys(value: unknown): string[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+  return Object.keys(value)
+    .map((key) =>
+      /^[A-Za-z$][A-Za-z0-9$]*$/.test(key) && key.length <= 64 ? key : "<invalid-key>",
+    )
+    .sort()
+    .slice(0, 32);
+}
+
+function diagnosticObject(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return (value as Record<string, unknown>)[key];
+}
+
+function diagnosticFirst(value: unknown): unknown {
+  return Array.isArray(value) ? value[0] : undefined;
+}
+
+function sanitizedDiagnostic(raw: Buffer): Buffer {
   if (raw.length > maxSarifBytes)
     return Buffer.from('{"kind":"oversize-sarif-rejected"}\n', "utf8");
-  let text = raw.toString("utf8");
+  const text = raw.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(raw))
     return Buffer.from('{"kind":"non-utf8-sarif-rejected"}\n', "utf8");
-  for (const path of [sourceRoot, runtimeProjectRoot, process.cwd(), tmpdir()])
-    text = text.replaceAll(path.replaceAll("\\", "/"), "<redacted-path>");
-  if (/(?:[A-Za-z]:[\\/]|\/(?:tmp|home|workspace|opt)\/)/.test(text))
-    return Buffer.from('{"kind":"absolute-path-sarif-rejected"}\n', "utf8");
-  return Buffer.from(text, "utf8");
+  try {
+    const sarif = JSON.parse(text) as unknown;
+    const run = diagnosticFirst(diagnosticObject(sarif, "runs"));
+    const tool = diagnosticObject(run, "tool");
+    const result = diagnosticFirst(diagnosticObject(run, "results"));
+    const location = diagnosticFirst(diagnosticObject(result, "locations"));
+    const physicalLocation = diagnosticObject(location, "physicalLocation");
+    return Buffer.from(
+      JSON.stringify({
+        kind: "sarif-shape-v1",
+        topLevelKeys: diagnosticKeys(sarif),
+        runKeys: diagnosticKeys(run),
+        driverKeys: diagnosticKeys(diagnosticObject(tool, "driver")),
+        invocationKeys: diagnosticKeys(diagnosticFirst(diagnosticObject(run, "invocations"))),
+        resultKeys: diagnosticKeys(result),
+        artifactLocationKeys: diagnosticKeys(
+          diagnosticObject(physicalLocation, "artifactLocation"),
+        ),
+        regionKeys: diagnosticKeys(diagnosticObject(physicalLocation, "region")),
+      }),
+      "utf8",
+    );
+  } catch {
+    return Buffer.from('{"kind":"malformed-sarif-shape-rejected"}\n', "utf8");
+  }
 }
 
 function sanitizedRunnerFailure(
@@ -236,7 +331,7 @@ function persistRunnerArtifact(input: {
     const raw = readFileSync(input.output);
     writeFileSync(
       artifactPath(input.diagnosticsRoot, `sanitized-sarif-${String(input.executionOrdinal)}.json`),
-      sanitizedDiagnostic(raw, input.sourceRoot, input.runtimeProjectRoot),
+      sanitizedDiagnostic(raw),
     );
   } else if (input.exitCode !== 0) {
     writeFileSync(
@@ -410,6 +505,50 @@ const expectRecursivelyFrozen = (value: unknown, seen = new Set<object>()) => {
 };
 
 describe("Cisco Linux amd64 observation-only probe", () => {
+  it("records only bounded SARIF field-shape metadata when a diagnostic has absolute paths", () => {
+    const raw = Buffer.from(
+      JSON.stringify({
+        $schema: "https://example.invalid/sarif",
+        runs: [
+          {
+            tool: { driver: { name: "skill-scanner", version: "1.0.0" } },
+            results: [
+              {
+                message: { text: "raw diagnostic text must not persist" },
+                locations: [
+                  {
+                    physicalLocation: {
+                      artifactLocation: { uri: "/private/source/SKILL.md", uriBaseId: "%SRCROOT%" },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const diagnostic = JSON.parse(sanitizedDiagnostic(raw).toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+
+    expect(Object.keys(diagnostic).sort()).toEqual([
+      "artifactLocationKeys",
+      "driverKeys",
+      "invocationKeys",
+      "kind",
+      "regionKeys",
+      "resultKeys",
+      "runKeys",
+      "topLevelKeys",
+    ]);
+    expect(diagnostic.kind).toBe("sarif-shape-v1");
+    expect(JSON.stringify(diagnostic)).not.toContain("/private/source/SKILL.md");
+    expect(JSON.stringify(diagnostic)).not.toContain("raw diagnostic text must not persist");
+  });
+
   it("generates a neutral valid Cisco skill fixture while retaining synthetic prompt text", () => {
     const root = fixtureRoot();
     expect(readFileSync(join(root, "SKILL.md"), "utf8")).toBe(neutralCiscoSkillFixture);
@@ -691,13 +830,13 @@ describe("Cisco Linux amd64 observation-only probe", () => {
     const permutedLocations = [
       {
         physicalLocation: {
-          artifactLocation: { uri: "SKILL.md" },
+          artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" },
           region: { startLine: 2 },
         },
       },
       {
         physicalLocation: {
-          artifactLocation: { uri: "SKILL.md" },
+          artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" },
           region: { startLine: 1 },
         },
       },

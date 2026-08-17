@@ -1,21 +1,75 @@
 import { describe, expect, it } from "vitest";
 import { canonicalCiscoSarifV1Bytes, parseCiscoSarifV1 } from "../../src/cisco/sarif-v1.js";
 
+/**
+ * Exact reporter contract from Cisco skill-scanner 2.0.13, wheel SHA-256
+ * d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837:
+ * skill_scanner/core/reporters/sarif_reporter.py.
+ */
 const validSarif = {
+  $schema:
+    "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
   version: "2.1.0",
   runs: [
     {
-      tool: { driver: { name: "cisco-ai-skill-scanner" } },
+      tool: {
+        driver: {
+          name: "skill-scanner",
+          version: "1.0.0",
+          informationUri: "https://github.com/cisco-ai-defense/skill-scanner",
+          rules: [
+            {
+              id: "MANIFEST_MISSING_LICENSE",
+              name: "Manifest Missing License",
+              shortDescription: { text: "Skill manifest is missing a license." },
+              fullDescription: { text: "Skill manifest does not include a license field." },
+              defaultConfiguration: { level: "warning" },
+              properties: {
+                category: "metadata",
+                severity: "medium",
+                tags: ["metadata", "security"],
+              },
+            },
+            {
+              id: "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
+              name: "Prompt Injection Ignore Instructions",
+              shortDescription: { text: "Prompt injection pattern." },
+              fullDescription: { text: "Pattern detected: Ignore previous instructions" },
+              defaultConfiguration: { level: "error" },
+              properties: {
+                category: "prompt-injection",
+                severity: "high",
+                tags: ["prompt-injection", "security"],
+              },
+              help: {
+                text: "Remove the injected instruction.",
+                markdown: "**Remediation**: Remove the injected instruction.",
+              },
+            },
+            {
+              id: "FUTURE_CISCO_RULE",
+              name: "Future Cisco Rule",
+              shortDescription: { text: "Future scanner fact." },
+              fullDescription: { text: "future scanner finding" },
+              defaultConfiguration: { level: "warning" },
+              properties: { category: "future", severity: "info", tags: ["future", "security"] },
+            },
+          ],
+        },
+      },
+      invocations: [{ executionSuccessful: true, endTimeUtc: "2026-08-17T12:34:56Z" }],
       results: [
         {
           ruleId: "MANIFEST_MISSING_LICENSE",
           level: "warning",
           message: { text: "Skill manifest does not include a license field." },
+          properties: { category: "metadata", severity: "medium" },
+          fingerprints: { primaryLocationLineHash: "finding-license" },
           locations: [
             {
               physicalLocation: {
-                artifactLocation: { uri: "SKILL.md" },
-                region: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 },
+                artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" },
+                region: { startLine: 1, snippet: { text: "license: MIT" } },
               },
             },
           ],
@@ -24,19 +78,30 @@ const validSarif = {
           ruleId: "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
           level: "error",
           message: { text: "Pattern detected: Ignore previous instructions" },
+          properties: {
+            category: "prompt-injection",
+            severity: "high",
+            remediation: "Remove the injected instruction.",
+          },
+          fingerprints: { primaryLocationLineHash: "finding-prompt" },
           locations: [
             {
               physicalLocation: {
-                artifactLocation: { uri: "SKILL.md" },
-                region: { startLine: 4 },
+                artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" },
+                region: { startLine: 8 },
               },
             },
           ],
         },
         {
           ruleId: "FUTURE_CISCO_RULE",
+          level: "warning",
           message: { text: "future scanner finding" },
-          locations: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+          properties: { category: "future", severity: "info" },
+          fingerprints: { primaryLocationLineHash: "finding-future" },
+          locations: [
+            { physicalLocation: { artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" } } },
+          ],
         },
       ],
     },
@@ -87,12 +152,7 @@ describe("Cisco SARIF V1 projection", () => {
     exactKeys(run.results[0]?.locations[0] ?? {}, ["physicalLocation"]);
     exactKeys(run.results[0]?.locations[0]?.physicalLocation ?? {}, ["artifactLocation", "region"]);
     exactKeys(run.results[0]?.locations[0]?.physicalLocation.artifactLocation ?? {}, ["uri"]);
-    exactKeys(run.results[0]?.locations[0]?.physicalLocation.region ?? {}, [
-      "startLine",
-      "startColumn",
-      "endLine",
-      "endColumn",
-    ]);
+    exactKeys(run.results[0]?.locations[0]?.physicalLocation.region ?? {}, ["startLine"]);
     expectRecursivelyFrozen(parsed);
     expect(() => {
       (run.results as unknown as { push: (value: unknown) => void }).push({});
@@ -128,6 +188,48 @@ describe("Cisco SARIF V1 projection", () => {
     ).toThrow();
   });
 
+  it("projects an absolute reporter artifact URI only through the supplied sealed source root", () => {
+    const absolute = clone(validSarif);
+    const location = absolute.runs[0]?.results[0]?.locations[0];
+    if (location === undefined) throw new Error("Cisco fixture is incomplete");
+    location.physicalLocation.artifactLocation.uri = "/sealed/source/SKILL.md";
+
+    expect(
+      parseCiscoSarifV1(text(absolute), { sourceRoot: "/sealed/source" }).runs[0]?.results[0],
+    ).toMatchObject({
+      locations: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+    });
+    expect(() => parseCiscoSarifV1(text(absolute))).toThrow(/absolute|source root|path/i);
+    expect(() => parseCiscoSarifV1(text(validSarif), { sourceRoot: "relative/source" })).toThrow(
+      /context|source root|path/i,
+    );
+
+    const windows = clone(absolute);
+    const windowsLocation = windows.runs[0]?.results[0]?.locations[0];
+    if (windowsLocation === undefined) throw new Error("Cisco fixture is incomplete");
+    windowsLocation.physicalLocation.artifactLocation.uri = "C:\\sealed\\source\\SKILL.md";
+    expect(
+      parseCiscoSarifV1(text(windows), { sourceRoot: "C:\\sealed\\source" }).runs[0]?.results[0],
+    ).toMatchObject({
+      locations: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+    });
+
+    for (const uri of [
+      "/sealed/outside/SKILL.md",
+      "/sealed/source/../outside/SKILL.md",
+      "file:///sealed/source/SKILL.md",
+      "https://example.invalid/SKILL.md",
+      "C:\\sealed\\source\\SKILL.md",
+      "\\\\server\\share\\SKILL.md",
+    ]) {
+      const hostile = clone(absolute);
+      const hostileLocation = hostile.runs[0]?.results[0]?.locations[0];
+      if (hostileLocation === undefined) throw new Error("Cisco fixture is incomplete");
+      hostileLocation.physicalLocation.artifactLocation.uri = uri;
+      expect(() => parseCiscoSarifV1(text(hostile), { sourceRoot: "/sealed/source" })).toThrow();
+    }
+  });
+
   it("accepts NFC Unicode in known fields but rejects non-NFC accepted-field data", () => {
     const run = validSarif.runs[0];
     const result = run?.results[0];
@@ -144,8 +246,8 @@ describe("Cisco SARIF V1 projection", () => {
               locations: [
                 {
                   physicalLocation: {
-                    artifactLocation: { uri: "skills/résumé/SKILL.md" },
-                    region: { startLine: 1, startColumn: 1 },
+                    artifactLocation: { uri: "skills/résumé/SKILL.md", uriBaseId: "%SRCROOT%" },
+                    region: { startLine: 1 },
                   },
                 },
               ],
@@ -209,7 +311,54 @@ describe("Cisco SARIF V1 projection", () => {
     for (const value of cases) expect(() => parseCiscoSarifV1(value)).toThrow();
   });
 
+  it("bounds the exact reporter rules, metadata, fingerprints, and invocation timestamp", () => {
+    const run = validSarif.runs[0];
+    const driver = run?.tool.driver;
+    const result = run?.results[0];
+    if (run === undefined || driver === undefined || result === undefined)
+      throw new Error("Cisco fixture is incomplete");
+    const withDriver = (nextDriver: object) =>
+      text({ ...validSarif, runs: [{ ...run, tool: { driver: nextDriver } }] });
+    const withResult = (nextResult: object) =>
+      text({ ...validSarif, runs: [{ ...run, results: [nextResult] }] });
+    const cases = [
+      withDriver({ ...driver, rules: Array.from({ length: 4097 }, () => clone(driver.rules[0])) }),
+      withDriver({
+        ...driver,
+        rules: [
+          {
+            ...driver.rules[0],
+            properties: {
+              ...driver.rules[0]?.properties,
+              tags: Array.from({ length: 65 }, () => "security"),
+            },
+          },
+        ],
+      }),
+      withDriver({
+        ...driver,
+        rules: [{ ...driver.rules[0], fullDescription: { text: "d".repeat(4097) } }],
+      }),
+      withDriver({
+        ...driver,
+        rules: [{ ...driver.rules[1], help: { text: "h".repeat(4097), markdown: "m" } }],
+      }),
+      withResult({ ...result, properties: { ...result.properties, category: "c".repeat(257) } }),
+      withResult({ ...result, fingerprints: { primaryLocationLineHash: "f".repeat(513) } }),
+      text({
+        ...validSarif,
+        runs: [
+          { ...run, invocations: [{ executionSuccessful: true, endTimeUtc: "not-a-timestamp" }] },
+        ],
+      }),
+    ];
+
+    for (const value of cases) expect(() => parseCiscoSarifV1(value)).toThrow();
+  });
+
   it("fails closed for malformed JSON, duplicate decoded keys, Unicode ambiguity, and unknown fields", () => {
+    const run = validSarif.runs[0];
+    if (run === undefined) throw new Error("Cisco fixture is incomplete");
     const cases = [
       '{"version":"2.1.0","runs":[]}',
       '{"version":"2.1.0","version":"2.1.0","runs":[]}',
@@ -219,13 +368,13 @@ describe("Cisco SARIF V1 projection", () => {
       '{"version":"2.1.0","runs":[] // comment\n}',
       '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"cisco-ai-skill-scanner"}},"results":[]}],"bad":"\\ud800"}',
       text({ ...validSarif, extra: true }),
-      text({ ...validSarif, runs: [{ ...validSarif.runs[0], extra: true }] }),
+      text({ ...validSarif, runs: [{ ...run, extra: true }] }),
       text({
         ...validSarif,
         runs: [
           {
-            ...validSarif.runs[0],
-            tool: { driver: { name: "cisco-ai-skill-scanner", extra: true } },
+            ...run,
+            tool: { driver: { ...run.tool.driver, extra: true } },
           },
         ],
       }),
@@ -241,7 +390,10 @@ describe("Cisco SARIF V1 projection", () => {
     const cases = [
       { ...validSarif, version: "2.0.0" },
       { ...validSarif, runs: [] },
-      { ...validSarif, runs: [{ ...run, tool: { driver: { name: "other" } } }] },
+      {
+        ...validSarif,
+        runs: [{ ...run, tool: { driver: { ...run.tool.driver, name: "other" } } }],
+      },
       { ...validSarif, runs: [{ ...run, results: [{ ...result, ruleId: "" }] }] },
       { ...validSarif, runs: [{ ...run, results: [{ ...result, message: {} }] }] },
       { ...validSarif, runs: [{ ...run, results: [{ ...result, locations: [] }] }] },

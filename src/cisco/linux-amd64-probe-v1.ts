@@ -187,12 +187,14 @@ function normalizeSarifSemantics(value: CiscoSarifV1): CiscoSarifV1 {
       locations: [...result.locations].sort(compareStrictJson),
     }))
     .sort(compareStrictJson);
-  return parseCiscoSarifV1(
-    canonicalStrictJsonBytesV1({
-      version: "2.1.0",
-      runs: [{ tool: { driver: { name: "cisco-ai-skill-scanner" } }, results }],
-    }).toString("utf8"),
-  );
+  return deepFreeze(
+    JSON.parse(
+      canonicalStrictJsonBytesV1({
+        version: "2.1.0",
+        runs: [{ tool: { driver: { name: "cisco-ai-skill-scanner" } }, results }],
+      }).toString("utf8"),
+    ),
+  ) as CiscoSarifV1;
 }
 
 function repeatabilitySemantics(factsOnly: {
@@ -271,7 +273,7 @@ export async function probeCiscoLinuxAmd64V1(input: unknown): Promise<any> {
         }),
       );
       const bytes = outputBytes(outputPath);
-      const parsedSarif = parseCiscoSarifV1(strictUtf8(bytes));
+      const parsedSarif = parseCiscoSarifV1(strictUtf8(bytes), { sourceRoot: data.sourceRoot });
       const normalizedSarif = normalizeSarifSemantics(parsedSarif);
       const afterSourceSeal = sealNativeObservationSourceV1(sourceInput);
       if (!sameSeal(beforeSourceSeal, afterSourceSeal)) fail("source changed during probe");
