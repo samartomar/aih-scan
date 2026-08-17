@@ -102,28 +102,48 @@ function liveRuntimeProjectRoot(): string {
   return runtimeProjectRoot;
 }
 
-function liveArtifactRoot(): string {
-  const artifactRoot = process.env.AIH_SCAN_CISCO_ARTIFACT_DIR;
+function runnerTempRoot(): string {
   const runnerTemp = process.env.RUNNER_TEMP;
-  if (
-    typeof artifactRoot !== "string" ||
-    typeof runnerTemp !== "string" ||
-    !isAbsolute(artifactRoot) ||
-    !isAbsolute(runnerTemp)
-  )
-    throw new Error("AIH_SCAN_CISCO_ARTIFACT_DIR and RUNNER_TEMP must be absolute paths");
-  const resolvedRunnerTemp = resolve(runnerTemp);
-  const resolvedArtifactRoot = resolve(artifactRoot);
-  const inside = relative(resolvedRunnerTemp, resolvedArtifactRoot);
-  if (
-    !inside ||
-    inside === ".." ||
-    inside.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
-  )
-    throw new Error("AIH_SCAN_CISCO_ARTIFACT_DIR must be a descendant of RUNNER_TEMP");
-  if (!existsSync(resolvedArtifactRoot))
-    throw new Error("AIH_SCAN_CISCO_ARTIFACT_DIR must exist before the live probe");
-  return resolvedArtifactRoot;
+  if (typeof runnerTemp !== "string" || !isAbsolute(runnerTemp) || !existsSync(runnerTemp))
+    throw new Error("RUNNER_TEMP must be an existing absolute path");
+  return resolve(runnerTemp);
+}
+
+function runnerTempDescendant(value: string | undefined, label: string): string {
+  if (typeof value !== "string" || !isAbsolute(value))
+    throw new Error(`${label} must be an absolute descendant of RUNNER_TEMP`);
+  const root = runnerTempRoot();
+  const target = resolve(value);
+  const inside = relative(root, target);
+  if (!inside || inside === ".." || inside.startsWith("../") || isAbsolute(inside))
+    throw new Error(`${label} must be a descendant of RUNNER_TEMP`);
+  if (!existsSync(target)) throw new Error(`${label} must exist before the live probe`);
+  return target;
+}
+
+function liveArtifactRoot(): string {
+  return runnerTempDescendant(
+    process.env.AIH_SCAN_CISCO_ARTIFACT_DIR,
+    "AIH_SCAN_CISCO_ARTIFACT_DIR",
+  );
+}
+
+function controlledLiveEnvironment(options: { readonly env: Readonly<Record<string, string>> }) {
+  expect(options.env).toEqual({ UV_OFFLINE: "1" });
+  const environment = {
+    UV_OFFLINE: "1",
+    PATH: runnerTempDescendant(process.env.AIH_SCAN_CISCO_CHILD_PATH, "AIH_SCAN_CISCO_CHILD_PATH"),
+    HOME: runnerTempDescendant(process.env.AIH_SCAN_CISCO_CHILD_HOME, "AIH_SCAN_CISCO_CHILD_HOME"),
+    UV_CACHE_DIR: runnerTempDescendant(
+      process.env.AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR,
+      "AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR",
+    ),
+  };
+  expect(Object.keys(environment).sort()).toEqual(["HOME", "PATH", "UV_CACHE_DIR", "UV_OFFLINE"]);
+  expect(Object.keys(environment)).not.toContainEqual(
+    expect.stringMatching(/token|credential|auth|proxy|docker|socket/i),
+  );
+  return environment;
 }
 
 function artifactPath(artifactRoot: string, name: string): string {
@@ -161,7 +181,7 @@ function liveRunner(sourceRoot: string, runtimeProjectRoot: string, diagnosticsR
     },
   ) => {
     expect(options.cwd).toBe(runtimeProjectRoot);
-    expect(options.env).toEqual({ UV_OFFLINE: "1" });
+    const environment = controlledLiveEnvironment(options);
     const [file, ...args] = argv;
     if (file === undefined) throw new Error("probe runner command is missing");
     const output = argv[argv.indexOf("--output-sarif") + 1];
@@ -172,7 +192,7 @@ function liveRunner(sourceRoot: string, runtimeProjectRoot: string, diagnosticsR
       (resolveRun, rejectRun) => {
         const child = spawn(file, args, {
           cwd: options.cwd,
-          env: options.env,
+          env: environment,
           shell: false,
           stdio: ["ignore", "pipe", "pipe"],
         });

@@ -14,6 +14,8 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     expect(existsSync(workflowPath)).toBe(true);
     const workflow = readWorkflow();
 
+    expect(workflow.match(/^permissions:/gm)).toHaveLength(1);
+    expect(workflow).not.toMatch(/^\s{2,}permissions:/gm);
     const triggerBlock = workflow.match(/^on:\s*\n([\s\S]*?)^permissions:/m)?.[1];
     expect(triggerBlock).toBeDefined();
     expect(
@@ -55,15 +57,28 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     const verification = blockContaining(workflow, "Verify exact runtime inputs");
     const warm = blockContaining(workflow, "Warm exact Cisco runtime");
     const live = blockContaining(workflow, "Capture Linux observation evidence");
-    expect(verification).toMatch(/sha256sum .*pyproject\.toml/);
-    expect(verification).toMatch(/sha256sum .*uv\.lock/);
+    expect(verification).toMatch(/curl .*--output .*\.whl/);
+    expect(verification).toMatch(/cisco[-_]ai[-_]skill[-_]scanner.*2\.0\.13/i);
+    expect(verification).toMatch(/sha256sum -c\s+[^\s]+/);
     expect(verification).toMatch(
-      /d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837/,
+      /ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41.*pyproject\.toml/i,
     );
-    expect(warm).toMatch(/uv run --project .*--locked --isolated --python 3\.12/);
+    expect(verification).toMatch(
+      /3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3.*uv\.lock/i,
+    );
+    expect(verification).toMatch(
+      /d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837.*\.whl/i,
+    );
+    expect(warm).toMatch(/uv sync --project .*--locked --isolated --python 3\.12/);
     expect(warm).not.toMatch(/--offline/);
+    expect(warm).not.toMatch(/skill-scanner\s+(?:--version|scan)/);
+    expect(warm).toMatch(/UV_CACHE_DIR=.*aih-scan-cisco-uv-cache/);
     expect(live).toMatch(/AIH_SCAN_CISCO_LINUX_AMD64_PROBE=1/);
+    expect(live).toMatch(/UV_OFFLINE=1/);
     expect(live).toMatch(/AIH_SCAN_CISCO_RUNTIME_PROJECT=/);
+    expect(live).toMatch(/AIH_SCAN_CISCO_CHILD_PATH=/);
+    expect(live).toMatch(/AIH_SCAN_CISCO_CHILD_HOME=/);
+    expect(live).toMatch(/AIH_SCAN_CISCO_CHILD_UV_CACHE_DIR=/);
     expect(live).toMatch(/npm test -- --run tests\/cisco\/linux-amd64-probe\.test\.ts/);
     expect(workflow.indexOf(verification ?? "")).toBeLessThan(workflow.indexOf(warm ?? ""));
     expect(workflow.indexOf(warm ?? "")).toBeLessThan(workflow.indexOf(live ?? ""));
