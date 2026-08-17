@@ -230,17 +230,12 @@ function jsonData(value, label, depth = 0) {
 
 function descriptor(value, label, expectedMediaTypes) {
   const data = plain(value, ["mediaType", "digest", "size"], label);
-  if (
-    typeof data.mediaType !== "string" ||
-    !expectedMediaTypes.has(data.mediaType) ||
-    typeof data.digest !== "string" ||
-    !SHA256.test(data.digest) ||
-    typeof data.size !== "number" ||
-    !Number.isSafeInteger(data.size) ||
-    data.size < 0 ||
-    data.size > MAX_FILE_BYTES
-  )
-    fail(`${label} descriptor`);
+  if (typeof data.mediaType !== "string" || !expectedMediaTypes.has(data.mediaType))
+    fail(`${label} media type`);
+  if (typeof data.digest !== "string" || !SHA256.test(data.digest)) fail(`${label} digest`);
+  if (typeof data.size !== "number") fail(`${label} size type`);
+  if (!Number.isSafeInteger(data.size) || data.size < 0 || data.size > MAX_FILE_BYTES)
+    fail(`${label} size range`);
   return data;
 }
 
