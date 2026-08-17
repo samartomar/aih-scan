@@ -549,6 +549,28 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
+  it("classifies nonzero and truncated scanner runs without exposing diagnostics", async () => {
+    const diagnostic = "scanner-run-diagnostic-not-for-errors";
+    for (const [response, reason] of [
+      [{ code: 17, stdout: diagnostic, stderr: diagnostic }, "scanner run nonzero code 17"],
+      [
+        { code: 0, stdout: diagnostic, stderr: diagnostic, truncated: true },
+        "scanner run truncated",
+      ],
+    ] as const) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "run") return response;
+        return original(argv, options);
+      };
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow(
+        `invalid Cisco OCI broker V1: ${reason}`,
+      );
+      await expect(executeCiscoOciBrokerV1(value)).rejects.not.toThrow(diagnostic);
+    }
+  });
+
   it("binds a UID-writable output child inside a private temporary parent", async () => {
     const { value, fake } = input();
     const original = fake.run;
