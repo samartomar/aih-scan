@@ -455,19 +455,19 @@ describe("Cisco Linux amd64 observation-only probe", () => {
           const nested = join(root, "nested-symlink");
           mkdirSync(nested);
           symlinkSync(join(root, "SKILL.md"), join(nested, "linked-SKILL.md"));
-          return "nested-symlink/linked-SKILL.md";
+          return "nested-symlink";
         },
         (root) => {
           const nested = join(root, "nested-hardlink");
           mkdirSync(nested);
           linkSync(join(root, "SKILL.md"), join(nested, "hard-linked-SKILL.md"));
-          return "nested-hardlink/hard-linked-SKILL.md";
+          return "nested-hardlink";
         },
         (root) => {
           const nested = join(root, "nested-fifo");
           mkdirSync(nested);
           execFileSync("mkfifo", [join(nested, "special-pipe")]);
-          return "nested-fifo/special-pipe";
+          return "nested-fifo";
         },
       ];
 
