@@ -9,7 +9,8 @@ const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
 const CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json";
 const DOCKER_MANIFEST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json";
 const DOCKER_MANIFEST_LIST_MEDIA_TYPE = "application/vnd.docker.distribution.manifest.list.v2+json";
-const WORKFLOW_IMAGE_NAME = "local.invalid/aih-scan/cisco";
+const WORKFLOW_REFERENCE_NAME = "local.invalid/aih-scan/cisco";
+const WORKFLOW_IMAGE_NAME = `${WORKFLOW_REFERENCE_NAME}:latest`;
 const LOGICAL_REFERENCE_PREFIX = "local.invalid/aih-scan/cisco@sha256:";
 const LAYER_MEDIA_TYPES = new Set([
   "application/vnd.oci.image.layer.v1.tar",
@@ -615,7 +616,7 @@ function metadata(value, layout) {
   if (
     data["image.name"] !== undefined &&
     (data["image.name"] !== WORKFLOW_IMAGE_NAME ||
-      data["image.name"] !== layout.manifestDescriptor.annotations[OCI_REFERENCE_ANNOTATION])
+      layout.manifestDescriptor.annotations[OCI_REFERENCE_ANNOTATION] !== WORKFLOW_REFERENCE_NAME)
   )
     fail("metadata image name");
   const metadataDescriptor = metadataDescriptors.get(layout) ?? layout.manifestDescriptor;

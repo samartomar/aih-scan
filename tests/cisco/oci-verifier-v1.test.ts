@@ -24,7 +24,8 @@ const hash = (value: Buffer | string) =>
 const manifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const configMediaType = "application/vnd.oci.image.config.v1+json";
 const indexMediaType = "application/vnd.oci.image.index.v1+json";
-const workflowImageName = "local.invalid/aih-scan/cisco";
+const workflowReferenceName = "local.invalid/aih-scan/cisco";
+const workflowImageName = `${workflowReferenceName}:latest`;
 const verifierPath = resolve(
   import.meta.dirname,
   "..",
@@ -95,7 +96,7 @@ const layoutFixture = (
     digest: manifestDigest,
     size: manifest.length,
     platform: { os: "linux", architecture: "amd64" },
-    annotations: { "org.opencontainers.image.ref.name": workflowImageName },
+    annotations: { "org.opencontainers.image.ref.name": workflowReferenceName },
   };
   const nestedIndex =
     options.nestedIndex === true
@@ -118,7 +119,7 @@ const layoutFixture = (
     nestedIndex === undefined
       ? manifestDescriptor
       : {
-          annotations: { "org.opencontainers.image.ref.name": workflowImageName },
+          annotations: { "org.opencontainers.image.ref.name": workflowReferenceName },
           digest: hash(nestedIndex),
           mediaType: indexMediaType,
           size: nestedIndex.length,
@@ -977,7 +978,7 @@ describe("Cisco OCI candidate verifier V1", () => {
       protocol: "CiscoOciVerifierV1",
     });
 
-    for (const imageName of [`${workflowImageName}:latest`, "local.invalid/aih-scan/other"]) {
+    for (const imageName of [workflowReferenceName, "local.invalid/aih-scan/cisco:candidate"]) {
       expect(() =>
         verifyCiscoOciCandidateV1({
           ...input(fixture),
@@ -999,12 +1000,12 @@ describe("Cisco OCI candidate verifier V1", () => {
     setRootManifestAnnotations(first, {
       "io.containerd.image.name": "local.invalid/aih-scan/cisco",
       "org.opencontainers.image.created": "2026-08-17T00:00:00Z",
-      "org.opencontainers.image.ref.name": workflowImageName,
+      "org.opencontainers.image.ref.name": workflowReferenceName,
     });
     setRootManifestAnnotations(second, {
       "io.containerd.image.name": "local.invalid/aih-scan/cisco",
       "org.opencontainers.image.created": "2026-08-17T00:00:00.123456789+05:30",
-      "org.opencontainers.image.ref.name": workflowImageName,
+      "org.opencontainers.image.ref.name": workflowReferenceName,
     });
     const firstResult = verifyCiscoOciCandidateV1(input(first));
     const secondResult = verifyCiscoOciCandidateV1(input(second));
@@ -1027,7 +1028,7 @@ describe("Cisco OCI candidate verifier V1", () => {
       setRootManifestAnnotations(fixture, {
         "io.containerd.image.name": "local.invalid/aih-scan/cisco",
         "org.opencontainers.image.created": created,
-        "org.opencontainers.image.ref.name": workflowImageName,
+        "org.opencontainers.image.ref.name": workflowReferenceName,
       });
       expect(() => verifyCiscoOciCandidateV1(input(fixture))).toThrow();
     }
