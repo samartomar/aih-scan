@@ -71,8 +71,10 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     );
     expect(warm).toMatch(/uv sync --project .*--locked --isolated --python 3\.12/);
     expect(warm).not.toMatch(/--offline/);
+    expect(warm).not.toMatch(/--no-env-file/);
     expect(warm).not.toMatch(/skill-scanner\s+(?:--version|scan)/);
     expect(warm).toMatch(/UV_CACHE_DIR=.*aih-scan-cisco-uv-cache/);
+    expect(warm).toMatch(/UV_CONFIG_FILE=.*aih-scan-cisco-empty-uv\.toml/);
     expect(live).toMatch(/AIH_SCAN_CISCO_LINUX_AMD64_PROBE=1/);
     expect(live).toMatch(/UV_OFFLINE=1/);
     expect(live).toMatch(/AIH_SCAN_CISCO_RUNTIME_PROJECT=/);

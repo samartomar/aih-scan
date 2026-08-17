@@ -47,6 +47,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/aih-scan-cisco-child-bin"
           mkdir -p "$RUNNER_TEMP/aih-scan-cisco-child-home"
           mkdir -p "$RUNNER_TEMP/aih-scan-cisco-uv-cache"
+          : > "$RUNNER_TEMP/aih-scan-cisco-empty-uv.toml"
           ln -s "$(command -v uv)" "$RUNNER_TEMP/aih-scan-cisco-child-bin/uv"
 
       - name: Verify exact runtime inputs
@@ -67,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          UV_CACHE_DIR="$RUNNER_TEMP/aih-scan-cisco-uv-cache" HOME="$RUNNER_TEMP/aih-scan-cisco-child-home" uv sync --project .candidate-sources/ai-harness/tools/cisco-skill-scanner --locked --isolated --python 3.12 --no-env-file
+          UV_CACHE_DIR="$RUNNER_TEMP/aih-scan-cisco-uv-cache" HOME="$RUNNER_TEMP/aih-scan-cisco-child-home" UV_CONFIG_FILE="$RUNNER_TEMP/aih-scan-cisco-empty-uv.toml" uv sync --project .candidate-sources/ai-harness/tools/cisco-skill-scanner --locked --isolated --python 3.12
 
       - name: Capture Linux observation evidence
         shell: bash
