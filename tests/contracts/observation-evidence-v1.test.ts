@@ -27,7 +27,7 @@ describe("ObservationKey/Set/EvidenceAnnex V1", () => {
     const observationKey = createObservationKeyV1(key);
     const set = createObservationSetV1({
       protocol: "ObservationSetV1",
-      observationKey,
+      observationKey: key,
       facts: [],
       coverage: [{ coverageKind: "selected-closure", coverageSha256: sha("a") }],
     });
@@ -49,11 +49,12 @@ describe("ObservationKey/Set/EvidenceAnnex V1", () => {
       "observationSetSha256",
       "protocol",
     ]);
+    expect(set.observationKey).toEqual(observationKey);
     expect(Object.isFrozen(set.facts)).toBe(true);
     expect(() =>
       createObservationSetV1({
         protocol: "ObservationSetV1",
-        observationKey,
+        observationKey: key,
         facts: [{ rawOccurrenceFingerprint: `raw-occurrence-v1:${sha("0")}`, multiplicity: 0 }],
         coverage: [{ coverageKind: "selected-closure", coverageSha256: sha("a") }],
       }),

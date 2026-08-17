@@ -92,4 +92,24 @@ describe("ScannerManifestV1", () => {
       parseScannerManifestV1Json('{"protocol":"ScannerManifestV1","protocol":"x"}'),
     ).toThrow();
   });
+
+  it("sorts supported platforms canonically and permits Windows only as a structural platform shape", () => {
+    const platforms = [
+      { os: "windows" as const, architecture: "amd64" as const },
+      { os: "linux" as const, architecture: "amd64" as const },
+    ];
+    const forward = createScannerManifestV1({
+      protocol: "ScannerManifestV1",
+      detectors: [{ ...entry, supportedPlatforms: platforms }],
+    });
+    const reverse = createScannerManifestV1({
+      protocol: "ScannerManifestV1",
+      detectors: [{ ...entry, supportedPlatforms: [...platforms].reverse() }],
+    });
+    expect(forward).toEqual(reverse);
+    expect(forward.detectors[0]?.supportedPlatforms).toContainEqual({
+      os: "windows",
+      architecture: "amd64",
+    });
+  });
 });

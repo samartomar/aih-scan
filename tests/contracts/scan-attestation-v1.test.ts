@@ -77,4 +77,21 @@ describe("ScanAttestationV1", () => {
     ])
       expect(() => createScanAttestationV1(invalid)).toThrow();
   });
+
+  it("rejects arbitrary, noncanonical, and statement-mismatched DSSE base64 payloads", () => {
+    const current = createScanAttestationV1(input);
+    const parse = (value: unknown) => parseScanAttestationV1Json(JSON.stringify(value));
+    const arbitrary = structuredClone(current);
+    arbitrary.envelope.payload = Buffer.from('{"arbitrary":true}', "utf8").toString("base64");
+    expect(() => parse(arbitrary)).toThrow();
+    const noncanonical = structuredClone(current);
+    noncanonical.envelope.payload = `${current.envelope.payload}=`;
+    expect(() => parse(noncanonical)).toThrow();
+    const malformed = structuredClone(current);
+    malformed.envelope.payload = "%%%";
+    expect(() => parse(malformed)).toThrow();
+    const mutatedStatement = structuredClone(current);
+    mutatedStatement.statement.predicate.cleanup.outcome = "failed";
+    expect(() => parse(mutatedStatement)).toThrow();
+  });
 });

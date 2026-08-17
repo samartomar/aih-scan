@@ -17,6 +17,7 @@ const sourceFiles = (path = resolve(root, "src")): string[] =>
 describe("dormant contract public boundary", () => {
   it("keeps the package root empty and prevents public/runtime AIH trust cutover", () => {
     expect(read("src/index.ts").trim()).toBe("export {};");
+    expect(sourceFiles()).toContain(resolve(root, "src", "index.ts"));
     for (const source of sourceFiles()) {
       const text = readFileSync(source, "utf8");
       expect(text).not.toMatch(/ai-harness|src\/trust|from\s+["'][^"']*trust|normalization-v1/i);

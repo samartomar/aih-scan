@@ -43,7 +43,7 @@ describe("Cisco facts-only parity", () => {
     const right = createCiscoFactsOnlyV1(input([result("second")]));
     expect(left.facts[0]?.rawOccurrenceFingerprint).toBe(right.facts[0]?.rawOccurrenceFingerprint);
     expect(left.facts[0]?.rawOccurrenceFingerprint).toBe(
-      "raw-occurrence-v1:854db687293e3cf1937d1363c6427fc511e28651d3b2964a2c6af1162ac07745",
+      "raw-occurrence-v1:da89dc078001a939f501966c99d4f346fd83c201a3101e6a0da640c46adf5bd3",
     );
     expect(left.annexBytes.equals(right.annexBytes)).toBe(false);
     const changedRule = createCiscoFactsOnlyV1(
@@ -59,6 +59,18 @@ describe("Cisco facts-only parity", () => {
     expect(changedFile.facts[0]?.rawOccurrenceFingerprint).not.toBe(
       left.facts[0]?.rawOccurrenceFingerprint,
     );
+  });
+
+  it("changes a raw occurrence fingerprint when canonical ordinal alone changes", () => {
+    const duplicates = createCiscoFactsOnlyV1(input([result("same"), result("same")]));
+    const ordered = [...duplicates.facts].sort(
+      (left: { canonicalOrdinal: number }, right: { canonicalOrdinal: number }) =>
+        left.canonicalOrdinal - right.canonicalOrdinal,
+    );
+    expect(ordered.map((fact: { canonicalOrdinal: number }) => fact.canonicalOrdinal)).toEqual([
+      0, 1,
+    ]);
+    expect(ordered[0]?.rawOccurrenceFingerprint).not.toBe(ordered[1]?.rawOccurrenceFingerprint);
   });
 
   it("allows an exact zero-result coverage claim without inventing a trust conclusion", () => {
