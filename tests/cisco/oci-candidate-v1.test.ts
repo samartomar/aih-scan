@@ -433,6 +433,24 @@ describe("Cisco OCI candidate V1", () => {
     ).toThrow();
     expect(() =>
       createCiscoOciCandidateV1({
+        ...value,
+        annexPayloads: [
+          { descriptorId: "annex.sbom", bytes: originalSbom.bytes },
+          { descriptorId: "annex.provenance", bytes: provenanceBytes },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      createCiscoOciCandidateV1({
+        ...value,
+        runtime: {
+          ...value.runtime,
+          provenance: { ...value.runtime.provenance, sha256: sha256(provenanceBytes) },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      createCiscoOciCandidateV1({
         ...sbomChanged,
         runtime: {
           ...sbomChanged.runtime,
