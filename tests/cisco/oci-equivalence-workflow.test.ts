@@ -7,6 +7,14 @@ const workflowPath = resolve(root, ".github", "workflows", "cisco-oci-equivalenc
 const verifierPath = resolve(root, "tools", "verify-cisco-oci-candidate.mjs");
 const workflow = () => readFileSync(workflowPath, "utf8");
 const verifier = () => readFileSync(verifierPath, "utf8");
+const step = (text: string, name: string): string => {
+  const match = new RegExp(
+    `^- name: ${name}\\s*\\n([\\s\\S]*?)(?=^- name:|(?![\\s\\S]))`,
+    "m",
+  ).exec(text);
+  if (match === null) throw new Error(`workflow step missing: ${name}`);
+  return match[0];
+};
 
 const buildxSha256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b";
 const buildkit =
@@ -41,15 +49,20 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
 
   it("performs one Linux amd64 local-only build, verifies its two identities, and executes only the config ID", () => {
     const text = workflow();
-    expect(text.match(/docker buildx build/g)).toHaveLength(1);
-    expect(text).toContain("--platform linux/amd64");
-    expect(text).toContain("--provenance=false");
-    expect(text).toContain("--sbom=false");
-    expect(text).toMatch(/type=oci,[^\n]*oci-mediatypes=true/);
-    expect(text).toMatch(/type=docker/);
-    expect(text).toContain("local.invalid/aih-scan/cisco");
-    expect(text).toContain("verify-cisco-oci-candidate.mjs");
-    expect(text).toMatch(/docker image inspect[^\n]*\{\{\.Id\}\}/);
+    const build = step(text, "Build OCI layout and local image");
+    const verify = step(text, "Verify OCI layout and local image identity");
+    const execute = step(text, "Compare isolated direct and OCI observations");
+    expect(build.match(/docker buildx build/g)).toHaveLength(1);
+    expect(build).toContain("--platform linux/amd64");
+    expect(build).toContain("--provenance=false");
+    expect(build).toContain("--sbom=false");
+    expect(build).toMatch(/type=oci,[^\n]*oci-mediatypes=true[^\n]*dest=\$RUNNER_TEMP\//);
+    expect(build).toMatch(/type=docker,dest=\$RUNNER_TEMP\//);
+    expect(build).toContain("local.invalid/aih-scan/cisco");
+    expect(verify).toMatch(/docker load[^\n]*\$RUNNER_TEMP/);
+    expect(verify).toContain("verify-cisco-oci-candidate.mjs");
+    expect(verify).toMatch(/docker image inspect[^\n]*\{\{\.Id\}\}/);
+    expect(execute).toMatch(/configDigestSha256|config-id/i);
     expect(text).not.toMatch(
       /--push|docker login|registry|cache-(?:from|to)|:latest|sign(?:ing)?|provenance=true|sbom=true/i,
     );
@@ -68,14 +81,30 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(text).not.toMatch(/qualif|trusted|verified|pass|verdict|acceptance|acknowledgement/i);
   });
 
+  it("binds credential-free checkouts and contains execution in named steps", () => {
+    const text = workflow();
+    const scan = step(text, "Check out aih-scan");
+    const aih = step(text, "Check out public ai-harness");
+    const execute = step(text, "Compare isolated direct and OCI observations");
+    expect(scan).toContain("persist-credentials: false");
+    expect(aih).toContain("persist-credentials: false");
+    expect(aih).toContain("ref: c0b4931d1f5435f10dc5d2bc57480f9275ed3eff");
+    expect(aih).toContain("path: .candidate-sources/ai-harness");
+    expect(execute).toMatch(/RUNNER_TEMP[^\n]*(?:direct|oci)/i);
+    expect(execute).toContain("dual-run-equivalence");
+  });
+
   it("keeps the verifier statically bounded and fail-closed", () => {
     const text = verifier();
     expect(text).toContain("CiscoOciLayoutV1");
     expect(text).toContain("local.invalid/aih-scan/cisco@sha256:");
     expect(text).toMatch(/manifest.*config/i);
     expect(text).toMatch(/process\.exitCode\s*=\s*1|throw new TypeError/);
+    expect(text).toMatch(/execFile/);
+    expect(text).toMatch(/(?:uv|docker|tar)/);
+    expect(text).toMatch(/timeout|maxStdout|maxStderr/i);
     expect(text).not.toMatch(
-      /child_process|exec\b|spawn\b|network|fetch\b|docker\s+build|registry/i,
+      /execSync|spawn\b|shell:\s*true|fetch\b|https?\.request|docker\s+build|registry/i,
     );
   });
 });
