@@ -334,6 +334,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     if (created.truncated || created.code !== 0 || created.stderr !== "")
       fail("container creation");
     const claimedContainerId = normalizedContainerId(created.stdout, "container creation");
+    ownedContainerId = claimedContainerId;
     const inspectedContainer = await invoke(
       ["docker", "container", "inspect", "--format", "{{.Id}}", claimedContainerId],
       "container identity",
@@ -346,7 +347,6 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
         claimedContainerId
     )
       fail("container identity mismatch");
-    ownedContainerId = claimedContainerId;
     const run = await invoke(
       ["docker", "container", "start", "--attach", ownedContainerId],
       "container start",
