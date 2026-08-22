@@ -337,6 +337,48 @@ function runInstalledBin(project: string, args: readonly string[]): string {
   });
 }
 
+function outputText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
+  return "";
+}
+
+function rejectedInstalledBin(
+  project: string,
+  args: readonly string[],
+): {
+  status: number | undefined;
+  stdout: string;
+  stderr: string;
+} {
+  try {
+    return { status: 0, stdout: runInstalledBin(project, args), stderr: "" };
+  } catch (error) {
+    if (typeof error !== "object" || error === null) throw error;
+    const result = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return {
+      status: typeof result.status === "number" ? result.status : undefined,
+      stdout: outputText(result.stdout),
+      stderr: outputText(result.stderr),
+    };
+  }
+}
+
+function expectRejectedInstalledBin(
+  project: string,
+  args: readonly string[],
+  secret?: string,
+): string {
+  const result = rejectedInstalledBin(project, args);
+  expect(result.status).toBe(2);
+  expect(result.stdout).toBe("");
+  expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(512);
+  expect(result.stderr).toMatch(/^[A-Za-z0-9 :.-]+\r?\n$/);
+  expect(result.stderr).not.toMatch(/envelopeValid|payloadSha256|release\.admin/i);
+  if (secret !== undefined) expect(result.stderr).not.toContain(secret);
+  return result.stderr;
+}
+
 describe("npm CLI resolution", () => {
   it("accepts a validated absolute npm_execpath and otherwise uses an installed npm CLI", () => {
     const directory = mkdtempSync(join(tmpdir(), "aih-scan-npm-cli-"));
@@ -435,9 +477,8 @@ describe("published V2 package installation", () => {
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
     const privateKey = join(directory, "signer.pem");
-    writeFileSync(privateKey, keyPair.privateKey.export({ format: "pem", type: "pkcs8" }), {
-      mode: 0o600,
-    });
+    const privateKeyPem = keyPair.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    writeFileSync(privateKey, privateKeyPem, { mode: 0o600 });
     chmodSync(privateKey, 0o600);
     if (process.platform !== "win32") {
       expect(readFileSync(privateKey).byteLength).toBeGreaterThan(0);
@@ -486,7 +527,18 @@ describe("published V2 package installation", () => {
     };
     for (const [name, value] of Object.entries({ signer, claims, roots, expected }))
       writeFileSync(join(directory, `${name}.json`), JSON.stringify(value), { mode: 0o600 });
-    runInstalledBin(directory, [
+    writeFileSync(join(directory, "invalid-capture-request.json"), "{}", { mode: 0o600 });
+    expect(expectRejectedInstalledBin(directory, ["capture"])).toBe("aih-scan: capture usage\n");
+    expect(
+      expectRejectedInstalledBin(directory, [
+        "capture",
+        "--request",
+        "invalid-capture-request.json",
+        "--output",
+        "capture-output",
+      ]),
+    ).toBe("aih-scan: Cisco capture request fields\n");
+    const signArgs = [
       "sign",
       "--bundle",
       "bundle",
@@ -498,12 +550,59 @@ describe("published V2 package installation", () => {
       "claims.json",
       "--output",
       "evidence.json",
-    ]);
-    const verified = JSON.parse(
-      runInstalledBin(directory, [
+    ];
+    if (process.platform !== "win32") {
+      chmodSync(privateKey, 0o644);
+      expect(expectRejectedInstalledBin(directory, signArgs, privateKeyPem)).toBe(
+        "aih-scan: private key file permissions\n",
+      );
+      chmodSync(privateKey, 0o600);
+    }
+    runInstalledBin(directory, signArgs);
+    const verifyArgs = [
+      "verify",
+      "--evidence",
+      "evidence.json",
+      "--bundle",
+      "bundle",
+      "--roots",
+      "roots.json",
+      "--expected",
+      "expected.json",
+    ];
+    const verified = JSON.parse(runInstalledBin(directory, verifyArgs)) as {
+      envelopeValid?: unknown;
+      signer?: { identity?: unknown };
+      replayIdentity?: unknown;
+    };
+    expect(verified).toMatchObject({ envelopeValid: true, signer: { identity: "release.admin" } });
+    expect(typeof verified.replayIdentity).toBe("string");
+    writeFileSync(
+      join(directory, "seen.json"),
+      JSON.stringify({ identities: [verified.replayIdentity] }),
+      { mode: 0o600 },
+    );
+    expect(expectRejectedInstalledBin(directory, [...verifyArgs, "--seen", "seen.json"])).toBe(
+      "invalid ScanAttestationV2: replayed evidence\n",
+    );
+    const tampered = JSON.parse(readFileSync(join(directory, "evidence.json"), "utf8")) as {
+      signatures?: { sig?: unknown }[];
+    };
+    const signatureEntry = tampered.signatures?.[0];
+    const signature = signatureEntry?.sig;
+    if (signatureEntry === undefined || typeof signature !== "string" || signature.length === 0)
+      throw new Error("missing signature");
+    const first = signature[0];
+    if (first === undefined) throw new Error("missing signature byte");
+    signatureEntry.sig = first === "A" ? `B${signature.slice(1)}` : `A${signature.slice(1)}`;
+    writeFileSync(join(directory, "tampered-evidence.json"), JSON.stringify(tampered), {
+      mode: 0o600,
+    });
+    expect(
+      expectRejectedInstalledBin(directory, [
         "verify",
         "--evidence",
-        "evidence.json",
+        "tampered-evidence.json",
         "--bundle",
         "bundle",
         "--roots",
@@ -511,7 +610,6 @@ describe("published V2 package installation", () => {
         "--expected",
         "expected.json",
       ]),
-    ) as { envelopeValid?: unknown; signer?: { identity?: unknown } };
-    expect(verified).toMatchObject({ envelopeValid: true, signer: { identity: "release.admin" } });
+    ).toBe("invalid ScanAttestationV2: signature verification\n");
   }, 30_000);
 });
