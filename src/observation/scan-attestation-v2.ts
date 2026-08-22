@@ -716,13 +716,21 @@ function parseExpected(value: unknown): z.infer<typeof claimsSchema> & {
   );
   const now = ownData(value, "now");
   const subjectSha256 = ownData(value, "subjectSha256");
-  const signer = ownData(value, "signer");
+  const rawSigner = ownData(value, "signer");
   if (typeof now !== "string" || !sha256.safeParse(subjectSha256).success) fail("expected values");
+  if (typeof rawSigner !== "object" || rawSigner === null || Array.isArray(rawSigner))
+    fail("expected signer object");
+  exactKeys(rawSigner, ["identity", "class", "keyId"], "expected signer");
+  const signer = signerSchema.parse({
+    identity: ownData(rawSigner, "identity"),
+    class: ownData(rawSigner, "class"),
+    keyId: ownData(rawSigner, "keyId"),
+  });
   return {
     ...claims,
     now,
     subjectSha256: subjectSha256 as string,
-    signer: signerSchema.parse(signer),
+    signer,
   };
 }
 export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestationV2 {

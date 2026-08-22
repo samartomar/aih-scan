@@ -12,6 +12,22 @@ import { parseCiscoOciLayoutV1 } from "./oci-layout-v1.js";
 function fail(reason: string): never {
   throw new TypeError(`invalid Cisco V2 capture: ${reason}`);
 }
+function ownData(value: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined || !("value" in descriptor)) fail(`${key} must be own data`);
+  return descriptor.value;
+}
+function exactInput(value: object, fields: readonly string[]): void {
+  if (
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0
+  )
+    fail("input plain data");
+  const keys = Object.keys(value);
+  if (keys.length !== fields.length || fields.some((field) => !keys.includes(field)))
+    fail("input fields");
+  for (const field of fields) ownData(value, field);
+}
 function sameSeal(
   left: { sourceTreeSha256: string; selectedClosureSha256: string; sealedSnapshotSha256: string },
   right: { sourceTreeSha256: string; selectedClosureSha256: string; sealedSnapshotSha256: string },
@@ -77,7 +93,7 @@ export interface CiscoCaptureV2 {
 /** Executes only the registered Cisco OCI broker and promotes its exact internal evidence bindings. */
 export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoCaptureV2> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail("input object");
-  const input = value as Record<string, unknown>;
+  const input = value;
   const fields = [
     "layout",
     "sourceRoot",
@@ -87,44 +103,46 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoC
     "broker",
     "runner",
   ];
+  exactInput(input, fields);
+  const layoutInput = ownData(input, "layout");
+  const sourceRoot = ownData(input, "sourceRoot");
+  const selectedClosurePaths = ownData(input, "selectedClosurePaths");
+  const runtime = ownData(input, "runtime");
+  const annexPayloads = ownData(input, "annexPayloads");
+  const broker = ownData(input, "broker");
+  const runner = ownData(input, "runner");
   if (
-    Object.getPrototypeOf(input) !== Object.prototype ||
-    Object.keys(input).length !== fields.length ||
-    fields.some((field) => !Object.hasOwn(input, field))
-  )
-    fail("input fields");
-  if (
-    typeof input.sourceRoot !== "string" ||
-    !Array.isArray(input.selectedClosurePaths) ||
-    typeof input.runner !== "function"
+    typeof sourceRoot !== "string" ||
+    !Array.isArray(selectedClosurePaths) ||
+    typeof runner !== "function"
   )
     fail("input values");
-  const layout = parseCiscoOciLayoutV1(canonicalStrictJsonBytesV1(input.layout));
+  const layout = parseCiscoOciLayoutV1(canonicalStrictJsonBytesV1(layoutInput));
   const before = sealSourceV2({
-    sourceRoot: input.sourceRoot,
-    selectedClosurePaths: input.selectedClosurePaths,
+    sourceRoot,
+    selectedClosurePaths,
   });
   const beforeV1 = describeNativeObservationSourceV1({
-    sourceRoot: input.sourceRoot,
-    selectedClosurePaths: input.selectedClosurePaths,
+    sourceRoot,
+    selectedClosurePaths,
   });
   crossCheckSourceInventories(before, beforeV1);
   const result = await executeCiscoOciBrokerV1({
     protocol: "CiscoOciBrokerV1",
     layout,
-    sourceRoot: input.sourceRoot,
-    selectedClosurePaths: input.selectedClosurePaths,
+    sourceRoot,
+    selectedClosurePaths,
     host: { os: "linux", architecture: "amd64" },
-    runner: input.runner,
+    runner,
   });
   if (typeof result !== "object" || result === null) fail("broker result");
   const after = sealSourceV2({
-    sourceRoot: input.sourceRoot,
-    selectedClosurePaths: input.selectedClosurePaths,
+    sourceRoot,
+    selectedClosurePaths,
   });
   const afterV1 = describeNativeObservationSourceV1({
-    sourceRoot: input.sourceRoot,
-    selectedClosurePaths: input.selectedClosurePaths,
+    sourceRoot,
+    selectedClosurePaths,
   });
   crossCheckSourceInventories(after, afterV1);
   if (!sameSeal(before, after)) fail("source changed during capture");
@@ -134,9 +152,9 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoC
     protocol: "CiscoOciCandidateV1",
     layout,
     brokerResult: result,
-    runtime: input.runtime,
-    annexPayloads: input.annexPayloads,
-    broker: input.broker,
+    runtime,
+    annexPayloads,
+    broker,
   });
   const detector = internal.scannerManifest.detectors[0];
   if (
