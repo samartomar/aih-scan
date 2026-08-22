@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
+import { canonicalSourceSealsV2Bytes } from "../../src/index.js";
 import {
   createObservationKeyV1,
   createObservationSetV1,
@@ -222,6 +223,48 @@ const roots = () => [
   { identity: "scanner.ci", class: "test-ephemeral" as const, keyId, publicKey: keyPair.publicKey },
 ];
 describe("ScanAttestationV2 signed evidence", () => {
+  it("canonicalizes valid public V2 source seals deterministically and rejects malformed variants", () => {
+    const before = seal();
+    const after = seal();
+    const expectedBytes = canonicalStrictJsonBytesV1({ before, after });
+
+    expect(canonicalSourceSealsV2Bytes({ after, before }).equals(expectedBytes)).toBe(true);
+    expect(canonicalSourceSealsV2Bytes({ before, after }).equals(expectedBytes)).toBe(true);
+    expect(() =>
+      canonicalSourceSealsV2Bytes({
+        before: { ...before, protocol: "SourceSealV1" },
+        after,
+      }),
+    ).toThrow();
+    expect(() =>
+      canonicalSourceSealsV2Bytes({
+        before: { ...before, selectedClosurePaths: ["z.md", "A.md"] },
+        after,
+      }),
+    ).toThrow();
+    expect(() => canonicalSourceSealsV2Bytes({ before })).toThrow();
+  });
+
+  it("rejects hidden and accessor-backed public source-seal inputs without invoking accessors", () => {
+    const before = seal();
+    const after = seal();
+    let accessorReads = 0;
+    const accessor = { after } as Record<string, unknown>;
+    Object.defineProperty(accessor, "before", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        throw new Error("must not read source-seal accessor");
+      },
+    });
+    const hidden = { before, after } as Record<string, unknown>;
+    Object.defineProperty(hidden, "unexpected", { value: true });
+
+    expect(() => canonicalSourceSealsV2Bytes(accessor)).toThrow();
+    expect(accessorReads).toBe(0);
+    expect(() => canonicalSourceSealsV2Bytes(hidden)).toThrow();
+  });
+
   it("signs deterministic canonical DSSE bytes and verifies exact configured signer claims", () => {
     const first = signed();
     const second = signed();

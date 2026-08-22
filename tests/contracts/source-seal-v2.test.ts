@@ -1,8 +1,43 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { sealSourceV2, validateSourceSealV2 } from "../../src/observation/source-seal-v2.js";
+
+type FileEntry = { kind: "file"; path: string; sha256: string; byteLength: number };
+const sha256 = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
+function sourceSeal(entries: readonly FileEntry[]) {
+  const selectedFiles = [
+    entries[0] ??
+      (() => {
+        throw new Error("missing source entry");
+      })(),
+  ];
+  const sourceTreeSha256 = sha256(
+    canonicalStrictJsonBytesV1({ protocol: "SourceTreeV2", entries }),
+  );
+  const selectedClosureSha256 = sha256(
+    canonicalStrictJsonBytesV1({ protocol: "SelectedClosureV2", files: selectedFiles }),
+  );
+  return {
+    protocol: "SourceSealV2" as const,
+    algorithm: "code-unit-canonical-json-v1" as const,
+    entries,
+    selectedClosurePaths: selectedFiles.map((entry) => entry.path),
+    selectedFiles,
+    sourceTreeSha256,
+    selectedClosureSha256,
+    sealedSnapshotSha256: sha256(
+      canonicalStrictJsonBytesV1({
+        protocol: "SealedSnapshotV2",
+        sourceTreeSha256,
+        selectedClosureSha256,
+      }),
+    ),
+  };
+}
 
 describe("SourceSealV2", () => {
   it("uses code-unit canonical file order and rejects a selected closure escape", () => {
@@ -38,5 +73,18 @@ describe("SourceSealV2", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects a digest-valid seal whose exact canonical representation exceeds 512 KiB", () => {
+    const entries = Array.from({ length: 4_096 }, (_, index) => ({
+      kind: "file" as const,
+      path: `file-${String(index).padStart(4, "0")}-canonical-size-bound.md`,
+      sha256: "0".repeat(64),
+      byteLength: 0,
+    }));
+    const oversized = sourceSeal(entries);
+
+    expect(canonicalStrictJsonBytesV1(oversized).byteLength).toBeGreaterThan(512 * 1024);
+    expect(() => validateSourceSealV2(oversized)).toThrow("canonical seal byte bound");
   });
 });
