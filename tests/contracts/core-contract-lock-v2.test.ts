@@ -53,14 +53,24 @@ describe("Core Strict V2 compatibility lock", () => {
     ).toThrow();
   });
 
-  it("keeps the pinned Core checkout outside the scanner lint root", () => {
+  it("verifies and removes the exact Core checkout before scanner checks", () => {
     const workflow = ciWorkflow();
-    expect(workflow).toContain("path: $" + "{{ runner.temp }}/aih-core-contract");
-    expect(workflow).toContain(
-      'node tools/verify-core-contract-lock-v2.mjs --core-root "$' +
-        '{{ runner.temp }}/aih-core-contract"',
-    );
-    expect(workflow).not.toContain("path: .core-contract");
-    expect(workflow).not.toContain("--core-root .core-contract");
+    expect(workflow).toContain("path: .core-contract");
+    const verifier = "node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract";
+    expect(workflow).toContain(verifier);
+    const verifierIndex = workflow.indexOf(verifier);
+    const cleanupIndex = workflow.indexOf("name: Remove exact Core contract checkout");
+    expect(verifierIndex).toBeGreaterThanOrEqual(0);
+    expect(cleanupIndex).toBeGreaterThan(verifierIndex);
+    const cleanupEnd = workflow.indexOf("- run: npm run typecheck", cleanupIndex);
+    expect(cleanupEnd).toBeGreaterThan(cleanupIndex);
+    const cleanup = workflow.slice(cleanupIndex, cleanupEnd);
+    expect(cleanup).toContain('core_root="$GITHUB_WORKSPACE/.core-contract"');
+    expect(cleanup).toContain('rm -rf -- "$core_root"');
+    expect(cleanup).toContain('test ! -e "$core_root"');
+    expect(cleanup).not.toMatch(/[?*]/);
+    for (const check of ["npm run typecheck", "npm run lint", "npm test", "npm run build"]) {
+      expect(workflow.indexOf(check)).toBeGreaterThan(cleanupIndex);
+    }
   });
 });

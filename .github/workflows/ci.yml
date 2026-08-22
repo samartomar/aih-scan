@@ -20,14 +20,24 @@ jobs:
         with:
           repository: samartomar/ai-harness
           ref: e27a55dcebb635c8298aa4fd6fd871f59089bcf7
-          path: ${{ runner.temp }}/aih-core-contract
+          path: .core-contract
           persist-credentials: false
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 20
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: node tools/verify-core-contract-lock-v2.mjs --core-root "${{ runner.temp }}/aih-core-contract"
+      - run: node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract
+      - name: Remove exact Core contract checkout
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          core_root="$GITHUB_WORKSPACE/.core-contract"
+          if [ -e "$core_root" ]; then
+            test -d "$core_root"
+            rm -rf -- "$core_root"
+          fi
+          test ! -e "$core_root"
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
