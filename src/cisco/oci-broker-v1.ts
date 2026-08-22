@@ -295,6 +295,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   const temporaryBase = tmpdir();
   temporaryPath(temporaryBase, "temporary base");
   const clientRoot = mkdtempSync(join(temporaryBase, "aih-scan-oci-client-"));
+  chmodSync(clientRoot, 0o700);
   const home = join(clientRoot, "home");
   const dockerConfig = join(clientRoot, "docker-config");
   let outputParent: string | undefined;
