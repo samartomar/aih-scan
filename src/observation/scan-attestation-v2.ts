@@ -1,0 +1,505 @@
+import { createHash, KeyObject, sign as signDetached, verify as verifyDetached } from "node:crypto";
+import { z } from "zod";
+import {
+  assertStrictJsonValueV1,
+  canonicalStrictJsonBytesV1,
+  codeUnitCompare,
+  deepFreezeStrictJsonV1,
+  parseStrictJsonObjectV1,
+} from "../contract/strict-json-v1.js";
+import {
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+  AI_HARNESS_STRICT_V2_COMMIT,
+} from "../core/core-contract-lock-v2.js";
+
+const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
+const sourceSeal = z
+  .object({ sourceTreeSha256: sha256, selectedClosureSha256: sha256, sealedSnapshotSha256: sha256 })
+  .strict();
+const subject = z
+  .object({ name: z.literal("source-tree"), digest: z.object({ sha256 }).strict() })
+  .strict();
+const candidateInput = z
+  .object({
+    protocol: z.literal("ScanCandidateV2"),
+    coreContract: z
+      .object({
+        commit: z.literal(AI_HARNESS_STRICT_V2_COMMIT),
+        decisionSchemaSha256: z.literal(AI_HARNESS_DECISION_V2_SCHEMA_SHA256),
+      })
+      .strict(),
+    subject,
+    sourceSeals: z.object({ before: sourceSeal, run: sourceSeal, after: sourceSeal }).strict(),
+    observation: z.object({ keySha256: sha256, setSha256: sha256 }).strict(),
+    scanner: z
+      .object({ manifestSha256: sha256, runtimeSha256: sha256, configurationSha256: sha256 })
+      .strict(),
+    platform: z.object({ os: z.literal("linux"), architecture: z.literal("amd64") }).strict(),
+    coverage: z
+      .object({ kind: z.literal("selected-closure"), sha256, complete: z.literal(true) })
+      .strict(),
+    annexes: z
+      .array(
+        z
+          .object({
+            descriptorId: z.string().regex(/^annex\.[a-z0-9][a-z0-9.-]*$/),
+            sha256,
+            byteLength: z
+              .number()
+              .int()
+              .positive()
+              .max(16 * 1024 * 1024),
+          })
+          .strict(),
+      )
+      .max(128),
+    cleanup: z.object({ outcome: z.literal("completed") }).strict(),
+    scan: z.object({ outcome: z.enum(["succeeded", "failed", "refused"]) }).strict(),
+  })
+  .strict();
+const claimsSchema = z
+  .object({
+    repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+    workflow: z.string().regex(/^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/),
+    issuer: z.string().url().max(512),
+    sourceRef: z.string().regex(/^refs\/(heads|tags)\/[A-Za-z0-9._/-]{1,256}$/),
+    commit: z.string().regex(/^[0-9a-f]{40}$/),
+    environment: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    runId: z.string().regex(/^[1-9][0-9]{0,19}$/),
+    runAttempt: z.number().int().positive().max(1000),
+    signedAt: z.string(),
+    expiresAt: z.string(),
+  })
+  .strict();
+const signerSchema = z
+  .object({
+    identity: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+    class: z.enum(["test-ephemeral", "organization"]),
+    keyId: z.string().regex(/^ed25519:[A-Za-z0-9._-]{1,128}$/),
+  })
+  .strict();
+const signatureSchema = z.object({ keyid: signerSchema.shape.keyId, sig: z.string() }).strict();
+const envelopeSchema = z
+  .object({
+    payloadType: z.literal("application/vnd.in-toto+json"),
+    payload: z.string(),
+    signatures: z.array(signatureSchema).length(1),
+  })
+  .strict();
+const statementSchema = z
+  .object({
+    _type: z.literal("https://in-toto.io/Statement/v1"),
+    subject: z.array(subject).length(1),
+    predicateType: z.literal("https://aih.dev/ScanAttestationV2"),
+    predicate: z
+      .object({
+        protocol: z.literal("ScanAttestationV2"),
+        candidate: z.object({ sha256 }).strict(),
+        coreContract: candidateInput.shape.coreContract,
+        sourceSeals: candidateInput.shape.sourceSeals,
+        observation: candidateInput.shape.observation,
+        scanner: candidateInput.shape.scanner,
+        platform: candidateInput.shape.platform,
+        coverage: candidateInput.shape.coverage,
+        annexes: candidateInput.shape.annexes,
+        cleanup: candidateInput.shape.cleanup,
+        scan: candidateInput.shape.scan,
+        signer: signerSchema,
+        claims: claimsSchema
+          .extend({ origin: z.literal("signer-asserted"), provenance: z.literal("none") })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
+type CandidateWire = z.infer<typeof candidateInput> & { readonly candidateSha256: string };
+type Statement = z.infer<typeof statementSchema>;
+type Envelope = z.infer<typeof envelopeSchema>;
+export interface ScanCandidateV2 extends Readonly<CandidateWire> {}
+export interface SignedScanAttestationV2 {
+  readonly protocol: "ScanAttestationV2";
+  readonly envelope: Readonly<Envelope>;
+  readonly payloadSha256: string;
+  readonly evidenceDigestSha256: string;
+}
+export type ScanTrustRootV2 = Readonly<{
+  identity: string;
+  class: "test-ephemeral" | "organization";
+  keyId: string;
+  publicKey: KeyObject;
+}>;
+export interface VerifiedScanAttestationV2 {
+  readonly facts: Readonly<{
+    envelopeValid: true;
+    signer: Readonly<{ identity: string; class: "test-ephemeral" | "organization"; keyId: string }>;
+    signerAssertedClaimsMatchPolicy: true;
+    provenanceVerified: false;
+    scan: Readonly<{ outcome: "succeeded" | "failed" | "refused" }>;
+    replayIdentity: string;
+    evidenceDigestSha256: string;
+  }>;
+}
+
+const candidates = new WeakMap<object, Buffer>();
+const signed = new WeakMap<object, Buffer>();
+const verified = new WeakSet<object>();
+
+function fail(reason: string): never {
+  throw new TypeError(`invalid ScanAttestationV2: ${reason}`);
+}
+function digest(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+function canonicalBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64");
+}
+function decodeBase64(value: string, label: string, maxBytes = 2 * 1024 * 1024): Buffer {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > Math.ceil(maxBytes / 3) * 4 ||
+    value.length % 4 !== 0
+  )
+    fail(`${label} base64 bounds`);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))
+    fail(`${label} base64 grammar`);
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.byteLength > maxBytes || canonicalBase64(bytes) !== value)
+    fail(`${label} canonical base64`);
+  return bytes;
+}
+function exactTime(value: string, label: string): number {
+  if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value)) fail(`${label} time grammar`);
+  const epoch = Date.parse(value);
+  if (!Number.isFinite(epoch) || new Date(epoch).toISOString() !== value)
+    fail(`${label} time value`);
+  return epoch;
+}
+function sameSeal(left: z.infer<typeof sourceSeal>, right: z.infer<typeof sourceSeal>): boolean {
+  return canonicalStrictJsonBytesV1(left).equals(canonicalStrictJsonBytesV1(right));
+}
+function ownData(value: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined || !("value" in descriptor)) fail(`${key} must be own data`);
+  return descriptor.value;
+}
+function exactKeys(value: object, allowed: readonly string[], label: string): void {
+  if (
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0
+  )
+    fail(`${label} plain data`);
+  const keys = Object.keys(value);
+  if (keys.length !== allowed.length || allowed.some((key) => !keys.includes(key)))
+    fail(`${label} fields`);
+}
+function sortedAnnexes(
+  values: z.infer<typeof candidateInput>["annexes"],
+): z.infer<typeof candidateInput>["annexes"] {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value.descriptorId)) fail("duplicate annex descriptor");
+    seen.add(value.descriptorId);
+  }
+  return [...values].sort((left, right) => codeUnitCompare(left.descriptorId, right.descriptorId));
+}
+
+/** Source-seal V2 bytes use strict JSON and code-unit sorted object keys. */
+export function canonicalSourceSealsV2Bytes(value: unknown): Buffer {
+  assertStrictJsonValueV1(value, "ScanAttestationV2 source seals");
+  return canonicalStrictJsonBytesV1(candidateInput.shape.sourceSeals.parse(structuredClone(value)));
+}
+export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
+  assertStrictJsonValueV1(value, "ScanCandidateV2 candidate");
+  const parsed = candidateInput.parse(structuredClone(value));
+  if (
+    !sameSeal(parsed.sourceSeals.before, parsed.sourceSeals.run) ||
+    !sameSeal(parsed.sourceSeals.run, parsed.sourceSeals.after)
+  )
+    fail("source seal TOCTOU mismatch");
+  const normalized = { ...parsed, annexes: sortedAnnexes(parsed.annexes) };
+  const result = deepFreezeStrictJsonV1({
+    ...normalized,
+    candidateSha256: digest(
+      canonicalStrictJsonBytesV1({ domain: "aih.scan-candidate-v2", candidate: normalized }),
+    ),
+  });
+  candidates.set(result, canonicalStrictJsonBytesV1(result));
+  return result;
+}
+function candidateBytes(value: unknown): Buffer {
+  if (typeof value !== "object" || value === null) fail("candidate object");
+  const bytes = candidates.get(value);
+  if (bytes === undefined) fail("candidate requires validated custody");
+  return bytes;
+}
+function parseClaims(value: unknown): z.infer<typeof claimsSchema> {
+  assertStrictJsonValueV1(value, "ScanAttestationV2 claims");
+  const parsed = claimsSchema.parse(structuredClone(value));
+  const signedAt = exactTime(parsed.signedAt, "signedAt");
+  if (
+    exactTime(parsed.expiresAt, "expiresAt") <= signedAt ||
+    exactTime(parsed.expiresAt, "expiresAt") - signedAt > 24 * 60 * 60 * 1000
+  )
+    fail("claims expiry");
+  return parsed;
+}
+export function canonicalDssePaeV2(payloadType: string, payload: Uint8Array): Buffer {
+  if (payloadType !== "application/vnd.in-toto+json") fail("payload type");
+  if (
+    !(Buffer.isBuffer(payload) || payload instanceof Uint8Array) ||
+    payload.byteLength === 0 ||
+    payload.byteLength > 2 * 1024 * 1024
+  )
+    fail("payload bytes");
+  return Buffer.concat([
+    Buffer.from(
+      `DSSEv1 ${Buffer.byteLength(payloadType)} ${payloadType} ${payload.byteLength} `,
+      "ascii",
+    ),
+    Buffer.from(payload),
+  ]);
+}
+export function signScanCandidateV2(value: unknown): SignedScanAttestationV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    fail("sign input object");
+  exactKeys(value, ["candidate", "signer", "claims"], "sign input");
+  const candidate = ownData(value, "candidate");
+  candidateBytes(candidate);
+  const rawSigner = ownData(value, "signer");
+  if (typeof rawSigner !== "object" || rawSigner === null || Array.isArray(rawSigner))
+    fail("signer object");
+  exactKeys(rawSigner, ["identity", "class", "keyId", "privateKey"], "signer");
+  const signer = signerSchema.parse({
+    identity: ownData(rawSigner, "identity"),
+    class: ownData(rawSigner, "class"),
+    keyId: ownData(rawSigner, "keyId"),
+  });
+  const privateKey = ownData(rawSigner, "privateKey");
+  if (
+    !(privateKey instanceof KeyObject) ||
+    privateKey.type !== "private" ||
+    privateKey.asymmetricKeyType !== "ed25519"
+  )
+    fail("Ed25519 private key");
+  const claims = parseClaims(ownData(value, "claims"));
+  const candidateWire = candidate as ScanCandidateV2;
+  const statement: Statement = statementSchema.parse({
+    _type: "https://in-toto.io/Statement/v1",
+    subject: [candidateWire.subject],
+    predicateType: "https://aih.dev/ScanAttestationV2",
+    predicate: {
+      protocol: "ScanAttestationV2",
+      candidate: { sha256: candidateWire.candidateSha256 },
+      coreContract: candidateWire.coreContract,
+      sourceSeals: candidateWire.sourceSeals,
+      observation: candidateWire.observation,
+      scanner: candidateWire.scanner,
+      platform: candidateWire.platform,
+      coverage: candidateWire.coverage,
+      annexes: candidateWire.annexes,
+      cleanup: candidateWire.cleanup,
+      scan: candidateWire.scan,
+      signer,
+      claims: { ...claims, origin: "signer-asserted", provenance: "none" },
+    },
+  });
+  const payload = canonicalStrictJsonBytesV1(statement);
+  const signature = signDetached(
+    null,
+    canonicalDssePaeV2("application/vnd.in-toto+json", payload),
+    privateKey,
+  );
+  if (signature.byteLength !== 64) fail("Ed25519 signature length");
+  const envelope = envelopeSchema.parse({
+    payloadType: "application/vnd.in-toto+json",
+    payload: canonicalBase64(payload),
+    signatures: [{ keyid: signer.keyId, sig: canonicalBase64(signature) }],
+  });
+  const result = deepFreezeStrictJsonV1({
+    protocol: "ScanAttestationV2" as const,
+    envelope,
+    payloadSha256: digest(payload),
+    evidenceDigestSha256: digest(canonicalStrictJsonBytesV1(envelope)),
+  });
+  signed.set(result, canonicalStrictJsonBytesV1(result));
+  return result;
+}
+export function canonicalScanAttestationEnvelopeBytesV2(value: SignedScanAttestationV2): Buffer {
+  if (typeof value !== "object" || value === null) fail("signed evidence object");
+  const bytes = signed.get(value);
+  if (bytes === undefined) fail("canonical envelope requires signed custody");
+  return canonicalStrictJsonBytesV1(value.envelope);
+}
+function parseEnvelope(value: unknown): {
+  envelope: Envelope;
+  statement: Statement;
+  payload: Buffer;
+  payloadSha256: string;
+  evidenceDigestSha256: string;
+} {
+  const raw =
+    typeof value === "object" && value !== null && "envelope" in value
+      ? (value as { envelope: unknown }).envelope
+      : value;
+  assertStrictJsonValueV1(raw, "ScanAttestationV2 envelope");
+  const envelope = envelopeSchema.parse(structuredClone(raw));
+  const payload = decodeBase64(envelope.payload, "payload");
+  let parsedPayload: Record<string, unknown>;
+  try {
+    parsedPayload = parseStrictJsonObjectV1(payload.toString("utf8"), "ScanAttestationV2 payload");
+  } catch {
+    fail("payload JSON");
+  }
+  if (!canonicalStrictJsonBytesV1(parsedPayload).equals(payload)) fail("noncanonical payload");
+  const statement = statementSchema.parse(parsedPayload);
+  const candidate = statement.predicate.candidate.sha256;
+  const rebuiltCandidate = digest(
+    canonicalStrictJsonBytesV1({
+      domain: "aih.scan-candidate-v2",
+      candidate: {
+        protocol: "ScanCandidateV2",
+        coreContract: statement.predicate.coreContract,
+        subject: statement.subject[0],
+        sourceSeals: statement.predicate.sourceSeals,
+        observation: statement.predicate.observation,
+        scanner: statement.predicate.scanner,
+        platform: statement.predicate.platform,
+        coverage: statement.predicate.coverage,
+        annexes: sortedAnnexes(statement.predicate.annexes),
+        cleanup: statement.predicate.cleanup,
+        scan: statement.predicate.scan,
+      },
+    }),
+  );
+  if (candidate !== rebuiltCandidate) fail("candidate digest binding");
+  if (
+    !sameSeal(statement.predicate.sourceSeals.before, statement.predicate.sourceSeals.run) ||
+    !sameSeal(statement.predicate.sourceSeals.run, statement.predicate.sourceSeals.after)
+  )
+    fail("source seal TOCTOU mismatch");
+  return {
+    envelope,
+    statement,
+    payload,
+    payloadSha256: digest(payload),
+    evidenceDigestSha256: digest(canonicalStrictJsonBytesV1(envelope)),
+  };
+}
+function parseExpected(value: unknown): z.infer<typeof claimsSchema> & {
+  now: string;
+  subjectSha256: string;
+  signer: z.infer<typeof signerSchema>;
+} {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) fail("expected policy");
+  exactKeys(
+    value,
+    [...Object.keys(claimsSchema.shape), "now", "subjectSha256", "signer"],
+    "expected policy",
+  );
+  const claims = parseClaims(
+    Object.fromEntries(Object.keys(claimsSchema.shape).map((key) => [key, ownData(value, key)])),
+  );
+  const now = ownData(value, "now");
+  const subjectSha256 = ownData(value, "subjectSha256");
+  const signer = ownData(value, "signer");
+  if (typeof now !== "string" || !sha256.safeParse(subjectSha256).success) fail("expected values");
+  return {
+    ...claims,
+    now,
+    subjectSha256: subjectSha256 as string,
+    signer: signerSchema.parse(signer),
+  };
+}
+export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestationV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    fail("verify input object");
+  const raw = value as object;
+  const allowed = ["envelope", "roots", "expected", "seenReplayIdentities"];
+  if (
+    Object.getPrototypeOf(raw) !== Object.prototype ||
+    Object.getOwnPropertySymbols(raw).length > 0 ||
+    Object.keys(raw).some((key) => !allowed.includes(key)) ||
+    !["envelope", "roots", "expected"].every((key) => Object.hasOwn(raw, key))
+  )
+    fail("verify input fields");
+  const parsed = parseEnvelope(ownData(raw, "envelope"));
+  const expected = parseExpected(ownData(raw, "expected"));
+  const now = exactTime(expected.now, "now");
+  const claims = parsed.statement.predicate.claims;
+  if (
+    now < exactTime(claims.signedAt, "signedAt") ||
+    now >= exactTime(claims.expiresAt, "expiresAt")
+  )
+    fail("evidence time window");
+  for (const key of Object.keys(claimsSchema.shape) as (keyof z.infer<typeof claimsSchema>)[])
+    if (claims[key] !== expected[key]) fail(`claim mismatch ${key}`);
+  if (parsed.statement.subject[0]?.digest.sha256 !== expected.subjectSha256)
+    fail("Core subject digest mismatch");
+  const signer = parsed.statement.predicate.signer;
+  if (
+    signer.identity !== expected.signer.identity ||
+    signer.class !== expected.signer.class ||
+    signer.keyId !== expected.signer.keyId
+  )
+    fail("expected signer mismatch");
+  const roots = ownData(raw, "roots");
+  if (!Array.isArray(roots) || roots.length === 0 || roots.length > 64) fail("trust roots");
+  const root = roots.find((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+    const rootValue = entry as Record<string, unknown>;
+    return (
+      rootValue.identity === signer.identity &&
+      rootValue.class === signer.class &&
+      rootValue.keyId === signer.keyId
+    );
+  });
+  if (root === undefined || typeof root !== "object" || root === null) fail("unknown signer root");
+  const rootKey = (root as Record<string, unknown>).publicKey;
+  if (
+    !(rootKey instanceof KeyObject) ||
+    rootKey.type !== "public" ||
+    rootKey.asymmetricKeyType !== "ed25519"
+  )
+    fail("Ed25519 trust root");
+  const signature = decodeBase64(parsed.envelope.signatures[0]?.sig ?? "", "signature", 64);
+  if (
+    signature.byteLength !== 64 ||
+    parsed.envelope.signatures[0]?.keyid !== signer.keyId ||
+    !verifyDetached(
+      null,
+      canonicalDssePaeV2(parsed.envelope.payloadType, parsed.payload),
+      rootKey,
+      signature,
+    )
+  )
+    fail("signature verification");
+  const replayIdentity = `${signer.identity}|${parsed.payloadSha256}`;
+  const seen = Object.hasOwn(raw, "seenReplayIdentities")
+    ? ownData(raw, "seenReplayIdentities")
+    : [];
+  if (
+    !Array.isArray(seen) ||
+    seen.length > 100_000 ||
+    seen.some((entry) => typeof entry !== "string")
+  )
+    fail("replay identities");
+  if (seen.includes(replayIdentity)) fail("replayed evidence");
+  const result = deepFreezeStrictJsonV1({
+    facts: {
+      envelopeValid: true as const,
+      signer: { identity: signer.identity, class: signer.class, keyId: signer.keyId },
+      signerAssertedClaimsMatchPolicy: true as const,
+      provenanceVerified: false as const,
+      scan: { outcome: parsed.statement.predicate.scan.outcome },
+      replayIdentity,
+      evidenceDigestSha256: parsed.evidenceDigestSha256,
+    },
+  });
+  verified.add(result);
+  return result;
+}
+export function isVerifiedScanAttestationV2(value: unknown): value is VerifiedScanAttestationV2 {
+  return typeof value === "object" && value !== null && verified.has(value);
+}

@@ -21,12 +21,28 @@ const candidate = () =>
     },
     subject: { name: "source-tree", digest: { sha256: source } },
     sourceSeals: {
-      before: { sourceTreeSha256: source, selectedClosureSha256: sha("closure"), sealedSnapshotSha256: sha("seal") },
-      run: { sourceTreeSha256: source, selectedClosureSha256: sha("closure"), sealedSnapshotSha256: sha("seal") },
-      after: { sourceTreeSha256: source, selectedClosureSha256: sha("closure"), sealedSnapshotSha256: sha("seal") },
+      before: {
+        sourceTreeSha256: source,
+        selectedClosureSha256: sha("closure"),
+        sealedSnapshotSha256: sha("seal"),
+      },
+      run: {
+        sourceTreeSha256: source,
+        selectedClosureSha256: sha("closure"),
+        sealedSnapshotSha256: sha("seal"),
+      },
+      after: {
+        sourceTreeSha256: source,
+        selectedClosureSha256: sha("closure"),
+        sealedSnapshotSha256: sha("seal"),
+      },
     },
     observation: { keySha256: sha("key"), setSha256: sha("set") },
-    scanner: { manifestSha256: sha("manifest"), runtimeSha256: sha("runtime"), configurationSha256: sha("config") },
+    scanner: {
+      manifestSha256: sha("manifest"),
+      runtimeSha256: sha("runtime"),
+      configurationSha256: sha("config"),
+    },
     platform: { os: "linux", architecture: "amd64" },
     coverage: { kind: "selected-closure", sha256: sha("coverage"), complete: true },
     annexes: [{ descriptorId: "annex.sbom", sha256: sha("annex"), byteLength: 4 }],
@@ -48,7 +64,12 @@ const claims = {
 const signed = () =>
   signScanCandidateV2({
     candidate: candidate(),
-    signer: { identity: "scanner.ci", class: "test-ephemeral", keyId: "ed25519:test", privateKey: keyPair.privateKey },
+    signer: {
+      identity: "scanner.ci",
+      class: "test-ephemeral",
+      keyId: "ed25519:test",
+      privateKey: keyPair.privateKey,
+    },
     claims,
   });
 const expected = {
@@ -58,28 +79,71 @@ const expected = {
   signer: { identity: "scanner.ci", class: "test-ephemeral", keyId: "ed25519:test" },
 };
 const roots = () => [
-  { identity: "scanner.ci", class: "test-ephemeral" as const, keyId: "ed25519:test", publicKey: keyPair.publicKey },
+  {
+    identity: "scanner.ci",
+    class: "test-ephemeral" as const,
+    keyId: "ed25519:test",
+    publicKey: keyPair.publicKey,
+  },
 ];
 
 describe("ScanAttestationV2 signed evidence", () => {
   it("signs deterministic canonical DSSE bytes and verifies exact configured signer claims", () => {
     const first = signed();
     const second = signed();
-    expect(canonicalScanAttestationEnvelopeBytesV2(first).equals(canonicalScanAttestationEnvelopeBytesV2(second))).toBe(true);
-    expect(canonicalDssePaeV2(first.envelope.payloadType, Buffer.from(first.envelope.payload, "base64")).toString("utf8")).toContain("DSSEv1");
+    expect(
+      canonicalScanAttestationEnvelopeBytesV2(first).equals(
+        canonicalScanAttestationEnvelopeBytesV2(second),
+      ),
+    ).toBe(true);
+    expect(
+      canonicalDssePaeV2(
+        first.envelope.payloadType,
+        Buffer.from(first.envelope.payload, "base64"),
+      ).toString("utf8"),
+    ).toContain("DSSEv1");
     const verified = verifyScanAttestationV2({ envelope: first, roots: roots(), expected });
     expect(isVerifiedScanAttestationV2(verified)).toBe(true);
-    expect(verified.facts).toMatchObject({ envelopeValid: true, signerAssertedClaimsMatchPolicy: true, scan: { outcome: "succeeded" } });
+    expect(verified.facts).toMatchObject({
+      envelopeValid: true,
+      signerAssertedClaimsMatchPolicy: true,
+      scan: { outcome: "succeeded" },
+    });
     expect(verified.facts.provenanceVerified).toBe(false);
   });
 
   it("fails closed for malformed signatures, mismatched roots/claims, time, replay, and raw or cloned custody", () => {
     const evidence = signed();
-    expect(() => verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected: { ...expected, now: "2026-08-22T01:00:00.000Z" } })).toThrow();
+    expect(() =>
+      verifyScanAttestationV2({
+        envelope: evidence,
+        roots: roots(),
+        expected: { ...expected, now: "2026-08-22T01:00:00.000Z" },
+      }),
+    ).toThrow();
     expect(() => verifyScanAttestationV2({ envelope: evidence, roots: [], expected })).toThrow();
-    expect(() => verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected: { ...expected, repository: "other/repo" } })).toThrow();
-    expect(() => verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected, seenPayloadSha256: [evidence.payloadSha256] })).toThrow();
-    expect(() => verifyScanAttestationV2({ envelope: { ...evidence, envelope: { ...evidence.envelope, signatures: [] } }, roots: roots(), expected })).toThrow();
+    expect(() =>
+      verifyScanAttestationV2({
+        envelope: evidence,
+        roots: roots(),
+        expected: { ...expected, repository: "other/repo" },
+      }),
+    ).toThrow();
+    expect(() =>
+      verifyScanAttestationV2({
+        envelope: evidence,
+        roots: roots(),
+        expected,
+        seenReplayIdentities: [`scanner.ci|${evidence.payloadSha256}`],
+      }),
+    ).toThrow();
+    expect(() =>
+      verifyScanAttestationV2({
+        envelope: { ...evidence, envelope: { ...evidence.envelope, signatures: [] } },
+        roots: roots(),
+        expected,
+      }),
+    ).toThrow();
     const verified = verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected });
     expect(isVerifiedScanAttestationV2({ ...verified })).toBe(false);
     expect(isVerifiedScanAttestationV2(JSON.parse(JSON.stringify(verified)))).toBe(false);
