@@ -1,7 +1,18 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  type Stats,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
@@ -18,9 +29,47 @@ const maxInputBytes = 2 * 1024 * 1024;
 function fail(message: string): never {
   throw new TypeError(`aih-scan: ${message}`);
 }
+function sameIdentity(left: Stats, right: Stats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+function readBoundedRegularFile(path: string, label: string, maximumBytes: number): Buffer {
+  const resolved = resolve(path);
+  const beforePath = lstatSync(resolved);
+  if (
+    !beforePath.isFile() ||
+    beforePath.isSymbolicLink() ||
+    beforePath.size <= 0 ||
+    beforePath.size > maximumBytes
+  )
+    fail(`${label} file shape`);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || !sameIdentity(beforePath, before)) fail(`${label} file replacement`);
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor);
+    const afterPath = lstatSync(resolved);
+    if (
+      bytes.byteLength === 0 ||
+      bytes.byteLength > maximumBytes ||
+      !sameIdentity(before, after) ||
+      !sameIdentity(before, afterPath)
+    )
+      fail(`${label} file replacement`);
+    return bytes;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
 function readText(path: string, label: string): string {
-  const bytes = readFileSync(resolve(path));
-  if (bytes.byteLength === 0 || bytes.byteLength > maxInputBytes) fail(`${label} input size`);
+  const bytes = readBoundedRegularFile(path, label, maxInputBytes);
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
   return text;
@@ -32,7 +81,41 @@ function readPrivateKey(path: string): string {
     fail("private key file shape");
   if (process.platform !== "win32" && (stat.mode & 0o077) !== 0)
     fail("private key file permissions");
-  return readText(resolved, "private key");
+  const bytes = readBoundedRegularFile(resolved, "private key", 64 * 1024);
+  const after = lstatSync(resolved);
+  if (process.platform !== "win32" && (after.mode & 0o077) !== 0)
+    fail("private key file permissions");
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) fail("private key UTF-8");
+  return text;
+}
+function readAnnexDirectory(path: string): { descriptorId: string; bytes: Buffer }[] {
+  const root = resolve(path),
+    directory = lstatSync(root);
+  if (!directory.isDirectory() || directory.isSymbolicLink()) fail("annex directory shape");
+  return readdirSync(root)
+    .sort()
+    .map((name) => {
+      const descriptorId = name.endsWith(".bin") ? name.slice(0, -4) : "";
+      if (!/^annex\.[a-z0-9][a-z0-9.-]*$/.test(descriptorId)) fail("annex artifact name");
+      return {
+        descriptorId,
+        bytes: readBoundedRegularFile(join(root, name), "annex artifact", 16 * 1024 * 1024),
+      };
+    });
+}
+function exactWire(value: Record<string, unknown>, fields: readonly string[], label: string): void {
+  if (
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0 ||
+    Object.keys(value).length !== fields.length ||
+    fields.some((field) => !Object.hasOwn(value, field)) ||
+    fields.some((field) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, field);
+      return descriptor === undefined || !("value" in descriptor);
+    })
+  )
+    fail(`${label} fields`);
 }
 function readJson(path: string, label: string): Record<string, unknown> {
   return parseStrictJsonObjectV1(readText(path, label), label);
@@ -45,7 +128,7 @@ function flag(args: readonly string[], name: string): string {
   return args[index + 1] as string;
 }
 function verify(args: readonly string[]): void {
-  const allowed = new Set(["--evidence", "--roots", "--expected", "--seen"]);
+  const allowed = new Set(["--evidence", "--roots", "--expected", "--seen", "--annex-dir"]);
   if (args.length % 2 !== 0 || args.some((arg, index) => index % 2 === 0 && !allowed.has(arg)))
     fail("unknown verify argument");
   const evidence = parseScanAttestationEnvelopeV2Json(
@@ -53,12 +136,14 @@ function verify(args: readonly string[]): void {
   );
   const rootsWire = readJson(flag(args, "--roots"), "roots");
   const expected = readJson(flag(args, "--expected"), "expected policy");
+  exactWire(rootsWire, ["roots"], "roots");
   const rootsValue = rootsWire.roots;
   if (!Array.isArray(rootsValue) || rootsValue.length === 0 || rootsValue.length > 64)
     fail("roots shape");
   const roots = rootsValue.map((value) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) fail("root object");
     const root = value as Record<string, unknown>;
+    exactWire(root, ["identity", "class", "keyId", "publicKeyPem"], "root");
     if (
       typeof root.identity !== "string" ||
       (root.class !== "test-ephemeral" && root.class !== "organization") ||
@@ -73,14 +158,19 @@ function verify(args: readonly string[]): void {
       publicKey: createPublicKey(root.publicKeyPem),
     };
   });
-  const seen = args.includes("--seen")
-    ? readJson(flag(args, "--seen"), "replay identities").identities
-    : [];
+  const seen = (() => {
+    if (!args.includes("--seen")) return [];
+    const seenWire = readJson(flag(args, "--seen"), "replay identities");
+    exactWire(seenWire, ["identities"], "replay identities");
+    if (!Array.isArray(seenWire.identities)) fail("replay identities");
+    return seenWire.identities;
+  })();
   const result = verifyScanAttestationV2({
     envelope: evidence,
     roots,
     expected,
     seenReplayIdentities: seen,
+    annexArtifacts: readAnnexDirectory(flag(args, "--annex-dir")),
   });
   process.stdout.write(`${canonicalStrictJsonBytesV1(result.facts).toString("utf8")}\n`);
 }
@@ -169,21 +259,23 @@ async function capture(args: readonly string[]): Promise<void> {
 }
 function sign(args: readonly string[]): void {
   if (
-    args.length !== 10 ||
+    args.length !== 12 ||
     args[0] !== "--candidate" ||
-    args[2] !== "--signer" ||
-    args[4] !== "--private-key" ||
-    args[6] !== "--claims" ||
-    args[8] !== "--output"
+    args[2] !== "--annex-dir" ||
+    args[4] !== "--signer" ||
+    args[6] !== "--private-key" ||
+    args[8] !== "--claims" ||
+    args[10] !== "--output"
   )
     fail("sign usage");
   const candidatePath = args[1],
-    signerPath = args[3],
-    privateKeyPath = args[5],
-    claimsPath = args[7],
-    outputPath = args[9];
+    annexDirectory = args[3],
+    signerPath = args[5],
+    privateKeyPath = args[7],
+    claimsPath = args[9],
+    outputPath = args[11];
   if (
-    [candidatePath, signerPath, privateKeyPath, claimsPath, outputPath].some(
+    [candidatePath, annexDirectory, signerPath, privateKeyPath, claimsPath, outputPath].some(
       (entry) => typeof entry !== "string",
     )
   )
@@ -191,6 +283,7 @@ function sign(args: readonly string[]): void {
   const candidate = parseScanCandidateV2Json(readText(candidatePath as string, "candidate"));
   const signerWire = readJson(signerPath as string, "signer");
   const claims = readJson(claimsPath as string, "claims");
+  exactWire(signerWire, ["identity", "class", "keyId"], "signer");
   if (
     typeof signerWire.identity !== "string" ||
     typeof signerWire.class !== "string" ||
@@ -207,6 +300,7 @@ function sign(args: readonly string[]): void {
       privateKey: createPrivateKey(readPrivateKey(privateKeyPath as string)),
     },
     claims,
+    annexArtifacts: readAnnexDirectory(annexDirectory as string),
   });
   writeNew(outputPath as string, canonicalScanAttestationEnvelopeBytesV2(evidence));
 }
@@ -220,7 +314,7 @@ async function main(): Promise<void> {
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --candidate <file> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --roots <file> --expected <file> [--seen <file>]\n",
+      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --candidate <file> --annex-dir <directory> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --annex-dir <directory> --roots <file> --expected <file> [--seen <file>]\n",
     );
     return;
   }

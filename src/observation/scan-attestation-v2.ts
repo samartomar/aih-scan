@@ -148,6 +148,12 @@ export interface VerifiedScanAttestationV2 {
     coreContract: Readonly<{ commit: string; decisionSchemaSha256: string }>;
     coverage: Readonly<{ kind: "selected-closure"; sha256: string; complete: true }>;
     cleanup: Readonly<{ outcome: "completed" }>;
+    annexesComplete: true;
+    annexDescriptors: readonly Readonly<{
+      descriptorId: string;
+      sha256: string;
+      byteLength: number;
+    }>[];
   }>;
 }
 
@@ -222,6 +228,38 @@ function sortedAnnexes(
     seen.add(value.descriptorId);
   }
   return [...values].sort((left, right) => codeUnitCompare(left.descriptorId, right.descriptorId));
+}
+function verifyAnnexArtifacts(
+  descriptors: z.infer<typeof candidateInput>["annexes"],
+  value: unknown,
+): z.infer<typeof candidateInput>["annexes"] {
+  if (!Array.isArray(value) || value.length !== descriptors.length) fail("annex artifact set");
+  const supplied = new Map<string, { bytes: Uint8Array }>();
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item))
+      fail("annex artifact object");
+    exactKeys(item, ["descriptorId", "bytes"], "annex artifact");
+    const descriptorId = ownData(item, "descriptorId"),
+      bytes = ownData(item, "bytes");
+    if (
+      typeof descriptorId !== "string" ||
+      !(Buffer.isBuffer(bytes) || bytes instanceof Uint8Array) ||
+      bytes.byteLength > 16 * 1024 * 1024 ||
+      supplied.has(descriptorId)
+    )
+      fail("annex artifact fields");
+    supplied.set(descriptorId, { bytes });
+  }
+  for (const descriptor of descriptors) {
+    const artifact = supplied.get(descriptor.descriptorId);
+    if (
+      artifact === undefined ||
+      artifact.bytes.byteLength !== descriptor.byteLength ||
+      digest(artifact.bytes) !== descriptor.sha256
+    )
+      fail("annex artifact binding");
+  }
+  return descriptors;
 }
 
 /** Source-seal V2 bytes use strict JSON and code-unit sorted object keys. */
@@ -313,7 +351,7 @@ export function canonicalDssePaeV2(payloadType: string, payload: Uint8Array): Bu
 export function signScanCandidateV2(value: unknown): SignedScanAttestationV2 {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     fail("sign input object");
-  exactKeys(value, ["candidate", "signer", "claims"], "sign input");
+  exactKeys(value, ["candidate", "signer", "claims", "annexArtifacts"], "sign input");
   const candidate = ownData(value, "candidate");
   candidateBytes(candidate);
   const rawSigner = ownData(value, "signer");
@@ -335,6 +373,7 @@ export function signScanCandidateV2(value: unknown): SignedScanAttestationV2 {
   if (signer.keyId !== keyIdFor(privateKey)) fail("signer keyId fingerprint");
   const claims = parseClaims(ownData(value, "claims"));
   const candidateWire = candidate as ScanCandidateV2;
+  verifyAnnexArtifacts(candidateWire.annexes, ownData(value, "annexArtifacts"));
   const statement: Statement = statementSchema.parse({
     _type: "https://in-toto.io/Statement/v1",
     subject: [candidateWire.subject],
@@ -478,15 +517,19 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
   if (typeof value !== "object" || value === null || Array.isArray(value))
     fail("verify input object");
   const raw = value as object;
-  const allowed = ["envelope", "roots", "expected", "seenReplayIdentities"];
+  const allowed = ["envelope", "roots", "expected", "seenReplayIdentities", "annexArtifacts"];
   if (
     Object.getPrototypeOf(raw) !== Object.prototype ||
     Object.getOwnPropertySymbols(raw).length > 0 ||
     Object.keys(raw).some((key) => !allowed.includes(key)) ||
-    !["envelope", "roots", "expected"].every((key) => Object.hasOwn(raw, key))
+    !["envelope", "roots", "expected", "annexArtifacts"].every((key) => Object.hasOwn(raw, key))
   )
     fail("verify input fields");
   const parsed = parseEnvelope(ownData(raw, "envelope"));
+  const annexDescriptors = verifyAnnexArtifacts(
+    parsed.statement.predicate.annexes,
+    ownData(raw, "annexArtifacts"),
+  );
   const expected = parseExpected(ownData(raw, "expected"));
   const now = exactTime(expected.now, "now");
   const claims = parsed.statement.predicate.claims;
@@ -585,6 +628,8 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
       coreContract: parsed.statement.predicate.coreContract,
       coverage: parsed.statement.predicate.coverage,
       cleanup: parsed.statement.predicate.cleanup,
+      annexesComplete: true as const,
+      annexDescriptors,
     },
   });
   verified.add(result);

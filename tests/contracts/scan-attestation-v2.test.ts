@@ -15,6 +15,8 @@ const sha = (value: string | Uint8Array) => createHash("sha256").update(value).d
 const keyPair = generateKeyPairSync("ed25519");
 const keyId = ed25519KeyIdV2(keyPair.publicKey);
 const source = sha("source");
+const annexBytes = Buffer.from("annex", "utf8");
+const annexArtifacts = [{ descriptorId: "annex.sbom", bytes: annexBytes }];
 const seal = () => {
   const entries = [{ kind: "file" as const, path: "SKILL.md", sha256: source, byteLength: 6 }];
   const sourceTreeSha256 = sha(canonicalStrictJsonBytesV1({ protocol: "SourceTreeV2", entries }));
@@ -63,7 +65,9 @@ const candidate = () =>
       sha256: seal().selectedClosureSha256,
       complete: true,
     },
-    annexes: [{ descriptorId: "annex.sbom", sha256: sha("annex"), byteLength: 4 }],
+    annexes: [
+      { descriptorId: "annex.sbom", sha256: sha(annexBytes), byteLength: annexBytes.byteLength },
+    ],
     cleanup: { outcome: "completed" },
     scan: { outcome: "succeeded" },
   });
@@ -89,6 +93,7 @@ const signed = () =>
       privateKey: keyPair.privateKey,
     },
     claims,
+    annexArtifacts,
   });
 const expected = {
   ...claims,
@@ -115,7 +120,12 @@ describe("ScanAttestationV2 signed evidence", () => {
         Buffer.from(first.envelope.payload, "base64"),
       ).toString("utf8"),
     ).toContain("DSSEv1");
-    const verified = verifyScanAttestationV2({ envelope: first, roots: roots(), expected });
+    const verified = verifyScanAttestationV2({
+      envelope: first,
+      roots: roots(),
+      expected,
+      annexArtifacts,
+    });
     expect(isVerifiedScanAttestationV2(verified)).toBe(true);
     expect(verified.facts).toMatchObject({
       envelopeValid: true,
@@ -132,14 +142,18 @@ describe("ScanAttestationV2 signed evidence", () => {
         envelope: evidence,
         roots: roots(),
         expected: { ...expected, now: "2026-08-22T01:00:00.000Z" },
+        annexArtifacts,
       }),
     ).toThrow();
-    expect(() => verifyScanAttestationV2({ envelope: evidence, roots: [], expected })).toThrow();
+    expect(() =>
+      verifyScanAttestationV2({ envelope: evidence, roots: [], expected, annexArtifacts }),
+    ).toThrow();
     expect(() =>
       verifyScanAttestationV2({
         envelope: evidence,
         roots: roots(),
         expected: { ...expected, repository: "other/repo" },
+        annexArtifacts,
       }),
     ).toThrow();
     expect(() =>
@@ -148,6 +162,7 @@ describe("ScanAttestationV2 signed evidence", () => {
         roots: roots(),
         expected,
         seenReplayIdentities: [`scanner.ci|${evidence.payloadSha256}`],
+        annexArtifacts,
       }),
     ).toThrow();
     expect(() =>
@@ -155,11 +170,65 @@ describe("ScanAttestationV2 signed evidence", () => {
         envelope: { ...evidence, envelope: { ...evidence.envelope, signatures: [] } },
         roots: roots(),
         expected,
+        annexArtifacts,
       }),
     ).toThrow();
-    const verified = verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected });
+    const verified = verifyScanAttestationV2({
+      envelope: evidence,
+      roots: roots(),
+      expected,
+      annexArtifacts,
+    });
     expect(isVerifiedScanAttestationV2({ ...verified })).toBe(false);
     expect(isVerifiedScanAttestationV2(JSON.parse(JSON.stringify(verified)))).toBe(false);
+  });
+
+  it("requires the exact complete detached annex set before signing or reporting verified evidence facts", () => {
+    const input = {
+      candidate: candidate(),
+      signer: {
+        identity: "scanner.ci",
+        class: "test-ephemeral" as const,
+        keyId,
+        privateKey: keyPair.privateKey,
+      },
+      claims,
+    };
+    expect(() => signScanCandidateV2({ ...input, annexArtifacts: [] })).toThrow(/annex artifact/i);
+    expect(() =>
+      signScanCandidateV2({
+        ...input,
+        annexArtifacts: [
+          ...annexArtifacts,
+          { descriptorId: "annex.extra", bytes: Buffer.from("extra", "utf8") },
+        ],
+      }),
+    ).toThrow(/annex artifact/i);
+
+    const evidence = signed();
+    expect(() =>
+      verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected, annexArtifacts: [] }),
+    ).toThrow(/annex artifact/i);
+    expect(() =>
+      verifyScanAttestationV2({
+        envelope: evidence,
+        roots: roots(),
+        expected,
+        annexArtifacts: [
+          { descriptorId: "annex.sbom", bytes: Buffer.from("substitution", "utf8") },
+        ],
+      }),
+    ).toThrow(/annex artifact/i);
+    const verified = verifyScanAttestationV2({
+      envelope: evidence,
+      roots: roots(),
+      expected,
+      annexArtifacts,
+    });
+    expect(verified.facts).toMatchObject({
+      annexesComplete: true,
+      annexDescriptors: [{ descriptorId: "annex.sbom", sha256: sha(annexBytes) }],
+    });
   });
 
   it("refuses source-subject and coverage bindings that do not describe the sealed selected closure", () => {
