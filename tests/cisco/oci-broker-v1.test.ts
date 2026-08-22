@@ -688,8 +688,8 @@ describe("Cisco OCI broker V1", () => {
     ).toBe(false);
   });
 
-  it("does not issue cleanup from malformed, missing, or replaced ownership evidence", async () => {
-    for (const mode of ["malformed-create", "missing-create", "replaced-inspect"] as const) {
+  it("does not issue cleanup from malformed or missing creation output", async () => {
+    for (const mode of ["malformed-create", "missing-create"] as const) {
       const { value, fake } = input();
       const original = fake.run;
       value.runner = async (argv, options) => {
@@ -698,8 +698,6 @@ describe("Cisco OCI broker V1", () => {
             return { code: 0, stdout: "not-a-container-id", stderr: "" };
           if (mode === "missing-create") return { code: 0, stdout: "", stderr: "" };
         }
-        if (mode === "replaced-inspect" && argv[1] === "container" && argv[2] === "inspect")
-          return { code: 0, stdout: "b".repeat(64), stderr: "" };
         return original(argv, options);
       };
 
@@ -710,6 +708,30 @@ describe("Cisco OCI broker V1", () => {
             call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "rm",
         ),
       ).toBe(false);
+      expect(
+        fake.calls.some(
+          (call) =>
+            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "start",
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("cleans the exact created ID when reinspection is replaced, nonzero, or truncated", async () => {
+    for (const mode of ["replaced", "nonzero", "truncated"] as const) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "container" && argv[2] === "inspect") {
+          if (mode === "replaced") return { code: 0, stdout: "b".repeat(64), stderr: "" };
+          if (mode === "nonzero") return { code: 1, stdout: "", stderr: "unavailable" };
+          return { code: 0, stdout: ownedContainerId, stderr: "", truncated: true };
+        }
+        return original(argv, options);
+      };
+
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expectCleanup(fake.calls);
       expect(
         fake.calls.some(
           (call) =>
