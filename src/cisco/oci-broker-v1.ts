@@ -190,6 +190,51 @@ function normalizedContainerId(stdout: string, label: string): string {
   return line;
 }
 
+function cidfileStats(path: string): Stats {
+  let stat: Stats;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return fail("container ownership cidfile");
+  }
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    stat.nlink !== 1 ||
+    stat.size < 1 ||
+    stat.size > 66
+  )
+    fail("container ownership cidfile");
+  return stat;
+}
+
+function sameCidfileStats(left: Stats, right: Stats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function readOwnedContainerId(path: string): string {
+  const before = cidfileStats(path);
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch {
+    return fail("container ownership cidfile");
+  }
+  if (bytes.length !== before.size) fail("container ownership cidfile");
+  const after = cidfileStats(path);
+  if (!sameCidfileStats(before, after)) fail("container ownership cidfile");
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) fail("container ownership cidfile");
+  return normalizedContainerId(text, "container ownership cidfile");
+}
+
 function output(path: string): Buffer {
   const names = readdirSync(path).sort();
   if (names.length !== 1 || names[0] !== "result.sarif") fail("SARIF output stale or extra");
@@ -278,6 +323,8 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     mkdirSync(outputRoot);
     chmodSync(outputRoot, 0o777);
     temporaryPath(outputRoot, "output root");
+    const cidfile = join(clientRoot, "container.cid");
+    temporaryPath(cidfile, "container ownership cidfile");
     const inspected = await invoke(
       ["docker", "image", "inspect", "--format", "{{.Id}}", input.layout.configDigestSha256],
       "image inspect",
@@ -291,50 +338,73 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
       fail("local image ID mismatch");
     const before = sealNativeObservationSourceV1(sourceInput);
     if (!sameSeal(initialSeal, before)) fail("source drift before run");
-    const created = await invoke(
-      [
-        "docker",
-        "container",
-        "create",
-        "--pull=never",
-        "--network=none",
-        "--read-only",
-        "--user",
-        "65532:65532",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--cpus",
-        "1",
-        "--memory",
-        "512m",
-        "--memory-swap",
-        "512m",
-        "--pids-limit",
-        "128",
-        "--tmpfs",
-        "/tmp:rw,noexec,nosuid,size=64m",
-        "--mount",
-        `type=bind,src=${input.sourceRoot},dst=/source,readonly`,
-        "--mount",
-        `type=bind,src=${outputRoot},dst=/output`,
-        "--entrypoint",
-        "/runtime/.venv/bin/skill-scanner",
-        input.layout.configDigestSha256,
-        "scan",
-        "/source",
-        "--format",
-        "sarif",
-        "--output-sarif",
-        "/output/result.sarif",
-      ],
-      "container create",
-    );
-    if (created.truncated || created.code !== 0 || created.stderr !== "")
+    let created: DockerResponse | undefined;
+    let createInvocationError: unknown;
+    try {
+      created = await invoke(
+        [
+          "docker",
+          "container",
+          "create",
+          "--cidfile",
+          cidfile,
+          "--pull=never",
+          "--network=none",
+          "--read-only",
+          "--user",
+          "65532:65532",
+          "--cap-drop",
+          "ALL",
+          "--security-opt",
+          "no-new-privileges",
+          "--cpus",
+          "1",
+          "--memory",
+          "512m",
+          "--memory-swap",
+          "512m",
+          "--pids-limit",
+          "128",
+          "--tmpfs",
+          "/tmp:rw,noexec,nosuid,size=64m",
+          "--mount",
+          `type=bind,src=${input.sourceRoot},dst=/source,readonly`,
+          "--mount",
+          `type=bind,src=${outputRoot},dst=/output`,
+          "--entrypoint",
+          "/runtime/.venv/bin/skill-scanner",
+          input.layout.configDigestSha256,
+          "scan",
+          "/source",
+          "--format",
+          "sarif",
+          "--output-sarif",
+          "/output/result.sarif",
+        ],
+        "container create",
+      );
+    } catch (error) {
+      createInvocationError = error;
+    }
+    let cidfileId: string | undefined;
+    let cidfileError: unknown;
+    try {
+      cidfileId = readOwnedContainerId(cidfile);
+      ownedContainerId = cidfileId;
+    } catch (error) {
+      cidfileError = error;
+    }
+    if (createInvocationError !== undefined) throw createInvocationError;
+    const createResult = created ?? fail("container creation");
+    if (createResult.truncated || createResult.code !== 0 || createResult.stderr !== "")
       fail("container creation");
-    const claimedContainerId = normalizedContainerId(created.stdout, "container creation");
-    ownedContainerId = claimedContainerId;
+    if (cidfileError !== undefined) throw cidfileError;
+    if (cidfileId === undefined) fail("container ownership cidfile");
+    const claimedContainerId = normalizedContainerId(createResult.stdout, "container creation");
+    if (claimedContainerId !== cidfileId) {
+      ownedContainerId = undefined;
+      fail("container ownership mismatch");
+    }
     const inspectedContainer = await invoke(
       ["docker", "container", "inspect", "--format", "{{.Id}}", claimedContainerId],
       "container identity",
@@ -348,7 +418,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     )
       fail("container identity mismatch");
     const run = await invoke(
-      ["docker", "container", "start", "--attach", ownedContainerId],
+      ["docker", "container", "start", "--attach", claimedContainerId],
       "container start",
     );
     if (run.truncated) fail("scanner run truncated");

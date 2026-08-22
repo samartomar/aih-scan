@@ -410,6 +410,8 @@ describe("Cisco OCI broker V1", () => {
       "docker",
       "container",
       "create",
+      "--cidfile",
+      expect.stringMatching(/(?:^|[\\/])container\.cid$/),
       "--pull=never",
       "--network=none",
       "--read-only",
@@ -464,6 +466,9 @@ describe("Cisco OCI broker V1", () => {
     expect(dockerConfig).toBeDefined();
     if (home === undefined || dockerConfig === undefined)
       throw new Error("broker client environment is incomplete");
+    const cidfileIndex = create?.argv.indexOf("--cidfile") ?? -1;
+    const cidfile = cidfileIndex >= 0 ? create?.argv[cidfileIndex + 1] : undefined;
+    expect(cidfile).toBe(join(dirname(home), "container.cid"));
     expect(home).not.toBe(process.env.HOME);
     expect(dockerConfig).not.toBe(process.env.DOCKER_CONFIG);
     expectBoundedDockerCalls(fake.calls, fake.clientStates);
@@ -756,7 +761,8 @@ describe("Cisco OCI broker V1", () => {
         if (argv[1] === "container" && argv[2] === "create") {
           const index = argv.indexOf("--cidfile");
           cidfile = index >= 0 ? argv[index + 1] : undefined;
-          if (cidfile !== undefined) writeFileSync(cidfile, `${ownedContainerId}\n`, { mode: 0o600 });
+          if (cidfile !== undefined)
+            writeFileSync(cidfile, `${ownedContainerId}\n`, { mode: 0o600 });
           return mode === "nonzero"
             ? { code: 125, stdout: "", stderr: "daemon response lost" }
             : { code: 0, stdout: "", stderr: "", truncated: true };
