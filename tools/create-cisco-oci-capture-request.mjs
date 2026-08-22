@@ -9,6 +9,13 @@ const fail = (message) => {
   throw new TypeError(`Cisco OCI capture bridge rejected input: ${message}`);
 };
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const sameIdentity = (left, right) =>
+  left.dev === right.dev &&
+  left.ino === right.ino &&
+  left.size === right.size &&
+  left.mtimeMs === right.mtimeMs &&
+  left.ctimeMs === right.ctimeMs &&
+  left.nlink === right.nlink;
 const canonical = (value) => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value !== null && typeof value === "object")
@@ -21,16 +28,28 @@ const canonical = (value) => {
 function regular(path, label) {
   const resolved = resolve(path);
   if (!isAbsolute(path) || path.includes("\0")) fail(`${label} path`);
-  let stat;
+  let before;
   try {
-    stat = lstatSync(resolved);
+    before = lstatSync(resolved);
   } catch {
     fail(`${label} missing`);
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size <= 0 || stat.size > 16 * 1024 * 1024)
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    before.size <= 0 ||
+    before.size > 16 * 1024 * 1024
+  )
     fail(`${label} file shape`);
   const bytes = readFileSync(resolved);
-  if (bytes.byteLength !== stat.size || lstatSync(resolved).mtimeMs !== stat.mtimeMs) fail(`${label} changed`);
+  let after;
+  try {
+    after = lstatSync(resolved);
+  } catch {
+    fail(`${label} changed`);
+  }
+  if (bytes.byteLength !== before.size || !sameIdentity(before, after)) fail(`${label} changed`);
   return { bytes, path: resolved, sha256: hash(bytes) };
 }
 function directory(path, label) {
@@ -52,18 +71,40 @@ function parseLayout(file) {
   } catch {
     fail("canonical layout JSON");
   }
+  if (!Buffer.from(canonical(layout), "utf8").equals(file.bytes)) fail("canonical layout JSON");
+  const exact = (value, fields) =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === fields.length &&
+    fields.every((field) => Object.hasOwn(value, field));
   if (
-    layout === null ||
-    typeof layout !== "object" ||
-    Array.isArray(layout) ||
+    !exact(layout, [
+      "protocol",
+      "manifestDigestSha256",
+      "configDigestSha256",
+      "logicalReference",
+      "manifestPlatform",
+      "manifestDescriptor",
+    ]) ||
     layout.protocol !== "CiscoOciLayoutV1" ||
     !DIGEST.test(layout.manifestDigestSha256) ||
     !DIGEST.test(layout.configDigestSha256) ||
     layout.manifestDigestSha256 === layout.configDigestSha256 ||
     layout.logicalReference !== `local.invalid/aih-scan/cisco@${layout.manifestDigestSha256}` ||
-    layout.manifestPlatform?.os !== "linux" ||
-    layout.manifestPlatform?.architecture !== "amd64" ||
-    layout.manifestDescriptor?.digest !== layout.manifestDigestSha256
+    !exact(layout.manifestPlatform, ["architecture", "os"]) ||
+    layout.manifestPlatform.os !== "linux" ||
+    layout.manifestPlatform.architecture !== "amd64" ||
+    !exact(layout.manifestDescriptor, ["mediaType", "digest", "size", "platform", "annotations"]) ||
+    layout.manifestDescriptor.digest !== layout.manifestDigestSha256 ||
+    layout.manifestDescriptor.mediaType !== "application/vnd.oci.image.manifest.v1+json" ||
+    !Number.isSafeInteger(layout.manifestDescriptor.size) ||
+    layout.manifestDescriptor.size < 0 ||
+    !exact(layout.manifestDescriptor.platform, ["architecture", "os"]) ||
+    layout.manifestDescriptor.platform.os !== "linux" ||
+    layout.manifestDescriptor.platform.architecture !== "amd64" ||
+    !exact(layout.manifestDescriptor.annotations, ["org.opencontainers.image.ref.name"]) ||
+    typeof layout.manifestDescriptor.annotations["org.opencontainers.image.ref.name"] !== "string"
   )
     fail("canonical layout identity");
   return layout;
@@ -185,7 +226,7 @@ function main() {
       },
     ],
   };
-  const runtimeInputs = { ci, dependencies, layout };
+  const runtimeInputs = { dependencies, layout };
   const runtime = {
     adapter: {
       identity: identifier("adapter", runtimeInputs),

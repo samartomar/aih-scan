@@ -10,12 +10,18 @@ jobs:
     timeout-minutes: 30
     outputs:
       candidate_digest: ${{ steps.capture.outputs.candidate_digest }}
+      scanner_commit: ${{ steps.capture.outputs.scanner_commit }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "24.18.0"
       - name: Check out public ai-harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -47,7 +53,7 @@ jobs:
           docker buildx inspect --bootstrap
       - name: Prepare isolated OCI equivalence prerequisites
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
           mkdir -p "$RUNNER_TEMP/oci-equivalence/direct-root" "$RUNNER_TEMP/oci-equivalence/oci-root" "$RUNNER_TEMP/oci-equivalence/artifacts" "$RUNNER_TEMP/oci-equivalence/child-bin" "$RUNNER_TEMP/oci-equivalence/child-home" "$RUNNER_TEMP/oci-equivalence/child-uv-cache"
           printf "" > "$RUNNER_TEMP/aih-scan-cisco-empty-uv.toml"
@@ -105,6 +111,7 @@ jobs:
             source_ref="$GITHUB_REF"
             commit="$GITHUB_SHA"
           fi
+          test "$commit" = "$(git rev-parse HEAD)"
           node tools/create-cisco-oci-capture-request.mjs \
             --layout "$RUNNER_TEMP/oci-equivalence/candidate-layout-v1.json" \
             --source-root "$RUNNER_TEMP/oci-equivalence/oci-root" \
@@ -126,6 +133,7 @@ jobs:
             --output "$RUNNER_TEMP/oci-equivalence/capture-bundle"
           candidate_digest="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const candidate = JSON.parse(readFileSync(process.argv[1], "utf8")); if (!/^[a-f0-9]{64}$/.test(candidate.candidateSha256)) throw new TypeError("candidate digest"); process.stdout.write(candidate.candidateSha256);' "$RUNNER_TEMP/oci-equivalence/capture-bundle/candidate.json")"
           printf 'candidate_digest=%s\n' "$candidate_digest" >> "$GITHUB_OUTPUT"
+          printf 'scanner_commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
       - name: Clean up OCI equivalence resources
         if: ${{ always() }}
         run: |
@@ -147,7 +155,13 @@ jobs:
           name: cisco-capture-bundle
           path: |
             ${{ runner.temp }}/oci-equivalence/capture-bundle
-            ${{ runner.temp }}/oci-equivalence/capture-input/ci-context.json
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload captured CI context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cisco-capture-context
+          path: ${{ runner.temp }}/oci-equivalence/capture-input/ci-context.json
           if-no-files-found: error
           retention-days: 3
       - name: Upload OCI equivalence digest summary
@@ -166,17 +180,27 @@ jobs:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ needs.capture.outputs.scanner_commit }}
           persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "24.18.0"
       - name: Install scanner CLI
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --ignore-scripts
           npm run build
       - name: Download complete Cisco capture bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: cisco-capture-bundle
           path: ${{ runner.temp }}/cisco-capture
+      - name: Download captured CI context
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: cisco-capture-context
+          path: ${{ runner.temp }}/cisco-context
       - name: Sign captured bundle with a test-ephemeral Ed25519 key
         run: |
           set -euo pipefail
@@ -191,9 +215,7 @@ jobs:
           chmod 0600 "$private_key"
           openssl pkey -in "$private_key" -pubout -outform DER > "$public_key"
           key_id="ed25519:$(sha256sum "$public_key" | cut -d ' ' -f 1)"
-          signed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          expires_at="$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)"
-          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [ciPath, signerPath, rootsPath, claimsPath, publicPath, keyId, signedAt, expiresAt] = process.argv.slice(1); const ci = JSON.parse(readFileSync(ciPath, "utf8")); const signer = { identity: "github-actions-test-ephemeral", class: "test-ephemeral", keyId }; const claims = { ...ci, issuer: "https://github.com", signedAt, expiresAt }; writeFileSync(signerPath, JSON.stringify(signer)); writeFileSync(rootsPath, JSON.stringify({ roots: [{ ...signer, publicKeySpkiBase64: readFileSync(publicPath).toString("base64") }] })); writeFileSync(claimsPath, JSON.stringify(claims));' "$RUNNER_TEMP/cisco-capture/ci-context.json" "$signing_root/signer.json" "$signing_root/roots.json" "$signing_root/claims.json" "$public_key" "$key_id" "$signed_at" "$expires_at"
+          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [ciPath, signerPath, rootsPath, claimsPath, publicPath, keyId] = process.argv.slice(1); const ci = JSON.parse(readFileSync(ciPath, "utf8")); const signedAt = new Date(); const expiresAt = new Date(signedAt.getTime() + 60 * 60 * 1000); const signer = { identity: "github-actions-test-ephemeral", class: "test-ephemeral", keyId }; const claims = { ...ci, issuer: "https://token.actions.githubusercontent.com", signedAt: signedAt.toISOString(), expiresAt: expiresAt.toISOString() }; writeFileSync(signerPath, JSON.stringify(signer)); writeFileSync(rootsPath, JSON.stringify({ roots: [{ ...signer, publicKeySpkiBase64: readFileSync(publicPath).toString("base64") }] })); writeFileSync(claimsPath, JSON.stringify(claims));' "$RUNNER_TEMP/cisco-context/ci-context.json" "$signing_root/signer.json" "$signing_root/roots.json" "$signing_root/claims.json" "$public_key" "$key_id"
           node dist/cli.js sign \
             --bundle "$RUNNER_TEMP/cisco-capture/capture-bundle" \
             --signer "$signing_root/signer.json" \
@@ -202,7 +224,6 @@ jobs:
             --output "$signing_root/evidence.json"
           rm -f "$private_key"
           test ! -e "$private_key"
-          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [claimsPath, candidatePath, signerPath, expectedPath] = process.argv.slice(1); const claims = JSON.parse(readFileSync(claimsPath, "utf8")); const candidate = JSON.parse(readFileSync(candidatePath, "utf8")); const signer = JSON.parse(readFileSync(signerPath, "utf8")); writeFileSync(expectedPath, JSON.stringify({ ...claims, now: claims.signedAt, signer, subjectSha256: candidate.subject.digest.sha256 }));' "$signing_root/claims.json" "$RUNNER_TEMP/cisco-capture/capture-bundle/candidate.json" "$signing_root/signer.json" "$signing_root/expected.json"
       - name: Upload signed evidence and test roots
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -210,28 +231,39 @@ jobs:
           path: |
             ${{ runner.temp }}/cisco-signing/evidence.json
             ${{ runner.temp }}/cisco-signing/roots.json
-            ${{ runner.temp }}/cisco-signing/expected.json
+            ${{ runner.temp }}/cisco-signing/signer.json
+            ${{ runner.temp }}/cisco-signing/claims.json
           if-no-files-found: error
           retention-days: 3
   verify:
-    needs: sign
+    needs: [capture, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ needs.capture.outputs.scanner_commit }}
           persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "24.18.0"
       - name: Install scanner CLI
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --ignore-scripts
           npm run build
       - name: Download complete Cisco capture bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: cisco-capture-bundle
           path: ${{ runner.temp }}/cisco-capture
+      - name: Download captured CI context
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: cisco-capture-context
+          path: ${{ runner.temp }}/cisco-context
       - name: Download signed evidence and test roots
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -240,6 +272,7 @@ jobs:
       - name: Independently verify signed Cisco evidence
         run: |
           set -euo pipefail
+          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [ciPath, claimsPath, candidatePath, signerPath, expectedPath] = process.argv.slice(1); const ci = JSON.parse(readFileSync(ciPath, "utf8")); const claims = JSON.parse(readFileSync(claimsPath, "utf8")); const candidate = JSON.parse(readFileSync(candidatePath, "utf8")); const signer = JSON.parse(readFileSync(signerPath, "utf8")); const expected = { ...ci, issuer: "https://token.actions.githubusercontent.com", signedAt: claims.signedAt, expiresAt: claims.expiresAt, now: new Date().toISOString(), signer, subjectSha256: candidate.subject.digest.sha256 }; writeFileSync(expectedPath, JSON.stringify(expected));' "$RUNNER_TEMP/cisco-context/ci-context.json" "$RUNNER_TEMP/cisco-signed/claims.json" "$RUNNER_TEMP/cisco-capture/capture-bundle/candidate.json" "$RUNNER_TEMP/cisco-signed/signer.json" "$RUNNER_TEMP/cisco-signed/expected.json"
           node dist/cli.js verify \
             --evidence "$RUNNER_TEMP/cisco-signed/evidence.json" \
             --bundle "$RUNNER_TEMP/cisco-capture/capture-bundle" \
