@@ -365,9 +365,12 @@ describe("ScanAttestationV2 adversarial verifier contract", () => {
         throw new Error("must not read expected signer accessor");
       },
     });
+    const hiddenExtraSigner = { ...expected.signer } as Record<string, unknown>;
+    Object.defineProperty(hiddenExtraSigner, "unexpected", { value: true });
     const signers: unknown[] = [
       Object.create(expected.signer),
       { ...expected.signer, unexpected: true },
+      hiddenExtraSigner,
       accessorSigner,
     ];
     for (const signer of signers)

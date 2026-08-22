@@ -206,8 +206,11 @@ describe("Cisco V2 capture promotion", () => {
         throw new Error("must not read capture accessor");
       },
     });
+    const hiddenExtra = { ...base } as Record<string, unknown>;
+    Object.defineProperty(hiddenExtra, "unexpected", { value: true });
     const variants: unknown[] = [
       { ...base, [Symbol("unexpected")]: true },
+      hiddenExtra,
       accessor,
       Object.create(base),
     ];
