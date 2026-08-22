@@ -263,6 +263,8 @@ async function produce(
   const ociRoot = fixtureRoot("aih-scan-dual-oci-", ociBytes);
   const ociLayout = layout();
   let directInvocation = 0;
+  const containerId = "c".repeat(64);
+  let outputRoot: string | undefined;
   const direct = await probeCiscoLinuxAmd64V1({
     protocol: "CiscoLinuxAmd64ProbeV1",
     sourceRoot: directRoot,
@@ -301,18 +303,37 @@ async function produce(
     host: { os: "linux", architecture: "amd64" },
     runner: async (argv: readonly string[]) => {
       if (argv[1] === "image") return { code: 0, stdout: ociLayout.configDigestSha256, stderr: "" };
-      if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
-      const mount = argv.find(
-        (value) => value.startsWith("type=bind,src=") && value.endsWith(",dst=/output"),
-      );
-      if (mount === undefined) throw new Error("OCI output mount missing");
-      const outputRoot = mount.slice("type=bind,src=".length, -",dst=/output".length);
-      writeFileSync(
-        join(outputRoot, "result.sarif"),
-        reportBytes(ociKind, "2026-08-17T12:35:56Z", true),
-      );
-      return { code: 0, stdout: "", stderr: "" };
+      if (argv[1] !== "container") throw new Error("unexpected Docker command");
+      if (argv[2] === "create") {
+        const mount = argv.find(
+          (value) => value.startsWith("type=bind,src=") && value.endsWith(",dst=/output"),
+        );
+        if (mount === undefined) throw new Error("OCI output mount missing");
+        outputRoot = mount.slice("type=bind,src=".length, -",dst=/output".length);
+        return { code: 0, stdout: `${containerId}\n`, stderr: "" };
+      }
+      if (argv[2] === "inspect") {
+        if (argv.at(-1) !== containerId) throw new Error("unexpected container identity");
+        return { code: 0, stdout: `${containerId}\n`, stderr: "" };
+      }
+      if (argv[2] === "start") {
+        if (argv.at(-1) !== containerId || outputRoot === undefined)
+          throw new Error("broker did not start the claimed container");
+        writeFileSync(
+          join(outputRoot, "result.sarif"),
+          reportBytes(ociKind, "2026-08-17T12:35:56Z", true),
+        );
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (argv[2] === "rm") {
+        if (argv.at(-1) !== containerId) throw new Error("unexpected cleanup identity");
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (argv[2] === "ls") {
+        if (!argv.includes(`id=${containerId}`)) throw new Error("unexpected absence filter");
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      throw new Error("unexpected container command");
     },
   });
   return { directRoot, ociRoot, direct, oci };
