@@ -4,8 +4,8 @@ import {
   constants,
   fstatSync,
   lstatSync,
+  opendirSync,
   openSync,
-  readdirSync,
   readSync,
   realpathSync,
   type Stats,
@@ -50,6 +50,7 @@ export const sourceSealV2Schema = z
 export type SourceSealV2 = Readonly<z.infer<typeof sourceSealV2Schema>>;
 type FileEntry = z.infer<typeof file>;
 type Entry = z.infer<typeof entry>;
+type TraverseBudget = { entries: number; totalBytes: number };
 const fail = (reason: string): never => {
   throw new TypeError(`invalid SourceSealV2: ${reason}`);
 };
@@ -151,8 +152,20 @@ function requireDirectory(path: string, realRoot: string): void {
   const real = realpathSync.native(path);
   if (real !== realRoot) inside(realRoot, real);
 }
-function readFileEntry(root: string, path: string): FileEntry {
-  const beforePath = lstatSync(path);
+function reserveEntry(budget: TraverseBudget): void {
+  if (budget.entries >= maxEntries) fail("source entry bound");
+  budget.entries += 1;
+}
+function reserveFileBytes(stat: Stats, budget: TraverseBudget): void {
+  if (stat.size > maxTotalBytes - budget.totalBytes) fail("source byte bound");
+  budget.totalBytes += stat.size;
+}
+function readFileEntry(
+  root: string,
+  path: string,
+  beforePath: Stats,
+  budget: TraverseBudget,
+): FileEntry {
   if (
     !beforePath.isFile() ||
     beforePath.isSymbolicLink() ||
@@ -160,6 +173,7 @@ function readFileEntry(root: string, path: string): FileEntry {
     beforePath.size > maxFileBytes
   )
     fail("file link, reparse, hardlink, or bounds");
+  reserveFileBytes(beforePath, budget);
   let descriptor: number | undefined;
   try {
     descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -187,19 +201,40 @@ function readFileEntry(root: string, path: string): FileEntry {
     if (descriptor !== undefined) closeSync(descriptor);
   }
 }
-function traverse(root: string, realRoot: string, directoryPath: string, entries: Entry[]): void {
+function directoryNames(directoryPath: string, maximum: number): string[] {
+  const handle = opendirSync(directoryPath);
+  try {
+    const names: string[] = [];
+    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
+      if (names.length >= maximum) fail("source entry bound");
+      names.push(entry.name);
+    }
+    return names.sort(codeUnitCompare);
+  } finally {
+    handle.closeSync();
+  }
+}
+function traverse(
+  root: string,
+  realRoot: string,
+  directoryPath: string,
+  entries: Entry[],
+  budget: TraverseBudget,
+): void {
   requireDirectory(directoryPath, realRoot);
-  for (const name of readdirSync(directoryPath).sort(codeUnitCompare)) {
+  const names = directoryNames(directoryPath, maxEntries - budget.entries);
+  for (const name of names) {
     const absolute = resolve(directoryPath, name);
     inside(root, absolute);
     const stat = lstatSync(absolute),
       path = relative(root, absolute).split(sep).join("/");
     assertSafeRelativePosixPathV1(path, "source entry path");
+    reserveEntry(budget);
     if (stat.isDirectory()) {
       if (stat.isSymbolicLink()) fail("directory link or reparse");
       entries.push({ kind: "directory", path });
-      traverse(root, realRoot, absolute, entries);
-    } else entries.push(readFileEntry(root, absolute));
+      traverse(root, realRoot, absolute, entries, budget);
+    } else entries.push(readFileEntry(root, absolute, stat, budget));
   }
 }
 /** Seals files and directories, including empty directories, by canonical code-unit path order. */
@@ -237,7 +272,7 @@ export function sealSourceV2(value: unknown): SourceSealV2 {
   if (new Set(selectedClosurePaths).size !== selectedClosurePaths.length)
     fail("selected closure duplicate");
   const entries: Entry[] = [];
-  traverse(root, realRoot, root, entries);
+  traverse(root, realRoot, root, entries, { entries: 0, totalBytes: 0 });
   entries.sort((left, right) => codeUnitCompare(left.path, right.path));
   const files = new Map(
     entries
