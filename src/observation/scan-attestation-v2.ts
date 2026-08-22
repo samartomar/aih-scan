@@ -17,10 +17,108 @@ import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
 } from "../core/core-contract-lock-v2.js";
+import { createObservationKeyV1, createObservationSetV1 } from "./observation-evidence-v1.js";
+import { createScannerManifestV1 } from "./scanner-manifest-v1.js";
 import { sourceSealV2Schema, validateSourceSealV2 } from "./source-seal-v2.js";
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const sourceSeal = sourceSealV2Schema;
+const sourceSealV1 = z
+  .object({
+    protocol: z.literal("SourceSealV1"),
+    sourceTreeSha256: sha256,
+    selectedClosureSha256: sha256,
+    sealedSnapshotSha256: sha256,
+  })
+  .strict();
+const rawFact = z
+  .object({
+    rawOccurrenceFingerprint: z.string().regex(/^raw-occurrence-v1:[0-9a-f]{64}$/),
+    multiplicity: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+const rawCoverage = z
+  .object({
+    coverageKind: z.enum(["selected-closure", "source-tree"]),
+    coverageSha256: sha256,
+  })
+  .strict();
+const ciscoScanner = z
+  .object({
+    detectorId: z.literal("detector.cisco"),
+    analyzerIdentity: z.string().regex(/^native\.[a-f0-9]{12}$/),
+    oci: z
+      .object({
+        logicalReference: z.string().regex(/^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$/),
+        manifestDigestSha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        configDigestSha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      })
+      .strict(),
+    adapter: z.object({ identity: z.string().regex(/^adapter\.[a-f0-9]{12}$/), sha256 }).strict(),
+    observationConfigurationSha256: sha256,
+    executionProfileSha256: sha256,
+    supportedPlatform: z
+      .object({ os: z.literal("linux"), architecture: z.literal("amd64") })
+      .strict(),
+    sbom: z
+      .object({
+        mediaType: z.literal("application/spdx+json"),
+        sha256,
+        state: z.literal("digest-bound-unverified"),
+      })
+      .strict(),
+    provenance: z
+      .object({
+        mediaType: z.literal("application/vnd.in-toto+json"),
+        sha256,
+        state: z.literal("digest-bound-unverified"),
+      })
+      .strict(),
+    scannerManifestEntrySha256: sha256,
+    sourceSealV1,
+    platform: z
+      .object({
+        os: z.literal("linux"),
+        architecture: z.literal("amd64"),
+        relevantFactsSha256: sha256,
+      })
+      .strict(),
+    observation: z
+      .object({
+        keySha256: sha256,
+        setSha256: sha256,
+        facts: z.array(rawFact).max(4096),
+        coverage: z.array(rawCoverage).min(1).max(2),
+      })
+      .strict(),
+    broker: z
+      .object({
+        identity: z.string().regex(/^broker\.[a-f0-9]{12}$/),
+        sarifSha256: sha256,
+        enforcementState: z.literal("unverified"),
+        policyDigestSha256: sha256,
+        appliedFactsSha256: sha256,
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!value.oci.logicalReference.endsWith(`@${value.oci.manifestDigestSha256}`))
+      context.addIssue({
+        code: "custom",
+        message: "OCI reference manifest binding",
+        path: ["oci"],
+      });
+    if (
+      new Set(value.observation.coverage.map((entry) => entry.coverageKind)).size !==
+      value.observation.coverage.length
+    )
+      context.addIssue({
+        code: "custom",
+        message: "duplicate raw coverage",
+        path: ["observation", "coverage"],
+      });
+  });
 const subject = z
   .object({ name: z.literal("source-tree"), digest: z.object({ sha256 }).strict() })
   .strict();
@@ -37,7 +135,12 @@ const candidateInput = z
     sourceSeals: z.object({ before: sourceSeal, after: sourceSeal }).strict(),
     observation: z.object({ keySha256: sha256, setSha256: sha256 }).strict(),
     scanner: z
-      .object({ manifestSha256: sha256, runtimeSha256: sha256, configurationSha256: sha256 })
+      .object({
+        manifestSha256: sha256,
+        runtimeSha256: sha256,
+        configurationSha256: sha256,
+        cisco: ciscoScanner,
+      })
       .strict(),
     platform: z.object({ os: z.literal("linux"), architecture: z.literal("amd64") }).strict(),
     coverage: z
@@ -122,6 +225,7 @@ type CandidateWire = z.infer<typeof candidateInput> & { readonly candidateSha256
 type Statement = z.infer<typeof statementSchema>;
 type Envelope = z.infer<typeof envelopeSchema>;
 export interface ScanCandidateV2 extends Readonly<CandidateWire> {}
+export type ScanAnnexArtifactV2 = Readonly<{ descriptorId: string; bytes: Uint8Array }>;
 export interface SignedScanAttestationV2 {
   readonly protocol: "ScanAttestationV2";
   readonly envelope: Readonly<Envelope>;
@@ -146,6 +250,9 @@ export interface VerifiedScanAttestationV2 {
     evidenceDigestSha256: string;
     subject: Readonly<{ name: "source-tree"; sha256: string }>;
     coreContract: Readonly<{ commit: string; decisionSchemaSha256: string }>;
+    observation: Readonly<{ keySha256: string; setSha256: string }>;
+    scanner: Readonly<CandidateWire["scanner"]>;
+    platform: Readonly<{ os: "linux"; architecture: "amd64" }>;
     coverage: Readonly<{ kind: "selected-closure"; sha256: string; complete: true }>;
     cleanup: Readonly<{ outcome: "completed" }>;
     annexesComplete: true;
@@ -204,6 +311,94 @@ function exactTime(value: string, label: string): number {
 function sameSeal(left: z.infer<typeof sourceSeal>, right: z.infer<typeof sourceSeal>): boolean {
   return canonicalStrictJsonBytesV1(left).equals(canonicalStrictJsonBytesV1(right));
 }
+function validateCiscoIdentityBindings(
+  scanner: z.infer<typeof candidateInput>["scanner"],
+  observation: z.infer<typeof candidateInput>["observation"],
+): void {
+  const cisco = scanner.cisco;
+  const manifest = createScannerManifestV1({
+    protocol: "ScannerManifestV1",
+    detectors: [
+      {
+        detectorId: cisco.detectorId,
+        analyzerIdentity: cisco.analyzerIdentity,
+        ociImage: {
+          reference: cisco.oci.logicalReference,
+          sha256: cisco.oci.manifestDigestSha256.slice("sha256:".length),
+        },
+        adapter: cisco.adapter,
+        observationConfigurationSha256: cisco.observationConfigurationSha256,
+        executionProfileSha256: cisco.executionProfileSha256,
+        supportedPlatforms: [cisco.supportedPlatform],
+        sbom: { mediaType: cisco.sbom.mediaType, sha256: cisco.sbom.sha256 },
+        provenance: { mediaType: cisco.provenance.mediaType, sha256: cisco.provenance.sha256 },
+      },
+    ],
+  });
+  const detector = manifest.detectors[0] ?? fail("Cisco scanner manifest entry");
+  if (
+    manifest.scannerManifestSha256 !== scanner.manifestSha256 ||
+    detector.scannerManifestEntrySha256 !== cisco.scannerManifestEntrySha256
+  )
+    fail("Cisco scanner manifest binding");
+  const expectedRelevantFacts = digest(
+    canonicalStrictJsonBytesV1({
+      domain: "aih.cisco.oci-candidate.relevant-facts-v1",
+      sourceSeal: cisco.sourceSealV1,
+    }),
+  );
+  if (cisco.platform.relevantFactsSha256 !== expectedRelevantFacts)
+    fail("Cisco relevant facts binding");
+  const observationKeyInput = {
+    protocol: "ObservationKeyV1" as const,
+    sourceSeal: cisco.sourceSealV1,
+    nativeAnalyzerIdentity: cisco.analyzerIdentity,
+    observationConfigurationSha256: cisco.observationConfigurationSha256,
+    platform: cisco.platform,
+    scannerManifestEntrySha256: cisco.scannerManifestEntrySha256,
+  };
+  const observationKey = createObservationKeyV1(observationKeyInput);
+  const observationSet = createObservationSetV1({
+    protocol: "ObservationSetV1",
+    observationKey: observationKeyInput,
+    facts: cisco.observation.facts,
+    coverage: cisco.observation.coverage,
+  });
+  if (
+    observationKey.observationKeySha256 !== cisco.observation.keySha256 ||
+    observationSet.observationSetSha256 !== cisco.observation.setSha256 ||
+    observation.keySha256 !== observationKey.observationKeySha256 ||
+    observation.setSha256 !== observationSet.observationSetSha256 ||
+    !canonicalStrictJsonBytesV1(observationSet.facts).equals(
+      canonicalStrictJsonBytesV1(cisco.observation.facts),
+    ) ||
+    !canonicalStrictJsonBytesV1(observationSet.coverage).equals(
+      canonicalStrictJsonBytesV1(cisco.observation.coverage),
+    )
+  )
+    fail("Cisco observation identity binding");
+  const appliedFactsSha256 = digest(
+    canonicalStrictJsonBytesV1({
+      domain: "aih.cisco.oci-candidate.applied-facts-v1",
+      facts: cisco.observation.facts,
+      coverage: cisco.observation.coverage,
+    }),
+  );
+  if (cisco.broker.appliedFactsSha256 !== appliedFactsSha256) fail("Cisco broker facts binding");
+  const policyDigestSha256 = digest(
+    canonicalStrictJsonBytesV1({
+      domain: "aih.cisco.oci-candidate.broker-binding-v1",
+      brokerIdentity: cisco.broker.identity,
+      scannerManifestEntrySha256: cisco.scannerManifestEntrySha256,
+      sarifSha256: cisco.broker.sarifSha256,
+    }),
+  );
+  if (cisco.broker.policyDigestSha256 !== policyDigestSha256) fail("Cisco broker policy binding");
+  const runtimeSha256 = digest(
+    canonicalStrictJsonBytesV1({ domain: "aih.cisco.capture-v2.runtime", detector }),
+  );
+  if (scanner.runtimeSha256 !== runtimeSha256) fail("Cisco runtime identity binding");
+}
 function ownData(value: object, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
   if (descriptor === undefined || !("value" in descriptor)) fail(`${key} must be own data`);
@@ -229,7 +424,7 @@ function sortedAnnexes(
   }
   return [...values].sort((left, right) => codeUnitCompare(left.descriptorId, right.descriptorId));
 }
-function verifyAnnexArtifacts(
+export function assertCompleteScanAnnexArtifactsV2(
   descriptors: z.infer<typeof candidateInput>["annexes"],
   value: unknown,
 ): z.infer<typeof candidateInput>["annexes"] {
@@ -287,6 +482,23 @@ export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
     fail("subject source seal binding");
   if (parsed.coverage.sha256 !== sourceSeals.before.selectedClosureSha256)
     fail("coverage selected closure binding");
+  validateCiscoIdentityBindings(parsed.scanner, parsed.observation);
+  if (
+    parsed.observation.keySha256 !== parsed.scanner.cisco.observation.keySha256 ||
+    parsed.observation.setSha256 !== parsed.scanner.cisco.observation.setSha256 ||
+    parsed.scanner.configurationSha256 !== parsed.scanner.cisco.observationConfigurationSha256 ||
+    parsed.platform.os !== parsed.scanner.cisco.supportedPlatform.os ||
+    parsed.platform.architecture !== parsed.scanner.cisco.supportedPlatform.architecture
+  )
+    fail("Cisco identity binding");
+  const expectedAnnexes = new Map(parsed.annexes.map((annex) => [annex.descriptorId, annex]));
+  if (
+    expectedAnnexes.size !== 3 ||
+    expectedAnnexes.get("annex.cisco-raw") === undefined ||
+    expectedAnnexes.get("annex.sbom")?.sha256 !== parsed.scanner.cisco.sbom.sha256 ||
+    expectedAnnexes.get("annex.provenance")?.sha256 !== parsed.scanner.cisco.provenance.sha256
+  )
+    fail("Cisco annex identity binding");
   const normalized = { ...normalizedParsed, annexes: sortedAnnexes(parsed.annexes) };
   const result = deepFreezeStrictJsonV1({
     ...normalized,
@@ -373,7 +585,7 @@ export function signScanCandidateV2(value: unknown): SignedScanAttestationV2 {
   if (signer.keyId !== keyIdFor(privateKey)) fail("signer keyId fingerprint");
   const claims = parseClaims(ownData(value, "claims"));
   const candidateWire = candidate as ScanCandidateV2;
-  verifyAnnexArtifacts(candidateWire.annexes, ownData(value, "annexArtifacts"));
+  assertCompleteScanAnnexArtifactsV2(candidateWire.annexes, ownData(value, "annexArtifacts"));
   const statement: Statement = statementSchema.parse({
     _type: "https://in-toto.io/Statement/v1",
     subject: [candidateWire.subject],
@@ -517,16 +729,34 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
   if (typeof value !== "object" || value === null || Array.isArray(value))
     fail("verify input object");
   const raw = value as object;
-  const allowed = ["envelope", "roots", "expected", "seenReplayIdentities", "annexArtifacts"];
+  const allowed = [
+    "envelope",
+    "candidate",
+    "roots",
+    "expected",
+    "seenReplayIdentities",
+    "annexArtifacts",
+  ];
   if (
     Object.getPrototypeOf(raw) !== Object.prototype ||
     Object.getOwnPropertySymbols(raw).length > 0 ||
     Object.keys(raw).some((key) => !allowed.includes(key)) ||
-    !["envelope", "roots", "expected", "annexArtifacts"].every((key) => Object.hasOwn(raw, key))
+    !["envelope", "candidate", "roots", "expected", "annexArtifacts"].every((key) =>
+      Object.hasOwn(raw, key),
+    )
   )
     fail("verify input fields");
   const parsed = parseEnvelope(ownData(raw, "envelope"));
-  const annexDescriptors = verifyAnnexArtifacts(
+  const bundledCandidate = ownData(raw, "candidate");
+  if (
+    typeof bundledCandidate !== "object" ||
+    bundledCandidate === null ||
+    candidateBytes(bundledCandidate) === undefined ||
+    (bundledCandidate as ScanCandidateV2).candidateSha256 !==
+      parsed.statement.predicate.candidate.sha256
+  )
+    fail("detached candidate binding");
+  const annexDescriptors = assertCompleteScanAnnexArtifactsV2(
     parsed.statement.predicate.annexes,
     ownData(raw, "annexArtifacts"),
   );
@@ -626,6 +856,9 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
         sha256: parsed.statement.subject[0]?.digest.sha256 ?? fail("subject"),
       },
       coreContract: parsed.statement.predicate.coreContract,
+      observation: parsed.statement.predicate.observation,
+      scanner: parsed.statement.predicate.scanner,
+      platform: parsed.statement.predicate.platform,
       coverage: parsed.statement.predicate.coverage,
       cleanup: parsed.statement.predicate.cleanup,
       annexesComplete: true as const,

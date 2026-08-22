@@ -6,24 +6,21 @@ import {
   constants,
   fstatSync,
   lstatSync,
-  mkdirSync,
   openSync,
-  readdirSync,
   readFileSync,
   type Stats,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
   canonicalScanAttestationEnvelopeBytesV2,
-  canonicalScanCandidateBytesV2,
   parseScanAttestationEnvelopeV2Json,
-  parseScanCandidateV2Json,
   signScanCandidateV2,
   verifyScanAttestationV2,
 } from "./observation/scan-attestation-v2.js";
+import { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation/scan-bundle-v2.js";
 
 const maxInputBytes = 2 * 1024 * 1024;
 function fail(message: string): never {
@@ -44,6 +41,7 @@ function readBoundedRegularFile(path: string, label: string, maximumBytes: numbe
   if (
     !beforePath.isFile() ||
     beforePath.isSymbolicLink() ||
+    beforePath.nlink !== 1 ||
     beforePath.size <= 0 ||
     beforePath.size > maximumBytes
   )
@@ -52,13 +50,15 @@ function readBoundedRegularFile(path: string, label: string, maximumBytes: numbe
   try {
     descriptor = openSync(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     const before = fstatSync(descriptor);
-    if (!before.isFile() || !sameIdentity(beforePath, before)) fail(`${label} file replacement`);
+    if (!before.isFile() || before.nlink !== 1 || !sameIdentity(beforePath, before))
+      fail(`${label} file replacement`);
     const bytes = readFileSync(descriptor);
     const after = fstatSync(descriptor);
     const afterPath = lstatSync(resolved);
     if (
       bytes.byteLength === 0 ||
       bytes.byteLength > maximumBytes ||
+      after.nlink !== 1 ||
       !sameIdentity(before, after) ||
       !sameIdentity(before, afterPath)
     )
@@ -89,20 +89,18 @@ function readPrivateKey(path: string): string {
   if (!Buffer.from(text, "utf8").equals(bytes)) fail("private key UTF-8");
   return text;
 }
-function readAnnexDirectory(path: string): { descriptorId: string; bytes: Buffer }[] {
-  const root = resolve(path),
-    directory = lstatSync(root);
-  if (!directory.isDirectory() || directory.isSymbolicLink()) fail("annex directory shape");
-  return readdirSync(root)
-    .sort()
-    .map((name) => {
-      const descriptorId = name.endsWith(".bin") ? name.slice(0, -4) : "";
-      if (!/^annex\.[a-z0-9][a-z0-9.-]*$/.test(descriptorId)) fail("annex artifact name");
-      return {
-        descriptorId,
-        bytes: readBoundedRegularFile(join(root, name), "annex artifact", 16 * 1024 * 1024),
-      };
-    });
+function decodeCanonicalBase64(value: string, label: string, maximumBytes: number): Buffer {
+  if (
+    value.length === 0 ||
+    value.length % 4 !== 0 ||
+    value.length > Math.ceil(maximumBytes / 3) * 4 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  )
+    fail(`${label} base64`);
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.byteLength > maximumBytes || decoded.toString("base64") !== value)
+    fail(`${label} base64`);
+  return decoded;
 }
 function exactWire(value: Record<string, unknown>, fields: readonly string[], label: string): void {
   if (
@@ -128,12 +126,13 @@ function flag(args: readonly string[], name: string): string {
   return args[index + 1] as string;
 }
 function verify(args: readonly string[]): void {
-  const allowed = new Set(["--evidence", "--roots", "--expected", "--seen", "--annex-dir"]);
+  const allowed = new Set(["--evidence", "--bundle", "--roots", "--expected", "--seen"]);
   if (args.length % 2 !== 0 || args.some((arg, index) => index % 2 === 0 && !allowed.has(arg)))
     fail("unknown verify argument");
   const evidence = parseScanAttestationEnvelopeV2Json(
     readText(flag(args, "--evidence"), "evidence"),
   );
+  const bundle = readScanCaptureBundleV2({ bundleDirectory: flag(args, "--bundle") });
   const rootsWire = readJson(flag(args, "--roots"), "roots");
   const expected = readJson(flag(args, "--expected"), "expected policy");
   exactWire(rootsWire, ["roots"], "roots");
@@ -143,19 +142,23 @@ function verify(args: readonly string[]): void {
   const roots = rootsValue.map((value) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) fail("root object");
     const root = value as Record<string, unknown>;
-    exactWire(root, ["identity", "class", "keyId", "publicKeyPem"], "root");
+    exactWire(root, ["identity", "class", "keyId", "publicKeySpkiBase64"], "root");
     if (
       typeof root.identity !== "string" ||
       (root.class !== "test-ephemeral" && root.class !== "organization") ||
       typeof root.keyId !== "string" ||
-      typeof root.publicKeyPem !== "string"
+      typeof root.publicKeySpkiBase64 !== "string"
     )
       fail("root fields");
     return {
       identity: root.identity,
       class: root.class,
       keyId: root.keyId,
-      publicKey: createPublicKey(root.publicKeyPem),
+      publicKey: createPublicKey({
+        key: decodeCanonicalBase64(root.publicKeySpkiBase64, "root SPKI", 4096),
+        format: "der",
+        type: "spki",
+      }),
     };
   });
   const seen = (() => {
@@ -170,7 +173,8 @@ function verify(args: readonly string[]): void {
     roots,
     expected,
     seenReplayIdentities: seen,
-    annexArtifacts: readAnnexDirectory(flag(args, "--annex-dir")),
+    candidate: bundle.candidate,
+    annexArtifacts: bundle.annexArtifacts,
   });
   process.stdout.write(`${canonicalStrictJsonBytesV1(result.facts).toString("utf8")}\n`);
 }
@@ -247,40 +251,63 @@ async function capture(args: readonly string[]): Promise<void> {
     outputPath = args[3];
   if (typeof requestPath !== "string" || typeof outputPath !== "string") fail("capture arguments");
   const request = readJson(requestPath, "Cisco capture request");
-  const captured = await captureCiscoOciCandidateV2({ ...request, runner: dockerRunner });
-  const outputDirectory = resolve(outputPath);
-  mkdirSync(outputDirectory, { recursive: false, mode: 0o700 });
-  writeNew(
-    join(outputDirectory, "candidate.json"),
-    canonicalScanCandidateBytesV2(captured.candidate),
+  exactWire(
+    request,
+    ["layout", "sourceRoot", "selectedClosurePaths", "runtime", "annexFiles", "broker"],
+    "Cisco capture request",
   );
-  for (const artifact of captured.annexArtifacts)
-    writeNew(join(outputDirectory, `${artifact.descriptorId}.bin`), artifact.bytes);
+  if (!Array.isArray(request.annexFiles) || request.annexFiles.length !== 2)
+    fail("Cisco capture annex files");
+  const annexPayloads = request.annexFiles.map((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      fail("Cisco capture annex file");
+    const wire = entry as Record<string, unknown>;
+    exactWire(wire, ["descriptorId", "path"], "Cisco capture annex file");
+    if (
+      (wire.descriptorId !== "annex.sbom" && wire.descriptorId !== "annex.provenance") ||
+      typeof wire.path !== "string"
+    )
+      fail("Cisco capture annex file");
+    return {
+      descriptorId: wire.descriptorId,
+      bytes: readBoundedRegularFile(wire.path, "Cisco capture annex", 16 * 1024 * 1024),
+    };
+  });
+  if (new Set(annexPayloads.map((entry) => entry.descriptorId)).size !== annexPayloads.length)
+    fail("Cisco capture annex file duplicate");
+  const captured = await captureCiscoOciCandidateV2({
+    layout: request.layout,
+    sourceRoot: request.sourceRoot,
+    selectedClosurePaths: request.selectedClosurePaths,
+    runtime: request.runtime,
+    annexPayloads,
+    broker: request.broker,
+    runner: dockerRunner,
+  });
+  writeScanCaptureBundleV2({ outputDirectory: outputPath, ...captured });
 }
 function sign(args: readonly string[]): void {
   if (
-    args.length !== 12 ||
-    args[0] !== "--candidate" ||
-    args[2] !== "--annex-dir" ||
-    args[4] !== "--signer" ||
-    args[6] !== "--private-key" ||
-    args[8] !== "--claims" ||
-    args[10] !== "--output"
+    args.length !== 10 ||
+    args[0] !== "--bundle" ||
+    args[2] !== "--signer" ||
+    args[4] !== "--private-key" ||
+    args[6] !== "--claims" ||
+    args[8] !== "--output"
   )
     fail("sign usage");
-  const candidatePath = args[1],
-    annexDirectory = args[3],
-    signerPath = args[5],
-    privateKeyPath = args[7],
-    claimsPath = args[9],
-    outputPath = args[11];
+  const bundleDirectory = args[1],
+    signerPath = args[3],
+    privateKeyPath = args[5],
+    claimsPath = args[7],
+    outputPath = args[9];
   if (
-    [candidatePath, annexDirectory, signerPath, privateKeyPath, claimsPath, outputPath].some(
+    [bundleDirectory, signerPath, privateKeyPath, claimsPath, outputPath].some(
       (entry) => typeof entry !== "string",
     )
   )
     fail("sign arguments");
-  const candidate = parseScanCandidateV2Json(readText(candidatePath as string, "candidate"));
+  const bundle = readScanCaptureBundleV2({ bundleDirectory: bundleDirectory as string });
   const signerWire = readJson(signerPath as string, "signer");
   const claims = readJson(claimsPath as string, "claims");
   exactWire(signerWire, ["identity", "class", "keyId"], "signer");
@@ -292,7 +319,7 @@ function sign(args: readonly string[]): void {
   )
     fail("signer fields");
   const evidence = signScanCandidateV2({
-    candidate,
+    candidate: bundle.candidate,
     signer: {
       identity: signerWire.identity,
       class: signerWire.class,
@@ -300,7 +327,7 @@ function sign(args: readonly string[]): void {
       privateKey: createPrivateKey(readPrivateKey(privateKeyPath as string)),
     },
     claims,
-    annexArtifacts: readAnnexDirectory(annexDirectory as string),
+    annexArtifacts: bundle.annexArtifacts,
   });
   writeNew(outputPath as string, canonicalScanAttestationEnvelopeBytesV2(evidence));
 }
@@ -314,7 +341,7 @@ async function main(): Promise<void> {
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --candidate <file> --annex-dir <directory> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --annex-dir <directory> --roots <file> --expected <file> [--seen <file>]\n",
+      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --bundle <directory> --roots <file> --expected <file> [--seen <file>]\n",
     );
     return;
   }

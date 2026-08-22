@@ -5,6 +5,7 @@ export {
   verifyAiHarnessStrictV2Contract,
 } from "./core/core-contract-lock-v2.js";
 export {
+  assertCompleteScanAnnexArtifactsV2,
   canonicalDssePaeV2,
   canonicalScanAttestationEnvelopeBytesV2,
   canonicalScanCandidateBytesV2,
@@ -21,4 +22,5 @@ export {
   type VerifiedScanAttestationV2,
   verifyScanAttestationV2,
 } from "./observation/scan-attestation-v2.js";
+export { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation/scan-bundle-v2.js";
 export { type SourceSealV2, sealSourceV2 } from "./observation/source-seal-v2.js";

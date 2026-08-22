@@ -11,6 +11,7 @@ describe("Strict V2 public boundary", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
       "AI_HARNESS_STRICT_V2_COMMIT",
+      "assertCompleteScanAnnexArtifactsV2",
       "canonicalDssePaeV2",
       "canonicalScanAttestationEnvelopeBytesV2",
       "canonicalScanCandidateBytesV2",
@@ -21,10 +22,12 @@ describe("Strict V2 public boundary", () => {
       "isVerifiedScanAttestationV2",
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
+      "readScanCaptureBundleV2",
       "sealSourceV2",
       "signScanCandidateV2",
       "verifyAiHarnessStrictV2Contract",
       "verifyScanAttestationV2",
+      "writeScanCaptureBundleV2",
     ]);
     expect(read("src/index.ts")).not.toMatch(/-v1\.js/);
   });
