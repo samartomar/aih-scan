@@ -1,8 +1,16 @@
 import { execFileSync, execSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalStrictJsonBytesV1 } from "../src/contract/strict-json-v1.js";
@@ -93,8 +101,26 @@ function packedManifest(tarball: string): Record<string, unknown> {
   throw new Error("packed package manifest missing");
 }
 
+function npmCliPath(environment: { readonly npm_execpath?: string } = process.env): string {
+  const fromEnvironment = environment.npm_execpath;
+  if (
+    typeof fromEnvironment === "string" &&
+    isAbsolute(fromEnvironment) &&
+    basename(fromEnvironment) === "npm-cli.js" &&
+    existsSync(fromEnvironment)
+  )
+    return fromEnvironment;
+  const nodeDirectory = dirname(process.execPath);
+  for (const candidate of [
+    join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+    resolve(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ])
+    if (existsSync(candidate)) return candidate;
+  throw new Error("npm CLI entrypoint unavailable");
+}
+
 function runNpm(args: readonly string[], cwd: string): string {
-  const npmCli = resolve(process.execPath, "..", "node_modules", "npm", "bin", "npm-cli.js");
+  const npmCli = npmCliPath();
   return execFileSync(process.execPath, [npmCli, ...args], {
     cwd,
     encoding: "utf8",
@@ -310,6 +336,21 @@ function runInstalledBin(project: string, args: readonly string[]): string {
     stdio: "pipe",
   });
 }
+
+describe("npm CLI resolution", () => {
+  it("accepts a validated absolute npm_execpath and otherwise uses an installed npm CLI", () => {
+    const directory = mkdtempSync(join(tmpdir(), "aih-scan-npm-cli-"));
+    temporaryDirectories.push(directory);
+    const npmCli = join(directory, "npm-cli.js");
+    writeFileSync(npmCli, "", { mode: 0o600 });
+
+    expect(npmCliPath({ npm_execpath: npmCli })).toBe(npmCli);
+    expect(npmCliPath({ npm_execpath: join(directory, "not-npm-cli.js") })).not.toBe(
+      join(directory, "not-npm-cli.js"),
+    );
+    expect(existsSync(npmCliPath())).toBe(true);
+  });
+});
 
 describe("published V2 package installation", () => {
   it("packs a minimal public boundary and signs then verifies a fully detached bundle", () => {
