@@ -402,10 +402,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     if (cidfileError !== undefined) throw cidfileError;
     if (cidfileId === undefined) fail("container ownership cidfile");
     const claimedContainerId = normalizedContainerId(createResult.stdout, "container creation");
-    if (claimedContainerId !== cidfileId) {
-      ownedContainerId = undefined;
-      fail("container ownership mismatch");
-    }
+    if (claimedContainerId !== cidfileId) fail("container ownership mismatch");
     const inspectedContainer = await invoke(
       ["docker", "container", "inspect", "--format", "{{.Id}}", claimedContainerId],
       "container identity",
