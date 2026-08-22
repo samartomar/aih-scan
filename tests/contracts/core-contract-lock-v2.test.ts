@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
+  verifyAiHarnessStrictV2Contract,
   verifyCoreDecisionSchemaLockV2,
 } from "../../src/core/core-contract-lock-v2.js";
 
@@ -31,8 +32,18 @@ describe("Core Strict V2 compatibility lock", () => {
       expectedSchemaSha256: createHash("sha256").update(bytes).digest("hex"),
     };
     expect(() => verifyCoreDecisionSchemaLockV2({ ...good, coreCommit: "0".repeat(40) })).toThrow();
-    expect(() => verifyCoreDecisionSchemaLockV2({ ...good, schemaBytes: Buffer.from("[]") })).toThrow();
-    expect(() => verifyCoreDecisionSchemaLockV2({ ...good, expectedSchemaSha256: "0".repeat(64) })).toThrow();
+    expect(() =>
+      verifyCoreDecisionSchemaLockV2({ ...good, schemaBytes: Buffer.from("[]") }),
+    ).toThrow();
+    expect(() =>
+      verifyCoreDecisionSchemaLockV2({ ...good, expectedSchemaSha256: "0".repeat(64) }),
+    ).toThrow();
     expect(() => verifyCoreDecisionSchemaLockV2({ ...good, unexpected: true })).toThrow();
+    expect(() =>
+      verifyAiHarnessStrictV2Contract({
+        coreCommit: AI_HARNESS_STRICT_V2_COMMIT,
+        schemaBytes: bytes,
+      }),
+    ).toThrow();
   });
 });
