@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..", "..");
 const bridge = resolve(root, "tools", "create-cisco-oci-capture-request.mjs");
+const workflowPath = resolve(root, ".github", "workflows", "cisco-oci-equivalence.yml");
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const roots: string[] = [];
 afterEach(() => {
@@ -96,9 +97,8 @@ describe("Cisco OCI capture evidence bridge", () => {
     const secondRun = run(second);
     expect(firstRun.status, firstRun.stderr).toBe(0);
     expect(secondRun.status, secondRun.stderr).toBe(0);
-    expect(readFileSync(join(first, "capture-request.json"))).toEqual(
-      readFileSync(join(second, "capture-request.json")),
-    );
+    for (const file of ["annex.sbom.json", "annex.provenance.json", "ci-context.json"])
+      expect(readFileSync(join(first, file))).toEqual(readFileSync(join(second, file)));
     const request = JSON.parse(readFileSync(join(first, "capture-request.json"), "utf8"));
     const sbom = JSON.parse(readFileSync(join(first, "annex.sbom.json"), "utf8"));
     const provenance = JSON.parse(readFileSync(join(first, "annex.provenance.json"), "utf8"));
@@ -188,5 +188,39 @@ describe("Cisco OCI capture evidence bridge", () => {
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/Docker image config identity/i);
+  });
+
+  it("passes the existing OCI observation through independent capture, test-ephemeral sign, and verify jobs", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+    const job = (name: string) =>
+      new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z]+:|(?![\\s\\S]))`, "m").exec(
+        workflow,
+      )?.[0] ?? "";
+    const capture = job("capture");
+    const sign = job("sign");
+    const verify = job("verify");
+    expect(workflow.match(/docker buildx build/g)).toHaveLength(2);
+    expect(capture).toContain(
+      "candidate_digest: $" + "{{ steps.capture.outputs.candidate_digest }}",
+    );
+    expect(capture).toContain("create-cisco-oci-capture-request.mjs");
+    expect(capture).toContain("node dist/cli.js capture");
+    expect(capture).toContain("digest-bound-unverified");
+    expect(capture).toContain("GITHUB_HEAD_REF");
+    expect(capture).toContain("event.pull_request.head.sha");
+    expect(sign).toContain("needs: capture");
+    expect(sign).toContain(
+      'test "$candidate_digest" = "$' + '{{ needs.capture.outputs.candidate_digest }}"',
+    );
+    expect(sign).toContain("openssl genpkey -algorithm ED25519");
+    expect(sign).toContain('class: "test-ephemeral"');
+    expect(sign).toContain("node dist/cli.js sign");
+    expect(sign).toContain('rm -f "$private_key"');
+    expect(sign).not.toMatch(/docker|capture --request/i);
+    expect(verify).toContain("needs: sign");
+    expect(verify).toContain("node dist/cli.js verify");
+    expect(verify).not.toMatch(/docker|capture --request|sign --bundle/i);
+    expect(workflow).toMatch(/^permissions:\n {2}contents: read\s*$/m);
+    expect(workflow.match(/timeout-minutes:/g)).toHaveLength(3);
   });
 });
