@@ -617,6 +617,34 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
+  it("never removes a foreign container when Docker run reports an exact-name conflict", async () => {
+    const { value, fake } = input();
+    const foreignName = `aih-scan-cisco-${value.layout.configDigestSha256.slice(7, 19)}`;
+    const original = fake.run;
+    value.runner = async (argv, options) => {
+      if (argv[1] === "run")
+        return {
+          code: 125,
+          stdout: "",
+          stderr: `Conflict. The container name "/${foreignName}" is already in use.`,
+        };
+      return original(argv, options);
+    };
+
+    await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow(
+      "invalid Cisco OCI broker V1: scanner run nonzero code 125",
+    );
+    expect(
+      fake.calls.some(
+        (call) =>
+          call.argv[0] === "docker" &&
+          call.argv[1] === "container" &&
+          call.argv[2] === "rm" &&
+          call.argv.includes(foreignName),
+      ),
+    ).toBe(false);
+  });
+
   it("fails closed before run for forged layout, strict-input, host, image-inspect, and mount injection failures", async () => {
     const layout = layoutFixture();
     const sourceRoot = sourceFixture();
