@@ -14,6 +14,27 @@ import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.
 const root = resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
+const publicV2Exports = [
+  "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+  "AI_HARNESS_STRICT_V2_COMMIT",
+  "assertCompleteScanAnnexArtifactsV2",
+  "canonicalDssePaeV2",
+  "canonicalScanAttestationEnvelopeBytesV2",
+  "canonicalScanCandidateBytesV2",
+  "canonicalSourceSealsV2Bytes",
+  "captureCiscoOciCandidateV2",
+  "createScanCandidateV2",
+  "ed25519KeyIdV2",
+  "isVerifiedScanAttestationV2",
+  "parseScanAttestationEnvelopeV2Json",
+  "parseScanCandidateV2Json",
+  "readScanCaptureBundleV2",
+  "sealSourceV2",
+  "signScanCandidateV2",
+  "verifyAiHarnessStrictV2Contract",
+  "verifyScanAttestationV2",
+  "writeScanCaptureBundleV2",
+].sort();
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0))
@@ -260,14 +281,22 @@ describe("published V2 package installation", () => {
   it("packs a minimal public boundary and signs then verifies a fully detached bundle", () => {
     const directory = mkdtempSync(join(tmpdir(), "aih-scan-package-install-v2-"));
     temporaryDirectories.push(directory);
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+      scripts?: { prepack?: unknown };
+    };
+    expect(manifest.scripts?.prepack).toBe("npm run build");
     const { tarball, paths } = packagePaths(directory);
 
     expect(paths).toContain("dist/index.d.ts");
     expect(paths).toContain("dist/index.js");
     expect(paths).toContain("dist/cli.js");
     expect(paths).not.toContain("src/index.ts");
-    expect(paths.some((path) => path.startsWith("tests/"))).toBe(false);
-    expect(paths.some((path) => /(?:^|\/)\S*-v1\.(?:d\.ts|js)$/.test(path))).toBe(false);
+    expect(
+      paths.some((path) =>
+        /(?:^|\/)(?:src|tests|secrets)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:key|pem)$/i.test(path),
+      ),
+    ).toBe(false);
+    expect(paths.some((path) => /(?:^|\/)\S+\.local(?:\.|\/|$)/i.test(path))).toBe(false);
     expect(readFileSync(tarball)).not.toContain(Buffer.from(root, "utf8"));
 
     writeFileSync(join(directory, "package.json"), JSON.stringify({ private: true }), {
@@ -290,17 +319,31 @@ describe("published V2 package installation", () => {
         '    bytes: Buffer.from(base64, "base64"),',
         "  })),",
         "});",
-        'process.stdout.write(scan.AI_HARNESS_STRICT_V2_COMMIT + "\\n");',
+        'const denied = await Promise.all(["@aihq/scan/dist/contract/strict-json-v1.js", "@aihq/scan/private-v1"].map(async (specifier) => {',
+        "  try {",
+        "    await import(specifier);",
+        '    return { specifier, code: "resolved" };',
+        "  } catch (error) {",
+        "    return { specifier, code: error?.code };",
+        "  }",
+        "}));",
+        'process.stdout.write(JSON.stringify({ exports: Object.keys(scan).sort(), denied }) + "\\n");',
       ].join("\n"),
       { mode: 0o600 },
     );
-    expect(
+    const consumer = JSON.parse(
       execFileSync(process.execPath, ["consumer.mjs"], {
         cwd: directory,
         encoding: "utf8",
         stdio: "pipe",
       }),
-    ).toBe("e27a55dcebb635c8298aa4fd6fd871f59089bcf7\n");
+    ) as { exports?: unknown; denied?: readonly { code?: unknown }[] };
+    expect(consumer.exports).toEqual(publicV2Exports);
+    expect(consumer.denied?.map(({ code }) => code)).toEqual([
+      "ERR_PACKAGE_PATH_NOT_EXPORTED",
+      "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    ]);
+    expect(runInstalledBin(directory, ["--help"])).not.toMatch(/v1|private/i);
 
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
