@@ -213,7 +213,7 @@ jobs:
           set -euo pipefail
           signing_root="$RUNNER_TEMP/cisco-signing"
           mkdir -p "$signing_root"
-          candidate_digest="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const candidate = JSON.parse(readFileSync(process.argv[1], "utf8")); process.stdout.write(candidate.candidateSha256);' "$RUNNER_TEMP/cisco-capture/capture-bundle/candidate.json")"
+          candidate_digest="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const candidate = JSON.parse(readFileSync(process.argv[1], "utf8")); process.stdout.write(candidate.candidateSha256);' "$RUNNER_TEMP/cisco-capture/candidate.json")"
           test "$candidate_digest" = "${{ needs.capture.outputs.candidate_digest }}"
           private_key="$signing_root/private-key.pem"
           public_key="$signing_root/public-key.spki"
@@ -224,7 +224,7 @@ jobs:
           key_id="ed25519:$(sha256sum "$public_key" | cut -d ' ' -f 1)"
           node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [ciPath, signerPath, rootsPath, claimsPath, publicPath, keyId] = process.argv.slice(1); const ci = JSON.parse(readFileSync(ciPath, "utf8")); const signedAt = new Date(); const expiresAt = new Date(signedAt.getTime() + 60 * 60 * 1000); const signer = { identity: "github-actions-test-ephemeral", class: "test-ephemeral", keyId }; const claims = { ...ci, issuer: "https://token.actions.githubusercontent.com", signedAt: signedAt.toISOString(), expiresAt: expiresAt.toISOString() }; writeFileSync(signerPath, JSON.stringify(signer)); writeFileSync(rootsPath, JSON.stringify({ roots: [{ ...signer, publicKeySpkiBase64: readFileSync(publicPath).toString("base64") }] })); writeFileSync(claimsPath, JSON.stringify(claims));' "$RUNNER_TEMP/cisco-context/ci-context.json" "$signing_root/signer.json" "$signing_root/roots.json" "$signing_root/claims.json" "$public_key" "$key_id"
           node dist/cli.js sign \
-            --bundle "$RUNNER_TEMP/cisco-capture/capture-bundle" \
+            --bundle "$RUNNER_TEMP/cisco-capture" \
             --signer "$signing_root/signer.json" \
             --private-key "$private_key" \
             --claims "$signing_root/claims.json" \
@@ -280,9 +280,9 @@ jobs:
       - name: Independently verify signed Cisco evidence
         run: |
           set -euo pipefail
-          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [ciPath, claimsPath, candidatePath, signerPath, expectedPath] = process.argv.slice(1); const ci = JSON.parse(readFileSync(ciPath, "utf8")); const claims = JSON.parse(readFileSync(claimsPath, "utf8")); const candidate = JSON.parse(readFileSync(candidatePath, "utf8")); const signer = JSON.parse(readFileSync(signerPath, "utf8")); const expected = { ...ci, issuer: "https://token.actions.githubusercontent.com", signedAt: claims.signedAt, expiresAt: claims.expiresAt, now: new Date().toISOString(), signer, subjectSha256: candidate.subject.digest.sha256 }; writeFileSync(expectedPath, JSON.stringify(expected));' "$RUNNER_TEMP/cisco-context/ci-context.json" "$RUNNER_TEMP/cisco-signed/claims.json" "$RUNNER_TEMP/cisco-capture/capture-bundle/candidate.json" "$RUNNER_TEMP/cisco-signed/signer.json" "$RUNNER_TEMP/cisco-signed/expected.json"
+          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const [ciPath, claimsPath, candidatePath, signerPath, expectedPath] = process.argv.slice(1); const ci = JSON.parse(readFileSync(ciPath, "utf8")); const claims = JSON.parse(readFileSync(claimsPath, "utf8")); const candidate = JSON.parse(readFileSync(candidatePath, "utf8")); const signer = JSON.parse(readFileSync(signerPath, "utf8")); const expected = { ...ci, issuer: "https://token.actions.githubusercontent.com", signedAt: claims.signedAt, expiresAt: claims.expiresAt, now: new Date().toISOString(), signer, subjectSha256: candidate.subject.digest.sha256 }; writeFileSync(expectedPath, JSON.stringify(expected));' "$RUNNER_TEMP/cisco-context/ci-context.json" "$RUNNER_TEMP/cisco-signed/claims.json" "$RUNNER_TEMP/cisco-capture/candidate.json" "$RUNNER_TEMP/cisco-signed/signer.json" "$RUNNER_TEMP/cisco-signed/expected.json"
           node dist/cli.js verify \
             --evidence "$RUNNER_TEMP/cisco-signed/evidence.json" \
-            --bundle "$RUNNER_TEMP/cisco-capture/capture-bundle" \
+            --bundle "$RUNNER_TEMP/cisco-capture" \
             --roots "$RUNNER_TEMP/cisco-signed/roots.json" \
             --expected "$RUNNER_TEMP/cisco-signed/expected.json"

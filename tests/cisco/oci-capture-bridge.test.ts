@@ -303,6 +303,10 @@ describe("Cisco OCI capture evidence bridge", () => {
     expect(sign).toContain("repository: $" + "{{ needs.capture.outputs.scanner_repository }}");
     expect(sign).toContain("name: cisco-capture-context");
     expect(sign).toContain("$RUNNER_TEMP/cisco-context/ci-context.json");
+    expect(sign).toContain("path: $" + "{{ runner.temp }}/cisco-capture");
+    expect(sign).toContain('"$RUNNER_TEMP/cisco-capture/candidate.json"');
+    expect(sign).toContain('--bundle "$RUNNER_TEMP/cisco-capture"');
+    expect(sign).not.toContain("$RUNNER_TEMP/cisco-capture/capture-bundle");
     expect(sign).toContain("node dist/cli.js sign");
     expect(sign).toContain('rm -f "$private_key"');
     expect(sign).not.toMatch(/docker|capture --request/i);
@@ -311,6 +315,9 @@ describe("Cisco OCI capture evidence bridge", () => {
     expect(verify).toContain("now: new Date().toISOString()");
     expect(verify).toContain("https://token.actions.githubusercontent.com");
     expect(verify).not.toContain("now: claims.signedAt");
+    expect(verify).toContain('"$RUNNER_TEMP/cisco-capture/candidate.json"');
+    expect(verify).toContain('--bundle "$RUNNER_TEMP/cisco-capture"');
+    expect(verify).not.toContain("$RUNNER_TEMP/cisco-capture/capture-bundle");
     expect(verify).toContain("ref: $" + "{{ needs.capture.outputs.scanner_commit }}");
     expect(verify).toContain("repository: $" + "{{ needs.capture.outputs.scanner_repository }}");
     expect(verify).not.toMatch(/docker|capture --request|sign --bundle/i);
