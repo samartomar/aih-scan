@@ -1,10 +1,16 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
 type DockerRunner = (
   argv: readonly string[],
@@ -28,6 +34,7 @@ const options = {
   maxStdoutBytes: 1024,
   maxStderrBytes: 1024,
 };
+const temporaryDirectories: string[] = [];
 
 async function loadDockerRunner(): Promise<DockerRunner> {
   const originalArgv = process.argv;
@@ -45,6 +52,8 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.resetModules();
+  for (const directory of temporaryDirectories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 
 describe("dockerRunner", () => {
@@ -84,5 +93,31 @@ describe("dockerRunner", () => {
       truncated: true,
     });
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("aih-scan bin", () => {
+  it("executes through a symlinked installed-bin path", () => {
+    const directory = mkdtempSync(join(process.cwd(), ".aih-scan-bin-"));
+    temporaryDirectories.push(directory);
+    const outputDirectory = join(directory, "dist");
+    execFileSync(
+      process.execPath,
+      [
+        resolve("node_modules/typescript/bin/tsc"),
+        "-p",
+        "tsconfig.build.json",
+        "--outDir",
+        outputDirectory,
+      ],
+      { cwd: process.cwd(), stdio: "pipe" },
+    );
+    const binPath = join(directory, "aih-scan");
+    symlinkSync(join(outputDirectory, "cli.js"), binPath, "file");
+
+    const result = spawnSync(process.execPath, [binPath, "--help"], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Usage: aih-scan capture");
   });
 });
