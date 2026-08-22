@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { closeSync, lstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
@@ -157,8 +157,15 @@ async function capture(args: readonly string[]): Promise<void> {
     outputPath = args[3];
   if (typeof requestPath !== "string" || typeof outputPath !== "string") fail("capture arguments");
   const request = readJson(requestPath, "Cisco capture request");
-  const candidate = await captureCiscoOciCandidateV2({ ...request, runner: dockerRunner });
-  writeNew(outputPath, canonicalScanCandidateBytesV2(candidate));
+  const captured = await captureCiscoOciCandidateV2({ ...request, runner: dockerRunner });
+  const outputDirectory = resolve(outputPath);
+  mkdirSync(outputDirectory, { recursive: false, mode: 0o700 });
+  writeNew(
+    join(outputDirectory, "candidate.json"),
+    canonicalScanCandidateBytesV2(captured.candidate),
+  );
+  for (const artifact of captured.annexArtifacts)
+    writeNew(join(outputDirectory, `${artifact.descriptorId}.bin`), artifact.bytes);
 }
 function sign(args: readonly string[]): void {
   if (
@@ -213,7 +220,7 @@ async function main(): Promise<void> {
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan capture --request <file> --output <new-file> | sign --candidate <file> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --roots <file> --expected <file> [--seen <file>]\n",
+      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --candidate <file> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --roots <file> --expected <file> [--seen <file>]\n",
     );
     return;
   }

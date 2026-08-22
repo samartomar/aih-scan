@@ -5,6 +5,7 @@ import {
 import { createScanCandidateV2, type ScanCandidateV2 } from "../observation/scan-attestation-v2.js";
 import { sealSourceV2 } from "../observation/source-seal-v2.js";
 import { executeCiscoOciBrokerV1 } from "./oci-broker-v1.js";
+import { createCiscoOciCandidateV1 } from "./oci-candidate-v1.js";
 import { parseCiscoOciLayoutV1 } from "./oci-layout-v1.js";
 
 function fail(reason: string): never {
@@ -20,11 +21,23 @@ function sameSeal(
     left.sealedSnapshotSha256 === right.sealedSnapshotSha256
   );
 }
-/** Executes only the registered Cisco OCI broker against an explicit source target. */
-export async function captureCiscoOciCandidateV2(value: unknown): Promise<ScanCandidateV2> {
+export interface CiscoCaptureV2 {
+  readonly candidate: ScanCandidateV2;
+  readonly annexArtifacts: readonly { readonly descriptorId: string; readonly bytes: Buffer }[];
+}
+/** Executes only the registered Cisco OCI broker and promotes its exact internal evidence bindings. */
+export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoCaptureV2> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail("input object");
   const input = value as Record<string, unknown>;
-  const fields = ["layout", "sourceRoot", "selectedClosurePaths", "runner"];
+  const fields = [
+    "layout",
+    "sourceRoot",
+    "selectedClosurePaths",
+    "runtime",
+    "annexPayloads",
+    "broker",
+    "runner",
+  ];
   if (
     Object.getPrototypeOf(input) !== Object.prototype ||
     Object.keys(input).length !== fields.length ||
@@ -56,17 +69,27 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<ScanCa
   });
   if (!sameSeal(before, after)) fail("source changed during capture");
   if (typeof result !== "object" || result === null) fail("broker result");
-  const broker = result as Record<string, unknown>;
+  const internal = createCiscoOciCandidateV1({
+    protocol: "CiscoOciCandidateV1",
+    layout,
+    brokerResult: result,
+    runtime: input.runtime,
+    annexPayloads: input.annexPayloads,
+    broker: input.broker,
+  });
+  const detector = internal.scannerManifest.detectors[0];
   if (
-    broker.cleanup === undefined ||
-    broker.coverage === undefined ||
-    broker.evidenceAnnex === undefined ||
-    !Array.isArray(broker.facts)
+    detector === undefined ||
+    internal.attestation.statement.predicate.cleanup.outcome !== "completed"
   )
-    fail("broker result shape");
-  const annex = broker.evidenceAnnex as { descriptors?: unknown };
-  if (!Array.isArray(annex.descriptors)) fail("broker annex");
-  return createScanCandidateV2({
+    fail("internal candidate binding");
+  const annexArtifacts = internal.annexPayloads.map(
+    (item: { descriptorId: string; payload: string }) => ({
+      descriptorId: item.descriptorId,
+      bytes: Buffer.from(item.payload, "base64"),
+    }),
+  );
+  const candidate = createScanCandidateV2({
     protocol: "ScanCandidateV2",
     coreContract: {
       commit: "e27a55dcebb635c8298aa4fd6fd871f59089bcf7",
@@ -75,24 +98,20 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<ScanCa
     subject: { name: "source-tree", digest: { sha256: before.sourceTreeSha256 } },
     sourceSeals: { before, after },
     observation: {
-      keySha256: canonicalStrictJsonSha256V1({
-        domain: "aih.cisco.capture-v2.key",
-        facts: broker.facts,
-      }),
-      setSha256: canonicalStrictJsonSha256V1({
-        domain: "aih.cisco.capture-v2.set",
-        facts: broker.facts,
-        coverage: broker.coverage,
-      }),
+      keySha256: internal.observationKey.observationKeySha256,
+      setSha256: internal.observationSet.observationSetSha256,
     },
     scanner: {
-      manifestSha256: layout.manifestDigestSha256.slice(7),
-      runtimeSha256: layout.configDigestSha256.slice(7),
-      configurationSha256: layout.configDigestSha256.slice(7),
+      manifestSha256: internal.scannerManifest.scannerManifestSha256,
+      runtimeSha256: canonicalStrictJsonSha256V1({
+        domain: "aih.cisco.capture-v2.runtime",
+        detector,
+      }),
+      configurationSha256: detector.observationConfigurationSha256,
     },
     platform: { os: "linux", architecture: "amd64" },
     coverage: { kind: "selected-closure", sha256: before.selectedClosureSha256, complete: true },
-    annexes: annex.descriptors.map((value) => {
+    annexes: internal.evidenceAnnex.descriptors.map((value: unknown) => {
       if (typeof value !== "object" || value === null || Array.isArray(value))
         fail("broker annex descriptor");
       const descriptor = value as Record<string, unknown>;
@@ -102,7 +121,8 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<ScanCa
         byteLength: descriptor.byteLength,
       };
     }),
-    cleanup: { outcome: "completed" },
+    cleanup: internal.attestation.statement.predicate.cleanup,
     scan: { outcome: "succeeded" },
   });
+  return { candidate, annexArtifacts };
 }
