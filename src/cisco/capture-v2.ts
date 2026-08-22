@@ -1,4 +1,7 @@
-import { canonicalStrictJsonSha256V1 } from "../contract/strict-json-v1.js";
+import {
+  canonicalStrictJsonBytesV1,
+  canonicalStrictJsonSha256V1,
+} from "../contract/strict-json-v1.js";
 import { createScanCandidateV2, type ScanCandidateV2 } from "../observation/scan-attestation-v2.js";
 import { sealSourceV2 } from "../observation/source-seal-v2.js";
 import { executeCiscoOciBrokerV1 } from "./oci-broker-v1.js";
@@ -34,7 +37,7 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<ScanCa
     typeof input.runner !== "function"
   )
     fail("input values");
-  const layout = parseCiscoOciLayoutV1(input.layout);
+  const layout = parseCiscoOciLayoutV1(canonicalStrictJsonBytesV1(input.layout));
   const before = sealSourceV2({
     sourceRoot: input.sourceRoot,
     selectedClosurePaths: input.selectedClosurePaths,

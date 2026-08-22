@@ -17,22 +17,10 @@ import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
 } from "../core/core-contract-lock-v2.js";
+import { sourceSealV2Schema, validateSourceSealV2 } from "./source-seal-v2.js";
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
-const sourceSeal = z
-  .object({
-    protocol: z.literal("SourceSealV2"),
-    algorithm: z.literal("code-unit-canonical-json-v1"),
-    sourceTreeSha256: sha256,
-    selectedClosureSha256: sha256,
-    sealedSnapshotSha256: sha256,
-    files: z
-      .array(
-        z.object({ path: z.string(), sha256, byteLength: z.number().int().nonnegative() }).strict(),
-      )
-      .max(100_000),
-  })
-  .strict();
+const sourceSeal = sourceSealV2Schema;
 const subject = z
   .object({ name: z.literal("source-tree"), digest: z.object({ sha256 }).strict() })
   .strict();
@@ -92,7 +80,7 @@ const signerSchema = z
   .object({
     identity: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
     class: z.enum(["test-ephemeral", "organization"]),
-    keyId: z.string().regex(/^ed25519:[A-Za-z0-9._-]{1,128}$/),
+    keyId: z.string().regex(/^ed25519:[0-9a-f]{64}$/),
   })
   .strict();
 const signatureSchema = z.object({ keyid: signerSchema.shape.keyId, sig: z.string() }).strict();
@@ -175,8 +163,7 @@ function digest(bytes: Uint8Array): string {
 }
 function keyIdFor(key: KeyObject): string {
   if (key.asymmetricKeyType !== "ed25519") fail("Ed25519 key");
-  const publicKey =
-    key.type === "private" ? createPublicKey(key.export({ type: "pkcs8", format: "pem" })) : key;
+  const publicKey = key.type === "private" ? createPublicKey(key as never) : key;
   if (publicKey.type !== "public") fail("Ed25519 public key");
   return `ed25519:${digest(publicKey.export({ type: "spki", format: "der" }))}`;
 }
@@ -240,25 +227,36 @@ function sortedAnnexes(
 /** Source-seal V2 bytes use strict JSON and code-unit sorted object keys. */
 export function canonicalSourceSealsV2Bytes(value: unknown): Buffer {
   assertStrictJsonValueV1(value, "ScanAttestationV2 source seals");
-  return canonicalStrictJsonBytesV1(candidateInput.shape.sourceSeals.parse(structuredClone(value)));
+  const parsed = candidateInput.shape.sourceSeals.parse(structuredClone(value));
+  return canonicalStrictJsonBytesV1({
+    before: validateSourceSealV2(parsed.before),
+    run: validateSourceSealV2(parsed.run),
+    after: validateSourceSealV2(parsed.after),
+  });
 }
 export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
   assertStrictJsonValueV1(value, "ScanCandidateV2 candidate");
   const parsed = candidateInput.parse(structuredClone(value));
+  const sourceSeals = {
+    before: validateSourceSealV2(parsed.sourceSeals.before),
+    run: validateSourceSealV2(parsed.sourceSeals.run),
+    after: validateSourceSealV2(parsed.sourceSeals.after),
+  };
+  const normalizedParsed = { ...parsed, sourceSeals };
   if (
-    !sameSeal(parsed.sourceSeals.before, parsed.sourceSeals.run) ||
-    !sameSeal(parsed.sourceSeals.run, parsed.sourceSeals.after)
+    !sameSeal(sourceSeals.before, sourceSeals.run) ||
+    !sameSeal(sourceSeals.run, sourceSeals.after)
   )
     fail("source seal TOCTOU mismatch");
   if (
-    parsed.subject.digest.sha256 !== parsed.sourceSeals.before.sourceTreeSha256 ||
-    parsed.subject.digest.sha256 !== parsed.sourceSeals.run.sourceTreeSha256 ||
-    parsed.subject.digest.sha256 !== parsed.sourceSeals.after.sourceTreeSha256
+    parsed.subject.digest.sha256 !== sourceSeals.before.sourceTreeSha256 ||
+    parsed.subject.digest.sha256 !== sourceSeals.run.sourceTreeSha256 ||
+    parsed.subject.digest.sha256 !== sourceSeals.after.sourceTreeSha256
   )
     fail("subject source seal binding");
-  if (parsed.coverage.sha256 !== parsed.sourceSeals.before.selectedClosureSha256)
+  if (parsed.coverage.sha256 !== sourceSeals.before.selectedClosureSha256)
     fail("coverage selected closure binding");
-  const normalized = { ...parsed, annexes: sortedAnnexes(parsed.annexes) };
+  const normalized = { ...normalizedParsed, annexes: sortedAnnexes(parsed.annexes) };
   const result = deepFreezeStrictJsonV1({
     ...normalized,
     candidateSha256: digest(
@@ -413,6 +411,11 @@ function parseEnvelope(value: unknown): {
   }
   if (!canonicalStrictJsonBytesV1(parsedPayload).equals(payload)) fail("noncanonical payload");
   const statement = statementSchema.parse(parsedPayload);
+  const sourceSeals = {
+    before: validateSourceSealV2(statement.predicate.sourceSeals.before),
+    run: validateSourceSealV2(statement.predicate.sourceSeals.run),
+    after: validateSourceSealV2(statement.predicate.sourceSeals.after),
+  };
   const candidate = statement.predicate.candidate.sha256;
   const rebuiltCandidate = digest(
     canonicalStrictJsonBytesV1({
@@ -421,7 +424,7 @@ function parseEnvelope(value: unknown): {
         protocol: "ScanCandidateV2",
         coreContract: statement.predicate.coreContract,
         subject: statement.subject[0],
-        sourceSeals: statement.predicate.sourceSeals,
+        sourceSeals,
         observation: statement.predicate.observation,
         scanner: statement.predicate.scanner,
         platform: statement.predicate.platform,
@@ -434,15 +437,13 @@ function parseEnvelope(value: unknown): {
   );
   if (candidate !== rebuiltCandidate) fail("candidate digest binding");
   if (
-    !sameSeal(statement.predicate.sourceSeals.before, statement.predicate.sourceSeals.run) ||
-    !sameSeal(statement.predicate.sourceSeals.run, statement.predicate.sourceSeals.after)
+    !sameSeal(sourceSeals.before, sourceSeals.run) ||
+    !sameSeal(sourceSeals.run, sourceSeals.after)
   )
     fail("source seal TOCTOU mismatch");
   if (
-    statement.subject[0]?.digest.sha256 !==
-      statement.predicate.sourceSeals.before.sourceTreeSha256 ||
-    statement.predicate.coverage.sha256 !==
-      statement.predicate.sourceSeals.before.selectedClosureSha256
+    statement.subject[0]?.digest.sha256 !== sourceSeals.before.sourceTreeSha256 ||
+    statement.predicate.coverage.sha256 !== sourceSeals.before.selectedClosureSha256
   )
     fail("subject or coverage source seal binding");
   return {
@@ -539,12 +540,14 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
     return { ...parsedRoot, publicKey };
   });
   const rootKeys = new Set<string>();
-  const rootIdentities = new Set<string>();
+  const rootIdentityClasses = new Map<string, string>();
   for (const entry of parsedRoots) {
-    if (rootKeys.has(entry.keyId) || rootIdentities.has(entry.identity))
-      fail("duplicate trust root");
+    if (rootKeys.has(entry.keyId)) fail("duplicate trust root key");
+    const existingClass = rootIdentityClasses.get(entry.identity);
+    if (existingClass !== undefined && existingClass !== entry.class)
+      fail("trust root identity class conflict");
     rootKeys.add(entry.keyId);
-    rootIdentities.add(entry.identity);
+    rootIdentityClasses.set(entry.identity, entry.class);
   }
   const root = parsedRoots.find(
     (entry) =>

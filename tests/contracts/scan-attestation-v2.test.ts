@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import {
   canonicalDssePaeV2,
   canonicalScanAttestationEnvelopeBytesV2,
@@ -10,10 +11,34 @@ import {
   verifyScanAttestationV2,
 } from "../../src/observation/scan-attestation-v2.js";
 
-const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const keyPair = generateKeyPairSync("ed25519");
 const keyId = ed25519KeyIdV2(keyPair.publicKey);
 const source = sha("source");
+const seal = () => {
+  const entries = [{ kind: "file" as const, path: "SKILL.md", sha256: source, byteLength: 6 }];
+  const sourceTreeSha256 = sha(canonicalStrictJsonBytesV1({ protocol: "SourceTreeV2", entries }));
+  const selectedClosureSha256 = sha(
+    canonicalStrictJsonBytesV1({ protocol: "SelectedClosureV2", files: entries }),
+  );
+  return {
+    protocol: "SourceSealV2" as const,
+    algorithm: "code-unit-canonical-json-v1" as const,
+    entries,
+    selectedClosurePaths: ["SKILL.md"],
+    selectedFiles: entries,
+    sourceTreeSha256,
+    selectedClosureSha256,
+    sealedSnapshotSha256: sha(
+      canonicalStrictJsonBytesV1({
+        protocol: "SealedSnapshotV2",
+        sourceTreeSha256,
+        selectedClosureSha256,
+      }),
+    ),
+  };
+};
+const subjectSource = seal().sourceTreeSha256;
 const candidate = () =>
   createScanCandidateV2({
     protocol: "ScanCandidateV2",
@@ -21,32 +46,11 @@ const candidate = () =>
       commit: "e27a55dcebb635c8298aa4fd6fd871f59089bcf7",
       decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     },
-    subject: { name: "source-tree", digest: { sha256: source } },
+    subject: { name: "source-tree", digest: { sha256: subjectSource } },
     sourceSeals: {
-      before: {
-        protocol: "SourceSealV2",
-        algorithm: "code-unit-canonical-json-v1",
-        sourceTreeSha256: source,
-        selectedClosureSha256: sha("closure"),
-        sealedSnapshotSha256: sha("seal"),
-        files: [],
-      },
-      run: {
-        protocol: "SourceSealV2",
-        algorithm: "code-unit-canonical-json-v1",
-        sourceTreeSha256: source,
-        selectedClosureSha256: sha("closure"),
-        sealedSnapshotSha256: sha("seal"),
-        files: [],
-      },
-      after: {
-        protocol: "SourceSealV2",
-        algorithm: "code-unit-canonical-json-v1",
-        sourceTreeSha256: source,
-        selectedClosureSha256: sha("closure"),
-        sealedSnapshotSha256: sha("seal"),
-        files: [],
-      },
+      before: seal(),
+      run: seal(),
+      after: seal(),
     },
     observation: { keySha256: sha("key"), setSha256: sha("set") },
     scanner: {
@@ -55,7 +59,11 @@ const candidate = () =>
       configurationSha256: sha("config"),
     },
     platform: { os: "linux", architecture: "amd64" },
-    coverage: { kind: "selected-closure", sha256: sha("closure"), complete: true },
+    coverage: {
+      kind: "selected-closure",
+      sha256: seal().selectedClosureSha256,
+      complete: true,
+    },
     annexes: [{ descriptorId: "annex.sbom", sha256: sha("annex"), byteLength: 4 }],
     cleanup: { outcome: "completed" },
     scan: { outcome: "succeeded" },
@@ -86,7 +94,7 @@ const signed = () =>
 const expected = {
   ...claims,
   now: "2026-08-22T00:30:00.000Z",
-  subjectSha256: source,
+  subjectSha256: subjectSource,
   signer: { identity: "scanner.ci", class: "test-ephemeral", keyId },
 };
 const roots = () => [

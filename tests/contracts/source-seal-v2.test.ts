@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { sealSourceV2 } from "../../src/observation/source-seal-v2.js";
+import { sealSourceV2, validateSourceSealV2 } from "../../src/observation/source-seal-v2.js";
 
 describe("SourceSealV2", () => {
   it("uses code-unit canonical file order and rejects a selected closure escape", () => {
@@ -10,10 +10,15 @@ describe("SourceSealV2", () => {
     try {
       writeFileSync(join(root, "z.md"), "z");
       writeFileSync(join(root, "A.md"), "A");
+      mkdirSync(join(root, "empty"));
       const first = sealSourceV2({ sourceRoot: root, selectedClosurePaths: ["z.md", "A.md"] });
       const second = sealSourceV2({ sourceRoot: root, selectedClosurePaths: ["A.md", "z.md"] });
       expect(first.sourceTreeSha256).toBe(second.sourceTreeSha256);
       expect(first.selectedClosureSha256).toBe(second.selectedClosureSha256);
+      expect(first.entries).toContainEqual({ kind: "directory", path: "empty" });
+      expect(() =>
+        validateSourceSealV2({ ...first, entries: [...first.entries].reverse() }),
+      ).toThrow();
       expect(() =>
         sealSourceV2({ sourceRoot: root, selectedClosurePaths: ["../outside"] }),
       ).toThrow();
