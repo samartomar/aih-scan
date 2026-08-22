@@ -176,7 +176,7 @@ describe("aih-scan repository AI bootstrap", () => {
       filesystemRoot,
       rootPath,
       join(rootPath, "nested-cache"),
-      join(rootPath, "..", "aih-scan", "nested-cache"),
+      join(rootPath, "nested-cache", "deeper-cache"),
     ]) {
       expect(() => tools.resolveCodebaseMemoryCacheDir(override), JSON.stringify(override)).toThrow(
         /CBM_CACHE_DIR/i,
