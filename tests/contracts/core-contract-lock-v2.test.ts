@@ -1,0 +1,38 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+  AI_HARNESS_STRICT_V2_COMMIT,
+  verifyCoreDecisionSchemaLockV2,
+} from "../../src/core/core-contract-lock-v2.js";
+
+describe("Core Strict V2 compatibility lock", () => {
+  it("accepts only the exact Core commit and decision schema bytes", () => {
+    const bytes = Buffer.from('{"strict":"core-schema"}', "utf8");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    expect(AI_HARNESS_STRICT_V2_COMMIT).toBe("e27a55dcebb635c8298aa4fd6fd871f59089bcf7");
+    expect(AI_HARNESS_DECISION_V2_SCHEMA_SHA256).toBe(
+      "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
+    );
+    expect(() =>
+      verifyCoreDecisionSchemaLockV2({
+        coreCommit: AI_HARNESS_STRICT_V2_COMMIT,
+        schemaBytes: bytes,
+        expectedSchemaSha256: digest,
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails closed for drifted commit, schema path, digest, or hostile input", () => {
+    const bytes = Buffer.from("{}", "utf8");
+    const good = {
+      coreCommit: AI_HARNESS_STRICT_V2_COMMIT,
+      schemaBytes: bytes,
+      expectedSchemaSha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    expect(() => verifyCoreDecisionSchemaLockV2({ ...good, coreCommit: "0".repeat(40) })).toThrow();
+    expect(() => verifyCoreDecisionSchemaLockV2({ ...good, schemaBytes: Buffer.from("[]") })).toThrow();
+    expect(() => verifyCoreDecisionSchemaLockV2({ ...good, expectedSchemaSha256: "0".repeat(64) })).toThrow();
+    expect(() => verifyCoreDecisionSchemaLockV2({ ...good, unexpected: true })).toThrow();
+  });
+});
