@@ -208,6 +208,10 @@ expected claims through an independent trusted process.
 - Registered scanner path: Cisco only.
 - Qualified capture platform: Linux `amd64` only.
 - Source tree: at most 4,096 entries, 16 MiB per file, and 256 MiB total.
+  The canonical `SourceSealV2` record is also capped at 512 KiB. Selected
+  files appear in both the complete file inventory and the selected-closure
+  binding, so long paths or large selected closures can reach the canonical
+  record cap before the entry or aggregate-byte limits.
 - Detached annex: at most 16 MiB per annex; the Cisco bundle requires raw,
   SBOM, and provenance annexes.
 - Scanner process: 120-second command timeout, 64 KiB per stdout/stderr stream,
