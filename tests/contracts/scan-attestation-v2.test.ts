@@ -49,7 +49,6 @@ const candidate = () =>
     subject: { name: "source-tree", digest: { sha256: subjectSource } },
     sourceSeals: {
       before: seal(),
-      run: seal(),
       after: seal(),
     },
     observation: { keySha256: sha("key"), setSha256: sha("set") },

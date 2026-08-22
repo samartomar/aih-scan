@@ -20,9 +20,10 @@ import {
   deepFreezeStrictJsonV1,
 } from "../contract/strict-json-v1.js";
 
-const maxEntries = 100_000,
+const maxEntries = 4_096,
   maxFileBytes = 16 * 1024 * 1024,
-  maxTotalBytes = 256 * 1024 * 1024;
+  maxTotalBytes = 256 * 1024 * 1024,
+  maxSealBytes = 512 * 1024;
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const file = z
   .object({
@@ -129,6 +130,8 @@ export function validateSourceSealV2(value: unknown): SourceSealV2 {
     parsed.sealedSnapshotSha256 !== expected.sealedSnapshotSha256
   )
     fail("digest binding");
+  if (canonicalStrictJsonBytesV1(parsed).byteLength > maxSealBytes)
+    fail("canonical seal byte bound");
   return deepFreezeStrictJsonV1(parsed);
 }
 function inside(root: string, target: string): void {
@@ -144,8 +147,7 @@ const sameIdentity = (left: Stats, right: Stats) =>
   left.ctimeMs === right.ctimeMs;
 function requireDirectory(path: string, realRoot: string): void {
   const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.nlink > 1)
-    fail("directory link, reparse, or hardlink");
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail("directory link or reparse");
   const real = realpathSync.native(path);
   if (real !== realRoot) inside(realRoot, real);
 }
@@ -194,7 +196,7 @@ function traverse(root: string, realRoot: string, directoryPath: string, entries
       path = relative(root, absolute).split(sep).join("/");
     assertSafeRelativePosixPathV1(path, "source entry path");
     if (stat.isDirectory()) {
-      if (stat.isSymbolicLink() || stat.nlink > 1) fail("directory link, reparse, or hardlink");
+      if (stat.isSymbolicLink()) fail("directory link or reparse");
       entries.push({ kind: "directory", path });
       traverse(root, realRoot, absolute, entries);
     } else entries.push(readFileEntry(root, absolute));

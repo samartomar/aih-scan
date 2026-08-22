@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
@@ -24,6 +24,15 @@ function readText(path: string, label: string): string {
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
   return text;
+}
+function readPrivateKey(path: string): string {
+  const resolved = resolve(path),
+    stat = lstatSync(resolved);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > 64 * 1024)
+    fail("private key file shape");
+  if (process.platform !== "win32" && (stat.mode & 0o077) !== 0)
+    fail("private key file permissions");
+  return readText(resolved, "private key");
 }
 function readJson(path: string, label: string): Record<string, unknown> {
   return parseStrictJsonObjectV1(readText(path, label), label);
@@ -153,19 +162,23 @@ async function capture(args: readonly string[]): Promise<void> {
 }
 function sign(args: readonly string[]): void {
   if (
-    args.length !== 8 ||
+    args.length !== 10 ||
     args[0] !== "--candidate" ||
     args[2] !== "--signer" ||
-    args[4] !== "--claims" ||
-    args[6] !== "--output"
+    args[4] !== "--private-key" ||
+    args[6] !== "--claims" ||
+    args[8] !== "--output"
   )
     fail("sign usage");
   const candidatePath = args[1],
     signerPath = args[3],
-    claimsPath = args[5],
-    outputPath = args[7];
+    privateKeyPath = args[5],
+    claimsPath = args[7],
+    outputPath = args[9];
   if (
-    [candidatePath, signerPath, claimsPath, outputPath].some((entry) => typeof entry !== "string")
+    [candidatePath, signerPath, privateKeyPath, claimsPath, outputPath].some(
+      (entry) => typeof entry !== "string",
+    )
   )
     fail("sign arguments");
   const candidate = parseScanCandidateV2Json(readText(candidatePath as string, "candidate"));
@@ -175,7 +188,7 @@ function sign(args: readonly string[]): void {
     typeof signerWire.identity !== "string" ||
     typeof signerWire.class !== "string" ||
     typeof signerWire.keyId !== "string" ||
-    typeof signerWire.privateKeyPem !== "string"
+    Object.keys(signerWire).length !== 3
   )
     fail("signer fields");
   const evidence = signScanCandidateV2({
@@ -184,7 +197,7 @@ function sign(args: readonly string[]): void {
       identity: signerWire.identity,
       class: signerWire.class,
       keyId: signerWire.keyId,
-      privateKey: createPrivateKey(signerWire.privateKeyPem),
+      privateKey: createPrivateKey(readPrivateKey(privateKeyPath as string)),
     },
     claims,
   });
@@ -200,7 +213,7 @@ async function main(): Promise<void> {
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan capture --request <file> --output <new-file> | sign --candidate <file> --signer <file> --claims <file> --output <new-file> | verify --evidence <file> --roots <file> --expected <file> [--seen <file>]\n",
+      "Usage: aih-scan capture --request <file> --output <new-file> | sign --candidate <file> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --roots <file> --expected <file> [--seen <file>]\n",
     );
     return;
   }

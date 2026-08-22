@@ -73,7 +73,7 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<ScanCa
       decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     },
     subject: { name: "source-tree", digest: { sha256: before.sourceTreeSha256 } },
-    sourceSeals: { before, run: before, after },
+    sourceSeals: { before, after },
     observation: {
       keySha256: canonicalStrictJsonSha256V1({
         domain: "aih.cisco.capture-v2.key",

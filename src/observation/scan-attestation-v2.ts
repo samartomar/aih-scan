@@ -34,7 +34,7 @@ const candidateInput = z
       })
       .strict(),
     subject,
-    sourceSeals: z.object({ before: sourceSeal, run: sourceSeal, after: sourceSeal }).strict(),
+    sourceSeals: z.object({ before: sourceSeal, after: sourceSeal }).strict(),
     observation: z.object({ keySha256: sha256, setSha256: sha256 }).strict(),
     scanner: z
       .object({ manifestSha256: sha256, runtimeSha256: sha256, configurationSha256: sha256 })
@@ -230,7 +230,6 @@ export function canonicalSourceSealsV2Bytes(value: unknown): Buffer {
   const parsed = candidateInput.shape.sourceSeals.parse(structuredClone(value));
   return canonicalStrictJsonBytesV1({
     before: validateSourceSealV2(parsed.before),
-    run: validateSourceSealV2(parsed.run),
     after: validateSourceSealV2(parsed.after),
   });
 }
@@ -239,18 +238,12 @@ export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
   const parsed = candidateInput.parse(structuredClone(value));
   const sourceSeals = {
     before: validateSourceSealV2(parsed.sourceSeals.before),
-    run: validateSourceSealV2(parsed.sourceSeals.run),
     after: validateSourceSealV2(parsed.sourceSeals.after),
   };
   const normalizedParsed = { ...parsed, sourceSeals };
-  if (
-    !sameSeal(sourceSeals.before, sourceSeals.run) ||
-    !sameSeal(sourceSeals.run, sourceSeals.after)
-  )
-    fail("source seal TOCTOU mismatch");
+  if (!sameSeal(sourceSeals.before, sourceSeals.after)) fail("source seal TOCTOU mismatch");
   if (
     parsed.subject.digest.sha256 !== sourceSeals.before.sourceTreeSha256 ||
-    parsed.subject.digest.sha256 !== sourceSeals.run.sourceTreeSha256 ||
     parsed.subject.digest.sha256 !== sourceSeals.after.sourceTreeSha256
   )
     fail("subject source seal binding");
@@ -413,7 +406,6 @@ function parseEnvelope(value: unknown): {
   const statement = statementSchema.parse(parsedPayload);
   const sourceSeals = {
     before: validateSourceSealV2(statement.predicate.sourceSeals.before),
-    run: validateSourceSealV2(statement.predicate.sourceSeals.run),
     after: validateSourceSealV2(statement.predicate.sourceSeals.after),
   };
   const candidate = statement.predicate.candidate.sha256;
@@ -436,11 +428,7 @@ function parseEnvelope(value: unknown): {
     }),
   );
   if (candidate !== rebuiltCandidate) fail("candidate digest binding");
-  if (
-    !sameSeal(sourceSeals.before, sourceSeals.run) ||
-    !sameSeal(sourceSeals.run, sourceSeals.after)
-  )
-    fail("source seal TOCTOU mismatch");
+  if (!sameSeal(sourceSeals.before, sourceSeals.after)) fail("source seal TOCTOU mismatch");
   if (
     statement.subject[0]?.digest.sha256 !== sourceSeals.before.sourceTreeSha256 ||
     statement.predicate.coverage.sha256 !== sourceSeals.before.selectedClosureSha256
