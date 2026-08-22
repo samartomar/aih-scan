@@ -9,7 +9,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const fsMetrics = vi.hoisted(() => ({ readCalls: 0 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readSync: (...args: Parameters<typeof actual.readSync>) => {
+      fsMetrics.readCalls += 1;
+      return actual.readSync(...args);
+    },
+  };
+});
+
 import { sealSourceV2, validateSourceSealV2 } from "../../src/observation/source-seal-v2.js";
 
 const roots: string[] = [];
@@ -17,6 +31,7 @@ const maxFileBytes = 16 * 1024 * 1024;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  fsMetrics.readCalls = 0;
 });
 
 function fixtureRoot(label: string): string {
@@ -85,6 +100,18 @@ describe("SourceSealV2 adversarial filesystem contract", () => {
         selectedClosurePaths: Array.from({ length: 4_097 }, (_, index) => `entry-${index}.md`),
       }),
     ).toThrow();
+  });
+
+  it("stops at the entry budget before reading the first over-budget source entry", () => {
+    const root = fixtureRoot("source-seal-entry-budget");
+    for (let index = 0; index < 4_096; index += 1) {
+      writeFileSync(join(root, `entry-${String(index).padStart(4, "0")}.md`), "x");
+    }
+
+    expect(() => sealSourceV2({ sourceRoot: root, selectedClosurePaths: ["SKILL.md"] })).toThrow(
+      "source entry bound",
+    );
+    expect(fsMetrics.readCalls).toBeLessThanOrEqual(4_096);
   });
 
   it("rejects noncanonical, V1, and TOCTOU-substituted seal structures before they can bind a candidate", () => {
