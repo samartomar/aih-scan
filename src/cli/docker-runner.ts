@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+const terminationGraceMs = 1_000;
+
 type DockerRunnerOptions = {
   readonly env: Readonly<Record<string, string>>;
   readonly timeoutMs: number;
@@ -37,10 +39,12 @@ export function dockerRunner(
       truncated,
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = (outcome: { readonly result: unknown } | { readonly error: unknown }) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (terminationTimer !== undefined) clearTimeout(terminationTimer);
       if ("error" in outcome) reject(outcome.error);
       else resolveResult(outcome.result);
     };
@@ -48,7 +52,7 @@ export function dockerRunner(
       settle({
         result: {
           ...result(),
-          code: code ?? 1,
+          code: truncated ? 1 : (code ?? 1),
         },
       });
     };
@@ -57,11 +61,24 @@ export function dockerRunner(
       terminationRequested = true;
       truncated = true;
       try {
-        if (!child.kill()) finish(1);
+        if (!child.kill("SIGTERM")) {
+          finish(1);
+          return;
+        }
       } catch {
         // The bounded runner result below is still authoritative after a failed termination request.
         finish(1);
+        return;
       }
+      terminationTimer = setTimeout(() => {
+        if (settled) return;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // A failed escalation must not leave the capture runner pending.
+        }
+        finish(1);
+      }, terminationGraceMs);
     };
     timer = setTimeout(terminate, options.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
