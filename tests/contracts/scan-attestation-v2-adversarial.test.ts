@@ -354,6 +354,35 @@ describe("ScanAttestationV2 adversarial verifier contract", () => {
     ).toThrow();
   });
 
+  it("rejects inherited, extra, and accessor-backed expected signers without reading accessors", () => {
+    const evidence = signed();
+    let accessorReads = 0;
+    const accessorSigner = { ...expected.signer } as Record<string, unknown>;
+    Object.defineProperty(accessorSigner, "identity", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        throw new Error("must not read expected signer accessor");
+      },
+    });
+    const signers: unknown[] = [
+      Object.create(expected.signer),
+      { ...expected.signer, unexpected: true },
+      accessorSigner,
+    ];
+    for (const signer of signers)
+      expect(() =>
+        verifyScanAttestationV2({
+          envelope: evidence,
+          candidate: candidate(),
+          roots: roots(),
+          expected: { ...expected, signer },
+          annexArtifacts,
+        }),
+      ).toThrow();
+    expect(accessorReads).toBe(0);
+  });
+
   it("rejects V1, unknown predicate, and noncanonical V2 envelope or payload JSON", () => {
     const evidence = signed();
     const decodePayload = () =>
