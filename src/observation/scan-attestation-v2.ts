@@ -405,14 +405,11 @@ function ownData(value: object, key: string): unknown {
   return descriptor.value;
 }
 function exactKeys(value: object, allowed: readonly string[], label: string): void {
-  if (
-    Object.getPrototypeOf(value) !== Object.prototype ||
-    Object.getOwnPropertySymbols(value).length > 0
-  )
-    fail(`${label} plain data`);
-  const keys = Object.keys(value);
+  if (Object.getPrototypeOf(value) !== Object.prototype) fail(`${label} plain data`);
+  const keys = Reflect.ownKeys(value);
   if (keys.length !== allowed.length || allowed.some((key) => !keys.includes(key)))
     fail(`${label} fields`);
+  for (const key of allowed) ownData(value, key);
 }
 function sortedAnnexes(
   values: z.infer<typeof candidateInput>["annexes"],

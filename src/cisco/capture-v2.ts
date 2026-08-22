@@ -18,12 +18,8 @@ function ownData(value: object, key: string): unknown {
   return descriptor.value;
 }
 function exactInput(value: object, fields: readonly string[]): void {
-  if (
-    Object.getPrototypeOf(value) !== Object.prototype ||
-    Object.getOwnPropertySymbols(value).length > 0
-  )
-    fail("input plain data");
-  const keys = Object.keys(value);
+  if (Object.getPrototypeOf(value) !== Object.prototype) fail("input plain data");
+  const keys = Reflect.ownKeys(value);
   if (keys.length !== fields.length || fields.some((field) => !keys.includes(field)))
     fail("input fields");
   for (const field of fields) ownData(value, field);
