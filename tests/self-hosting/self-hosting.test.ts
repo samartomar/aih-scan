@@ -35,9 +35,9 @@ describe("aih-scan self-hosting boundary", () => {
       expect(managedBody(read(path)), path).toBe(shared);
   });
 
-  it("keeps scanner product work out of the bootstrap and the canon manual", () => {
+  it("keeps public scanner metadata out of the bootstrap and the canon manual", () => {
     const packageJson = read("package.json");
-    expect(packageJson).not.toContain('"bin"');
+    expect(packageJson).toContain('"bin"');
     expect(packageJson).not.toContain("repo:publish");
     expect(read("ai-coding/SELF-HOSTING.md")).toContain("manual maintenance");
     expect(read("ai-coding/project.json")).toContain('"name": "aih-scan"');

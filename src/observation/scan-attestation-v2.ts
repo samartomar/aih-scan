@@ -1,4 +1,10 @@
-import { createHash, KeyObject, sign as signDetached, verify as verifyDetached } from "node:crypto";
+import {
+  createHash,
+  createPublicKey,
+  KeyObject,
+  sign as signDetached,
+  verify as verifyDetached,
+} from "node:crypto";
 import { z } from "zod";
 import {
   assertStrictJsonValueV1,
@@ -14,7 +20,18 @@ import {
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const sourceSeal = z
-  .object({ sourceTreeSha256: sha256, selectedClosureSha256: sha256, sealedSnapshotSha256: sha256 })
+  .object({
+    protocol: z.literal("SourceSealV2"),
+    algorithm: z.literal("code-unit-canonical-json-v1"),
+    sourceTreeSha256: sha256,
+    selectedClosureSha256: sha256,
+    sealedSnapshotSha256: sha256,
+    files: z
+      .array(
+        z.object({ path: z.string(), sha256, byteLength: z.number().int().nonnegative() }).strict(),
+      )
+      .max(100_000),
+  })
   .strict();
 const subject = z
   .object({ name: z.literal("source-tree"), digest: z.object({ sha256 }).strict() })
@@ -134,10 +151,15 @@ export interface VerifiedScanAttestationV2 {
     envelopeValid: true;
     signer: Readonly<{ identity: string; class: "test-ephemeral" | "organization"; keyId: string }>;
     signerAssertedClaimsMatchPolicy: true;
-    provenanceVerified: false;
+    provenance: "none";
     scan: Readonly<{ outcome: "succeeded" | "failed" | "refused" }>;
     replayIdentity: string;
+    payloadSha256: string;
     evidenceDigestSha256: string;
+    subject: Readonly<{ name: "source-tree"; sha256: string }>;
+    coreContract: Readonly<{ commit: string; decisionSchemaSha256: string }>;
+    coverage: Readonly<{ kind: "selected-closure"; sha256: string; complete: true }>;
+    cleanup: Readonly<{ outcome: "completed" }>;
   }>;
 }
 
@@ -150,6 +172,16 @@ function fail(reason: string): never {
 }
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+function keyIdFor(key: KeyObject): string {
+  if (key.asymmetricKeyType !== "ed25519") fail("Ed25519 key");
+  const publicKey =
+    key.type === "private" ? createPublicKey(key.export({ type: "pkcs8", format: "pem" })) : key;
+  if (publicKey.type !== "public") fail("Ed25519 public key");
+  return `ed25519:${digest(publicKey.export({ type: "spki", format: "der" }))}`;
+}
+export function ed25519KeyIdV2(key: KeyObject): string {
+  return keyIdFor(key);
 }
 function canonicalBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
@@ -218,6 +250,14 @@ export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
     !sameSeal(parsed.sourceSeals.run, parsed.sourceSeals.after)
   )
     fail("source seal TOCTOU mismatch");
+  if (
+    parsed.subject.digest.sha256 !== parsed.sourceSeals.before.sourceTreeSha256 ||
+    parsed.subject.digest.sha256 !== parsed.sourceSeals.run.sourceTreeSha256 ||
+    parsed.subject.digest.sha256 !== parsed.sourceSeals.after.sourceTreeSha256
+  )
+    fail("subject source seal binding");
+  if (parsed.coverage.sha256 !== parsed.sourceSeals.before.selectedClosureSha256)
+    fail("coverage selected closure binding");
   const normalized = { ...parsed, annexes: sortedAnnexes(parsed.annexes) };
   const result = deepFreezeStrictJsonV1({
     ...normalized,
@@ -227,6 +267,24 @@ export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
   });
   candidates.set(result, canonicalStrictJsonBytesV1(result));
   return result;
+}
+export function canonicalScanCandidateBytesV2(value: ScanCandidateV2): Buffer {
+  if (typeof value !== "object" || value === null) fail("candidate object");
+  const bytes = candidates.get(value);
+  if (bytes === undefined) fail("candidate requires validated custody");
+  return Buffer.from(bytes);
+}
+export function parseScanCandidateV2Json(text: string): ScanCandidateV2 {
+  const parsed = parseStrictJsonObjectV1(text, "ScanCandidateV2 candidate");
+  const candidateSha256 = parsed.candidateSha256;
+  if (typeof candidateSha256 !== "string" || !/^[0-9a-f]{64}$/.test(candidateSha256))
+    fail("candidate digest");
+  const { candidateSha256: _candidateSha256, ...input } = parsed;
+  const candidate = createScanCandidateV2(input);
+  if (candidate.candidateSha256 !== candidateSha256) fail("candidate digest binding");
+  if (!Buffer.from(text, "utf8").equals(canonicalScanCandidateBytesV2(candidate)))
+    fail("noncanonical candidate");
+  return candidate;
 }
 function candidateBytes(value: unknown): Buffer {
   if (typeof value !== "object" || value === null) fail("candidate object");
@@ -283,6 +341,7 @@ export function signScanCandidateV2(value: unknown): SignedScanAttestationV2 {
     privateKey.asymmetricKeyType !== "ed25519"
   )
     fail("Ed25519 private key");
+  if (signer.keyId !== keyIdFor(privateKey)) fail("signer keyId fingerprint");
   const claims = parseClaims(ownData(value, "claims"));
   const candidateWire = candidate as ScanCandidateV2;
   const statement: Statement = statementSchema.parse({
@@ -379,6 +438,13 @@ function parseEnvelope(value: unknown): {
     !sameSeal(statement.predicate.sourceSeals.run, statement.predicate.sourceSeals.after)
   )
     fail("source seal TOCTOU mismatch");
+  if (
+    statement.subject[0]?.digest.sha256 !==
+      statement.predicate.sourceSeals.before.sourceTreeSha256 ||
+    statement.predicate.coverage.sha256 !==
+      statement.predicate.sourceSeals.before.selectedClosureSha256
+  )
+    fail("subject or coverage source seal binding");
   return {
     envelope,
     statement,
@@ -386,6 +452,13 @@ function parseEnvelope(value: unknown): {
     payloadSha256: digest(payload),
     evidenceDigestSha256: digest(canonicalStrictJsonBytesV1(envelope)),
   };
+}
+export function parseScanAttestationEnvelopeV2Json(text: string): Readonly<Envelope> {
+  const raw = parseStrictJsonObjectV1(text, "ScanAttestationV2 envelope");
+  const parsed = parseEnvelope(raw);
+  if (!Buffer.from(text, "utf8").equals(canonicalStrictJsonBytesV1(parsed.envelope)))
+    fail("noncanonical envelope");
+  return deepFreezeStrictJsonV1(parsed.envelope);
 }
 function parseExpected(value: unknown): z.infer<typeof claimsSchema> & {
   now: string;
@@ -446,23 +519,41 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
     fail("expected signer mismatch");
   const roots = ownData(raw, "roots");
   if (!Array.isArray(roots) || roots.length === 0 || roots.length > 64) fail("trust roots");
-  const root = roots.find((entry) => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
-    const rootValue = entry as Record<string, unknown>;
-    return (
-      rootValue.identity === signer.identity &&
-      rootValue.class === signer.class &&
-      rootValue.keyId === signer.keyId
-    );
+  const parsedRoots = roots.map((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      fail("trust root object");
+    exactKeys(entry, ["identity", "class", "keyId", "publicKey"], "trust root");
+    const parsedRoot = signerSchema.parse({
+      identity: ownData(entry, "identity"),
+      class: ownData(entry, "class"),
+      keyId: ownData(entry, "keyId"),
+    });
+    const publicKey = ownData(entry, "publicKey");
+    if (
+      !(publicKey instanceof KeyObject) ||
+      publicKey.type !== "public" ||
+      publicKey.asymmetricKeyType !== "ed25519"
+    )
+      fail("Ed25519 trust root");
+    if (parsedRoot.keyId !== keyIdFor(publicKey)) fail("trust root keyId fingerprint");
+    return { ...parsedRoot, publicKey };
   });
-  if (root === undefined || typeof root !== "object" || root === null) fail("unknown signer root");
-  const rootKey = (root as Record<string, unknown>).publicKey;
-  if (
-    !(rootKey instanceof KeyObject) ||
-    rootKey.type !== "public" ||
-    rootKey.asymmetricKeyType !== "ed25519"
-  )
-    fail("Ed25519 trust root");
+  const rootKeys = new Set<string>();
+  const rootIdentities = new Set<string>();
+  for (const entry of parsedRoots) {
+    if (rootKeys.has(entry.keyId) || rootIdentities.has(entry.identity))
+      fail("duplicate trust root");
+    rootKeys.add(entry.keyId);
+    rootIdentities.add(entry.identity);
+  }
+  const root = parsedRoots.find(
+    (entry) =>
+      entry.identity === signer.identity &&
+      entry.class === signer.class &&
+      entry.keyId === signer.keyId,
+  );
+  if (root === undefined) fail("unknown signer root");
+  const rootKey = root.publicKey;
   const signature = decodeBase64(parsed.envelope.signatures[0]?.sig ?? "", "signature", 64);
   if (
     signature.byteLength !== 64 ||
@@ -491,10 +582,18 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
       envelopeValid: true as const,
       signer: { identity: signer.identity, class: signer.class, keyId: signer.keyId },
       signerAssertedClaimsMatchPolicy: true as const,
-      provenanceVerified: false as const,
+      provenance: "none" as const,
       scan: { outcome: parsed.statement.predicate.scan.outcome },
       replayIdentity,
+      payloadSha256: parsed.payloadSha256,
       evidenceDigestSha256: parsed.evidenceDigestSha256,
+      subject: {
+        name: "source-tree" as const,
+        sha256: parsed.statement.subject[0]?.digest.sha256 ?? fail("subject"),
+      },
+      coreContract: parsed.statement.predicate.coreContract,
+      coverage: parsed.statement.predicate.coverage,
+      cleanup: parsed.statement.predicate.cleanup,
     },
   });
   verified.add(result);

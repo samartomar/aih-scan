@@ -112,10 +112,10 @@ describe("aih-scan repository AI bootstrap", () => {
 
   it("keeps generated local state out of Git and exposes only bootstrap scripts", () => {
     const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as {
-      private: boolean;
+      private?: boolean;
       scripts: Record<string, string>;
     };
-    expect(packageJson.private).toBe(true);
+    expect(packageJson.private).toBeUndefined();
     expect(packageJson.scripts["repo:init"]).toBe("node tools/repo-ai-tools.mjs setup-codex");
     expect(packageJson.scripts["repo:doctor"]).toBe("node tools/repo-ai-tools.mjs doctor-codex");
     const gitignore = readFileSync(resolve(root, ".gitignore"), "utf8");

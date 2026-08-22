@@ -4,6 +4,7 @@ import {
   canonicalDssePaeV2,
   canonicalScanAttestationEnvelopeBytesV2,
   createScanCandidateV2,
+  ed25519KeyIdV2,
   isVerifiedScanAttestationV2,
   signScanCandidateV2,
   verifyScanAttestationV2,
@@ -11,6 +12,7 @@ import {
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 const keyPair = generateKeyPairSync("ed25519");
+const keyId = ed25519KeyIdV2(keyPair.publicKey);
 const source = sha("source");
 const candidate = () =>
   createScanCandidateV2({
@@ -22,19 +24,28 @@ const candidate = () =>
     subject: { name: "source-tree", digest: { sha256: source } },
     sourceSeals: {
       before: {
+        protocol: "SourceSealV2",
+        algorithm: "code-unit-canonical-json-v1",
         sourceTreeSha256: source,
         selectedClosureSha256: sha("closure"),
         sealedSnapshotSha256: sha("seal"),
+        files: [],
       },
       run: {
+        protocol: "SourceSealV2",
+        algorithm: "code-unit-canonical-json-v1",
         sourceTreeSha256: source,
         selectedClosureSha256: sha("closure"),
         sealedSnapshotSha256: sha("seal"),
+        files: [],
       },
       after: {
+        protocol: "SourceSealV2",
+        algorithm: "code-unit-canonical-json-v1",
         sourceTreeSha256: source,
         selectedClosureSha256: sha("closure"),
         sealedSnapshotSha256: sha("seal"),
+        files: [],
       },
     },
     observation: { keySha256: sha("key"), setSha256: sha("set") },
@@ -44,7 +55,7 @@ const candidate = () =>
       configurationSha256: sha("config"),
     },
     platform: { os: "linux", architecture: "amd64" },
-    coverage: { kind: "selected-closure", sha256: sha("coverage"), complete: true },
+    coverage: { kind: "selected-closure", sha256: sha("closure"), complete: true },
     annexes: [{ descriptorId: "annex.sbom", sha256: sha("annex"), byteLength: 4 }],
     cleanup: { outcome: "completed" },
     scan: { outcome: "succeeded" },
@@ -67,7 +78,7 @@ const signed = () =>
     signer: {
       identity: "scanner.ci",
       class: "test-ephemeral",
-      keyId: "ed25519:test",
+      keyId,
       privateKey: keyPair.privateKey,
     },
     claims,
@@ -76,15 +87,10 @@ const expected = {
   ...claims,
   now: "2026-08-22T00:30:00.000Z",
   subjectSha256: source,
-  signer: { identity: "scanner.ci", class: "test-ephemeral", keyId: "ed25519:test" },
+  signer: { identity: "scanner.ci", class: "test-ephemeral", keyId },
 };
 const roots = () => [
-  {
-    identity: "scanner.ci",
-    class: "test-ephemeral" as const,
-    keyId: "ed25519:test",
-    publicKey: keyPair.publicKey,
-  },
+  { identity: "scanner.ci", class: "test-ephemeral" as const, keyId, publicKey: keyPair.publicKey },
 ];
 
 describe("ScanAttestationV2 signed evidence", () => {
@@ -109,7 +115,7 @@ describe("ScanAttestationV2 signed evidence", () => {
       signerAssertedClaimsMatchPolicy: true,
       scan: { outcome: "succeeded" },
     });
-    expect(verified.facts.provenanceVerified).toBe(false);
+    expect(verified.facts.provenance).toBe("none");
   });
 
   it("fails closed for malformed signatures, mismatched roots/claims, time, replay, and raw or cloned custody", () => {
@@ -147,5 +153,32 @@ describe("ScanAttestationV2 signed evidence", () => {
     const verified = verifyScanAttestationV2({ envelope: evidence, roots: roots(), expected });
     expect(isVerifiedScanAttestationV2({ ...verified })).toBe(false);
     expect(isVerifiedScanAttestationV2(JSON.parse(JSON.stringify(verified)))).toBe(false);
+  });
+
+  it("refuses source-subject and coverage bindings that do not describe the sealed selected closure", () => {
+    const input = {
+      protocol: "ScanCandidateV2",
+      coreContract: {
+        commit: "e27a55dcebb635c8298aa4fd6fd871f59089bcf7",
+        decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
+      },
+      subject: { name: "source-tree", digest: { sha256: sha("wrong") } },
+      sourceSeals: candidate().sourceSeals,
+      observation: candidate().observation,
+      scanner: candidate().scanner,
+      platform: candidate().platform,
+      coverage: candidate().coverage,
+      annexes: candidate().annexes,
+      cleanup: candidate().cleanup,
+      scan: candidate().scan,
+    };
+    expect(() => createScanCandidateV2(input)).toThrow(/subject source seal/i);
+    expect(() =>
+      createScanCandidateV2({
+        ...input,
+        subject: candidate().subject,
+        coverage: { ...input.coverage, sha256: sha("wrong") },
+      }),
+    ).toThrow(/coverage selected closure/i);
   });
 });
