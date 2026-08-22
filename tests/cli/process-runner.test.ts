@@ -56,11 +56,11 @@ describe("dockerRunner", () => {
 
     const completed = dockerRunner(["docker", "version"], options);
     child.emit("error", new Error("docker unavailable"));
-    child.emit("close", 0);
 
     await expect(completed).rejects.toThrow("docker unavailable");
     await vi.advanceTimersByTimeAsync(20);
     expect(child.kill).not.toHaveBeenCalled();
+    child.emit("close", 0);
   });
 
   it("settles with a truncated result when timeout termination cannot be requested", async () => {

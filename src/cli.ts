@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
@@ -186,7 +187,7 @@ function writeNew(path: string, bytes: Uint8Array): void {
     closeSync(descriptor);
   }
 }
-function dockerRunner(
+export function dockerRunner(
   argv: readonly string[],
   options: {
     readonly env: Readonly<Record<string, string>>;
@@ -209,39 +210,56 @@ function dockerRunner(
       stderrSize = 0,
       truncated = false,
       settled = false;
-    const finish = (result: unknown) => {
-      if (!settled) {
-        settled = true;
-        resolveResult(result);
-      }
+    const result = () => ({
+      code: 1,
+      stdout: Buffer.concat(stdout).toString("utf8"),
+      stderr: Buffer.concat(stderr).toString("utf8"),
+      truncated,
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (outcome: { readonly result: unknown } | { readonly error: unknown }) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if ("error" in outcome) reject(outcome.error);
+      else resolveResult(outcome.result);
     };
-    const timer = setTimeout(() => {
+    const finish = (code: number | null) => {
+      settle({
+        result: {
+          ...result(),
+          code: code ?? 1,
+        },
+      });
+    };
+    const terminate = () => {
+      if (settled) return;
       truncated = true;
-      child.kill();
-    }, options.timeoutMs);
+      try {
+        child.kill();
+      } catch {
+        // The bounded runner result below is still authoritative after a failed termination request.
+      }
+      finish(1);
+    };
+    timer = setTimeout(terminate, options.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
+      if (settled) return;
       stdoutSize += chunk.byteLength;
       if (stdoutSize > options.maxStdoutBytes) {
-        truncated = true;
-        child.kill();
+        terminate();
       } else stdout.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (settled) return;
       stderrSize += chunk.byteLength;
       if (stderrSize > options.maxStderrBytes) {
-        truncated = true;
-        child.kill();
+        terminate();
       } else stderr.push(chunk);
     });
-    child.once("error", reject);
+    child.once("error", (error) => settle({ error }));
     child.once("close", (code) => {
-      clearTimeout(timer);
-      finish({
-        code: code ?? 1,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        truncated,
-      });
+      finish(code);
     });
   });
 }
@@ -347,7 +365,12 @@ async function main(): Promise<void> {
   }
   fail("unknown command");
 }
-main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : "invalid input"}\n`);
-  process.exitCode = 2;
-});
+if (
+  typeof process.argv[1] === "string" &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`${error instanceof Error ? error.message : "invalid input"}\n`);
+    process.exitCode = 2;
+  });
+}
