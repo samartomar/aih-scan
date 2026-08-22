@@ -22,6 +22,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "biome check .",
+    "prepack": "npm run build",
     "repo:doctor": "node tools/repo-ai-tools.mjs doctor-codex",
     "repo:init": "node tools/repo-ai-tools.mjs setup-codex",
     "test": "vitest run",

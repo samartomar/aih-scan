@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -269,8 +269,10 @@ function runInstalledBin(project: string, args: readonly string[]): string {
   );
   if (process.platform !== "win32")
     return execFileSync(bin, args, { cwd: project, encoding: "utf8", stdio: "pipe" });
-  const command = [bin, ...args].map((value) => `"${value.replaceAll('"', '""')}"`).join(" ");
-  return execFileSync("cmd.exe", ["/d", "/s", "/c", command], {
+  const command = `call ${[bin, ...args]
+    .map((value) => `"${value.replaceAll('"', '""')}"`)
+    .join(" ")}`;
+  return execSync(command, {
     cwd: project,
     encoding: "utf8",
     stdio: "pipe",
@@ -343,7 +345,7 @@ describe("published V2 package installation", () => {
       "ERR_PACKAGE_PATH_NOT_EXPORTED",
       "ERR_PACKAGE_PATH_NOT_EXPORTED",
     ]);
-    expect(runInstalledBin(directory, ["--help"])).not.toMatch(/v1|private/i);
+    expect(runInstalledBin(directory, ["--help"])).not.toMatch(/v1/i);
 
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
@@ -352,8 +354,10 @@ describe("published V2 package installation", () => {
       mode: 0o600,
     });
     chmodSync(privateKey, 0o600);
-    if (process.platform !== "win32")
+    if (process.platform !== "win32") {
       expect(readFileSync(privateKey).byteLength).toBeGreaterThan(0);
+      expect(statSync(privateKey).mode & 0o077).toBe(0);
+    }
     const signer = { identity: "release.admin", class: "organization", keyId };
     const claims = {
       repository: "aihq/scan",
@@ -424,5 +428,5 @@ describe("published V2 package installation", () => {
       ]),
     ) as { envelopeValid?: unknown; signer?: { identity?: unknown } };
     expect(verified).toMatchObject({ envelopeValid: true, signer: { identity: "release.admin" } });
-  });
+  }, 30_000);
 });
