@@ -245,7 +245,7 @@ describe("ScanAttestationV2 signed evidence", () => {
     expect(() => canonicalSourceSealsV2Bytes({ before })).toThrow();
   });
 
-  it("rejects hidden and accessor-backed public source-seal inputs without invoking accessors", () => {
+  it("rejects hidden, symbol, extra, and accessor-backed public source-seal inputs", () => {
     const before = seal();
     const after = seal();
     let accessorReads = 0;
@@ -259,10 +259,21 @@ describe("ScanAttestationV2 signed evidence", () => {
     });
     const hidden = { before, after } as Record<string, unknown>;
     Object.defineProperty(hidden, "unexpected", { value: true });
+    const symbol = { before, after } as Record<string | symbol, unknown>;
+    symbol[Symbol("unexpected")] = true;
+    const extra = { before, after, unexpected: true };
+    const nestedHidden = { before: { ...before }, after } as {
+      before: Record<string, unknown>;
+      after: typeof after;
+    };
+    Object.defineProperty(nestedHidden.before, "unexpected", { value: true });
 
     expect(() => canonicalSourceSealsV2Bytes(accessor)).toThrow();
     expect(accessorReads).toBe(0);
     expect(() => canonicalSourceSealsV2Bytes(hidden)).toThrow();
+    expect(() => canonicalSourceSealsV2Bytes(symbol)).toThrow();
+    expect(() => canonicalSourceSealsV2Bytes(extra)).toThrow();
+    expect(() => canonicalSourceSealsV2Bytes(nestedHidden)).toThrow();
   });
 
   it("signs deterministic canonical DSSE bytes and verifies exact configured signer claims", () => {

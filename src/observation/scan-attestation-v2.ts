@@ -411,6 +411,56 @@ function exactKeys(value: object, allowed: readonly string[], label: string): vo
     fail(`${label} fields`);
   for (const key of allowed) ownData(value, key);
 }
+function assertOwnEnumerableDataTree(
+  value: unknown,
+  label: string,
+  active = new WeakSet<object>(),
+): void {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return;
+  if (typeof value === "number") return;
+  if (typeof value !== "object") fail(`${label} JSON data`);
+  if (active.has(value)) fail(`${label} cycle`);
+  active.add(value);
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) fail(`${label} array shape`);
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== value.length + 1 ||
+      !keys.includes("length") ||
+      keys.some(
+        (key) =>
+          typeof key !== "string" ||
+          (key !== "length" && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length)),
+      )
+    )
+      fail(`${label} array fields`);
+    for (let index = 0; index < value.length; index += 1)
+      assertOwnEnumerableDataTree(
+        ownData(value, String(index)),
+        `${label}[${String(index)}]`,
+        active,
+      );
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) fail(`${label} object shape`);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") fail(`${label} symbol field`);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor))
+        fail(`${label} own enumerable data`);
+      assertOwnEnumerableDataTree(descriptor.value, `${label}.${key}`, active);
+    }
+  }
+  active.delete(value);
+}
+function assertStrictPublicSourceSealsInput(value: unknown): void {
+  assertOwnEnumerableDataTree(value, "ScanAttestationV2 source seals");
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    fail("source seals object");
+  exactKeys(value, ["before", "after"], "source seals");
+  sourceSealV2Schema.parse(ownData(value, "before"));
+  sourceSealV2Schema.parse(ownData(value, "after"));
+}
 function sortedAnnexes(
   values: z.infer<typeof candidateInput>["annexes"],
 ): z.infer<typeof candidateInput>["annexes"] {
@@ -456,6 +506,7 @@ export function assertCompleteScanAnnexArtifactsV2(
 
 /** Source-seal V2 bytes use strict JSON and code-unit sorted object keys. */
 export function canonicalSourceSealsV2Bytes(value: unknown): Buffer {
+  assertStrictPublicSourceSealsInput(value);
   assertStrictJsonValueV1(value, "ScanAttestationV2 source seals");
   const parsed = candidateInput.shape.sourceSeals.parse(structuredClone(value));
   return canonicalStrictJsonBytesV1({
