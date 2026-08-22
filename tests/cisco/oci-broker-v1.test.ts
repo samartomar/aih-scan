@@ -23,6 +23,7 @@ const ociManifestMediaType = "application/vnd.oci.image.manifest.v1+json";
 const ociConfigMediaType = "application/vnd.oci.image.config.v1+json";
 const ociLayerMediaType = "application/vnd.oci.image.layer.v1.tar";
 const maxSarifBytes = 16 * 1024 * 1024;
+const ownedContainerId = "a".repeat(64);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -185,6 +186,8 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
     readonly home: string;
     readonly path: string;
   }> = [];
+  let createdOutput: string | undefined;
+  let createdSource: string | undefined;
   return {
     calls,
     clientStates,
@@ -211,6 +214,13 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
           stderr: "",
         };
       }
+      if (argv[1] === "container" && argv[2] === "create") {
+        createdOutput = mountSource(argv, "/output");
+        createdSource = mountSource(argv, "/source");
+        return { code: 0, stdout: ownedContainerId, stderr: "" };
+      }
+      if (argv[1] === "container" && argv[2] === "inspect")
+        return { code: 0, stdout: ownedContainerId, stderr: "" };
       if (argv[1] === "container" && argv[2] === "rm")
         return { code: mode === "cleanup-failure" ? 1 : 0, stdout: "", stderr: "" };
       if (argv[1] === "container" && argv[2] === "ls") {
@@ -222,9 +232,15 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
         return { code: 0, stdout: "", stderr: "" };
       }
       if (mode === "spawn-error") throw new Error("injected runner spawn failure");
-      const output = mountSource(argv, "/output");
-      if (mode === "source-drift")
-        writeFileSync(join(mountSource(argv, "/source"), "SKILL.md"), "drift\n");
+      if (
+        argv[1] !== "container" ||
+        argv[2] !== "start" ||
+        createdOutput === undefined ||
+        createdSource === undefined
+      )
+        throw new Error("broker did not start the claimed container");
+      const output = createdOutput;
+      if (mode === "source-drift") writeFileSync(join(createdSource, "SKILL.md"), "drift\n");
       if (mode === "malformed") writeFileSync(join(output, "result.sarif"), "not JSON");
       else if (mode === "non-utf8")
         writeFileSync(join(output, "result.sarif"), Buffer.from([0xff]));
@@ -274,10 +290,19 @@ function recursivelyFrozen(value: unknown, seen = new Set<object>()): void {
   for (const child of Object.values(value)) recursivelyFrozen(child, seen);
 }
 
-function expectCleanup(calls: readonly { readonly argv: readonly string[] }[], name: string): void {
+function expectCleanup(calls: readonly { readonly argv: readonly string[] }[]): void {
   expect(calls.slice(-2).map((call) => call.argv)).toEqual([
-    ["docker", "container", "rm", "--force", name],
-    ["docker", "container", "ls", "--all", "--quiet", "--filter", `name=^/${name}$`],
+    ["docker", "container", "rm", "--force", ownedContainerId],
+    [
+      "docker",
+      "container",
+      "ls",
+      "--all",
+      "--quiet",
+      "--no-trunc",
+      "--filter",
+      `id=${ownedContainerId}`,
+    ],
   ]);
 }
 
@@ -356,12 +381,13 @@ function expectNoAuthority(value: unknown): void {
 }
 
 describe("Cisco OCI broker V1", () => {
-  it("runs only the branded config image ID with exact restricted argv, isolated client state, and named cleanup", async () => {
+  it("creates, proves, starts, and cleans only an exact container ID with restricted argv", async () => {
     const { value, fake } = input();
-    const containerName = `aih-scan-cisco-${value.layout.configDigestSha256.slice(7, 19)}`;
     const result = await executeCiscoOciBrokerV1(value);
-    const run = fake.calls.find((call) => call.argv[1] === "run");
-    const options = run?.options;
+    const create = fake.calls.find(
+      (call) => call.argv[1] === "container" && call.argv[2] === "create",
+    );
+    const options = create?.options;
     const environment = options?.env as Record<string, string>;
     const home = environment?.HOME;
     const dockerConfig = environment?.DOCKER_CONFIG;
@@ -374,11 +400,10 @@ describe("Cisco OCI broker V1", () => {
       "{{.Id}}",
       value.layout.configDigestSha256,
     ]);
-    expect(run?.argv).toEqual([
+    expect(create?.argv).toEqual([
       "docker",
-      "run",
-      "--name",
-      containerName,
+      "container",
+      "create",
       "--pull=never",
       "--network=none",
       "--read-only",
@@ -412,7 +437,7 @@ describe("Cisco OCI broker V1", () => {
       "--output-sarif",
       "/output/result.sarif",
     ]);
-    expect(run?.argv?.filter((item) => item === "--mount")).toHaveLength(2);
+    expect(create?.argv?.filter((item) => item === "--mount")).toHaveLength(2);
     for (const forbidden of [
       "--privileged",
       "--network=host",
@@ -422,8 +447,9 @@ describe("Cisco OCI broker V1", () => {
       "--workdir",
       "--volume",
     ])
-      expect(run?.argv).not.toContain(forbidden);
-    expect(run?.argv?.join("\n")).not.toMatch(
+      expect(create?.argv).not.toContain(forbidden);
+    expect(create?.argv).not.toContain("--name");
+    expect(create?.argv?.join("\n")).not.toMatch(
       /(?:^|\n)(?:privileged=true|--privileged=true|--device=|--env=|--workdir=|--volume=|--mount=.*(?:docker\.sock|dst=\/host))(?:\n|$)/i,
     );
     expect(Object.keys(environment ?? {}).sort()).toEqual(["DOCKER_CONFIG", "HOME", "PATH"]);
@@ -435,7 +461,22 @@ describe("Cisco OCI broker V1", () => {
     expect(home).not.toBe(process.env.HOME);
     expect(dockerConfig).not.toBe(process.env.DOCKER_CONFIG);
     expectBoundedDockerCalls(fake.calls, fake.clientStates);
-    expectCleanup(fake.calls, containerName);
+    expect(fake.calls.map((call) => call.argv)).toContainEqual([
+      "docker",
+      "container",
+      "inspect",
+      "--format",
+      "{{.Id}}",
+      ownedContainerId,
+    ]);
+    expect(fake.calls.map((call) => call.argv)).toContainEqual([
+      "docker",
+      "container",
+      "start",
+      "--attach",
+      ownedContainerId,
+    ]);
+    expectCleanup(fake.calls);
     expectClientRootsRemoved(fake.clientStates);
     expect(Object.keys(result).sort()).toEqual(
       [
@@ -496,7 +537,9 @@ describe("Cisco OCI broker V1", () => {
         return original(argv, options);
       };
       await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
-      expect(fake.calls.some((call) => call.argv[1] === "run")).toBe(false);
+      expect(
+        fake.calls.some((call) => call.argv[1] === "container" && call.argv[2] === "create"),
+      ).toBe(false);
     }
   });
 
@@ -506,7 +549,7 @@ describe("Cisco OCI broker V1", () => {
     const { value, fake } = input();
     const original = fake.run;
     value.runner = async (argv, options) => {
-      if (argv[1] === "run") {
+      if (argv[1] === "container" && argv[2] === "start") {
         await original(argv, options);
         return { code: 0, stdout, stderr };
       }
@@ -534,7 +577,7 @@ describe("Cisco OCI broker V1", () => {
       const { value: invalid, fake: invalidFake } = input();
       const invalidOriginal = invalidFake.run;
       invalid.runner = async (argv, options) => {
-        if (argv[1] === "run") return response;
+        if (argv[1] === "container" && argv[2] === "start") return response;
         return invalidOriginal(argv, options);
       };
       let error: unknown;
@@ -561,7 +604,7 @@ describe("Cisco OCI broker V1", () => {
       const { value, fake } = input();
       const original = fake.run;
       value.runner = async (argv, options) => {
-        if (argv[1] === "run") return response;
+        if (argv[1] === "container" && argv[2] === "start") return response;
         return original(argv, options);
       };
       await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow(
@@ -577,7 +620,7 @@ describe("Cisco OCI broker V1", () => {
     let outputRoot: string | undefined;
     let outputParent: string | undefined;
     value.runner = async (argv, options) => {
-      if (argv[1] === "run") {
+      if (argv[1] === "container" && argv[2] === "create") {
         outputRoot = mountSource(argv, "/output");
         outputParent = dirname(outputRoot);
         expect(basename(outputRoot)).toBe("output");
@@ -594,12 +637,12 @@ describe("Cisco OCI broker V1", () => {
       cleanup: { kind: "clean" },
     });
     if (outputRoot === undefined || outputParent === undefined)
-      throw new Error("broker did not invoke the scanner runner");
+      throw new Error("broker did not create the scanner container");
     expect(existsSync(outputRoot)).toBe(false);
     expect(existsSync(outputParent)).toBe(false);
   });
 
-  it("requires a successful exact-name Docker absence listing with no output", async () => {
+  it("requires a successful exact-ID Docker absence listing with no output", async () => {
     for (const response of [
       { code: 1, stdout: "", stderr: "" },
       { code: 0, stdout: "unexpected", stderr: "" },
@@ -617,12 +660,12 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
-  it("never removes a foreign container when Docker run reports an exact-name conflict", async () => {
+  it("never removes a foreign container when creation reports a name conflict", async () => {
     const { value, fake } = input();
     const foreignName = `aih-scan-cisco-${value.layout.configDigestSha256.slice(7, 19)}`;
     const original = fake.run;
     value.runner = async (argv, options) => {
-      if (argv[1] === "run")
+      if (argv[1] === "run" || (argv[1] === "container" && argv[2] === "create"))
         return {
           code: 125,
           stdout: "",
@@ -632,7 +675,7 @@ describe("Cisco OCI broker V1", () => {
     };
 
     await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow(
-      "invalid Cisco OCI broker V1: scanner run nonzero code 125",
+      "invalid Cisco OCI broker V1: container creation",
     );
     expect(
       fake.calls.some(
@@ -640,12 +683,43 @@ describe("Cisco OCI broker V1", () => {
           call.argv[0] === "docker" &&
           call.argv[1] === "container" &&
           call.argv[2] === "rm" &&
-          call.argv.includes(foreignName),
+          call.argv[3] === "--force",
       ),
     ).toBe(false);
   });
 
-  it("fails closed before run for forged layout, strict-input, host, image-inspect, and mount injection failures", async () => {
+  it("does not issue cleanup from malformed, missing, or replaced ownership evidence", async () => {
+    for (const mode of ["malformed-create", "missing-create", "replaced-inspect"] as const) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "container" && argv[2] === "create") {
+          if (mode === "malformed-create")
+            return { code: 0, stdout: "not-a-container-id", stderr: "" };
+          if (mode === "missing-create") return { code: 0, stdout: "", stderr: "" };
+        }
+        if (mode === "replaced-inspect" && argv[1] === "container" && argv[2] === "inspect")
+          return { code: 0, stdout: "b".repeat(64), stderr: "" };
+        return original(argv, options);
+      };
+
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expect(
+        fake.calls.some(
+          (call) =>
+            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "rm",
+        ),
+      ).toBe(false);
+      expect(
+        fake.calls.some(
+          (call) =>
+            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "start",
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("fails closed before container creation for forged layout, strict-input, host, image-inspect, and mount injection failures", async () => {
     const layout = layoutFixture();
     const sourceRoot = sourceFixture();
     const imageMismatch = runner(layout, "image-mismatch");
@@ -666,7 +740,9 @@ describe("Cisco OCI broker V1", () => {
     ];
     for (const value of cases) await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
     for (const fake of [imageMismatch, imageNonzero])
-      expect(fake.calls.some((call) => call.argv[1] === "run")).toBe(false);
+      expect(
+        fake.calls.some((call) => call.argv[1] === "container" && call.argv[2] === "create"),
+      ).toBe(false);
   });
 
   it("rejects an existing comma-delimited source path before the runner", async () => {
@@ -733,7 +809,7 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
-  it("cleans and verifies named-container absence after every execution or output failure", async () => {
+  it("cleans and verifies claimed-container-ID absence after every execution or output failure", async () => {
     for (const mode of [
       "cleanup-failure",
       "cleanup-absence-hostile",
@@ -756,9 +832,8 @@ describe("Cisco OCI broker V1", () => {
       const fake = runner(layout, mode);
       const sourceRoot = sourceFixture();
       const value = input(layout, sourceRoot, { runner: fake.run }).value;
-      const name = `aih-scan-cisco-${layout.configDigestSha256.slice(7, 19)}`;
       await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
-      expectCleanup(fake.calls, name);
+      expectCleanup(fake.calls);
       const outputMount = fake.calls
         .flatMap((call) => call.argv)
         .find((item) => item.startsWith("type=bind,src=") && item.endsWith(",dst=/output"));
@@ -772,24 +847,27 @@ describe("Cisco OCI broker V1", () => {
     const layout = layoutFixture();
     const fake = runner(layout, "output-fifo");
     const value = input(layout, sourceFixture(), { runner: fake.run }).value;
-    const name = `aih-scan-cisco-${layout.configDigestSha256.slice(7, 19)}`;
-
     await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
-    expectCleanup(fake.calls, name);
+    expectCleanup(fake.calls);
   });
 
   it("rejects malformed reporter fields, selected-closure escape, and forged/mutable security inputs", async () => {
     const layout = layoutFixture();
     const malformed = runner(layout);
-    malformed.run = async (argv) => {
-      if (argv[1] === "image") return { code: 0, stdout: layout.configDigestSha256, stderr: "" };
-      if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
-      writeFileSync(
-        join(mountSource(argv, "/output"), "result.sarif"),
-        sarif().replace("endTimeUtc", "missingTime"),
-      );
-      return { code: 0, stdout: "", stderr: "" };
+    const malformedOriginal = malformed.run;
+    let malformedOutput: string | undefined;
+    malformed.run = async (argv, options) => {
+      if (argv[1] === "container" && argv[2] === "create")
+        malformedOutput = mountSource(argv, "/output");
+      const response = await malformedOriginal(argv, options);
+      if (argv[1] === "container" && argv[2] === "start") {
+        if (malformedOutput === undefined) throw new Error("missing malformed output mount");
+        writeFileSync(
+          join(malformedOutput, "result.sarif"),
+          sarif().replace("endTimeUtc", "missingTime"),
+        );
+      }
+      return response;
     };
     const sourceRoot = sourceFixture();
     await expect(
@@ -801,12 +879,17 @@ describe("Cisco OCI broker V1", () => {
       ),
     ).resolves.toMatchObject({ facts: expect.any(Array) });
     const outside = runner(layout);
-    outside.run = async (argv) => {
-      if (argv[1] === "image") return { code: 0, stdout: layout.configDigestSha256, stderr: "" };
-      if (argv[1] === "container" && argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
-      if (argv[1] === "container" && argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };
-      writeFileSync(join(mountSource(argv, "/output"), "result.sarif"), sarif("unselected.md"));
-      return { code: 0, stdout: "", stderr: "" };
+    const outsideOriginal = outside.run;
+    let outsideOutput: string | undefined;
+    outside.run = async (argv, options) => {
+      if (argv[1] === "container" && argv[2] === "create")
+        outsideOutput = mountSource(argv, "/output");
+      const response = await outsideOriginal(argv, options);
+      if (argv[1] === "container" && argv[2] === "start") {
+        if (outsideOutput === undefined) throw new Error("missing outside output mount");
+        writeFileSync(join(outsideOutput, "result.sarif"), sarif("unselected.md"));
+      }
+      return response;
     };
     await expect(
       executeCiscoOciBrokerV1(input(layout, sourceRoot, { runner: outside.run }).value),

@@ -184,6 +184,12 @@ function normalizedImageId(stdout: string): string {
   return line;
 }
 
+function normalizedContainerId(stdout: string, label: string): string {
+  const line = normalizedTerminalLine(stdout, label);
+  if (!/^[a-f0-9]{64}$/.test(line)) fail(label);
+  return line;
+}
+
 function output(path: string): Buffer {
   const names = readdirSync(path).sort();
   if (names.length !== 1 || names[0] !== "result.sarif") fail("SARIF output stale or extra");
@@ -255,10 +261,9 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     maxStdoutBytes: MAX_STDIO_BYTES,
     maxStderrBytes: MAX_STDIO_BYTES,
   });
-  const containerName = `aih-scan-cisco-${input.layout.configDigestSha256.slice(7, 19)}`;
   const invoke = async (argv: readonly string[], label: string) =>
     response(await input.runner(argv, options), label);
-  let created = false;
+  let ownedContainerId: string | undefined;
   let result: unknown;
   let operationError: unknown;
   let cleanupError: unknown;
@@ -286,13 +291,11 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
       fail("local image ID mismatch");
     const before = sealNativeObservationSourceV1(sourceInput);
     if (!sameSeal(initialSeal, before)) fail("source drift before run");
-    created = true;
-    const run = await invoke(
+    const created = await invoke(
       [
         "docker",
-        "run",
-        "--name",
-        containerName,
+        "container",
+        "create",
         "--pull=never",
         "--network=none",
         "--read-only",
@@ -326,7 +329,27 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
         "--output-sarif",
         "/output/result.sarif",
       ],
-      "run",
+      "container create",
+    );
+    if (created.truncated || created.code !== 0 || created.stderr !== "")
+      fail("container creation");
+    const claimedContainerId = normalizedContainerId(created.stdout, "container creation");
+    const inspectedContainer = await invoke(
+      ["docker", "container", "inspect", "--format", "{{.Id}}", claimedContainerId],
+      "container identity",
+    );
+    if (
+      inspectedContainer.truncated ||
+      inspectedContainer.code !== 0 ||
+      inspectedContainer.stderr !== "" ||
+      normalizedContainerId(inspectedContainer.stdout, "container identity mismatch") !==
+        claimedContainerId
+    )
+      fail("container identity mismatch");
+    ownedContainerId = claimedContainerId;
+    const run = await invoke(
+      ["docker", "container", "start", "--attach", ownedContainerId],
+      "container start",
     );
     if (run.truncated) fail("scanner run truncated");
     if (run.code !== 0) fail(`scanner run nonzero code ${run.code}`);
@@ -365,14 +388,23 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   } catch (error) {
     operationError = error;
   }
-  if (created) {
+  if (ownedContainerId !== undefined) {
     try {
       const removed = await invoke(
-        ["docker", "container", "rm", "--force", containerName],
+        ["docker", "container", "rm", "--force", ownedContainerId],
         "container rm",
       );
       const absent = await invoke(
-        ["docker", "container", "ls", "--all", "--quiet", "--filter", `name=^/${containerName}$`],
+        [
+          "docker",
+          "container",
+          "ls",
+          "--all",
+          "--quiet",
+          "--no-trunc",
+          "--filter",
+          `id=${ownedContainerId}`,
+        ],
         "container absence",
       );
       if (
