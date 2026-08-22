@@ -275,6 +275,11 @@ describe("Cisco OCI capture evidence bridge", () => {
     );
     expect(capture).toContain("scanner_commit: $" + "{{ steps.capture.outputs.scanner_commit }}");
     expect(capture).toContain(
+      "scanner_repository: $" + "{{ steps.capture.outputs.scanner_repository }}",
+    );
+    expect(workflow).toContain("branches: [main]");
+    expect(capture).toContain("event.pull_request.head.repo.full_name");
+    expect(capture).toContain(
       "ref: $" +
         "{{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}",
     );
@@ -295,6 +300,7 @@ describe("Cisco OCI capture evidence bridge", () => {
     expect(sign).toContain("expiresAt: expiresAt.toISOString()");
     expect(sign).toContain("npm ci --ignore-scripts");
     expect(sign).toContain("ref: $" + "{{ needs.capture.outputs.scanner_commit }}");
+    expect(sign).toContain("repository: $" + "{{ needs.capture.outputs.scanner_repository }}");
     expect(sign).toContain("name: cisco-capture-context");
     expect(sign).toContain("$RUNNER_TEMP/cisco-context/ci-context.json");
     expect(sign).toContain("node dist/cli.js sign");
@@ -306,6 +312,7 @@ describe("Cisco OCI capture evidence bridge", () => {
     expect(verify).toContain("https://token.actions.githubusercontent.com");
     expect(verify).not.toContain("now: claims.signedAt");
     expect(verify).toContain("ref: $" + "{{ needs.capture.outputs.scanner_commit }}");
+    expect(verify).toContain("repository: $" + "{{ needs.capture.outputs.scanner_repository }}");
     expect(verify).not.toMatch(/docker|capture --request|sign --bundle/i);
     expect(workflow).toMatch(/^permissions:\n {2}contents: read\s*$/m);
     expect(workflow.match(/timeout-minutes:/g)).toHaveLength(3);
@@ -313,5 +320,6 @@ describe("Cisco OCI capture evidence bridge", () => {
       workflow.match(/actions\/setup-node@a0853c24544627f65ddf259abe73b1d18a591444/g),
     ).toHaveLength(3);
     expect(workflow.match(/npm ci --ignore-scripts/g)).toHaveLength(3);
+    expect(workflow.match(/node-version: 20/g)).toHaveLength(3);
   });
 });

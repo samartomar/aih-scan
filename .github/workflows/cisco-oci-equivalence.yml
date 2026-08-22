@@ -1,6 +1,7 @@
 name: Cisco OCI equivalence
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -11,17 +12,19 @@ jobs:
     outputs:
       candidate_digest: ${{ steps.capture.outputs.candidate_digest }}
       scanner_commit: ${{ steps.capture.outputs.scanner_commit }}
+      scanner_repository: ${{ steps.capture.outputs.scanner_repository }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "24.18.0"
+          node-version: 20
       - name: Check out public ai-harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -107,9 +110,11 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             source_ref="refs/heads/$GITHUB_HEAD_REF"
             commit="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const event = JSON.parse(readFileSync(process.argv[1], "utf8")); process.stdout.write(event.pull_request.head.sha);' "$GITHUB_EVENT_PATH")"
+            repository="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const event = JSON.parse(readFileSync(process.argv[1], "utf8")); process.stdout.write(event.pull_request.head.repo.full_name);' "$GITHUB_EVENT_PATH")"
           else
             source_ref="$GITHUB_REF"
             commit="$GITHUB_SHA"
+            repository="$GITHUB_REPOSITORY"
           fi
           test "$commit" = "$(git rev-parse HEAD)"
           node tools/create-cisco-oci-capture-request.mjs \
@@ -120,7 +125,7 @@ jobs:
             --pyproject "$GITHUB_WORKSPACE/tools/cisco-oci-candidate/pyproject.toml" \
             --lock "$GITHUB_WORKSPACE/tools/cisco-oci-candidate/uv.lock" \
             --image-id "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt" \
-            --repository "$GITHUB_REPOSITORY" \
+            --repository "$repository" \
             --workflow .github/workflows/cisco-oci-equivalence.yml \
             --source-ref "$source_ref" \
             --commit "$commit" \
@@ -134,6 +139,7 @@ jobs:
           candidate_digest="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const candidate = JSON.parse(readFileSync(process.argv[1], "utf8")); if (!/^[a-f0-9]{64}$/.test(candidate.candidateSha256)) throw new TypeError("candidate digest"); process.stdout.write(candidate.candidateSha256);' "$RUNNER_TEMP/oci-equivalence/capture-bundle/candidate.json")"
           printf 'candidate_digest=%s\n' "$candidate_digest" >> "$GITHUB_OUTPUT"
           printf 'scanner_commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+          printf 'scanner_repository=%s\n' "$repository" >> "$GITHUB_OUTPUT"
       - name: Clean up OCI equivalence resources
         if: ${{ always() }}
         run: |
@@ -180,12 +186,13 @@ jobs:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          repository: ${{ needs.capture.outputs.scanner_repository }}
           ref: ${{ needs.capture.outputs.scanner_commit }}
           persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "24.18.0"
+          node-version: 20
       - name: Install scanner CLI
         run: |
           set -euo pipefail
@@ -243,12 +250,13 @@ jobs:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          repository: ${{ needs.capture.outputs.scanner_repository }}
           ref: ${{ needs.capture.outputs.scanner_commit }}
           persist-credentials: false
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "24.18.0"
+          node-version: 20
       - name: Install scanner CLI
         run: |
           set -euo pipefail

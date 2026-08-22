@@ -40,7 +40,9 @@ const allowedActions = new Set([
 describe("Cisco OCI direct/OCI equivalence workflow", () => {
   it("is push/PR/manual, least-privileged, and pins every action plus Buildx/BuildKit", () => {
     const text = workflow();
-    expect(text).toMatch(/^on:\n {2}push:\n {2}pull_request:\n {2}workflow_dispatch:\s*$/m);
+    expect(text).toMatch(
+      /^on:\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:\n {2}workflow_dispatch:\s*$/m,
+    );
     expect(text).not.toMatch(/pull_request_target|schedule:|workflow_run|repository_dispatch/);
     expect(text.match(/^permissions:/gm) ?? []).toHaveLength(1);
     expect(text).toMatch(/^permissions:\n {2}contents: read\s*$/m);
