@@ -8,10 +8,11 @@ implementation. For repository helper tooling, also read
 ## Repository facts
 
 - TypeScript/Node.js, npm, ESM, Vitest, and Biome.
-- This is private and publication-deferred. It has a private GitHub remote,
-  dormant internal contracts, and a caller-fed Cisco facts adapter, but no
-  scanner CLI, public API, container/process/registry execution, or release
-  lifecycle.
+- This has a private GitHub remote and remains publication-deferred. It builds
+  the public-ready `@aihq/scan` V2 API and `aih-scan` CLI for one bounded Cisco
+  Linux `amd64` OCI capture/sign/verify chain. Internal V1 contracts are not
+  public package exports, and scanner evidence has no qualification, approval,
+  installation, or adoption authority.
 - Never run an installed aih-scan against this checkout.
 
 ## Verification

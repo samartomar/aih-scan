@@ -217,6 +217,12 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
       if (argv[1] === "container" && argv[2] === "create") {
         createdOutput = mountSource(argv, "/output");
         createdSource = mountSource(argv, "/source");
+        const cidfileIndex = argv.indexOf("--cidfile");
+        if (cidfileIndex >= 0) {
+          const cidfile = argv[cidfileIndex + 1];
+          if (cidfile === undefined) throw new Error("broker supplied an incomplete cidfile flag");
+          writeFileSync(cidfile, `${ownedContainerId}\n`, { mode: 0o600 });
+        }
         return { code: 0, stdout: ownedContainerId, stderr: "" };
       }
       if (argv[1] === "container" && argv[2] === "inspect")
@@ -736,6 +742,68 @@ describe("Cisco OCI broker V1", () => {
         fake.calls.some(
           (call) =>
             call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "start",
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("uses a private cidfile to clean an exact created ID after truncated or nonzero creation output", async () => {
+    for (const mode of ["nonzero", "truncated"] as const) {
+      const { value, fake } = input();
+      const original = fake.run;
+      let cidfile: string | undefined;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "container" && argv[2] === "create") {
+          const index = argv.indexOf("--cidfile");
+          cidfile = index >= 0 ? argv[index + 1] : undefined;
+          if (cidfile !== undefined) writeFileSync(cidfile, `${ownedContainerId}\n`, { mode: 0o600 });
+          return mode === "nonzero"
+            ? { code: 125, stdout: "", stderr: "daemon response lost" }
+            : { code: 0, stdout: "", stderr: "", truncated: true };
+        }
+        return original(argv, options);
+      };
+
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expect(cidfile).toEqual(expect.any(String));
+      expectCleanup(fake.calls);
+      expect(existsSync(String(cidfile))).toBe(false);
+    }
+  });
+
+  it("does not clean from malformed, linked, or mismatched cidfile evidence", async () => {
+    for (const mode of ["malformed", "linked", "mismatched"] as const) {
+      const { value, fake } = input();
+      const original = fake.run;
+      value.runner = async (argv, options) => {
+        if (argv[1] === "container" && argv[2] === "create") {
+          const index = argv.indexOf("--cidfile");
+          const cidfile = index >= 0 ? argv[index + 1] : undefined;
+          if (cidfile !== undefined) {
+            if (mode === "linked") {
+              const replacement = `${cidfile}.replacement`;
+              writeFileSync(replacement, `${ownedContainerId}\n`);
+              symlinkSync(replacement, cidfile);
+            } else {
+              writeFileSync(
+                cidfile,
+                `${mode === "mismatched" ? "b".repeat(64) : "not-a-container-id"}\n`,
+                { mode: 0o600 },
+              );
+            }
+          }
+          return { code: 0, stdout: ownedContainerId, stderr: "" };
+        }
+        if (argv[1] === "container" && argv[2] === "inspect")
+          return { code: 0, stdout: ownedContainerId, stderr: "" };
+        return original(argv, options);
+      };
+
+      await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow();
+      expect(
+        fake.calls.some(
+          (call) =>
+            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "rm",
         ),
       ).toBe(false);
     }
