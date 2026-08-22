@@ -173,6 +173,12 @@ export function readScanCaptureBundleV2(value: unknown): ScanCaptureBundleV2 {
       fail("bundle annex binding");
     return { descriptorId: annex.descriptorId as string, bytes };
   });
+  if (
+    annexArtifacts.some(
+      (artifact, index) => artifact.descriptorId !== candidate.annexes[index]?.descriptorId,
+    )
+  )
+    fail("bundle annex ordering");
   if (artifactNames.size !== names.length || names.some((name) => !artifactNames.has(name)))
     fail("bundle extra or missing file");
   assertCompleteScanAnnexArtifactsV2(candidate.annexes, annexArtifacts);
