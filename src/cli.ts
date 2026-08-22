@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import {
   closeSync,
@@ -12,8 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
+import { dockerRunner } from "./cli/docker-runner.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
   canonicalScanAttestationEnvelopeBytesV2,
@@ -187,82 +186,6 @@ function writeNew(path: string, bytes: Uint8Array): void {
     closeSync(descriptor);
   }
 }
-export function dockerRunner(
-  argv: readonly string[],
-  options: {
-    readonly env: Readonly<Record<string, string>>;
-    readonly timeoutMs: number;
-    readonly maxStdoutBytes: number;
-    readonly maxStderrBytes: number;
-  },
-): Promise<unknown> {
-  if (argv[0] !== "docker" || argv.length < 2) fail("registered Docker argv");
-  return new Promise((resolveResult, reject) => {
-    const child = spawn("docker", argv.slice(1), {
-      shell: false,
-      windowsHide: true,
-      env: options.env,
-      stdio: "pipe",
-    });
-    const stdout: Buffer[] = [],
-      stderr: Buffer[] = [];
-    let stdoutSize = 0,
-      stderrSize = 0,
-      truncated = false,
-      settled = false;
-    const result = () => ({
-      code: 1,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-      truncated,
-    });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const settle = (outcome: { readonly result: unknown } | { readonly error: unknown }) => {
-      if (settled) return;
-      settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      if ("error" in outcome) reject(outcome.error);
-      else resolveResult(outcome.result);
-    };
-    const finish = (code: number | null) => {
-      settle({
-        result: {
-          ...result(),
-          code: code ?? 1,
-        },
-      });
-    };
-    const terminate = () => {
-      if (settled) return;
-      truncated = true;
-      try {
-        child.kill();
-      } catch {
-        // The bounded runner result below is still authoritative after a failed termination request.
-      }
-      finish(1);
-    };
-    timer = setTimeout(terminate, options.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      stdoutSize += chunk.byteLength;
-      if (stdoutSize > options.maxStdoutBytes) {
-        terminate();
-      } else stdout.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      stderrSize += chunk.byteLength;
-      if (stderrSize > options.maxStderrBytes) {
-        terminate();
-      } else stderr.push(chunk);
-    });
-    child.once("error", (error) => settle({ error }));
-    child.once("close", (code) => {
-      finish(code);
-    });
-  });
-}
 async function capture(args: readonly string[]): Promise<void> {
   if (args.length !== 4 || args[0] !== "--request" || args[2] !== "--output") fail("capture usage");
   const requestPath = args[1],
@@ -365,12 +288,7 @@ async function main(): Promise<void> {
   }
   fail("unknown command");
 }
-if (
-  typeof process.argv[1] === "string" &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  main().catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : "invalid input"}\n`);
-    process.exitCode = 2;
-  });
-}
+main().catch((error: unknown) => {
+  process.stderr.write(`${error instanceof Error ? error.message : "invalid input"}\n`);
+  process.exitCode = 2;
+});

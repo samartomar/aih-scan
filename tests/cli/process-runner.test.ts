@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { dockerRunner } from "../../src/cli/docker-runner.js";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -11,16 +12,6 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
 }));
-
-type DockerRunner = (
-  argv: readonly string[],
-  options: {
-    readonly env: Readonly<Record<string, string>>;
-    readonly timeoutMs: number;
-    readonly maxStdoutBytes: number;
-    readonly maxStderrBytes: number;
-  },
-) => Promise<unknown>;
 
 class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -36,18 +27,6 @@ const options = {
 };
 const temporaryDirectories: string[] = [];
 
-async function loadDockerRunner(): Promise<DockerRunner> {
-  const originalArgv = process.argv;
-  process.argv = [process.execPath, "aih-scan", "--help"];
-  try {
-    const cli = (await import("../../src/cli.js")) as { dockerRunner?: unknown };
-    expect(cli.dockerRunner).toBeTypeOf("function");
-    return cli.dockerRunner as DockerRunner;
-  } finally {
-    process.argv = originalArgv;
-  }
-}
-
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -61,7 +40,6 @@ describe("dockerRunner", () => {
     vi.useFakeTimers();
     const child = new FakeChild();
     spawnMock.mockReturnValue(child);
-    const dockerRunner = await loadDockerRunner();
 
     const completed = dockerRunner(["docker", "version"], options);
     child.emit("error", new Error("docker unavailable"));
@@ -76,7 +54,6 @@ describe("dockerRunner", () => {
     vi.useFakeTimers();
     const child = new FakeChild();
     spawnMock.mockReturnValue(child);
-    const dockerRunner = await loadDockerRunner();
 
     const completed = dockerRunner(["docker", "version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
@@ -88,6 +65,50 @@ describe("dockerRunner", () => {
 
     await expect(bounded).resolves.toEqual({
       code: 1,
+      stdout: "",
+      stderr: "",
+      truncated: true,
+    });
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles with a truncated result when timeout termination throws", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChild();
+    child.kill.mockImplementation(() => {
+      throw new Error("kill failed");
+    });
+    spawnMock.mockReturnValue(child);
+
+    const completed = dockerRunner(["docker", "version"], options);
+    await vi.advanceTimersByTimeAsync(options.timeoutMs);
+
+    await expect(completed).resolves.toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "",
+      truncated: true,
+    });
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "stdout",
+    "stderr",
+  ] as const)("settles with a truncated result when %s exceeds its byte cap", async (stream) => {
+    const child = new FakeChild();
+    child.kill.mockReturnValue(true);
+    spawnMock.mockReturnValue(child);
+
+    const completed = dockerRunner(["docker", "version"], options);
+    child[stream].write(Buffer.alloc(options.maxStdoutBytes + 1));
+
+    await expect(
+      Promise.race([completed.then(() => "settled"), Promise.resolve("pending")]),
+    ).resolves.toBe("pending");
+    child.emit("close", 0);
+    await expect(completed).resolves.toEqual({
+      code: 0,
       stdout: "",
       stderr: "",
       truncated: true,
