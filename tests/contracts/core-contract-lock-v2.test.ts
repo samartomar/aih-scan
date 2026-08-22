@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
@@ -6,6 +8,10 @@ import {
   verifyAiHarnessStrictV2Contract,
   verifyCoreDecisionSchemaLockV2,
 } from "../../src/core/core-contract-lock-v2.js";
+
+const repositoryRoot = resolve(import.meta.dirname, "..", "..");
+const ciWorkflow = () =>
+  readFileSync(resolve(repositoryRoot, ".github", "workflows", "ci.yml"), "utf8");
 
 describe("Core Strict V2 compatibility lock", () => {
   it("accepts only the exact Core commit and decision schema bytes", () => {
@@ -45,5 +51,16 @@ describe("Core Strict V2 compatibility lock", () => {
         schemaBytes: bytes,
       }),
     ).toThrow();
+  });
+
+  it("keeps the pinned Core checkout outside the scanner lint root", () => {
+    const workflow = ciWorkflow();
+    expect(workflow).toContain("path: $" + "{{ runner.temp }}/aih-core-contract");
+    expect(workflow).toContain(
+      'node tools/verify-core-contract-lock-v2.mjs --core-root "$' +
+        '{{ runner.temp }}/aih-core-contract"',
+    );
+    expect(workflow).not.toContain("path: .core-contract");
+    expect(workflow).not.toContain("--core-root .core-contract");
   });
 });
