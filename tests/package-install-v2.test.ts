@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalStrictJsonBytesV1 } from "../src/contract/strict-json-v1.js";
 import {
@@ -67,14 +68,29 @@ function packagePaths(directory: string): { tarball: string; paths: readonly str
 }
 
 function packedManifest(tarball: string): Record<string, unknown> {
-  const text = execFileSync("tar", ["-xOf", tarball, "package/package.json"], {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
-  const parsed: unknown = JSON.parse(text);
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
-    throw new Error("unexpected packed package manifest");
-  return parsed as Record<string, unknown>;
+  const archive = gunzipSync(readFileSync(tarball));
+  for (let offset = 0; offset + 512 <= archive.byteLength; ) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
+    const sizeText = header.subarray(124, 136).toString("ascii").replace(/\0.*$/, "").trim();
+    if (!/^[0-7]+$/.test(sizeText)) throw new Error("invalid packed tar size");
+    const size = Number.parseInt(sizeText, 8);
+    const contentStart = offset + 512;
+    const contentEnd = contentStart + size;
+    if (!Number.isSafeInteger(size) || contentEnd > archive.byteLength)
+      throw new Error("invalid packed tar bounds");
+    if (name === "package/package.json") {
+      const parsed: unknown = JSON.parse(
+        archive.subarray(contentStart, contentEnd).toString("utf8"),
+      );
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+        throw new Error("unexpected packed package manifest");
+      return parsed as Record<string, unknown>;
+    }
+    offset = contentStart + Math.ceil(size / 512) * 512;
+  }
+  throw new Error("packed package manifest missing");
 }
 
 function runNpm(args: readonly string[], cwd: string): string {

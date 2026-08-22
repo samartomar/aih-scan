@@ -2,6 +2,14 @@
   "name": "@aihq/scan",
   "version": "1.0.0",
   "description": "Strict, non-authoritative candidate and signed evidence contracts for AI Harness scanners.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samartomar/aih-scan.git"
+  },
+  "homepage": "https://github.com/samartomar/aih-scan#readme",
+  "bugs": {
+    "url": "https://github.com/samartomar/aih-scan/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
