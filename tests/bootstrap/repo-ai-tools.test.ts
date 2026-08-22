@@ -259,7 +259,9 @@ describe("aih-scan repository AI bootstrap", () => {
       tools.assertCodebaseMemorySearchResponse({ files: ["../ai-harness/src/index.ts"] }),
     ).toThrow(/search/i);
     expect(() =>
-      tools.assertCodebaseMemorySearchResponse({ files: ["C:/dev/ai-harness/src/index.ts"] }),
+      tools.assertCodebaseMemorySearchResponse({
+        files: [resolve(tmpdir(), "aih-scan-other-repository", "src", "index.ts")],
+      }),
     ).toThrow(/search/i);
     expect(() =>
       tools.assertCodebaseMemorySearchResponse({

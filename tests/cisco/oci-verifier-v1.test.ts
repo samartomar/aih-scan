@@ -415,7 +415,10 @@ describe("Cisco OCI candidate verifier V1", () => {
   });
 
   it("emits only a static rejection reason when hostile CLI values reach a filesystem boundary", () => {
-    const hostile = "C:\\do-not-leak\\digest-sha256-deadbeef\\metadata-content.json";
+    const hostile = resolve(
+      tmpdir(),
+      "aih-scan-do-not-leak-digest-sha256-deadbeef-metadata-content.json",
+    );
     const result = spawnSync(
       process.execPath,
       [
