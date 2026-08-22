@@ -92,6 +92,30 @@ describe("dockerRunner", () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
+  it("force-settles after a successful termination request never closes", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChild();
+    child.kill.mockReturnValue(true);
+    spawnMock.mockReturnValue(child);
+
+    const completed = dockerRunner(["docker", "version"], options);
+    await vi.advanceTimersByTimeAsync(options.timeoutMs);
+    const bounded = Promise.race([
+      completed,
+      new Promise<"not-settled">((resolve) => setTimeout(() => resolve("not-settled"), 1001)),
+    ]);
+    await vi.advanceTimersByTimeAsync(1001);
+
+    await expect(bounded).resolves.toEqual({
+      code: 1,
+      stdout: "",
+      stderr: "",
+      truncated: true,
+    });
+    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+
   it.each([
     "stdout",
     "stderr",
@@ -108,7 +132,7 @@ describe("dockerRunner", () => {
     ).resolves.toBe("pending");
     child.emit("close", 0);
     await expect(completed).resolves.toEqual({
-      code: 0,
+      code: 1,
       stdout: "",
       stderr: "",
       truncated: true,
