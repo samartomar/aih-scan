@@ -296,9 +296,12 @@ function recursivelyFrozen(value: unknown, seen = new Set<object>()): void {
   for (const child of Object.values(value)) recursivelyFrozen(child, seen);
 }
 
-function expectCleanup(calls: readonly { readonly argv: readonly string[] }[]): void {
+function expectCleanup(
+  calls: readonly { readonly argv: readonly string[] }[],
+  containerId = ownedContainerId,
+): void {
   expect(calls.slice(-2).map((call) => call.argv)).toEqual([
-    ["docker", "container", "rm", "--force", ownedContainerId],
+    ["docker", "container", "rm", "--force", containerId],
     [
       "docker",
       "container",
@@ -307,7 +310,7 @@ function expectCleanup(calls: readonly { readonly argv: readonly string[] }[]): 
       "--quiet",
       "--no-trunc",
       "--filter",
-      `id=${ownedContainerId}`,
+      `id=${containerId}`,
     ],
   ]);
 }
@@ -777,8 +780,8 @@ describe("Cisco OCI broker V1", () => {
     }
   });
 
-  it("does not clean from malformed, linked, or mismatched cidfile evidence", async () => {
-    for (const mode of ["malformed", "linked", "mismatched"] as const) {
+  it("does not clean from malformed or linked cidfile evidence", async () => {
+    for (const mode of ["malformed", "linked"] as const) {
       const { value, fake } = input();
       const original = fake.run;
       value.runner = async (argv, options) => {
@@ -791,11 +794,7 @@ describe("Cisco OCI broker V1", () => {
               writeFileSync(replacement, `${ownedContainerId}\n`);
               symlinkSync(replacement, cidfile);
             } else {
-              writeFileSync(
-                cidfile,
-                `${mode === "mismatched" ? "b".repeat(64) : "not-a-container-id"}\n`,
-                { mode: 0o600 },
-              );
+              writeFileSync(cidfile, "not-a-container-id\n", { mode: 0o600 });
             }
           }
           return { code: 0, stdout: ownedContainerId, stderr: "" };
@@ -813,6 +812,31 @@ describe("Cisco OCI broker V1", () => {
         ),
       ).toBe(false);
     }
+  });
+
+  it("cleans the cidfile-proven ID when creation stdout conflicts with it", async () => {
+    const { value, fake } = input();
+    const original = fake.run;
+    value.runner = async (argv, options) => {
+      if (argv[1] === "container" && argv[2] === "create") {
+        const index = argv.indexOf("--cidfile");
+        const cidfile = index >= 0 ? argv[index + 1] : undefined;
+        if (cidfile !== undefined) writeFileSync(cidfile, `${"b".repeat(64)}\n`, { mode: 0o600 });
+        return { code: 0, stdout: ownedContainerId, stderr: "" };
+      }
+      return original(argv, options);
+    };
+
+    await expect(executeCiscoOciBrokerV1(value)).rejects.toThrow(
+      "invalid Cisco OCI broker V1: container ownership mismatch",
+    );
+    expectCleanup(fake.calls, "b".repeat(64));
+    expect(
+      fake.calls.some(
+        (call) =>
+          call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "inspect",
+      ),
+    ).toBe(false);
   });
 
   it("fails closed before container creation for forged layout, strict-input, host, image-inspect, and mount injection failures", async () => {
