@@ -35,6 +35,11 @@ const publicV2Exports = [
   "verifyScanAttestationV2",
   "writeScanCaptureBundleV2",
 ].sort();
+const npmDiscoveryMetadata = {
+  repository: { type: "git", url: "git+https://github.com/samartomar/aih-scan.git" },
+  homepage: "https://github.com/samartomar/aih-scan#readme",
+  bugs: { url: "https://github.com/samartomar/aih-scan/issues" },
+} as const;
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0))
@@ -59,6 +64,17 @@ function packagePaths(directory: string): { tarball: string; paths: readonly str
     return path;
   });
   return { tarball: join(directory, filename), paths };
+}
+
+function packedManifest(tarball: string): Record<string, unknown> {
+  const text = execFileSync("tar", ["-xOf", tarball, "package/package.json"], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    throw new Error("unexpected packed package manifest");
+  return parsed as Record<string, unknown>;
 }
 
 function runNpm(args: readonly string[], cwd: string): string {
@@ -292,6 +308,7 @@ describe("published V2 package installation", () => {
     expect(paths).toContain("dist/index.d.ts");
     expect(paths).toContain("dist/index.js");
     expect(paths).toContain("dist/cli.js");
+    expect(paths).toContain("README.md");
     expect(paths).not.toContain("src/index.ts");
     expect(
       paths.some((path) =>
@@ -300,6 +317,7 @@ describe("published V2 package installation", () => {
     ).toBe(false);
     expect(paths.some((path) => /(?:^|\/)\S+\.local(?:\.|\/|$)/i.test(path))).toBe(false);
     expect(readFileSync(tarball)).not.toContain(Buffer.from(root, "utf8"));
+    expect(packedManifest(tarball)).toMatchObject(npmDiscoveryMetadata);
 
     writeFileSync(join(directory, "package.json"), JSON.stringify({ private: true }), {
       mode: 0o600,
@@ -312,6 +330,7 @@ describe("published V2 package installation", () => {
         'import * as scan from "@aihq/scan";',
         'import { readFileSync } from "node:fs";',
         'const input = JSON.parse(readFileSync("candidate-input.json", "utf8"));',
+        'const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json", "utf8"));',
         "const candidate = scan.createScanCandidateV2(input.candidate);",
         "scan.writeScanCaptureBundleV2({",
         '  outputDirectory: "bundle",',
@@ -329,7 +348,11 @@ describe("published V2 package installation", () => {
         "    return { specifier, code: error?.code };",
         "  }",
         "}));",
-        'process.stdout.write(JSON.stringify({ exports: Object.keys(scan).sort(), denied }) + "\\n");',
+        "process.stdout.write(JSON.stringify({",
+        "  exports: Object.keys(scan).sort(),",
+        "  denied,",
+        "  metadata: { repository: manifest.repository, homepage: manifest.homepage, bugs: manifest.bugs },",
+        '}) + "\\n");',
       ].join("\n"),
       { mode: 0o600 },
     );
@@ -339,8 +362,13 @@ describe("published V2 package installation", () => {
         encoding: "utf8",
         stdio: "pipe",
       }),
-    ) as { exports?: unknown; denied?: readonly { code?: unknown }[] };
+    ) as {
+      exports?: unknown;
+      denied?: readonly { code?: unknown }[];
+      metadata?: unknown;
+    };
     expect(consumer.exports).toEqual(publicV2Exports);
+    expect(consumer.metadata).toEqual(npmDiscoveryMetadata);
     expect(consumer.denied?.map(({ code }) => code)).toEqual([
       "ERR_PACKAGE_PATH_NOT_EXPORTED",
       "ERR_PACKAGE_PATH_NOT_EXPORTED",
