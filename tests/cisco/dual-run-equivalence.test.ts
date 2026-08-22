@@ -305,6 +305,10 @@ async function produce(
       if (argv[1] === "image") return { code: 0, stdout: ociLayout.configDigestSha256, stderr: "" };
       if (argv[1] !== "container") throw new Error("unexpected Docker command");
       if (argv[2] === "create") {
+        const cidfileIndex = argv.indexOf("--cidfile");
+        const cidfile = cidfileIndex >= 0 ? argv[cidfileIndex + 1] : undefined;
+        if (cidfile === undefined) throw new Error("missing container ownership cidfile");
+        writeFileSync(cidfile, `${containerId}\n`, { mode: 0o600 });
         const mount = argv.find(
           (value) => value.startsWith("type=bind,src=") && value.endsWith(",dst=/output"),
         );
