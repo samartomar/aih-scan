@@ -3,10 +3,10 @@
   "name": "aih-scan",
   "contextDir": "ai-coding",
   "targets": ["claude", "codex"],
-  "description": "Private, publication-deferred TypeScript repository with dormant internal scan-observation contracts and an opt-in injected-runner Cisco linux/amd64 observation probe.",
+  "description": "Private-remote, publication-deferred TypeScript repository building the public-ready @aihq/scan V2 signed-evidence package and Cisco Linux amd64 capture chain.",
   "languages": ["TypeScript/Node.js"],
   "packageManager": "npm",
-  "entrypoints": [],
+  "entrypoints": ["src/index.ts", "src/cli.ts"],
   "commands": {
     "typecheck": "npm run typecheck",
     "test": "npm test",

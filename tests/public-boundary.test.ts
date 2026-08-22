@@ -1,51 +1,55 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import * as publicApi from "../src/index.js";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
-const sourceFiles = (path = resolve(root, "src")): string[] =>
-  readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
-    const next = resolve(path, entry.name);
-    return entry.isDirectory()
-      ? sourceFiles(next)
-      : entry.isFile() && entry.name.endsWith(".ts")
-        ? [next]
-        : [];
-  });
-const ociLayoutSource = resolve(root, "src", "cisco", "oci-layout-v1.ts");
-const ociBrokerSource = resolve(root, "src", "cisco", "oci-broker-v1.ts");
 
-describe("dormant contract public boundary", () => {
-  it("keeps the package root empty and prevents public/runtime AIH trust cutover", () => {
-    expect(read("src/index.ts").trim()).toBe("export {};");
-    const sources = sourceFiles();
-    expect(sources).toContain(resolve(root, "src", "index.ts"));
-    expect(existsSync(ociLayoutSource)).toBe(true);
-    expect(existsSync(ociBrokerSource)).toBe(true);
-    for (const source of sources) {
-      const text = readFileSync(source, "utf8");
-      const restrictedText =
-        source === ociBrokerSource
-          ? (() => {
-              expect(text.match(/--pull=never/g)).toHaveLength(1);
-              return text.replace("--pull=never", "");
-            })()
-          : text;
-      expect(text).not.toMatch(/ai-harness|src\/trust|from\s+["'][^"']*trust|normalization-v1/i);
-      expect(restrictedText).not.toMatch(
-        /\b(PASS|verdict|acknowledg|acceptance|suppression|portable authority|podman|pull|verify-signature|trusted-root)\b/i,
-      );
-      if (source !== ociBrokerSource)
-        expect(text).not.toMatch(/\b(docker|broker(?:execute|verify|enforce))\b/i);
-    }
+describe("Strict V2 public boundary", () => {
+  it("exports only the bounded V2 evidence and compatibility contracts", () => {
+    expect(Object.keys(publicApi).sort()).toEqual([
+      "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+      "AI_HARNESS_STRICT_V2_COMMIT",
+      "assertCompleteScanAnnexArtifactsV2",
+      "canonicalDssePaeV2",
+      "canonicalScanAttestationEnvelopeBytesV2",
+      "canonicalScanCandidateBytesV2",
+      "canonicalSourceSealsV2Bytes",
+      "captureCiscoOciCandidateV2",
+      "createScanCandidateV2",
+      "ed25519KeyIdV2",
+      "isVerifiedScanAttestationV2",
+      "parseScanAttestationEnvelopeV2Json",
+      "parseScanCandidateV2Json",
+      "readScanCaptureBundleV2",
+      "sealSourceV2",
+      "signScanCandidateV2",
+      "verifyAiHarnessStrictV2Contract",
+      "verifyScanAttestationV2",
+      "writeScanCaptureBundleV2",
+    ]);
+    expect(read("src/index.ts")).not.toMatch(/-v1\.js/);
   });
 
-  it("contains no CLI, config, scanner execution, broker verification, or production Cisco identity", () => {
-    const publicFiles = ["package.json", "src/index.ts"];
-    for (const file of publicFiles)
-      expect(read(file)).not.toMatch(
-        /\b(bin|cisco-ai-skill-scanner|cisco|docker|podman|verify-signature|oci-(?:layout|broker)-v1)\b/i,
-      );
+  it("makes the 1.0 package boundary and verification CLI explicit without publication", () => {
+    const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
+    expect(manifest.name).toBe("@aihq/scan");
+    expect(manifest.version).toBe("1.0.0");
+    expect(manifest.private).toBeUndefined();
+    expect(manifest.bin).toEqual({ "aih-scan": "./dist/cli.js" });
+    expect(manifest.exports).toEqual({
+      ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+    });
+    const cli = read("src/cli.ts");
+    expect(cli).toContain('command === "verify"');
+    expect(cli).not.toMatch(/npm publish|createRelease|git tag/i);
+  });
+
+  it("keeps V1 internal and reports V2 signed claims without adoption authority", () => {
+    const source = read("src/observation/scan-attestation-v2.ts");
+    expect(source).toContain('origin: "signer-asserted"');
+    expect(source).toContain('provenance: "none"');
+    expect(source).not.toMatch(/\b(approve|waive|activate|install|project)\b/i);
   });
 });

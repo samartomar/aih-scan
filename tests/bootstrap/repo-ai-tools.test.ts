@@ -112,10 +112,10 @@ describe("aih-scan repository AI bootstrap", () => {
 
   it("keeps generated local state out of Git and exposes only bootstrap scripts", () => {
     const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as {
-      private: boolean;
+      private?: boolean;
       scripts: Record<string, string>;
     };
-    expect(packageJson.private).toBe(true);
+    expect(packageJson.private).toBeUndefined();
     expect(packageJson.scripts["repo:init"]).toBe("node tools/repo-ai-tools.mjs setup-codex");
     expect(packageJson.scripts["repo:doctor"]).toBe("node tools/repo-ai-tools.mjs doctor-codex");
     const gitignore = readFileSync(resolve(root, ".gitignore"), "utf8");
@@ -176,7 +176,7 @@ describe("aih-scan repository AI bootstrap", () => {
       filesystemRoot,
       rootPath,
       join(rootPath, "nested-cache"),
-      join(rootPath, "..", "aih-scan", "nested-cache"),
+      join(rootPath, "nested-cache", "deeper-cache"),
     ]) {
       expect(() => tools.resolveCodebaseMemoryCacheDir(override), JSON.stringify(override)).toThrow(
         /CBM_CACHE_DIR/i,
@@ -259,7 +259,9 @@ describe("aih-scan repository AI bootstrap", () => {
       tools.assertCodebaseMemorySearchResponse({ files: ["../ai-harness/src/index.ts"] }),
     ).toThrow(/search/i);
     expect(() =>
-      tools.assertCodebaseMemorySearchResponse({ files: ["C:/dev/ai-harness/src/index.ts"] }),
+      tools.assertCodebaseMemorySearchResponse({
+        files: [resolve(tmpdir(), "aih-scan-other-repository", "src", "index.ts")],
+      }),
     ).toThrow(/search/i);
     expect(() =>
       tools.assertCodebaseMemorySearchResponse({

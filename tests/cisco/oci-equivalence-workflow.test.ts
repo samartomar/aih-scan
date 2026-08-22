@@ -31,17 +31,19 @@ const uvWheelUrl =
 const uvWheelSha256 = "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15";
 const allowedActions = new Set([
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+  "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+  "actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444",
   "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 ]);
 
 describe("Cisco OCI direct/OCI equivalence workflow", () => {
-  it("is PR/manual-only, least-privileged, and pins every action plus Buildx/BuildKit", () => {
+  it("is push/PR/manual, least-privileged, and pins every action plus Buildx/BuildKit", () => {
     const text = workflow();
-    expect(text).toMatch(/^on:\n {2}pull_request:\n {2}workflow_dispatch:\s*$/m);
-    expect(text).not.toMatch(
-      /pull_request_target|schedule:|workflow_run|repository_dispatch|push:/,
+    expect(text).toMatch(
+      /^on:\n {2}push:\n {4}branches: \[main\]\n {2}pull_request:\n {2}workflow_dispatch:\s*$/m,
     );
+    expect(text).not.toMatch(/pull_request_target|schedule:|workflow_run|repository_dispatch/);
     expect(text.match(/^permissions:/gm) ?? []).toHaveLength(1);
     expect(text).toMatch(/^permissions:\n {2}contents: read\s*$/m);
     expect(text).not.toMatch(/^\s+permissions:/gm);
@@ -83,7 +85,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(verify).toContain('--image-id "$RUNNER_TEMP/oci-equivalence/docker-config-id.txt"');
     expect(execute).toMatch(/configDigestSha256|config-id/i);
     expect(text).not.toMatch(
-      /--push|docker login|registry|cache-(?:from|to)|:latest|sign(?:ing)?|provenance=true|sbom=true/i,
+      /--push|docker login|cache-(?:from|to)|:latest|provenance=true|sbom=true/i,
     );
   });
 
@@ -185,7 +187,9 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(text).not.toMatch(
       /sarif|archive|(?:stdout|stderr)-log|docker\.sock|env:.*(?:TOKEN|PASSWORD|SECRET)/i,
     );
-    expect(text).not.toMatch(/qualif|trusted|verified|pass|verdict|acceptance|acknowledgement/i);
+    expect(text).not.toMatch(
+      /BuildKit.*verified|OIDC|\bPASS\b|adoption|qualification|acknowledgement/i,
+    );
     expect(upload).toMatch(
       /path:\s*\$\{\{ runner\.temp \}\}\/oci-equivalence\/oci-equivalence-digest-summary\.json/,
     );
@@ -203,8 +207,8 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
     expect(aih).toContain("path: .candidate-sources/ai-harness");
     expect(execute).toMatch(/RUNNER_TEMP[^\n]*(?:direct|oci)/i);
     expect(execute).toContain("dual-run-equivalence");
-    expect(text.match(/^ {6}- name: Check out /gm) ?? []).toHaveLength(2);
-    expect(text.match(/persist-credentials: false/g) ?? []).toHaveLength(2);
+    expect(text.match(/^ {6}- name: Check out /gm) ?? []).toHaveLength(4);
+    expect(text.match(/persist-credentials: false/g) ?? []).toHaveLength(4);
   });
 
   it("installs and uses the pinned Buildx builder and supplies every live-test prerequisite from isolated temporary paths", () => {

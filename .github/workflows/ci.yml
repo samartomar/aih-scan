@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: samartomar/ai-harness
+          ref: e27a55dcebb635c8298aa4fd6fd871f59089bcf7
+          path: .core-contract
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract
+      - name: Remove exact Core contract checkout
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          core_root="$GITHUB_WORKSPACE/.core-contract"
+          if [ -e "$core_root" ]; then
+            test -d "$core_root"
+            rm -rf -- "$core_root"
+          fi
+          test ! -e "$core_root"
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
