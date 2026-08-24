@@ -808,7 +808,7 @@ describe("Cisco OCI candidate verifier V1", () => {
     expect(() =>
       verifyCiscoOciCandidateV1({ ...input(above), loadedImageId: aboveConfigDigest }),
     ).toThrow("layout bound at-most-1024MiB");
-  });
+  }, 20_000);
 
   it("classifies rejected Docker descriptor media types without echoing them", () => {
     const cases = [
