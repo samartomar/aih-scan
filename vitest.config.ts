@@ -7,6 +7,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
+      // The CLI is exercised as the packed subprocess boundary in
+      // tests/package-install-v2.test.ts; V8 coverage from that child process
+      // is not merged into Vitest's in-process report.
+      exclude: ["src/cli.ts"],
       reporter: ["text"],
       thresholds: {
         statements: 80,

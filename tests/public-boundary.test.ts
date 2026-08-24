@@ -10,8 +10,10 @@ describe("Strict V2 public boundary", () => {
   it("exports only the bounded V2 evidence and compatibility contracts", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+      "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
       "AI_HARNESS_STRICT_V2_COMMIT",
       "assertCompleteScanAnnexArtifactsV2",
+      "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
       "canonicalDssePaeV2",
       "canonicalScanAttestationEnvelopeBytesV2",
       "canonicalScanCandidateBytesV2",
@@ -22,14 +24,17 @@ describe("Strict V2 public boundary", () => {
       "isVerifiedScanAttestationV2",
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
+      "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readScanCaptureBundleV2",
       "sealSourceV2",
       "signScanCandidateV2",
+      "verifyAiHarnessCoreEvidenceContractV1",
       "verifyAiHarnessStrictV2Contract",
+      "verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1",
       "verifyScanAttestationV2",
       "writeScanCaptureBundleV2",
     ]);
-    expect(read("src/index.ts")).not.toMatch(/-v1\.js/);
+    expect(read("src/index.ts")).not.toMatch(/observation\/.+-v1\.js/);
   });
 
   it("makes the 1.0 package boundary and verification CLI explicit without publication", () => {
@@ -43,6 +48,7 @@ describe("Strict V2 public boundary", () => {
     });
     const cli = read("src/cli.ts");
     expect(cli).toContain('command === "verify"');
+    expect(cli).toContain('command === "project-core-evidence"');
     expect(cli).not.toMatch(/npm publish|createRelease|git tag/i);
   });
 
@@ -50,6 +56,6 @@ describe("Strict V2 public boundary", () => {
     const source = read("src/observation/scan-attestation-v2.ts");
     expect(source).toContain('origin: "signer-asserted"');
     expect(source).toContain('provenance: "none"');
-    expect(source).not.toMatch(/\b(approve|waive|activate|install|project)\b/i);
+    expect(source).not.toMatch(/\b(approve|waive|activate|install)\b/i);
   });
 });

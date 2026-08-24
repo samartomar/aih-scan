@@ -169,7 +169,7 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoC
   const candidate = createScanCandidateV2({
     protocol: "ScanCandidateV2",
     coreContract: {
-      commit: "e27a55dcebb635c8298aa4fd6fd871f59089bcf7",
+      commit: "e53fe219002515c092ebb68c5b91c91a2fc6110d",
       decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     },
     subject: { name: "source-tree", digest: { sha256: before.sourceTreeSha256 } },
