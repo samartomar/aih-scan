@@ -3,10 +3,12 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,9 +27,11 @@ const temporaryDirectories: string[] = [];
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const publicV2Exports = [
   "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+  "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
   "AI_HARNESS_STRICT_V2_COMMIT",
   "assertCompleteScanAnnexArtifactsV2",
   "canonicalDssePaeV2",
+  "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
   "canonicalScanAttestationEnvelopeBytesV2",
   "canonicalScanCandidateBytesV2",
   "canonicalSourceSealsV2Bytes",
@@ -37,10 +41,13 @@ const publicV2Exports = [
   "isVerifiedScanAttestationV2",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
+  "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
   "readScanCaptureBundleV2",
   "sealSourceV2",
   "signScanCandidateV2",
+  "verifyAiHarnessCoreEvidenceContractV1",
   "verifyAiHarnessStrictV2Contract",
+  "verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1",
   "verifyScanAttestationV2",
   "writeScanCaptureBundleV2",
 ].sort();
@@ -251,7 +258,7 @@ function writeCandidateInput(path: string): void {
       candidate: {
         protocol: "ScanCandidateV2",
         coreContract: {
-          commit: "e27a55dcebb635c8298aa4fd6fd871f59089bcf7",
+          commit: "e53fe219002515c092ebb68c5b91c91a2fc6110d",
           decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
         },
         subject: { name: "source-tree", digest: { sha256: seal.sourceTreeSha256 } },
@@ -490,7 +497,7 @@ describe("published V2 package installation", () => {
       workflow: ".github/workflows/package-install-v2.yml",
       issuer: "https://token.actions.githubusercontent.com",
       sourceRef: "refs/heads/main",
-      commit: "e27a55dcebb635c8298aa4fd6fd871f59089bcf7",
+      commit: "e53fe219002515c092ebb68c5b91c91a2fc6110d",
       environment: "test",
       runId: "123",
       runAttempt: 1,
@@ -577,6 +584,53 @@ describe("published V2 package installation", () => {
     };
     expect(verified).toMatchObject({ envelopeValid: true, signer: { identity: "release.admin" } });
     expect(typeof verified.replayIdentity).toBe("string");
+    const coreSubjectDigest = `sha256:${sha256("installed-core-subject")}`;
+    const projectionArgs = [
+      "project-core-evidence",
+      "--evidence",
+      "evidence.json",
+      "--bundle",
+      "bundle",
+      "--roots",
+      "roots.json",
+      "--expected",
+      "expected.json",
+      "--subject-digest",
+      coreSubjectDigest,
+      "--output",
+      "core-evidence.json",
+    ];
+    const projected = JSON.parse(runInstalledBin(directory, projectionArgs)) as {
+      outcome?: unknown;
+      envelopeSha256?: unknown;
+    };
+    expect(projected).toMatchObject({ outcome: "projected" });
+    expect(projected.envelopeSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const coreEvidenceBytes = readFileSync(join(directory, "core-evidence.json"));
+    const coreEvidence = JSON.parse(coreEvidenceBytes.toString("utf8")) as {
+      subjectDigest?: unknown;
+      evidence?: { summary?: unknown; payloadDigest?: unknown; artifactDigests?: unknown };
+    };
+    expect(coreEvidence.subjectDigest).toBe(coreSubjectDigest);
+    expect(coreEvidence.evidence?.summary).toMatch(/scanner evidence only/i);
+    expect(coreEvidence.evidence?.payloadDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(coreEvidence.evidence?.artifactDigests).toEqual(
+      [...(coreEvidence.evidence?.artifactDigests as string[])].sort(),
+    );
+    expect(coreEvidenceBytes.toString("utf8")).toBe(JSON.stringify(coreEvidence));
+    expect(expectRejectedInstalledBin(directory, projectionArgs)).toBe(
+      "aih-scan: projection output already exists\n",
+    );
+    const safeParent = join(directory, "safe-projection-parent");
+    const linkedParent = join(directory, "linked-projection-parent");
+    mkdirSync(safeParent, { mode: 0o700 });
+    symlinkSync(safeParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    expect(
+      expectRejectedInstalledBin(directory, [
+        ...projectionArgs.slice(0, -1),
+        join("linked-projection-parent", "unsafe-core-evidence.json"),
+      ]),
+    ).toBe("aih-scan: output parent link or reparse\n");
     writeFileSync(
       join(directory, "seen.json"),
       JSON.stringify({ identities: [verified.replayIdentity] }),

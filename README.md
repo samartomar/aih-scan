@@ -9,7 +9,9 @@ source closure.
 ## Status
 
 The V2 library, `aih-scan` CLI, detached bundle format, Ed25519 DSSE signing,
-and Linux `amd64` Cisco CI chain are implemented and tested in this repository.
+Linux `amd64` Cisco CI chain, and Core organization-evidence projection are
+implemented and tested in this repository. Projection is evidence transport
+only; it does not qualify, approve, admit, observe, or activate a subject.
 The repository is still private and `@aihq/scan` has not been published to npm.
 Repository visibility and npm publication require separate owner approval; the
 commands below can be exercised from a local checkout or a reviewed package
@@ -29,6 +31,7 @@ npm ci --ignore-scripts
 npm run typecheck
 npm run lint
 npm test
+npm run test:cov
 npm run build
 npm pack
 ```
@@ -56,9 +59,12 @@ Keep capture, signing, verification, and governance as separate phases:
 3. An administrator verifies the DSSE signature, detached bundle, expected
    source and CI claims, validity window, replay state, and signer identity
    against roots supplied outside the evidence bundle.
-4. A separate governance decision may use the verified facts. Scanner output
-   does not approve findings or grant installation, projection, or activation
-   authority.
+4. For an organization signer and successful scan, the administrator may
+   project those already verified facts into Core's exact canonical
+   `OrganizationEvidenceEnvelopeV1` contract.
+5. A separate externally verified governance decision may use the evidence.
+   Scanner output does not approve findings or grant installation, runtime
+   projection, or activation authority.
 
 The repository workflow at
 `.github/workflows/cisco-oci-equivalence.yml` is the complete current capture
@@ -183,6 +189,43 @@ fields are rejected. The optional replay file has the shape
 Successful verification prints canonical JSON facts. It does not print
 `PASS`, approval, a finding disposition, or an activation decision.
 
+## Project verified evidence for Core
+
+After successful verification, write one canonical Core evidence envelope:
+
+```sh
+npx aih-scan project-core-evidence \
+  --evidence /path/to/evidence.json \
+  --bundle /path/to/capture-bundle \
+  --roots /path/to/admin-roots.json \
+  --expected /path/to/expected-policy.json \
+  --seen /path/to/replay-identities.json \
+  --subject-digest sha256:<exact-core-subject-digest> \
+  --output /path/to/new-core-evidence.json
+```
+
+`--seen` is optional; all other options are required exactly once. The command
+repeats the complete V2 verification before writing anything. It accepts only
+an organization-class signer and a successful scan, and it refuses an existing
+output, linked output parent, malformed or mismatched evidence, stale validity,
+replay, incomplete annex custody, changed source, failed cleanup, or a failed or
+refused scan.
+
+The caller supplies the exact canonical Core subject digest. Scanner binds that
+digest to the verified evidence, candidate, payload, source-seal, and annex
+identities, but it neither derives the Core subject nor decides whether the
+organization should associate that evidence with it. The output validity comes
+only from the signed scan claims. Its deterministic attestor binds the verified
+organization signer identity and key id. Stdout reports only that evidence was
+written and its digest; the must-not-exist output file is the evidence handoff.
+The caller must preserve its custody until a separate authorized Core decision
+binds the exact envelope digest.
+
+Core still requires its separately verified V3 organization authority and exact
+decision before the envelope can qualify anything. A matching live observation
+or registered AIH-managed effect is a further boundary. Evidence projection
+alone is never effective state.
+
 ## What the evidence means
 
 Verification establishes that:
@@ -217,8 +260,8 @@ expected claims through an independent trusted process.
 - Scanner process: 120-second command timeout, 64 KiB per stdout/stderr stream,
   16 MiB SARIF output, then bounded termination and cleanup.
 - The package emits evidence facts only. It does not provide catalog promotion,
-  organization approval, installation, runtime projection, revocation custody,
-  repository publication, or npm publication.
+  organization approval, installation, runtime/effect projection, revocation
+  custody, repository publication, or npm publication.
 
 Organizations are not required to use an AIH-maintained catalog entry. The
 Core Strict V2 contract can bind organization-qualified evidence for an exact
@@ -235,6 +278,25 @@ npm run build
 npm audit --omit=dev
 git diff --check
 ```
+
+The packed prepublication proof additionally requires
+`AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
+HEAD is exactly `e53fe219002515c092ebb68c5b91c91a2fc6110d`:
+
+```sh
+AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
+  npm run verify:cold-core-evidence
+```
+
+The proof builds and packs Core, packs Scanner, installs both tarballs in
+disposable roots, projects real signed V2 mechanics evidence, validates the
+exact packaged Core schema, and invokes packed Core's real `policy resolve`
+command. Its expected production result is the named fail-closed
+`authority-unverified` refusal. Core does not export the organization-evidence
+parser at this lock, and without genuine V3 authority the resolver does not
+reach it. The generated organization-class key is non-public test mechanics,
+not organization authority, public attestation, qualification, successful
+custody, or a production effect.
 
 Never run AIH product behavior against this repository checkout. Tests exercise
 scanner behavior only against disposable fixture roots.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createPrivateKey, createPublicKey } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -7,13 +7,18 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  realpathSync,
   type Stats,
   writeFileSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { dockerRunner } from "./cli/docker-runner.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
+import {
+  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
+  projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
+} from "./core/organization-evidence-envelope-v1.js";
 import {
   canonicalScanAttestationEnvelopeBytesV2,
   parseScanAttestationEnvelopeV2Json,
@@ -34,6 +39,9 @@ function sameIdentity(left: Stats, right: Stats): boolean {
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs
   );
+}
+function sameFileReference(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 function readBoundedRegularFile(path: string, label: string, maximumBytes: number): Buffer {
   const resolved = resolve(path);
@@ -125,8 +133,7 @@ function flag(args: readonly string[], name: string): string {
   if (args.filter((value) => value === name).length !== 1) fail(`duplicate ${name}`);
   return args[index + 1] as string;
 }
-function verify(args: readonly string[]): void {
-  const allowed = new Set(["--evidence", "--bundle", "--roots", "--expected", "--seen"]);
+function verifiedFromCli(args: readonly string[], allowed: ReadonlySet<string>) {
   if (args.length % 2 !== 0 || args.some((arg, index) => index % 2 === 0 && !allowed.has(arg)))
     fail("unknown verify argument");
   const evidence = parseScanAttestationEnvelopeV2Json(
@@ -168,7 +175,7 @@ function verify(args: readonly string[]): void {
     if (!Array.isArray(seenWire.identities)) fail("replay identities");
     return seenWire.identities;
   })();
-  const result = verifyScanAttestationV2({
+  return verifyScanAttestationV2({
     envelope: evidence,
     roots,
     expected,
@@ -176,6 +183,12 @@ function verify(args: readonly string[]): void {
     candidate: bundle.candidate,
     annexArtifacts: bundle.annexArtifacts,
   });
+}
+function verify(args: readonly string[]): void {
+  const result = verifiedFromCli(
+    args,
+    new Set(["--evidence", "--bundle", "--roots", "--expected", "--seen"]),
+  );
   process.stdout.write(`${canonicalStrictJsonBytesV1(result.facts).toString("utf8")}\n`);
 }
 function writeNew(path: string, bytes: Uint8Array): void {
@@ -185,6 +198,95 @@ function writeNew(path: string, bytes: Uint8Array): void {
   } finally {
     closeSync(descriptor);
   }
+}
+
+type DirectorySnapshot = Readonly<{ path: string; realPath: string; stat: Stats }>;
+function safeOutputParents(path: string): readonly DirectorySnapshot[] {
+  const parents: DirectorySnapshot[] = [];
+  for (let current = dirname(path); ; current = dirname(current)) {
+    const stat = lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) fail("output parent link or reparse");
+    parents.push({ path: current, realPath: realpathSync.native(current), stat });
+    const next = dirname(current);
+    if (next === current) return parents;
+  }
+}
+function sameParents(
+  left: readonly DirectorySnapshot[],
+  right: readonly DirectorySnapshot[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (entry, index) =>
+        entry.path === right[index]?.path &&
+        entry.realPath === right[index]?.realPath &&
+        sameFileReference(entry.stat, right[index]?.stat ?? entry.stat),
+    )
+  );
+}
+function writeNewSafeProjection(path: string, bytes: Uint8Array): void {
+  const output = resolve(path);
+  if (!bytes.byteLength || bytes.byteLength > maxInputBytes) fail("projection output bounds");
+  try {
+    lstatSync(output);
+    fail("projection output already exists");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      // Must-not-exist is the only acceptable pre-write output state.
+    } else throw error;
+  }
+  const beforeParents = safeOutputParents(output);
+  const descriptor = openSync(output, "wx", 0o600);
+  try {
+    const before = fstatSync(descriptor);
+    const outputStat = lstatSync(output);
+    if (
+      !before.isFile() ||
+      before.nlink !== 1 ||
+      !outputStat.isFile() ||
+      outputStat.isSymbolicLink() ||
+      outputStat.nlink !== 1 ||
+      !sameIdentity(before, outputStat)
+    )
+      fail("projection output replacement");
+    writeFileSync(descriptor, bytes);
+    const after = fstatSync(descriptor);
+    const afterOutput = lstatSync(output);
+    if (
+      after.nlink !== 1 ||
+      !sameFileReference(before, after) ||
+      !sameFileReference(after, afterOutput) ||
+      !sameParents(beforeParents, safeOutputParents(output))
+    )
+      fail("projection output replacement");
+  } finally {
+    closeSync(descriptor);
+  }
+}
+function projectCoreEvidence(args: readonly string[]): void {
+  const allowed = new Set([
+    "--evidence",
+    "--bundle",
+    "--roots",
+    "--expected",
+    "--seen",
+    "--subject-digest",
+    "--output",
+  ]);
+  const result = verifiedFromCli(args, allowed);
+  const envelope = projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1({
+    verified: result,
+    subjectDigest: flag(args, "--subject-digest"),
+  });
+  const bytes = canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(envelope);
+  writeNewSafeProjection(flag(args, "--output"), bytes);
+  process.stdout.write(
+    `${canonicalStrictJsonBytesV1({
+      outcome: "projected",
+      envelopeSha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    }).toString("utf8")}\n`,
+  );
 }
 async function capture(args: readonly string[]): Promise<void> {
   if (args.length !== 4 || args[0] !== "--request" || args[2] !== "--output") fail("capture usage");
@@ -278,11 +380,12 @@ async function main(): Promise<void> {
     verify(args);
     return;
   }
+  if (command === "project-core-evidence") return projectCoreEvidence(args);
   if (command === "capture") return capture(args);
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --bundle <directory> --roots <file> --expected <file> [--seen <file>]\n",
+      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --bundle <directory> --roots <file> --expected <file> [--seen <file>] | project-core-evidence --evidence <file> --bundle <directory> --roots <file> --expected <file> --subject-digest <sha256:...> --output <new-file> [--seen <file>]\n",
     );
     return;
   }

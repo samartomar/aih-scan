@@ -19,6 +19,7 @@ import {
 } from "../core/core-contract-lock-v2.js";
 import { createObservationKeyV1, createObservationSetV1 } from "./observation-evidence-v1.js";
 import { createScannerManifestV1 } from "./scanner-manifest-v1.js";
+import type { SourceSealV2 } from "./source-seal-v2.js";
 import { sourceSealV2Schema, validateSourceSealV2 } from "./source-seal-v2.js";
 
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
@@ -248,7 +249,10 @@ export interface VerifiedScanAttestationV2 {
     replayIdentity: string;
     payloadSha256: string;
     evidenceDigestSha256: string;
+    candidateSha256: string;
     subject: Readonly<{ name: "source-tree"; sha256: string }>;
+    sourceSeals: Readonly<{ before: SourceSealV2; after: SourceSealV2 }>;
+    claims: Readonly<{ signedAt: string; expiresAt: string }>;
     coreContract: Readonly<{ commit: string; decisionSchemaSha256: string }>;
     observation: Readonly<{ keySha256: string; setSha256: string }>;
     scanner: Readonly<CandidateWire["scanner"]>;
@@ -907,9 +911,15 @@ export function verifyScanAttestationV2(value: unknown): VerifiedScanAttestation
       replayIdentity,
       payloadSha256: parsed.payloadSha256,
       evidenceDigestSha256: parsed.evidenceDigestSha256,
+      candidateSha256: parsed.statement.predicate.candidate.sha256,
       subject: {
         name: "source-tree" as const,
         sha256: parsed.statement.subject[0]?.digest.sha256 ?? fail("subject"),
+      },
+      sourceSeals: parsed.statement.predicate.sourceSeals,
+      claims: {
+        signedAt: parsed.statement.predicate.claims.signedAt,
+        expiresAt: parsed.statement.predicate.claims.expiresAt,
       },
       coreContract: parsed.statement.predicate.coreContract,
       observation: parsed.statement.predicate.observation,

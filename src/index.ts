@@ -1,9 +1,17 @@
 export { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 export {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+  AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
+  verifyAiHarnessCoreEvidenceContractV1,
   verifyAiHarnessStrictV2Contract,
+  verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1,
 } from "./core/core-contract-lock-v2.js";
+export {
+  type CoreOrganizationEvidenceEnvelopeV1,
+  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
+  projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
+} from "./core/organization-evidence-envelope-v1.js";
 export {
   assertCompleteScanAnnexArtifactsV2,
   canonicalDssePaeV2,
