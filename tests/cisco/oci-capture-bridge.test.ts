@@ -121,23 +121,33 @@ describe("Cisco OCI capture evidence bridge", () => {
     );
     expect(request.sourceRoot).toBe(value.directory);
     expect(request.selectedClosurePaths).toEqual(["source-SKILL.md"]);
-    expect(request.runtime.ociImage).toEqual({
+    expect(request.detectorId).toBe("detector.organization.cisco");
+    expect(request.registration.protocol).toBe("DetectorRegistrationV1");
+    const selected = request.registration.registrations[0];
+    expect(selected.adapterCapability).toBe("cisco-oci-v1");
+    expect(selected.broker.capability).toBe("cisco-oci-v1");
+    expect(selected.detector.ociImage).toEqual({
       reference: `local.invalid/aih-scan/cisco@sha256:${"a".repeat(64)}`,
       sha256: "a".repeat(64),
     });
-    expect(request.runtime.sbom.sha256).toBe(sha256(readFileSync(join(first, "annex.sbom.json"))));
-    expect(request.runtime.provenance.sha256).toBe(
+    expect(selected.detector.sbom.sha256).toBe(
+      sha256(readFileSync(join(first, "annex.sbom.json"))),
+    );
+    expect(selected.detector.provenance.sha256).toBe(
       sha256(readFileSync(join(first, "annex.provenance.json"))),
     );
-    expect(changedRequest.runtime).toMatchObject({
-      adapter: request.runtime.adapter,
-      analyzerIdentity: request.runtime.analyzerIdentity,
-      executionProfileSha256: request.runtime.executionProfileSha256,
-      observationConfigurationSha256: request.runtime.observationConfigurationSha256,
-      ociImage: request.runtime.ociImage,
-      sbom: request.runtime.sbom,
+    const changedSelected = changedRequest.registration.registrations[0];
+    expect(changedSelected.detector).toMatchObject({
+      adapter: selected.detector.adapter,
+      analyzerIdentity: selected.detector.analyzerIdentity,
+      executionProfileSha256: selected.detector.executionProfileSha256,
+      observationConfigurationSha256: selected.detector.observationConfigurationSha256,
+      ociImage: selected.detector.ociImage,
+      sbom: selected.detector.sbom,
     });
-    expect(changedRequest.runtime.provenance.sha256).not.toBe(request.runtime.provenance.sha256);
+    expect(changedSelected.detector.provenance.sha256).not.toBe(
+      selected.detector.provenance.sha256,
+    );
     expect(sbom.evidenceState).toBe("digest-bound-unverified");
     expect(sbom.packages).toEqual(
       expect.arrayContaining([

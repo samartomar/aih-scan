@@ -144,7 +144,8 @@ const candidate = () => {
       manifestSha256: manifest.scannerManifestSha256,
       runtimeSha256,
       configurationSha256: detector.observationConfigurationSha256,
-      cisco: {
+      detector: {
+        adapterCapability: "cisco-oci-v1",
         detectorId: detector.detectorId,
         analyzerIdentity: detector.analyzerIdentity,
         oci: {

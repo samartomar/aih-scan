@@ -769,7 +769,7 @@ describe("Cisco OCI candidate V1", () => {
         ...value,
         runtime: {
           ...value.runtime,
-          detectorId: "detector.other",
+          detectorId: "other",
         },
       },
       {

@@ -153,7 +153,8 @@ const candidate = () =>
         }),
       ),
       configurationSha256: observationConfigurationSha256,
-      cisco: {
+      detector: {
+        adapterCapability: "cisco-oci-v1",
         detectorId: detectorInput.detectorId,
         analyzerIdentity: detectorInput.analyzerIdentity,
         oci: {
@@ -304,7 +305,7 @@ describe("ScanAttestationV2 signed evidence", () => {
       scan: { outcome: "succeeded" },
     });
     expect(verified.facts.provenance).toBe("none");
-    expect(verified.facts.scanner.cisco).toMatchObject({
+    expect(verified.facts.scanner.detector).toMatchObject({
       detectorId: "detector.cisco",
       broker: { identity: "broker.0123456789ab" },
       observation: { facts: [{ rawOccurrenceFingerprint: `raw-occurrence-v1:${sha("fact")}` }] },
@@ -448,6 +449,14 @@ describe("ScanAttestationV2 signed evidence", () => {
       }),
     ).toThrow(/coverage selected closure/i);
   });
+  it("refuses an unregistered custom detector identity in direct V2 candidate evidence", () => {
+    const direct = JSON.parse(JSON.stringify(candidate())) as Record<string, unknown>;
+    delete direct.candidateSha256;
+    const scanner = direct.scanner as Record<string, unknown>;
+    const detector = scanner.detector as Record<string, unknown>;
+    detector.detectorId = "detector.acme.policy";
+    expect(() => createScanCandidateV2(direct)).toThrow(/unregistered detector identity/i);
+  });
   it("recomputes Cisco manifest, observation, broker, runtime, and annex identities instead of carrying claims", () => {
     const input = () => {
       const value = JSON.parse(JSON.stringify(candidate())) as Record<string, unknown>;
@@ -456,7 +465,7 @@ describe("ScanAttestationV2 signed evidence", () => {
         scanner: {
           manifestSha256: string;
           runtimeSha256: string;
-          cisco: {
+          detector: {
             scannerManifestEntrySha256: string;
             observation: { setSha256: string };
             platform: { relevantFactsSha256: string };
@@ -470,15 +479,15 @@ describe("ScanAttestationV2 signed evidence", () => {
       (value: ReturnType<typeof input>) =>
         (value.scanner.manifestSha256 = sha("substituted manifest")),
       (value: ReturnType<typeof input>) =>
-        (value.scanner.cisco.scannerManifestEntrySha256 = sha("substituted entry")),
+        (value.scanner.detector.scannerManifestEntrySha256 = sha("substituted entry")),
       (value: ReturnType<typeof input>) =>
-        (value.scanner.cisco.observation.setSha256 = sha("substituted observation set")),
+        (value.scanner.detector.observation.setSha256 = sha("substituted observation set")),
       (value: ReturnType<typeof input>) =>
-        (value.scanner.cisco.platform.relevantFactsSha256 = sha("substituted relevant facts")),
+        (value.scanner.detector.platform.relevantFactsSha256 = sha("substituted relevant facts")),
       (value: ReturnType<typeof input>) =>
-        (value.scanner.cisco.broker.appliedFactsSha256 = sha("substituted applied facts")),
+        (value.scanner.detector.broker.appliedFactsSha256 = sha("substituted applied facts")),
       (value: ReturnType<typeof input>) =>
-        (value.scanner.cisco.broker.sarifSha256 = sha("substituted sarif")),
+        (value.scanner.detector.broker.sarifSha256 = sha("substituted sarif")),
       (value: ReturnType<typeof input>) => {
         const sbom = value.annexes.find((entry) => entry.descriptorId === "annex.sbom");
         if (sbom === undefined) throw new Error("missing SBOM annex");

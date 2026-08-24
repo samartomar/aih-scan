@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   assertStrictJsonValueV1,
   canonicalStrictJsonBytesV1,
+  canonicalStrictJsonSha256V1,
   codeUnitCompare,
   deepFreezeStrictJsonV1,
   parseStrictJsonObjectV1,
@@ -17,6 +18,7 @@ import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
 } from "../core/core-contract-lock-v2.js";
+import { createDetectorRegistrationV1 } from "../registration/detector-registration-v1.js";
 import { createObservationKeyV1, createObservationSetV1 } from "./observation-evidence-v1.js";
 import { createScannerManifestV1 } from "./scanner-manifest-v1.js";
 import type { SourceSealV2 } from "./source-seal-v2.js";
@@ -44,9 +46,10 @@ const rawCoverage = z
     coverageSha256: sha256,
   })
   .strict();
-const ciscoScanner = z
+const detectorScanner = z
   .object({
-    detectorId: z.literal("detector.cisco"),
+    adapterCapability: z.literal("cisco-oci-v1"),
+    detectorId: z.string().regex(/^detector\.[a-z0-9][a-z0-9.-]*$/),
     analyzerIdentity: z.string().regex(/^native\.[a-f0-9]{12}$/),
     oci: z
       .object({
@@ -140,7 +143,15 @@ const candidateInput = z
         manifestSha256: sha256,
         runtimeSha256: sha256,
         configurationSha256: sha256,
-        cisco: ciscoScanner,
+        detector: detectorScanner,
+        registration: z
+          .object({
+            detectorId: z.string().regex(/^detector\.[a-z0-9][a-z0-9.-]*$/),
+            adapterCapability: z.literal("cisco-oci-v1"),
+            value: z.unknown(),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     platform: z.object({ os: z.literal("linux"), architecture: z.literal("amd64") }).strict(),
@@ -315,36 +326,139 @@ function exactTime(value: string, label: string): number {
 function sameSeal(left: z.infer<typeof sourceSeal>, right: z.infer<typeof sourceSeal>): boolean {
   return canonicalStrictJsonBytesV1(left).equals(canonicalStrictJsonBytesV1(right));
 }
+function normalizedRegistrationAuthoringValue(
+  registration: ReturnType<typeof createDetectorRegistrationV1>,
+): Record<string, unknown> {
+  return {
+    protocol: registration.protocol,
+    registrations: registration.registrations.map(
+      ({ registrationEntrySha256: _entry, detector, ...entry }) => {
+        const { scannerManifestEntrySha256: _manifestEntry, ...detectorInput } = detector;
+        return { ...entry, detector: detectorInput };
+      },
+    ),
+  };
+}
 function validateCiscoIdentityBindings(
   scanner: z.infer<typeof candidateInput>["scanner"],
   observation: z.infer<typeof candidateInput>["observation"],
 ): void {
-  const cisco = scanner.cisco;
-  const manifest = createScannerManifestV1({
-    protocol: "ScannerManifestV1",
-    detectors: [
-      {
-        detectorId: cisco.detectorId,
-        analyzerIdentity: cisco.analyzerIdentity,
-        ociImage: {
-          reference: cisco.oci.logicalReference,
-          sha256: cisco.oci.manifestDigestSha256.slice("sha256:".length),
-        },
-        adapter: cisco.adapter,
-        observationConfigurationSha256: cisco.observationConfigurationSha256,
-        executionProfileSha256: cisco.executionProfileSha256,
-        supportedPlatforms: [cisco.supportedPlatform],
-        sbom: { mediaType: cisco.sbom.mediaType, sha256: cisco.sbom.sha256 },
-        provenance: { mediaType: cisco.provenance.mediaType, sha256: cisco.provenance.sha256 },
-      },
-    ],
+  const cisco = scanner.detector;
+  const registration =
+    scanner.registration === undefined
+      ? undefined
+      : createDetectorRegistrationV1(scanner.registration.value);
+  const registrationEntry = registration?.registrations.find(
+    (entry) => entry.detector.detectorId === scanner.registration?.detectorId,
+  );
+  if (registration !== undefined && registrationEntry === undefined)
+    fail("registered detector selection");
+  if (
+    registration !== undefined &&
+    !canonicalStrictJsonBytesV1(scanner.registration?.value).equals(
+      canonicalStrictJsonBytesV1(normalizedRegistrationAuthoringValue(registration)),
+    )
+  )
+    fail("registered detector canonical authoring binding");
+  if (registration === undefined && cisco.detectorId !== "detector.cisco")
+    fail("unregistered detector identity");
+  if (
+    registrationEntry !== undefined &&
+    registrationEntry.adapterCapability !== scanner.registration?.adapterCapability
+  )
+    fail("registered adapter capability binding");
+  const registeredDetectorInputs = registration?.registrations.map(({ detector }) => {
+    const { scannerManifestEntrySha256: _entry, ...input } = detector;
+    return input;
   });
-  const detector = manifest.detectors[0] ?? fail("Cisco scanner manifest entry");
+  const manifest =
+    registration === undefined
+      ? createScannerManifestV1({
+          protocol: "ScannerManifestV1",
+          detectors: [
+            {
+              detectorId: cisco.detectorId,
+              analyzerIdentity: cisco.analyzerIdentity,
+              ociImage: {
+                reference: cisco.oci.logicalReference,
+                sha256: cisco.oci.manifestDigestSha256.slice("sha256:".length),
+              },
+              adapter: cisco.adapter,
+              observationConfigurationSha256: cisco.observationConfigurationSha256,
+              executionProfileSha256: cisco.executionProfileSha256,
+              supportedPlatforms: [cisco.supportedPlatform],
+              sbom: { mediaType: cisco.sbom.mediaType, sha256: cisco.sbom.sha256 },
+              provenance: {
+                mediaType: cisco.provenance.mediaType,
+                sha256: cisco.provenance.sha256,
+              },
+            },
+          ],
+        })
+      : createScannerManifestV1({
+          protocol: "ScannerManifestV1",
+          detectors: registeredDetectorInputs ?? fail("registered detector inputs"),
+        });
+  const detector =
+    manifest.detectors.find((entry) => entry.detectorId === cisco.detectorId) ??
+    fail("Cisco scanner manifest entry");
   if (
     manifest.scannerManifestSha256 !== scanner.manifestSha256 ||
     detector.scannerManifestEntrySha256 !== cisco.scannerManifestEntrySha256
   )
     fail("Cisco scanner manifest binding");
+  if (registration !== undefined && registrationEntry !== undefined) {
+    const bindings: readonly [string, boolean][] = [
+      [
+        "registration aggregate",
+        registration.registrationSha256 ===
+          canonicalStrictJsonSha256V1({
+            domain: "aih.detector-registration-v1.aggregate",
+            protocol: registration.protocol,
+            registrations: registration.registrations,
+          }),
+      ],
+      ["detector ID", registrationEntry.detector.detectorId === cisco.detectorId],
+      [
+        "manifest entry",
+        registrationEntry.detector.scannerManifestEntrySha256 === cisco.scannerManifestEntrySha256,
+      ],
+      ["analyzer", registrationEntry.detector.analyzerIdentity === cisco.analyzerIdentity],
+      [
+        "runtime reference",
+        registrationEntry.detector.ociImage.reference === cisco.oci.logicalReference,
+      ],
+      [
+        "runtime source digest",
+        registrationEntry.runtime.sourceSha256 ===
+          cisco.oci.manifestDigestSha256.slice("sha256:".length),
+      ],
+      [
+        "runtime config digest",
+        registrationEntry.runtime.configSha256 ===
+          cisco.oci.configDigestSha256.slice("sha256:".length),
+      ],
+      ["adapter identity", registrationEntry.detector.adapter.identity === cisco.adapter.identity],
+      ["adapter digest", registrationEntry.detector.adapter.sha256 === cisco.adapter.sha256],
+      [
+        "configuration digest",
+        registrationEntry.detector.observationConfigurationSha256 ===
+          cisco.observationConfigurationSha256,
+      ],
+      [
+        "profile digest",
+        registrationEntry.detector.executionProfileSha256 === cisco.executionProfileSha256,
+      ],
+      ["SBOM digest", registrationEntry.detector.sbom.sha256 === cisco.sbom.sha256],
+      [
+        "provenance digest",
+        registrationEntry.detector.provenance.sha256 === cisco.provenance.sha256,
+      ],
+      ["broker identity", registrationEntry.broker.identity === cisco.broker.identity],
+    ];
+    const mismatch = bindings.find(([, matches]) => !matches);
+    if (mismatch !== undefined) fail(`registered detector identity binding ${mismatch[0]}`);
+  }
   const expectedRelevantFacts = digest(
     canonicalStrictJsonBytesV1({
       domain: "aih.cisco.oci-candidate.relevant-facts-v1",
@@ -399,7 +513,15 @@ function validateCiscoIdentityBindings(
   );
   if (cisco.broker.policyDigestSha256 !== policyDigestSha256) fail("Cisco broker policy binding");
   const runtimeSha256 = digest(
-    canonicalStrictJsonBytesV1({ domain: "aih.cisco.capture-v2.runtime", detector }),
+    canonicalStrictJsonBytesV1(
+      registration === undefined
+        ? { domain: "aih.cisco.capture-v2.runtime", detector }
+        : {
+            domain: "aih.registered-detector-capture-v1.runtime",
+            registrationSha256: registration.registrationSha256,
+            detectorId: registrationEntry?.detector.detectorId,
+          },
+    ),
   );
   if (scanner.runtimeSha256 !== runtimeSha256) fail("Cisco runtime identity binding");
 }
@@ -536,19 +658,19 @@ export function createScanCandidateV2(value: unknown): ScanCandidateV2 {
     fail("coverage selected closure binding");
   validateCiscoIdentityBindings(parsed.scanner, parsed.observation);
   if (
-    parsed.observation.keySha256 !== parsed.scanner.cisco.observation.keySha256 ||
-    parsed.observation.setSha256 !== parsed.scanner.cisco.observation.setSha256 ||
-    parsed.scanner.configurationSha256 !== parsed.scanner.cisco.observationConfigurationSha256 ||
-    parsed.platform.os !== parsed.scanner.cisco.supportedPlatform.os ||
-    parsed.platform.architecture !== parsed.scanner.cisco.supportedPlatform.architecture
+    parsed.observation.keySha256 !== parsed.scanner.detector.observation.keySha256 ||
+    parsed.observation.setSha256 !== parsed.scanner.detector.observation.setSha256 ||
+    parsed.scanner.configurationSha256 !== parsed.scanner.detector.observationConfigurationSha256 ||
+    parsed.platform.os !== parsed.scanner.detector.supportedPlatform.os ||
+    parsed.platform.architecture !== parsed.scanner.detector.supportedPlatform.architecture
   )
     fail("Cisco identity binding");
   const expectedAnnexes = new Map(parsed.annexes.map((annex) => [annex.descriptorId, annex]));
   if (
     expectedAnnexes.size !== 3 ||
     expectedAnnexes.get("annex.cisco-raw") === undefined ||
-    expectedAnnexes.get("annex.sbom")?.sha256 !== parsed.scanner.cisco.sbom.sha256 ||
-    expectedAnnexes.get("annex.provenance")?.sha256 !== parsed.scanner.cisco.provenance.sha256
+    expectedAnnexes.get("annex.sbom")?.sha256 !== parsed.scanner.detector.sbom.sha256 ||
+    expectedAnnexes.get("annex.provenance")?.sha256 !== parsed.scanner.detector.provenance.sha256
   )
     fail("Cisco annex identity binding");
   const normalized = { ...normalizedParsed, annexes: sortedAnnexes(parsed.annexes) };

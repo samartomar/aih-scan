@@ -103,9 +103,14 @@ describe("Core Strict V2 compatibility lock", () => {
     expect(verifierSource).toContain("schemas/aih-organization-evidence-envelope-v1.schema.json");
     expect(verifierSource).toContain(AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256);
     const verifierIndex = workflow.indexOf(verifier);
+    const packedProof = "npm run verify:cold-core-evidence";
+    const packedProofIndex = workflow.indexOf(packedProof);
     const cleanupIndex = workflow.indexOf("name: Remove exact Core contract checkout");
     expect(verifierIndex).toBeGreaterThanOrEqual(0);
+    expect(packedProofIndex).toBeGreaterThan(verifierIndex);
+    expect(workflow).toContain("AIH_SCAN_CORE_SOURCE: $" + "{{ github.workspace }}/.core-contract");
     expect(cleanupIndex).toBeGreaterThan(verifierIndex);
+    expect(cleanupIndex).toBeGreaterThan(packedProofIndex);
     const cleanupEnd = workflow.indexOf("- run: npm run typecheck", cleanupIndex);
     expect(cleanupEnd).toBeGreaterThan(cleanupIndex);
     const cleanup = workflow.slice(cleanupIndex, cleanupEnd);

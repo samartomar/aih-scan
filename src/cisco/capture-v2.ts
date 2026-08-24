@@ -4,6 +4,7 @@ import {
 } from "../contract/strict-json-v1.js";
 import { describeNativeObservationSourceV1 } from "../observation/native-observation-v1.js";
 import { createScanCandidateV2, type ScanCandidateV2 } from "../observation/scan-attestation-v2.js";
+import { createScannerManifestV1 } from "../observation/scanner-manifest-v1.js";
 import { sealSourceV2 } from "../observation/source-seal-v2.js";
 import { executeCiscoOciBrokerV1 } from "./oci-broker-v1.js";
 import { createCiscoOciCandidateV1 } from "./oci-candidate-v1.js";
@@ -86,8 +87,18 @@ export interface CiscoCaptureV2 {
   readonly candidate: ScanCandidateV2;
   readonly annexArtifacts: readonly { readonly descriptorId: string; readonly bytes: Buffer }[];
 }
+type RegisteredScannerEvidence = Readonly<{
+  detectorId: string;
+  adapterCapability: "cisco-oci-v1";
+  value: unknown;
+  scannerManifestSha256: string;
+  runtimeSha256: string;
+}>;
 /** Executes only the registered Cisco OCI broker and promotes its exact internal evidence bindings. */
-export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoCaptureV2> {
+async function captureCiscoOciCandidateV2Internal(
+  value: unknown,
+  registration: RegisteredScannerEvidence | undefined,
+): Promise<CiscoCaptureV2> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail("input object");
   const input = value;
   const fields = [
@@ -113,6 +124,13 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoC
     typeof runner !== "function"
   )
     fail("input values");
+  const runtimeManifest = createScannerManifestV1({
+    protocol: "ScannerManifestV1",
+    detectors: [runtime],
+  });
+  const runtimeDetector = runtimeManifest.detectors[0] ?? fail("runtime detector");
+  if (registration === undefined && runtimeDetector.detectorId !== "detector.cisco")
+    fail("unregistered detector runtime");
   const layout = parseCiscoOciLayoutV1(canonicalStrictJsonBytesV1(layoutInput));
   const before = sealSourceV2({
     sourceRoot,
@@ -179,13 +197,26 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoC
       setSha256: internal.observationSet.observationSetSha256,
     },
     scanner: {
-      manifestSha256: internal.scannerManifest.scannerManifestSha256,
-      runtimeSha256: canonicalStrictJsonSha256V1({
-        domain: "aih.cisco.capture-v2.runtime",
-        detector,
-      }),
+      manifestSha256:
+        registration?.scannerManifestSha256 ?? internal.scannerManifest.scannerManifestSha256,
+      runtimeSha256:
+        registration?.runtimeSha256 ??
+        canonicalStrictJsonSha256V1({
+          domain: "aih.cisco.capture-v2.runtime",
+          detector,
+        }),
       configurationSha256: detector.observationConfigurationSha256,
-      cisco: {
+      ...(registration === undefined
+        ? {}
+        : {
+            registration: {
+              detectorId: registration.detectorId,
+              adapterCapability: registration.adapterCapability,
+              value: registration.value,
+            },
+          }),
+      detector: {
+        adapterCapability: "cisco-oci-v1",
         detectorId: detector.detectorId,
         analyzerIdentity: detector.analyzerIdentity,
         oci: {
@@ -236,4 +267,15 @@ export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoC
     scan: { outcome: "succeeded" },
   });
   return { candidate, annexArtifacts };
+}
+/** Executes the built-in Cisco detector only. Organization-defined IDs require registered dispatch. */
+export async function captureCiscoOciCandidateV2(value: unknown): Promise<CiscoCaptureV2> {
+  return captureCiscoOciCandidateV2Internal(value, undefined);
+}
+/** Internal registered-dispatch entry point; intentionally not re-exported from the package API. */
+export async function captureRegisteredCiscoOciCandidateV2(
+  value: unknown,
+  registration: RegisteredScannerEvidence,
+): Promise<CiscoCaptureV2> {
+  return captureCiscoOciCandidateV2Internal(value, registration);
 }

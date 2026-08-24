@@ -46,7 +46,7 @@ const fields = [
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const runtimeSchema = z
   .object({
-    detectorId: z.literal("detector.cisco"),
+    detectorId: z.string().regex(/^detector\.[a-z0-9][a-z0-9.-]*$/),
     analyzerIdentity: z.string().regex(/^native\.[a-f0-9]{12}$/),
     ociImage: z.object({ reference: z.string(), sha256 }).strict(),
     adapter: z.object({ identity: z.string().regex(/^adapter\.[a-f0-9]{12}$/), sha256 }).strict(),
@@ -78,7 +78,7 @@ const outputSchema = z
   .strict();
 
 type Runtime = {
-  detectorId: "detector.cisco";
+  detectorId: string;
   analyzerIdentity: string;
   ociImage: { reference: string; sha256: string };
   adapter: { identity: string; sha256: string };
@@ -370,7 +370,9 @@ function build(
       },
     ],
   });
-  const detector = scannerManifest.detectors.find((entry) => entry.detectorId === "detector.cisco");
+  const detector = scannerManifest.detectors.find(
+    (entry) => entry.detectorId === runtime.detectorId,
+  );
   const scannerManifestEntry = detector ?? fail("Cisco scanner manifest entry");
   const observationKeyInput = {
     protocol: "ObservationKeyV1" as const,
@@ -427,7 +429,7 @@ function build(
     scannerManifestSha256: scannerManifest.scannerManifestSha256,
     observations: [
       {
-        detectorId: "detector.cisco",
+        detectorId: runtime.detectorId,
         observationKeySha256: observationKey.observationKeySha256,
         observationSetSha256: observationSet.observationSetSha256,
       },
@@ -551,7 +553,6 @@ export function parseCiscoOciCandidateV1Json(text: string): Candidate {
   );
   if (scannerManifest.detectors.length !== 1) fail("candidate Cisco detector cardinality");
   if (
-    ciscoDetector.detectorId !== "detector.cisco" ||
     ciscoDetector.ociImage.reference !== layout.logicalReference ||
     ciscoDetector.ociImage.sha256 !== layout.manifestDigestSha256.slice("sha256:".length) ||
     sbomDescriptor === undefined ||
@@ -573,7 +574,7 @@ export function parseCiscoOciCandidateV1Json(text: string): Candidate {
   if (
     attestedObservations.length !== 1 ||
     attestedCisco === undefined ||
-    attestedCisco.detectorId !== "detector.cisco" ||
+    attestedCisco.detectorId !== ciscoDetector.detectorId ||
     attestedCisco.observationKeySha256 !== observationKey.observationKeySha256 ||
     attestedCisco.observationSetSha256 !== observationSet.observationSetSha256
   )

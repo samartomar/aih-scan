@@ -227,13 +227,13 @@ function main() {
     ],
   };
   const runtimeInputs = { dependencies, layout };
-  const runtime = {
+  const detector = {
     adapter: {
       identity: identifier("adapter", runtimeInputs),
       sha256: hash(Buffer.from(canonical({ domain: "aih.cisco.oci-bridge.adapter-v1", runtimeInputs }))),
     },
     analyzerIdentity: identifier("native", runtimeInputs),
-    detectorId: "detector.cisco",
+    detectorId: "detector.organization.cisco",
     executionProfileSha256: hash(
       Buffer.from(canonical({ domain: "aih.cisco.oci-bridge.execution-profile-v1", runtimeInputs })),
     ),
@@ -262,9 +262,26 @@ function main() {
       { descriptorId: "annex.sbom", path: sbomPath },
       { descriptorId: "annex.provenance", path: provenancePath },
     ],
-    broker: { identity: identifier("broker", runtimeInputs) },
+    detectorId: detector.detectorId,
     layout,
-    runtime,
+    registration: {
+      protocol: "DetectorRegistrationV1",
+      registrations: [
+        {
+          detector,
+          runtime: {
+            sourceReference: layout.logicalReference,
+            sourceSha256: layout.manifestDigestSha256.slice(7),
+            configSha256: layout.configDigestSha256.slice(7),
+          },
+          adapterCapability: "cisco-oci-v1",
+          broker: {
+            identity: identifier("broker", runtimeInputs),
+            capability: "cisco-oci-v1",
+          },
+        },
+      ],
+    },
     selectedClosurePaths: [selectedPath],
     sourceRoot,
   };

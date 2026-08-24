@@ -2,16 +2,19 @@
 
 `@aihq/scan` captures and verifies bounded scanner evidence without deciding
 whether an organization should approve, install, or activate the scanned
-subject. The current V2 path covers one registered detector: the Cisco scanner
-running in a pinned Linux `amd64` OCI image against an explicitly selected
-source closure.
+subject. The V2 path has one code-owned execution capability,
+`cisco-oci-v1`, which can run either the built-in Cisco identity or an
+organization-defined exact detector registration in a pinned Linux `amd64`
+OCI image against an explicitly selected source closure. Registration does not
+load organization code into the Scanner process or grant governance authority.
 
 ## Status
 
-The V2 library, `aih-scan` CLI, detached bundle format, Ed25519 DSSE signing,
-Linux `amd64` Cisco CI chain, and Core organization-evidence projection are
-implemented and tested in this repository. Projection is evidence transport
-only; it does not qualify, approve, admit, observe, or activate a subject.
+The V2 library, `aih-scan` CLI, strict detector-registration grammar, detached
+bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
+organization-evidence projection are implemented and tested in this
+repository. Projection is evidence transport only; it does not qualify,
+approve, admit, observe, or activate a subject.
 The repository is still private and `@aihq/scan` has not been published to npm.
 Repository visibility and npm publication require separate owner approval; the
 commands below can be exercised from a local checkout or a reviewed package
@@ -51,8 +54,11 @@ implementation details and are not package export paths.
 Keep capture, signing, verification, and governance as separate phases:
 
 1. A candidate job builds or obtains the exact registered scanner runtime and
-   runs `aih-scan capture` against a disposable target. It has no signing or
-   repository-write authority.
+   runs `aih-scan capture` against a disposable target. The selected
+   registration names one code-owned adapter capability and binds the exact
+   runtime, adapter, configuration, execution profile, platform, SBOM,
+   provenance, and broker identities. It has no signing or repository-write
+   authority.
 2. A signing job reads the completed detached bundle and signs its exact
    candidate and annex identities. It does not run Docker or the candidate
    scanner.
@@ -80,7 +86,7 @@ npx aih-scan capture \
   --output /path/to/new-capture-bundle
 ```
 
-`--output` must not already exist. The strict request binds:
+`--output` must not already exist. A built-in Cisco request binds:
 
 - the canonical Cisco OCI layout and exact image/config digests;
 - the source root and selected relative closure paths;
@@ -88,16 +94,74 @@ npx aih-scan capture \
 - digest-bound SBOM and provenance annex files;
 - the broker identity.
 
+An organization-defined request replaces the top-level `runtime` and `broker`
+fields with `registration` and `detectorId`. `registration` has the strict
+authoring shape below; every digest is 64 lowercase hexadecimal characters and
+the OCI reference must end in the same manifest digest:
+
+```json
+{
+  "protocol": "DetectorRegistrationV1",
+  "registrations": [
+    {
+      "detector": {
+        "detectorId": "detector.example.policy",
+        "analyzerIdentity": "native.0123456789ab",
+        "ociImage": {
+          "reference": "local.invalid/aih-scan/cisco@sha256:<manifest-sha256>",
+          "sha256": "<manifest-sha256>"
+        },
+        "adapter": {
+          "identity": "adapter.0123456789ab",
+          "sha256": "<adapter-sha256>"
+        },
+        "observationConfigurationSha256": "<configuration-sha256>",
+        "executionProfileSha256": "<execution-profile-sha256>",
+        "supportedPlatforms": [{ "os": "linux", "architecture": "amd64" }],
+        "sbom": { "mediaType": "application/spdx+json", "sha256": "<sbom-sha256>" },
+        "provenance": {
+          "mediaType": "application/vnd.in-toto+json",
+          "sha256": "<provenance-sha256>"
+        }
+      },
+      "runtime": {
+        "sourceReference": "local.invalid/aih-scan/cisco@sha256:<manifest-sha256>",
+        "sourceSha256": "<manifest-sha256>",
+        "configSha256": "<image-config-sha256>"
+      },
+      "adapterCapability": "cisco-oci-v1",
+      "broker": { "identity": "broker.0123456789ab", "capability": "cisco-oci-v1" }
+    }
+  ]
+}
+```
+
+The selected `detectorId` need not appear in an AIH-maintained catalog. The
+current adapter requires the selected image to be loaded under the canonical
+local execution alias shown above; the registration, OCI layout, loaded image,
+SBOM, and provenance still bind its exact organization-chosen bytes. Scanner
+does not fetch or execute an arbitrary registry reference. The registration is
+strict, canonically hashed, deterministically ordered, capped at 128 entries
+and 512 KiB, and rejects duplicate IDs, mutable OCI references, unsupported
+platforms, unknown fields, digest mismatches, and unknown adapter capabilities.
+The V2 candidate records the selected identity under the neutral
+`scanner.detector` field and binds the complete registration digest. It does
+not claim that every registered entry ran.
+
+The only executable capability is the checked-in `cisco-oci-v1` adapter. An
+organization may select its own exact compatible OCI detector runtime and
+evidence identities, but cannot supply JavaScript, a command line, a host path,
+or another adapter implementation for Scanner to execute. A new execution
+capability requires reviewed Scanner code and tests.
+
 The capture command seals the source before and after execution and refuses a
 changed source, link/reparse escape, hard link, oversized input or output,
 timeout, truncated process output, nonzero scanner result, or incomplete
-container cleanup. Docker runs with no network, a read-only root filesystem,
+container cleanup. It also safely re-reads the capture request after execution
+and before bundle creation, refusing changed canonical request bytes. Docker
+runs with no network, a read-only root filesystem,
 no added capabilities, `no-new-privileges`, a non-root user, bounded CPU,
 memory, process count, temporary storage, and output.
-
-The current request producer is intentionally specific to the checked-in Cisco
-workflow. There is no generic organization-defined detector registration API
-in this package yet.
 
 ## Sign
 
@@ -232,9 +296,10 @@ Verification establishes that:
 
 - the DSSE signature is valid for the exact canonical in-toto payload under an
   administrator-supplied Ed25519 root;
-- the payload binds the detached candidate, source seals, Cisco runtime and
-  configuration identities, platform, raw facts, coverage, annex digests,
-  cleanup result, signer, and expected claims;
+- the payload binds the detached candidate, source seals, selected detector,
+  registration and code-owned adapter capability, runtime and configuration
+  identities, platform, raw facts, coverage, annex digests, cleanup result,
+  signer, and expected claims;
 - the detached candidate and all annex bytes are present and match their
   descriptors;
 - the evidence is current at the caller-supplied time and has not appeared in
@@ -248,7 +313,9 @@ expected claims through an independent trusted process.
 
 ## Limits
 
-- Registered scanner path: Cisco only.
+- Registered execution capability: `cisco-oci-v1` only. Organizations can bind
+  their own exact compatible detector identities and OCI bytes; Scanner does
+  not dynamically load arbitrary adapters.
 - Qualified capture platform: Linux `amd64` only.
 - Source tree: at most 4,096 entries, 16 MiB per file, and 256 MiB total.
   The canonical `SourceSealV2` record is also capped at 512 KiB. Selected
@@ -289,9 +356,12 @@ AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
 ```
 
 The proof builds and packs Core, packs Scanner, installs both tarballs in
-disposable roots, projects real signed V2 mechanics evidence, validates the
-exact packaged Core schema, and invokes packed Core's real `policy resolve`
-command. Its expected production result is the named fail-closed
+disposable roots, captures a catalog-absent organization detector through the
+registered adapter boundary, signs and independently verifies the resulting V2
+bundle, projects the evidence, validates the exact packaged Core schema, and
+invokes packed Core's real `policy resolve` command. Its deterministic runner
+and generated key are explicitly test mechanics rather than a production
+detector or trust root. Its expected production result is the named fail-closed
 `authority-unverified` refusal. Core does not export the organization-evidence
 parser at this lock, and without genuine V3 authority the resolver does not
 reach it. The generated organization-class key is non-public test mechanics,
