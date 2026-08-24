@@ -99,6 +99,7 @@ describe("DetectorRegistrationV1", () => {
       },
       { ...item, adapterCapability: "unregistered-adapter" },
       { ...item, broker: { ...item.broker, capability: "unregistered-adapter" } },
+      { ...item, detector: { ...item.detector, detectorId: "detector.cisco" } },
       { ...item, unexpected: true },
     ]) {
       expect(() =>

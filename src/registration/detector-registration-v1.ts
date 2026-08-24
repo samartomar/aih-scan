@@ -159,6 +159,8 @@ export function createDetectorRegistrationV1(value: unknown): DetectorRegistrati
     parsed.registrations.map((item) => item.detector.detectorId),
     "detector ID",
   );
+  if (parsed.registrations.some((item) => item.detector.detectorId === "detector.cisco"))
+    fail("reserved detector ID");
   const normalized = parsed.registrations
     .map(entry)
     .sort((left, right) => codeUnitCompare(left.detector.detectorId, right.detector.detectorId));

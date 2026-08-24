@@ -137,7 +137,9 @@ the OCI reference must end in the same manifest digest:
 ```
 
 The selected `detectorId` need not appear in an AIH-maintained catalog. The
-current adapter requires the selected image to be loaded under the canonical
+code-owned `detector.cisco` identity is reserved for the direct built-in path
+and cannot be claimed by an organization registration. The current adapter
+requires the selected image to be loaded under the canonical
 local execution alias shown above; the registration, OCI layout, loaded image,
 SBOM, and provenance still bind its exact organization-chosen bytes. Scanner
 does not fetch or execute an arbitrary registry reference. The registration is

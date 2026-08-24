@@ -47,12 +47,6 @@ function runtimeInput(
   const { scannerManifestEntrySha256: _entry, ...runtime } = value;
   return runtime;
 }
-function sameRegistration(left: DetectorRegistrationV1, right: DetectorRegistrationV1): boolean {
-  return canonicalDetectorRegistrationV1Bytes(left).equals(
-    canonicalDetectorRegistrationV1Bytes(right),
-  );
-}
-
 /** Dispatches only the named detector registration through a bounded built-in adapter. */
 export async function captureRegisteredDetectorCandidateV2(
   value: unknown,
@@ -67,7 +61,8 @@ export async function captureRegisteredDetectorCandidateV2(
     "annexPayloads",
     "runner",
   ]);
-  const registration = createDetectorRegistrationV1(ownData(value, "registration"));
+  const suppliedRegistration = ownData(value, "registration");
+  const registration = createDetectorRegistrationV1(suppliedRegistration);
   const detectorId = ownData(value, "detectorId");
   const layoutInput = ownData(value, "layout");
   const sourceRoot = ownData(value, "sourceRoot");
@@ -128,10 +123,9 @@ export async function captureRegisteredDetectorCandidateV2(
     },
     registrationEvidence,
   );
-  const reobservedRegistration = createDetectorRegistrationV1(registrationInput(registration));
+  const reobservedRegistration = createDetectorRegistrationV1(suppliedRegistration);
   if (!beforeRegistration.equals(canonicalDetectorRegistrationV1Bytes(reobservedRegistration)))
     fail("registration changed during capture");
-  if (!sameRegistration(registration, reobservedRegistration)) fail("registration re-observation");
   const candidateWire = structuredClone(captured.candidate) as Record<string, unknown>;
   delete candidateWire.candidateSha256;
   const scanner = candidateWire.scanner;
