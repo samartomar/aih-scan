@@ -26,6 +26,7 @@ import {
   verifyScanAttestationV2,
 } from "./observation/scan-attestation-v2.js";
 import { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation/scan-bundle-v2.js";
+import { captureRegisteredDetectorCandidateV2 } from "./registration/capture-registered-detector-v2.js";
 
 const maxInputBytes = 2 * 1024 * 1024;
 function fail(message: string): never {
@@ -293,40 +294,58 @@ async function capture(args: readonly string[]): Promise<void> {
   const requestPath = args[1],
     outputPath = args[3];
   if (typeof requestPath !== "string" || typeof outputPath !== "string") fail("capture arguments");
-  const request = readJson(requestPath, "Cisco capture request");
+  const request = readJson(requestPath, "capture request");
+  const registered = Object.hasOwn(request, "registration");
+  const captureLabel = registered ? "registered capture request" : "Cisco capture request";
   exactWire(
     request,
-    ["layout", "sourceRoot", "selectedClosurePaths", "runtime", "annexFiles", "broker"],
-    "Cisco capture request",
+    registered
+      ? ["registration", "detectorId", "layout", "sourceRoot", "selectedClosurePaths", "annexFiles"]
+      : ["layout", "sourceRoot", "selectedClosurePaths", "runtime", "annexFiles", "broker"],
+    captureLabel,
   );
+  const requestBytes = canonicalStrictJsonBytesV1(request);
   if (!Array.isArray(request.annexFiles) || request.annexFiles.length !== 2)
-    fail("Cisco capture annex files");
+    fail(`${captureLabel} annex files`);
   const annexPayloads = request.annexFiles.map((entry) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry))
-      fail("Cisco capture annex file");
+      fail(`${captureLabel} annex file`);
     const wire = entry as Record<string, unknown>;
-    exactWire(wire, ["descriptorId", "path"], "Cisco capture annex file");
+    exactWire(wire, ["descriptorId", "path"], `${captureLabel} annex file`);
     if (
       (wire.descriptorId !== "annex.sbom" && wire.descriptorId !== "annex.provenance") ||
       typeof wire.path !== "string"
     )
-      fail("Cisco capture annex file");
+      fail(`${captureLabel} annex file`);
     return {
       descriptorId: wire.descriptorId,
-      bytes: readBoundedRegularFile(wire.path, "Cisco capture annex", 16 * 1024 * 1024),
+      bytes: readBoundedRegularFile(wire.path, `${captureLabel} annex`, 16 * 1024 * 1024),
     };
   });
   if (new Set(annexPayloads.map((entry) => entry.descriptorId)).size !== annexPayloads.length)
-    fail("Cisco capture annex file duplicate");
-  const captured = await captureCiscoOciCandidateV2({
-    layout: request.layout,
-    sourceRoot: request.sourceRoot,
-    selectedClosurePaths: request.selectedClosurePaths,
-    runtime: request.runtime,
-    annexPayloads,
-    broker: request.broker,
-    runner: dockerRunner,
-  });
+    fail(`${captureLabel} annex file duplicate`);
+  const captured = registered
+    ? await captureRegisteredDetectorCandidateV2({
+        registration: request.registration,
+        detectorId: request.detectorId,
+        layout: request.layout,
+        sourceRoot: request.sourceRoot,
+        selectedClosurePaths: request.selectedClosurePaths,
+        annexPayloads,
+        runner: dockerRunner,
+      })
+    : await captureCiscoOciCandidateV2({
+        layout: request.layout,
+        sourceRoot: request.sourceRoot,
+        selectedClosurePaths: request.selectedClosurePaths,
+        runtime: request.runtime,
+        annexPayloads,
+        broker: request.broker,
+        runner: dockerRunner,
+      });
+  const afterRequest = readJson(requestPath, "capture request");
+  if (!requestBytes.equals(canonicalStrictJsonBytesV1(afterRequest)))
+    fail("capture request changed during capture");
   writeScanCaptureBundleV2({ outputDirectory: outputPath, ...captured });
 }
 function sign(args: readonly string[]): void {

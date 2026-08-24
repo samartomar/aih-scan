@@ -28,6 +28,10 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract
+      - name: Verify packed registered-detector evidence handoff
+        env:
+          AIH_SCAN_CORE_SOURCE: ${{ github.workspace }}/.core-contract
+        run: npm run verify:cold-core-evidence
       - name: Remove exact Core contract checkout
         if: ${{ always() }}
         run: |

@@ -32,3 +32,11 @@ export {
 } from "./observation/scan-attestation-v2.js";
 export { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation/scan-bundle-v2.js";
 export { type SourceSealV2, sealSourceV2 } from "./observation/source-seal-v2.js";
+export { captureRegisteredDetectorCandidateV2 } from "./registration/capture-registered-detector-v2.js";
+export {
+  canonicalDetectorRegistrationV1Bytes,
+  createDetectorRegistrationV1,
+  type DetectorRegistrationEntryV1,
+  type DetectorRegistrationV1,
+  parseDetectorRegistrationV1Json,
+} from "./registration/detector-registration-v1.js";

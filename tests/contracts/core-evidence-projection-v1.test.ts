@@ -131,7 +131,8 @@ function candidate(outcome: "succeeded" | "failed" | "refused" = "succeeded") {
         canonicalStrictJsonBytesV1({ domain: "aih.cisco.capture-v2.runtime", detector: entry }),
       ),
       configurationSha256: detector.observationConfigurationSha256,
-      cisco: {
+      detector: {
+        adapterCapability: "cisco-oci-v1",
         detectorId: detector.detectorId,
         analyzerIdentity: detector.analyzerIdentity,
         oci: {
