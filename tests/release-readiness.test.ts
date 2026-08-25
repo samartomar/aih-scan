@@ -379,6 +379,14 @@ describe("@aihq/scan release boundary (#12)", () => {
     }
   });
 
+  it("normalizes the upload-artifact digest before comparing live API custody", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    expect(recovery).toContain('if ! [[ "$RECOVERY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then');
+    expect(recovery).toContain('expected_api_digest="sha256:$RECOVERY_ARTIFACT_DIGEST"');
+    expect(recovery).toContain('test "$api_digest" = "$expected_api_digest"');
+    expect(recovery).not.toContain('[[ "$RECOVERY_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]');
+  });
+
   it("rejects substituted, expired, or ambiguous retained release artifacts", () => {
     const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
     const validator = inlineModuleFollowing(recovery, "ARTIFACT_OBSERVATION=");
