@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CORE_COMMIT = "74ddf3439df47a947a6f7a022515099602702ac8";
+const CORE_COMMIT = "38e01f49f2f4ff310e2f94651b292a1618b61f2e";
 const CORE_PACKAGE = {
   name: "@aihq/core",
   version: "0.1.0",
@@ -414,7 +414,7 @@ try {
     evidenceDigest,
     schemaCompatible: true,
     resolver: { outcome: "refused", reason: "authority-unverified" },
-    limitation: "Core 74ddf343 has no exported organization-evidence parser; without genuine V3 authority the resolver does not reach qualification parsing. This proves schema compatibility and fail-closed refusal only.",
+    limitation: "Core 0.1.0 has no exported organization-evidence parser; without genuine V3 authority the resolver does not reach qualification parsing. This proves schema compatibility and fail-closed refusal only.",
     mechanics: "The generated key and organization-class signer are non-public test mechanics only; they are not organization authority, qualification, or a production effect.",
   })}\n`);
 } finally {
