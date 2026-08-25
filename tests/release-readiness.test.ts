@@ -135,6 +135,22 @@ describe("@aihq/scan release boundary (#12)", () => {
     const publicationJob = workflow.slice(workflow.indexOf("  npm-publish:\n"));
     expect(publicationJob).not.toMatch(/actions\/checkout|npm ci|npm run |npm pack|--help/);
     expect(publicationJob).not.toContain("require('./package.json')");
+
+    const bootstrapStep = publicationJob.slice(
+      publicationJob.indexOf("Publish exact first tarball through the one-use npm bootstrap"),
+      publicationJob.indexOf("Verify exact tarball before GitHub release"),
+    );
+    const authenticatedAbsenceIndex = bootstrapStep.indexOf('npm view "@aihq/scan" name --json');
+    const liveRefIndex = bootstrapStep.indexOf(
+      "Revalidate live main and tag after authenticated registry observation",
+    );
+    const finalHashIndex = bootstrapStep.indexOf('actual_sha256="$(sha256sum "$TARBALL"');
+    const effectIndex = bootstrapStep.indexOf('npm publish "$tarball"');
+    expect(authenticatedAbsenceIndex).toBeGreaterThanOrEqual(0);
+    expect(liveRefIndex).toBeGreaterThan(authenticatedAbsenceIndex);
+    expect(finalHashIndex).toBeGreaterThan(liveRefIndex);
+    expect(effectIndex).toBeGreaterThan(finalHashIndex);
+    expect(bootstrapStep).toContain("env -u NODE_AUTH_TOKEN git");
   });
 
   it("parses npm package-absence evidence as one exact JSON E404 error", () => {
@@ -205,6 +221,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toMatch(/delete the GitHub\s+`NPM_BOOTSTRAP_TOKEN` secret/u);
     expect(releasing).toContain("revoke the npm token");
     expect(releasing).toMatch(/restores trusted-publisher-only\s+publication/u);
+    expect(releasing).toMatch(
+      /as soon as npm confirms package existence, regardless of whether\s+the later GitHub Release succeeds/u,
+    );
     expect(releasing).toContain("never delete, move, or reuse the tag");
     expect(releasing).toContain("read-only `verify-and-pack` job");
     expect(releasing).toContain("runs no Scanner package code");

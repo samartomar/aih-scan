@@ -28,9 +28,10 @@ only structured public and authenticated npm `E404` observations, rejects packed
 publication overrides, pins npmjs, and exposes the bootstrap credential only to
 the publish step. The protected GitHub environment, credential, exact tag,
 publication, immediate trusted-publisher binding, credential removal, and source
-cleanup remain owner actions documented in [RELEASING.md](RELEASING.md). Until
-those actions are authorized and observed, use a local checkout or a reviewed
-package tarball.
+cleanup remain owner actions documented in [RELEASING.md](RELEASING.md). That
+cleanup begins as soon as npm confirms package existence, even if later GitHub
+Release evidence fails. Until those actions are authorized and observed, use a
+local checkout or a reviewed package tarball.
 The new package line starts at `0.1.0` to describe its current maturity; it does
 not inherit the frozen Core legacy package's historical major version.
 
