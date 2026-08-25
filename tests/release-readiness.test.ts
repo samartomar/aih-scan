@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -238,16 +238,18 @@ describe("@aihq/scan release boundary (#12)", () => {
 
     const readme = read("README.md");
     expect(readme).toContain("npm install --save-exact @aihq/scan@0.1.1");
-    expect(readme).toContain("gh attestation verify ./aihq-scan-0.1.1.tgz");
+    expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-0.1.1.tgz"');
     expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("without executing Scanner package code");
     expect(readme).toContain("is public on npm");
-    expect(readme).toContain("GitHub Release evidence is incomplete");
+    expect(readme).not.toContain("GitHub Release evidence is incomplete");
+    expect(readme).toContain("five-asset GitHub Release");
     expect(readme).toContain("recover-v-scan-0.1.1.yml@refs/heads/main");
     expect(readme).toContain('--source-digest "$release_sha"');
-    expect(releasing).toContain("recovery workflow source SHA");
+    expect(releasing).toContain("Recovery run `32903155702`");
+    expect(releasing).toContain("is no longer present on `main`");
   });
 
   it("packs the license, README, command, and library under the exact identity", () => {
@@ -276,6 +278,16 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(paths).toContain("dist/cli.js");
     expect(paths).toContain("dist/index.js");
   });
+
+  it("retires the one-use 0.1.1 recovery workflow after verified success", () => {
+    expect(existsSync(resolve(root, ".github/workflows/recover-v-scan-0.1.1.yml"))).toBe(false);
+  });
+
+  // Preserve the exact adversarial contract as a fail-loud diagnostic if the
+  // spent one-use workflow is ever restored; it is not part of steady-state CI.
+  if (!existsSync(resolve(root, ".github/workflows/recover-v-scan-0.1.1.yml"))) {
+    return;
+  }
 
   it("recovers only the exact retained 0.1.1 artifact through a protected no-execution boundary", () => {
     const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");

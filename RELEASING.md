@@ -23,10 +23,13 @@ Exact `@aihq/scan@0.1.1` is public on npm from immutable tag
 `v-scan-0.1.1` and source `a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8`.
 The registry exposes signatures and npm provenance. The authorized release run
 published the exact tarball, then failed because its checkout-free `gh release
-create` command omitted `--repo`; the GitHub Release and assets are absent. The
-immutable `v-scan-0.1.0` attempt separately passed read-only verification before
-npm refused the protected publish with `EOTP`. Preserve both tags and failed runs
-as audit evidence; never delete, move, or reuse the tag.
+create` command omitted `--repo`. Recovery run `32903155702`, from exact workflow
+source `dfbb3a98461731f3a3e98ebb0049e8cc97373611`, subsequently created the
+GitHub Release with exactly the retained tarball, original provenance bundle,
+tarball-scoped SPDX SBOM, checksum manifest, and recovery-workflow cosign bundle.
+The immutable `v-scan-0.1.0` attempt separately passed read-only verification
+before npm refused the protected publish with `EOTP`. Preserve both tags and all
+failed and recovery runs as audit evidence; never delete, move, or reuse a tag.
 
 The one-use bootstrap source is absent. The GitHub bootstrap secret is absent.
 Current `.github/workflows/release.yml` rejects nonempty `NODE_AUTH_TOKEN` and
@@ -46,23 +49,25 @@ until that binding and token revocation are independently observed. Finally requ
 ruleset, credential, tag, and trusted-publisher mutations are not source-code
 changes and require their own authorization.
 
-## Exact 0.1.1 Release-evidence recovery
+## Recovered 0.1.1 Release evidence
 
-`.github/workflows/recover-v-scan-0.1.1.yml` is a bounded one-use recovery path.
-It is fixed to the authorized `0.1.1` source, original release run, retained
-artifact ID and service digest, original tarball SHA-256/SHA-1/integrity, and npm
-identity. Its read-only job verifies those facts, the exact immutable tag, the
-original GitHub build attestation, and an exact missing-Release observation. Its
-protected job receives only that rehashed tarball, runs no Scanner package code,
-cannot call `npm publish`, repeats live tag/npm/Release checks immediately before
-each public effect, and uses an explicit `--repo` plus `--verify-tag` to create
-the Release.
+The bounded one-use `.github/workflows/recover-v-scan-0.1.1.yml` path completed
+successfully in run `32903155702` and is no longer present on `main`. Its
+read-only job verified the authorized `0.1.1` source, original release run,
+retained artifact ID and service digest, exact tarball identities, npm identity,
+immutable tag, original GitHub build attestation, and missing Release. Its
+protected job received only that rehashed tarball, ran no Scanner package code,
+could not call `npm publish`, and repeated live tag/npm/Release checks immediately
+before signing and Release creation.
 The Release retains the original tag-run build attestation. Its checksum is
 newly signed under the
 `recover-v-scan-0.1.1.yml@refs/heads/main` certificate identity, and the Release
-notes record the exact recovery workflow source SHA; that signature must not be
-described as the original tag-run checksum signature. After success, verify
-every asset and remove the one-use recovery workflow in a reviewed cleanup.
+notes record the exact recovery workflow source SHA. Independent verification
+confirmed the five-asset set, every checksum, exact retained tarball SHA-256
+`ac80c7a2254d796aa30e489f6c3b7c2b72afa1194a3e5ed9e31a128b8e7ae8ec`,
+recovery certificate identity, original tag/source attestation, and exact SBOM
+subject. The recovery signature must not be described as the original tag-run
+checksum signature.
 
 ## Normal release
 
@@ -129,5 +134,5 @@ of organization authority, evidence acceptance, or a successful Core effect.
 If npm publication succeeds before a later workflow step fails, npm package
 existence is the cleanup trigger. Remove the bootstrap credential and source
 path before repairing missing GitHub Release evidence. For `0.1.1`, both are
-already absent and only the exact bounded recovery workflow may create the
-missing Release.
+absent, the missing Release was recovered, and the one-use recovery workflow was
+removed. Retain its terminal run as audit evidence.
