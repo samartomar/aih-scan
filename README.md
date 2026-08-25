@@ -20,23 +20,24 @@ bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
 organization-evidence projection are implemented and tested in this
 repository. Projection is evidence transport only; it does not qualify,
 approve, admit, observe, or activate a subject.
-The repository is public and Apache-2.0 licensed. `@aihq/scan` has not been published
-to npm, and npm publication remains a separate owner-controlled release gate. The
-immutable `v-scan-0.1.0` attempt passed its read-only verification but npm refused
-publication with `EOTP`; the registry still returns `E404`. That tag and failed run
-remain audit evidence and must never be deleted, moved, or reused.
-The source repository contains the pinned provenance-capable release workflow and
-a temporary one-use fix-forward path restricted to exact `@aihq/scan@0.1.1`. That path accepts
-only structured public and authenticated npm `E404` observations, rejects packed
-publication overrides, pins npmjs, and exposes the bootstrap credential only to
-the publish step. The protected GitHub environment and immutable tag ruleset
-exist. Replacing the rejected credential, authorizing and creating the exact
-fix-forward tag, publication, immediate trusted-publisher binding, credential
-removal, and source cleanup remain owner actions documented in
-[RELEASING.md](RELEASING.md). That
-cleanup begins as soon as npm confirms package existence, even if later GitHub
-Release evidence fails. Until those actions are authorized and observed, use a
-local checkout or a reviewed package tarball.
+The repository is public and Apache-2.0 licensed. Exact
+`@aihq/scan@0.1.1` is public on npm with registry signatures, npm provenance,
+and immutable tag `v-scan-0.1.1`. A disposable install and `aih-scan --help`
+pass. GitHub Release evidence is incomplete: npm publication succeeded, but the
+checkout-free Release command omitted its explicit repository, so no Release or
+assets exist. This is public npm custody, not a fully completed release and not
+organization evidence custody.
+
+The one-use bootstrap source and GitHub environment secret are absent. The
+current release workflow rejects npm token credentials and uses GitHub OIDC
+Trusted Publishing only. The npm trusted-publisher binding still requires owner
+browser/2FA confirmation, and the short-lived npm token must still be revoked.
+Future Scanner tags remain blocked until those external facts are observed.
+The exact, protected recovery workflow in this repository can create only the
+missing `v-scan-0.1.1` Release from the retained original run artifact after
+revalidating its tag, source, artifact and tarball digests, npm identity, and
+original GitHub attestation. It cannot republish npm and runs no Scanner package
+code. See [RELEASING.md](RELEASING.md).
 The new package line starts at `0.1.0` to describe its current maturity; it does
 not inherit the frozen Core legacy package's historical major version.
 
@@ -69,14 +70,17 @@ npx aih-scan --help
 The package exports only the V2 API from `@aihq/scan`. Internal V1 modules are
 implementation details and are not package export paths.
 
-After the exact release is visible on npm, a disposable consumer can install
-and verify the immutable version:
+Because the exact npm version is public, a disposable consumer can install it
+and verify the available registry evidence. The GitHub Release commands remain
+expected to fail until the bounded recovery completes:
 
 ```sh
 npm install --save-exact @aihq/scan@0.1.1
 npm audit signatures
 gh release download v-scan-0.1.1 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.1.tgz"
-gh attestation verify ./aihq-scan-0.1.1.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.1 --deny-self-hosted-runners
+release_sha="$(gh api repos/samartomar/aih-scan/git/ref/tags/v-scan-0.1.1 --jq .object.sha)"
+test "$release_sha" = "a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8"
+gh attestation verify ./aihq-scan-0.1.1.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.1 --source-digest "$release_sha" --deny-self-hosted-runners
 npx --no-install aih-scan --help
 ```
 
@@ -84,9 +88,15 @@ The release workflow builds and smoke-installs the candidate in a read-only job.
 Its protected job verifies the workflow-artifact digest, original tarball digest,
 and packed identity without executing Scanner package code. It then binds
 npm provenance, a GitHub build attestation, an SPDX SBOM, the tarball checksum, and a keyless
-cosign checksum bundle to the exact tagged source. Do not run this block
-until `npm view @aihq/scan@0.1.1` succeeds; source review or a local tarball is not
-publication evidence.
+cosign checksum bundle to the exact tagged source. `npm view
+@aihq/scan@0.1.1` is the live registry check; source review or a local tarball
+is not publication evidence. Do not claim the Release legs until the Release
+and all five exact assets are independently observed.
+The recovered Release retains the original tag-run build attestation. Its
+checksum bundle is newly signed by
+`recover-v-scan-0.1.1.yml@refs/heads/main`; the Release notes name the exact
+recovery workflow source SHA. Do not misrepresent that recovery signature as
+the original tag-run checksum signature.
 
 ## Evidence flow
 
@@ -369,11 +379,11 @@ expected claims through an independent trusted process.
   16 MiB SARIF output, then bounded termination and cleanup.
 - The package emits evidence facts only. It does not provide catalog promotion,
   organization approval, installation, runtime/effect projection, revocation
-  custody, repository publication, or npm publication.
-- No trusted-publisher binding, protected release environment, tag, GitHub
-  Release, or npm version exists yet. The Apache-2.0 license and source release
-  workflow are present, but reviewed source and tarballs are not publication
-  evidence.
+  custody, or publication authority.
+- The protected release environment, immutable tag, npm version, registry
+  signatures, and npm provenance exist. The GitHub Release is absent, npm
+  trusted-publisher binding is not yet observed, and npm-token revocation remains
+  an owner action. Those gaps prevent a fully completed release claim.
 
 Organizations are not required to use an AIH-maintained catalog entry. The
 Core Strict V2 contract can bind organization-qualified evidence for an exact
