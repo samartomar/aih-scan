@@ -10,6 +10,10 @@
   "bugs": {
     "url": "https://github.com/samartomar/aih-scan/issues"
   },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -37,7 +41,8 @@
     "test:cov": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "verify:cold-core-evidence": "node tools/verify-cold-core-evidence.mjs",
-    "verify": "npm run typecheck && npm run lint && npm test && npm run build"
+    "verify:workflow-action-pins": "node tools/verify-pinned-actions.mjs",
+    "verify": "npm run typecheck && npm run lint && npm run build && npm test && npm run verify:workflow-action-pins"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",

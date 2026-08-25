@@ -1,5 +1,7 @@
 # AIH Scanner (`@aihq/scan`)
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 `@aihq/scan` captures and verifies bounded scanner evidence without deciding
 whether an organization should approve, install, or activate the scanned
 subject. The V2 path has one code-owned execution capability,
@@ -18,9 +20,13 @@ bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
 organization-evidence projection are implemented and tested in this
 repository. Projection is evidence transport only; it does not qualify,
 approve, admit, observe, or activate a subject.
-The repository is public. `@aihq/scan` has not been published to npm, and npm
-publication remains a separate owner-controlled release gate. Until that gate is
-implemented and authorized, use a local checkout or a reviewed package tarball.
+The repository is public and Apache-2.0 licensed. `@aihq/scan` has not been published
+to npm, and npm publication remains a separate owner-controlled release gate.
+The source repository contains the pinned provenance-capable release workflow,
+but the protected GitHub environment, first-package bootstrap, npm trusted-
+publisher binding, exact tag, and publication remain owner actions documented
+in [RELEASING.md](RELEASING.md). Until those actions are authorized and observed,
+use a local checkout or a reviewed package tarball.
 The new package line starts at `0.1.0` to describe its current maturity; it does
 not inherit the frozen Core legacy package's historical major version.
 
@@ -52,6 +58,22 @@ npx aih-scan --help
 
 The package exports only the V2 API from `@aihq/scan`. Internal V1 modules are
 implementation details and are not package export paths.
+
+After the exact release is visible on npm, a disposable consumer can install
+and verify the immutable version:
+
+```sh
+npm install --save-exact @aihq/scan@0.1.0
+npm audit signatures
+gh release download v-scan-0.1.0 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.0.tgz"
+gh attestation verify ./aihq-scan-0.1.0.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.0 --deny-self-hosted-runners
+npx --no-install aih-scan --help
+```
+
+The release workflow binds npm provenance, a GitHub build attestation, an SPDX
+SBOM, the tarball checksum, and a keyless cosign checksum bundle to the exact
+tagged source. Do not run this block until `npm view @aihq/scan@0.1.0` succeeds;
+source review or a local tarball is not publication evidence.
 
 ## Evidence flow
 
@@ -335,9 +357,10 @@ expected claims through an independent trusted process.
 - The package emits evidence facts only. It does not provide catalog promotion,
   organization approval, installation, runtime/effect projection, revocation
   custody, repository publication, or npm publication.
-- No software license, release workflow, trusted-publisher binding, tag, or npm
-  version exists yet. Those are separate release controls; reviewed source and
-  tarballs are not publication evidence.
+- No trusted-publisher binding, protected release environment, tag, GitHub
+  Release, or npm version exists yet. The Apache-2.0 license and source release
+  workflow are present, but reviewed source and tarballs are not publication
+  evidence.
 
 Organizations are not required to use an AIH-maintained catalog entry. The
 Core Strict V2 contract can bind organization-qualified evidence for an exact
@@ -351,6 +374,7 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run verify:workflow-action-pins -- --online
 npm audit --omit=dev
 git diff --check
 ```
@@ -381,3 +405,9 @@ custody, or a production effect.
 
 Never run AIH product behavior against this repository checkout. Tests exercise
 scanner behavior only against disposable fixture roots.
+
+## License
+
+[Apache-2.0](LICENSE). Scanner evidence and software are provided on an "AS IS"
+basis without organization approval, qualification, warranty, support, or effect
+authority.
