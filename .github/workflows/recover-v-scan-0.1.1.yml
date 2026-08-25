@@ -299,16 +299,97 @@ jobs:
           output-file: aih-scan-sbom.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - name: Validate tarball-scoped SPDX SBOM
+        run: |
+          set -euo pipefail
+          SBOM_PATH=aihq-scan-sbom.spdx.json \
+          EXPECTED_TARBALL="$TARBALL" \
+          EXPECTED_SHA256="$TARBALL_SHA256" \
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const sbom = JSON.parse(readFileSync(process.env.SBOM_PATH ?? "", "utf8"));
+          const expectedTarball = process.env.EXPECTED_TARBALL;
+          const expectedSha256 = process.env.EXPECTED_SHA256;
+          const packages = sbom?.packages;
+          const exactTarballPackages = Array.isArray(packages)
+            ? packages.filter(
+                (pkg) =>
+                  typeof pkg?.name === "string" &&
+                  (pkg.name === expectedTarball ||
+                    pkg.name.endsWith(`/${expectedTarball}`) ||
+                    pkg.name.endsWith(`\\${expectedTarball}`)) &&
+                  pkg.versionInfo === `sha256:${expectedSha256}` &&
+                  Array.isArray(pkg.checksums) &&
+                  pkg.checksums.length === 1 &&
+                  pkg.checksums[0]?.algorithm === "SHA256" &&
+                  pkg.checksums[0]?.checksumValue === expectedSha256,
+              )
+            : [];
+          if (
+            typeof sbom !== "object" ||
+            sbom === null ||
+            Array.isArray(sbom) ||
+            typeof sbom.spdxVersion !== "string" ||
+            !/^SPDX-\d+\.\d+$/u.test(sbom.spdxVersion) ||
+            typeof sbom.SPDXID !== "string" ||
+            sbom.SPDXID.length === 0 ||
+            typeof sbom.name !== "string" ||
+            sbom.name.length === 0 ||
+            typeof sbom.documentNamespace !== "string" ||
+            sbom.documentNamespace.length === 0 ||
+            !Array.isArray(packages) ||
+            packages.length !== 1 ||
+            exactTarballPackages.length !== 1
+          ) {
+            throw new Error("recovery SBOM is not exact SPDX evidence for the retained tarball");
+          }
+          NODE
       - name: Download original provenance bundle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh attestation download "$TARBALL" \
-            --repo "$GITHUB_REPOSITORY" \
-            --predicate-type https://slsa.dev/provenance/v1
-          bundle="sha256:${TARBALL_SHA256}.jsonl"
+          provenance_root="$(mktemp -d)"
+          (
+            cd "$provenance_root"
+            gh attestation download "$GITHUB_WORKSPACE/$TARBALL" \
+              --repo "$GITHUB_REPOSITORY" \
+              --predicate-type https://slsa.dev/provenance/v1
+          )
+          bundle="$provenance_root/sha256:${TARBALL_SHA256}.jsonl"
           test -s "$bundle"
+          PROVENANCE_BUNDLE="$bundle" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const lines = readFileSync(process.env.PROVENANCE_BUNDLE ?? "", "utf8")
+            .split(/\r?\n/u)
+            .filter((line) => line.length > 0);
+          if (lines.length !== 1) {
+            throw new Error("original provenance bundle is ambiguous");
+          }
+          const bundle = JSON.parse(lines[0]);
+          if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle)) {
+            throw new Error("original provenance bundle is malformed");
+          }
+          NODE
+          verified_provenance="$(mktemp)"
+          gh attestation verify "$TARBALL" \
+            --repo "$GITHUB_REPOSITORY" \
+            --bundle "$bundle" \
+            --signer-workflow samartomar/aih-scan/.github/workflows/release.yml \
+            --source-ref refs/tags/v-scan-0.1.1 \
+            --source-digest a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8 \
+            --deny-self-hosted-runners \
+            --format json > "$verified_provenance"
+          PROVENANCE_VERIFICATION="$verified_provenance" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const verified = JSON.parse(readFileSync(process.env.PROVENANCE_VERIFICATION ?? "", "utf8"));
+          if (!Array.isArray(verified) || verified.length !== 1) {
+            throw new Error("original provenance verification is ambiguous");
+          }
+          NODE
           cp "$bundle" provenance.intoto.jsonl
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -394,7 +475,41 @@ jobs:
           verify_npm_package
           verify_release_absence
           verify_tarball
-          printf '%s  %s\n' "$TARBALL_SHA256" "$TARBALL" > SHA256SUMS.txt
+          {
+            sha256sum aih-scan-sbom.spdx.json
+            sha256sum "$TARBALL"
+            sha256sum provenance.intoto.jsonl
+          } | LC_ALL=C sort -k2,2 > SHA256SUMS.txt
+          CHECKSUMS_PATH=SHA256SUMS.txt \
+          EXPECTED_TARBALL="$TARBALL" \
+          EXPECTED_SHA256="$TARBALL_SHA256" \
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const expectedTarball = process.env.EXPECTED_TARBALL;
+          const expectedSha256 = process.env.EXPECTED_SHA256;
+          const lines = readFileSync(process.env.CHECKSUMS_PATH ?? "", "utf8")
+            .split(/\r?\n/u)
+            .filter((line) => line.length > 0);
+          const expectedNames = [
+            "aih-scan-sbom.spdx.json",
+            expectedTarball,
+            "provenance.intoto.jsonl",
+          ];
+          if (
+            lines.length !== expectedNames.length ||
+            lines.some((line, index) => {
+              const match = /^([0-9a-f]{64})  ([A-Za-z0-9._-]+)$/u.exec(line);
+              return (
+                match === null ||
+                match[2] !== expectedNames[index] ||
+                (match[2] === expectedTarball && match[1] !== expectedSha256)
+              );
+            })
+          ) {
+            throw new Error("recovery checksum evidence is not exact for all release assets");
+          }
+          NODE
           cosign sign-blob --yes --bundle SHA256SUMS.txt.sigstore.json SHA256SUMS.txt
 
           # Revalidate every live claim immediately before the Release effect.
@@ -431,9 +546,87 @@ jobs:
           test "${assets[*]}" = "${expected[*]}"
           actual_sha256="$(sha256sum "$release_root/$TARBALL" | awk '{print $1}')"
           test "$actual_sha256" = "$TARBALL_SHA256"
+          cmp --silent SHA256SUMS.txt "$release_root/SHA256SUMS.txt"
+          (
+            cd "$release_root"
+            sha256sum --strict --check --status SHA256SUMS.txt
+          )
+          cosign verify-blob "$release_root/SHA256SUMS.txt" \
+            --bundle "$release_root/SHA256SUMS.txt.sigstore.json" \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/recover-v-scan-0.1.1.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          provenance_bundle="$release_root/provenance.intoto.jsonl"
+          PROVENANCE_BUNDLE="$provenance_bundle" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const lines = readFileSync(process.env.PROVENANCE_BUNDLE ?? "", "utf8")
+            .split(/\r?\n/u)
+            .filter((line) => line.length > 0);
+          if (lines.length !== 1) {
+            throw new Error("released provenance bundle is ambiguous");
+          }
+          const bundle = JSON.parse(lines[0]);
+          if (typeof bundle !== "object" || bundle === null || Array.isArray(bundle)) {
+            throw new Error("released provenance bundle is malformed");
+          }
+          NODE
+          verified_provenance="$(mktemp)"
           gh attestation verify "$release_root/$TARBALL" \
             --repo "$GITHUB_REPOSITORY" \
+            --bundle "$provenance_bundle" \
             --signer-workflow samartomar/aih-scan/.github/workflows/release.yml \
             --source-ref refs/tags/v-scan-0.1.1 \
             --source-digest a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8 \
-            --deny-self-hosted-runners
+            --deny-self-hosted-runners \
+            --format json > "$verified_provenance"
+          PROVENANCE_VERIFICATION="$verified_provenance" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const verified = JSON.parse(readFileSync(process.env.PROVENANCE_VERIFICATION ?? "", "utf8"));
+          if (!Array.isArray(verified) || verified.length !== 1) {
+            throw new Error("released provenance verification is ambiguous");
+          }
+          NODE
+          SBOM_PATH="$release_root/aihq-scan-sbom.spdx.json" \
+          EXPECTED_TARBALL="$TARBALL" \
+          EXPECTED_SHA256="$TARBALL_SHA256" \
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const sbom = JSON.parse(readFileSync(process.env.SBOM_PATH ?? "", "utf8"));
+          const expectedTarball = process.env.EXPECTED_TARBALL;
+          const expectedSha256 = process.env.EXPECTED_SHA256;
+          const packages = sbom?.packages;
+          const exactTarballPackages = Array.isArray(packages)
+            ? packages.filter(
+                (pkg) =>
+                  typeof pkg?.name === "string" &&
+                  (pkg.name === expectedTarball ||
+                    pkg.name.endsWith(`/${expectedTarball}`) ||
+                    pkg.name.endsWith(`\\${expectedTarball}`)) &&
+                  pkg.versionInfo === `sha256:${expectedSha256}` &&
+                  Array.isArray(pkg.checksums) &&
+                  pkg.checksums.length === 1 &&
+                  pkg.checksums[0]?.algorithm === "SHA256" &&
+                  pkg.checksums[0]?.checksumValue === expectedSha256,
+              )
+            : [];
+          if (
+            typeof sbom !== "object" ||
+            sbom === null ||
+            Array.isArray(sbom) ||
+            typeof sbom.spdxVersion !== "string" ||
+            !/^SPDX-\d+\.\d+$/u.test(sbom.spdxVersion) ||
+            typeof sbom.SPDXID !== "string" ||
+            sbom.SPDXID.length === 0 ||
+            typeof sbom.name !== "string" ||
+            sbom.name.length === 0 ||
+            typeof sbom.documentNamespace !== "string" ||
+            sbom.documentNamespace.length === 0 ||
+            !Array.isArray(packages) ||
+            packages.length !== 1 ||
+            exactTarballPackages.length !== 1
+          ) {
+            throw new Error("recovery SBOM is not exact SPDX evidence for the retained tarball");
+          }
+          NODE

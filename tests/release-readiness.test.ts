@@ -306,8 +306,22 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(recovery).toContain("--source-digest a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8");
     expect(recovery).toContain("--deny-self-hosted-runners");
     expect(recovery).toContain("gh attestation download");
+    expect(recovery).toContain('PROVENANCE_BUNDLE="$bundle" node');
+    expect(recovery).toContain("original provenance bundle is ambiguous");
+    expect(recovery).toContain('--bundle "$bundle"');
     expect(recovery).toContain("format: spdx-json");
     expect(recovery).toContain("cosign sign-blob --yes");
+    expect(recovery).toContain("cosign verify-blob");
+    expect(recovery).toContain("--certificate-identity");
+    expect(recovery).toContain("--certificate-oidc-issuer");
+    expect(recovery).toContain("SHA256SUMS.txt.sigstore.json");
+    expect(recovery).toContain("sha256sum aih-scan-sbom.spdx.json");
+    expect(recovery).toContain('sha256sum "$TARBALL"');
+    expect(recovery).toContain("sha256sum provenance.intoto.jsonl");
+    expect(recovery).toContain("recovery checksum evidence is not exact for all release assets");
+    expect(recovery).toContain('cmp --silent SHA256SUMS.txt "$release_root/SHA256SUMS.txt"');
+    expect(recovery).toContain("sha256sum --strict --check --status SHA256SUMS.txt");
+    expect(recovery).toContain("recovery SBOM is not exact SPDX evidence for the retained tarball");
     expect(recovery).toContain('gh release create "$RELEASE_TAG"');
     expect(recovery).toContain('--repo "$GITHUB_REPOSITORY"');
     expect(recovery).toContain("--verify-tag");
@@ -478,6 +492,122 @@ describe("@aihq/scan release boundary (#12)", () => {
       const validResult = validate("valid.tgz");
       expect(validResult.status, `${validResult.stdout}${validResult.stderr}`).toBe(0);
       expect(validate("duplicate.tgz").status).not.toBe(0);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects ambiguous original provenance bundles before release recovery", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    const validator = inlineModuleFollowing(recovery, 'PROVENANCE_BUNDLE="$bundle" node');
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-release-recovery-provenance-"));
+    try {
+      const validate = (contents: string) => {
+        const bundle = join(fixtureRoot, "provenance.intoto.jsonl");
+        writeFileSync(bundle, contents);
+        return spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
+          env: { ...process.env, PROVENANCE_BUNDLE: bundle },
+          encoding: "utf8",
+        });
+      };
+
+      expect(
+        validate('{"mediaType":"application/vnd.dev.sigstore.bundle+json;version=0.3"}\n').status,
+      ).toBe(0);
+      expect(
+        validate(
+          '{"mediaType":"application/vnd.dev.sigstore.bundle+json;version=0.3"}\n{"mediaType":"application/vnd.dev.sigstore.bundle+json;version=0.3"}\n',
+        ).status,
+      ).not.toBe(0);
+      expect(validate("not-json\n").status).not.toBe(0);
+      expect(validate("\n").status).not.toBe(0);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("signs only exact sorted checksums for every recovered evidence asset", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    const validator = inlineModuleFollowing(recovery, "CHECKSUMS_PATH=SHA256SUMS.txt");
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-release-recovery-checksums-"));
+    const tarball = "aihq-scan-0.1.1.tgz";
+    const tarballSha256 = "ac80c7a2254d796aa30e489f6c3b7c2b72afa1194a3e5ed9e31a128b8e7ae8ec";
+    try {
+      const validate = (contents: string) => {
+        const checksums = join(fixtureRoot, "SHA256SUMS.txt");
+        writeFileSync(checksums, contents);
+        return spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
+          env: {
+            ...process.env,
+            CHECKSUMS_PATH: checksums,
+            EXPECTED_TARBALL: tarball,
+            EXPECTED_SHA256: tarballSha256,
+          },
+          encoding: "utf8",
+        });
+      };
+      const valid = [
+        `${"1".repeat(64)}  aih-scan-sbom.spdx.json`,
+        `${tarballSha256}  ${tarball}`,
+        `${"2".repeat(64)}  provenance.intoto.jsonl`,
+        "",
+      ].join("\n");
+
+      expect(validate(valid).status).toBe(0);
+      expect(validate(valid.replace(tarballSha256, "0".repeat(64))).status).not.toBe(0);
+      expect(validate(valid.replace("provenance.intoto.jsonl", "extra.asset")).status).not.toBe(0);
+      expect(validate(`${valid}${"3".repeat(64)}  unexpected.txt\n`).status).not.toBe(0);
+      expect(validate(valid.split("\n").reverse().join("\n")).status).not.toBe(0);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed or mismatched tarball-scoped SPDX evidence", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    const validator = inlineModuleFollowing(recovery, "SBOM_PATH=aihq-scan-sbom.spdx.json");
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-release-recovery-sbom-"));
+    const tarball = "aihq-scan-0.1.1.tgz";
+    const tarballSha256 = "ac80c7a2254d796aa30e489f6c3b7c2b72afa1194a3e5ed9e31a128b8e7ae8ec";
+    const valid = {
+      spdxVersion: "SPDX-2.3",
+      SPDXID: "SPDXRef-DOCUMENT",
+      name: tarball,
+      documentNamespace: "https://example.test/spdx/document",
+      packages: [
+        {
+          name: `/tmp/${tarball}`,
+          versionInfo: `sha256:${tarballSha256}`,
+          checksums: [{ algorithm: "SHA256", checksumValue: tarballSha256 }],
+        },
+      ],
+    };
+    try {
+      const validate = (sbom: unknown) => {
+        const sbomPath = join(fixtureRoot, "aih-scan-sbom.spdx.json");
+        writeFileSync(sbomPath, JSON.stringify(sbom));
+        return spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
+          env: {
+            ...process.env,
+            SBOM_PATH: sbomPath,
+            EXPECTED_TARBALL: tarball,
+            EXPECTED_SHA256: tarballSha256,
+          },
+          encoding: "utf8",
+        });
+      };
+
+      expect(validate(valid).status).toBe(0);
+      expect(
+        validate({
+          ...valid,
+          packages: [{ ...valid.packages[0], versionInfo: `sha256:${"0".repeat(64)}` }],
+        }).status,
+      ).not.toBe(0);
+      expect(
+        validate({ ...valid, packages: [...valid.packages, valid.packages[0]] }).status,
+      ).not.toBe(0);
+      expect(validate({ ...valid, spdxVersion: "SPDX-2" }).status).not.toBe(0);
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
