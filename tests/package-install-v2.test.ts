@@ -428,7 +428,13 @@ describe("published V2 package installation", () => {
     ).toBe(false);
     expect(paths.some((path) => /(?:^|\/)\S+\.local(?:\.|\/|$)/i.test(path))).toBe(false);
     expect(readFileSync(tarball)).not.toContain(Buffer.from(root, "utf8"));
-    expect(packedManifest(tarball)).toMatchObject(npmDiscoveryMetadata);
+    expect(basename(tarball)).toBe("aihq-scan-0.1.0.tgz");
+    expect(packedManifest(tarball)).toMatchObject({
+      name: "@aihq/scan",
+      version: "0.1.0",
+      bin: { "aih-scan": "./dist/cli.js" },
+      ...npmDiscoveryMetadata,
+    });
 
     writeFileSync(join(directory, "package.json"), JSON.stringify({ private: true }), {
       mode: 0o600,
