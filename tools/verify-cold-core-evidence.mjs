@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CORE_COMMIT = "38e01f49f2f4ff310e2f94651b292a1618b61f2e";
+const CORE_COMMIT = "c0324d331deffe6ca757be5ee9bbdcffb9927883";
 const CORE_PACKAGE = {
   name: "@aihq/core",
   version: "0.1.0",

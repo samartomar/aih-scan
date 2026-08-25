@@ -35,7 +35,7 @@ For the first version:
    environment. The bootstrap must publish the exact reviewed tarball with npm
    provenance; it must not become a standing token lane.
 4. Immediately after the package exists, remove the bootstrap path and credential,
-   then bind the steady-state trusted publisher with npm CLI 11.5.1 or newer:
+   then bind the steady-state trusted publisher with npm CLI 11.15.0 or newer:
 
    ```sh
    npm trust github @aihq/scan --file release.yml --repo samartomar/aih-scan --env npm-publish --allow-publish

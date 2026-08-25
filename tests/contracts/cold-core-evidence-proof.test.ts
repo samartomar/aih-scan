@@ -9,7 +9,7 @@ describe("packed Core evidence proof", () => {
   it("requires an exact clean Core checkout and runs only packed artifacts in disposable roots", () => {
     const source = read("tools/verify-cold-core-evidence.mjs");
     expect(source).toContain("AIH_SCAN_CORE_SOURCE");
-    expect(source).toContain("38e01f49f2f4ff310e2f94651b292a1618b61f2e");
+    expect(source).toContain("c0324d331deffe6ca757be5ee9bbdcffb9927883");
     expect(source).toContain("Core 0.1.0 has no exported organization-evidence parser");
     expect(source).toContain('"@aihq/core"');
     expect(source).not.toContain('"@aihq/harness"');
