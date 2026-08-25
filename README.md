@@ -384,7 +384,7 @@ git diff --check
 
 The packed prepublication proof additionally requires
 `AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
-HEAD is exactly `74ddf3439df47a947a6f7a022515099602702ac8`, identifying
+HEAD is exactly `38e01f49f2f4ff310e2f94651b292a1618b61f2e`, identifying
 `@aihq/core@0.1.0`:
 
 ```sh

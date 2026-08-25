@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
-const commit = "74ddf3439df47a947a6f7a022515099602702ac8";
+const commit = "38e01f49f2f4ff310e2f94651b292a1618b61f2e";
 const packageIdentity = {
   name: "@aihq/core",
   version: "0.1.0",
