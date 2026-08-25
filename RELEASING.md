@@ -88,13 +88,16 @@ their own authorization.
    npm view @aihq/scan@0.1.0
    npm install --save-exact @aihq/scan@0.1.0
    npm audit signatures
-   gh attestation verify ./node_modules/@aihq/scan --repo samartomar/aih-scan
+   gh release download v-scan-0.1.0 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.0.tgz"
+   release_sha="$(gh api repos/samartomar/aih-scan/git/ref/tags/v-scan-0.1.0 --jq .object.sha)"
+   gh attestation verify ./aihq-scan-0.1.0.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.0 --source-digest "$release_sha" --deny-self-hosted-runners
    npx --no-install aih-scan --help
    ```
 
-Also download the GitHub Release's `SHA256SUMS.txt`, cosign bundle, provenance
-bundle, SBOM, and tarball; verify the checksum and keyless signature before
-claiming the release complete.
+Compare `release_sha` to the separately authorized full SHA. Also download the
+GitHub Release's `SHA256SUMS.txt`, cosign bundle, provenance bundle, and SBOM;
+verify the checksum, keyless signature, and SBOM subject before claiming the
+release complete.
 
 ## Failure and immutability
 

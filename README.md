@@ -65,7 +65,8 @@ and verify the immutable version:
 ```sh
 npm install --save-exact @aihq/scan@0.1.0
 npm audit signatures
-gh attestation verify ./node_modules/@aihq/scan --repo samartomar/aih-scan
+gh release download v-scan-0.1.0 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.0.tgz"
+gh attestation verify ./aihq-scan-0.1.0.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.0 --deny-self-hosted-runners
 npx --no-install aih-scan --help
 ```
 

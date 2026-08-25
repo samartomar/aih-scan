@@ -42,7 +42,7 @@
     "typecheck": "tsc --noEmit",
     "verify:cold-core-evidence": "node tools/verify-cold-core-evidence.mjs",
     "verify:workflow-action-pins": "node tools/verify-pinned-actions.mjs",
-    "verify": "npm run typecheck && npm run lint && npm test && npm run build && npm run verify:workflow-action-pins"
+    "verify": "npm run typecheck && npm run lint && npm run build && npm test && npm run verify:workflow-action-pins"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.1",

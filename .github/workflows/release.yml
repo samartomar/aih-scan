@@ -71,6 +71,7 @@ jobs:
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           artifact-name: aih-scan-sbom.spdx.json
+          file: "${{ steps.pack.outputs.tarball }}"
           format: spdx-json
           output-file: aih-scan-sbom.spdx.json
       - name: Attest build provenance for the exact tarball
@@ -88,6 +89,7 @@ jobs:
       - name: Smoke-install the exact packed tarball
         run: |
           set -euo pipefail
+          sha256sum -c SHA256SUMS.txt
           tarball="$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}"
           consumer="$(mktemp -d)"
           npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund "$tarball"
@@ -95,6 +97,7 @@ jobs:
       - name: Publish exact tarball through npm trusted publishing
         run: |
           set -euo pipefail
+          sha256sum -c SHA256SUMS.txt
           tarball="${{ steps.pack.outputs.tarball }}"
           ver="$(node -p "require('./package.json').version")"
           case "$ver" in
@@ -107,6 +110,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          sha256sum -c SHA256SUMS.txt
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \

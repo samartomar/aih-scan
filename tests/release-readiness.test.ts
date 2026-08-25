@@ -43,6 +43,13 @@ describe("@aihq/scan release boundary (#12)", () => {
   });
 
   it("verifies, packs once, and keeps one exact tarball through evidence and publication", () => {
+    const manifest = JSON.parse(read("package.json")) as {
+      scripts: Record<string, string>;
+    };
+    const verifyScript = manifest.scripts.verify ?? "";
+    expect(verifyScript.indexOf("npm run build")).toBeGreaterThanOrEqual(0);
+    expect(verifyScript.indexOf("npm run build")).toBeLessThan(verifyScript.indexOf("npm test"));
+
     const workflow = read(".github/workflows/release.yml");
     expect(workflow).toContain('node-version: "24"');
     expect(workflow).toContain("package-manager-cache: false");
@@ -50,6 +57,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain("npm run verify");
     expect(workflow.match(/npm pack --ignore-scripts/gmu)).toHaveLength(1);
     expect(workflow).toContain('sha256sum "$tarball"');
+    expect(workflow.match(/sha256sum -c SHA256SUMS\.txt/gmu)).toHaveLength(3);
+    expect(workflow).toContain(['file: "$', '{{ steps.pack.outputs.tarball }}"'].join(""));
     expect(workflow).toContain(['subject-path: "$', '{{ steps.pack.outputs.tarball }}"'].join(""));
     expect(workflow).toContain(
       'npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund "$tarball"',
@@ -73,11 +82,14 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("one-use GitHub bootstrap path");
     expect(releasing).toContain("never delete, move, or reuse the tag");
     expect(releasing).toContain("npm view @aihq/scan@0.1.0");
-    expect(releasing).toContain("gh attestation verify");
+    expect(releasing).toContain("gh attestation verify ./aihq-scan-0.1.0.tgz");
+    expect(releasing).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
     const readme = read("README.md");
     expect(readme).toContain("npm install --save-exact @aihq/scan@0.1.0");
+    expect(readme).toContain("gh attestation verify ./aihq-scan-0.1.0.tgz");
+    expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("has not been published");
