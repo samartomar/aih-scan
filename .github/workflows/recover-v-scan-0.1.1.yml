@@ -266,12 +266,13 @@ jobs:
           case "$RECOVERY_ARTIFACT_ID" in
             ''|*[!0-9]*) echo "::error::invalid recovery artifact id"; exit 1 ;;
           esac
-          if ! [[ "$RECOVERY_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          if ! [[ "$RECOVERY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
             echo "::error::invalid recovery artifact digest"
             exit 1
           fi
+          expected_api_digest="sha256:$RECOVERY_ARTIFACT_DIGEST"
           api_digest="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$RECOVERY_ARTIFACT_ID" --jq .digest)"
-          test "$api_digest" = "$RECOVERY_ARTIFACT_DIGEST"
+          test "$api_digest" = "$expected_api_digest"
           test -f "$TARBALL"
           actual_sha256="$(sha256sum "$TARBALL" | awk '{print $1}')"
           test "$actual_sha256" = "$TARBALL_SHA256"

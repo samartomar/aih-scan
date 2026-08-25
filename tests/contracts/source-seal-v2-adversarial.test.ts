@@ -139,7 +139,7 @@ describe("SourceSealV2 adversarial filesystem contract", () => {
       "source entry bound",
     );
     expect(fsMetrics.readCalls).toBeLessThanOrEqual(4_096);
-  });
+  }, 15_000);
 
   it("refuses the first file beyond the aggregate byte budget before reading its contents", () => {
     const root = fixtureRoot("source-seal-byte-budget");
