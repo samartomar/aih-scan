@@ -22,7 +22,7 @@ describe("Core Strict V2 compatibility lock", () => {
   it("locks the current exact Core commit and both Core schema bytes", () => {
     const bytes = Buffer.from('{"strict":"core-schema"}', "utf8");
     const digest = createHash("sha256").update(bytes).digest("hex");
-    expect(AI_HARNESS_STRICT_V2_COMMIT).toBe("43609a21ee3cc97834fc84f358f49d2196c91873");
+    expect(AI_HARNESS_STRICT_V2_COMMIT).toBe("74ddf3439df47a947a6f7a022515099602702ac8");
     expect(AI_HARNESS_DECISION_V2_SCHEMA_SHA256).toBe(
       "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     );
