@@ -22,7 +22,7 @@ describe("Core Strict V2 compatibility lock", () => {
   it("locks the current exact Core commit and both Core schema bytes", () => {
     const bytes = Buffer.from('{"strict":"core-schema"}', "utf8");
     const digest = createHash("sha256").update(bytes).digest("hex");
-    expect(AI_HARNESS_STRICT_V2_COMMIT).toBe("e53fe219002515c092ebb68c5b91c91a2fc6110d");
+    expect(AI_HARNESS_STRICT_V2_COMMIT).toBe("43609a21ee3cc97834fc84f358f49d2196c91873");
     expect(AI_HARNESS_DECISION_V2_SCHEMA_SHA256).toBe(
       "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     );
@@ -100,6 +100,14 @@ describe("Core Strict V2 compatibility lock", () => {
     const verifier = "node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract";
     expect(workflow).toContain(verifier);
     const verifierSource = lockVerifier();
+    expect(verifierSource).toContain('name: "@aihq/core"');
+    expect(verifierSource).toContain('version: "0.1.0"');
+    expect(verifierSource).toContain(
+      "af64feda4e3e57808e1a262e15a5cb8f41581f77e8f9b49eb9b459317b803ecd",
+    );
+    expect(verifierSource).toContain("packageManifest.name !== packageIdentity.name");
+    expect(verifierSource).toContain("packageManifest.version !== packageIdentity.version");
+    expect(verifierSource).toContain("packageManifest.private === true");
     expect(verifierSource).toContain("schemas/aih-organization-evidence-envelope-v1.schema.json");
     expect(verifierSource).toContain(AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256);
     const verifierIndex = workflow.indexOf(verifier);

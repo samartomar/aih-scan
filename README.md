@@ -1,4 +1,4 @@
-# `@aihq/scan`
+# AIH Scanner (`@aihq/scan`)
 
 `@aihq/scan` captures and verifies bounded scanner evidence without deciding
 whether an organization should approve, install, or activate the scanned
@@ -8,9 +8,12 @@ organization-defined exact detector registration in a pinned Linux `amd64`
 OCI image against an explicitly selected source closure. Registration does not
 load organization code into the Scanner process or grant governance authority.
 
+> Core governs. Scan produces evidence. Catalog provides AIH qualification.
+> The organization provides authority.
+
 ## Status
 
-The V2 library, `aih-scan` CLI, strict detector-registration grammar, detached
+The `0.1.0` V2 library, `aih-scan` CLI, strict detector-registration grammar, detached
 bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
 organization-evidence projection are implemented and tested in this
 repository. Projection is evidence transport only; it does not qualify,
@@ -18,6 +21,8 @@ approve, admit, observe, or activate a subject.
 The repository is public. `@aihq/scan` has not been published to npm, and npm
 publication remains a separate owner-controlled release gate. Until that gate is
 implemented and authorized, use a local checkout or a reviewed package tarball.
+The new package line starts at `0.1.0` to describe its current maturity; it does
+not inherit the frozen Core legacy package's historical major version.
 
 The GitHub Actions example signs with a generated `test-ephemeral` key and
 uploads that public root beside the evidence. It proves the capture, signing,
@@ -41,7 +46,7 @@ npm pack
 Install the resulting tarball into a disposable consumer:
 
 ```sh
-npm install --save-dev /path/to/aihq-scan-1.0.0.tgz
+npm install --save-dev /path/to/aihq-scan-0.1.0.tgz
 npx aih-scan --help
 ```
 
@@ -330,6 +335,9 @@ expected claims through an independent trusted process.
 - The package emits evidence facts only. It does not provide catalog promotion,
   organization approval, installation, runtime/effect projection, revocation
   custody, repository publication, or npm publication.
+- No software license, release workflow, trusted-publisher binding, tag, or npm
+  version exists yet. Those are separate release controls; reviewed source and
+  tarballs are not publication evidence.
 
 Organizations are not required to use an AIH-maintained catalog entry. The
 Core Strict V2 contract can bind organization-qualified evidence for an exact
@@ -349,14 +357,16 @@ git diff --check
 
 The packed prepublication proof additionally requires
 `AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
-HEAD is exactly `e53fe219002515c092ebb68c5b91c91a2fc6110d`:
+HEAD is exactly `43609a21ee3cc97834fc84f358f49d2196c91873`, identifying
+`@aihq/core@0.1.0`:
 
 ```sh
 AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
   npm run verify:cold-core-evidence
 ```
 
-The proof builds and packs Core, packs Scanner, installs both tarballs in
+The proof builds and packs exact `@aihq/core@0.1.0`, packs
+`@aihq/scan@0.1.0`, installs both tarballs in
 disposable roots, captures a catalog-absent organization detector through the
 registered adapter boundary, signs and independently verifies the resulting V2
 bundle, projects the evidence, validates the exact packaged Core schema, and

@@ -41,5 +41,6 @@ describe("aih-scan self-hosting boundary", () => {
     expect(packageJson).not.toContain("repo:publish");
     expect(read("ai-coding/SELF-HOSTING.md")).toContain("manual maintenance");
     expect(read("ai-coding/project.json")).toContain('"name": "aih-scan"');
+    expect(read("ai-coding/project.json")).toContain("public-remote");
   });
 });

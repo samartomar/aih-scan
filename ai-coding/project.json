@@ -3,7 +3,7 @@
   "name": "aih-scan",
   "contextDir": "ai-coding",
   "targets": ["claude", "codex"],
-  "description": "Private-remote, publication-deferred TypeScript repository building the public-ready @aihq/scan V2 signed-evidence package, Cisco Linux amd64 capture chain, and non-authoritative Core evidence projection.",
+  "description": "A public-remote, npm-publication-deferred TypeScript repository building the @aihq/scan V2 evidence package, Cisco Linux amd64 capture chain, and non-authoritative Core evidence projection.",
   "languages": ["TypeScript/Node.js"],
   "packageManager": "npm",
   "entrypoints": ["src/index.ts", "src/cli.ts"],

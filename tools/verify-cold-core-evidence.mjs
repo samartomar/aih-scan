@@ -2,10 +2,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -15,7 +18,18 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CORE_COMMIT = "e53fe219002515c092ebb68c5b91c91a2fc6110d";
+const CORE_COMMIT = "43609a21ee3cc97834fc84f358f49d2196c91873";
+const CORE_PACKAGE = {
+  name: "@aihq/core",
+  version: "0.1.0",
+  filename: "aihq-core-0.1.0.tgz",
+  sha256: "af64feda4e3e57808e1a262e15a5cb8f41581f77e8f9b49eb9b459317b803ecd",
+};
+const SCANNER_PACKAGE = {
+  name: "@aihq/scan",
+  version: "0.1.0",
+  filename: "aihq-scan-0.1.0.tgz",
+};
 const CORE_SCHEMA_SHA256 = "88c0a36e9177201660e773351958d89059c7d5b54e1c437d0afd06f48c5288bc";
 const CORE_SCHEMA_PATH = "schemas/aih-organization-evidence-envelope-v1.schema.json";
 const scannerRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -89,9 +103,68 @@ function exactCleanCoreRoot() {
   if (status.length !== 0) fail("Core checkout must be clean");
   return root;
 }
-function packedTarball(root, destination) {
+function sameFileIdentity(left, right) {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+function packageIdentity(root, expected) {
+  const manifestPath = join(root, "package.json");
+  const before = lstatSync(manifestPath);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    before.size <= 0 ||
+    before.size > 1024 * 1024
+  )
+    fail("package manifest shape");
+  const descriptor = openSync(manifestPath, "r");
+  let bytes;
+  try {
+    const beforeDescriptor = fstatSync(descriptor);
+    if (!beforeDescriptor.isFile() || !sameFileIdentity(before, beforeDescriptor))
+      fail("package manifest changed before read");
+    bytes = readFileSync(descriptor);
+    const afterDescriptor = fstatSync(descriptor);
+    const after = lstatSync(manifestPath);
+    if (!sameFileIdentity(beforeDescriptor, afterDescriptor) || !sameFileIdentity(afterDescriptor, after))
+      fail("package manifest changed during read");
+  } finally {
+    closeSync(descriptor);
+  }
+  if (typeof expected.sha256 === "string" && sha256(bytes) !== expected.sha256)
+    fail("package manifest digest");
+  let manifest;
+  try {
+    manifest = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    fail("package manifest JSON");
+  }
+  if (
+    manifest === null ||
+    typeof manifest !== "object" ||
+    Array.isArray(manifest) ||
+    manifest.name !== expected.name ||
+    manifest.version !== expected.version ||
+    manifest.private === true
+  )
+    fail("package identity");
+}
+function packedTarball(root, destination, expected) {
   const result = JSON.parse(runNpm(["pack", "--json", "--pack-destination", destination], root));
-  if (!Array.isArray(result) || result.length !== 1 || typeof result[0]?.filename !== "string")
+  if (
+    !Array.isArray(result) ||
+    result.length !== 1 ||
+    result[0]?.name !== expected.name ||
+    result[0]?.version !== expected.version ||
+    result[0]?.filename !== expected.filename
+  )
     fail("packed artifact metadata");
   const tarball = join(destination, result[0].filename);
   if (!existsSync(tarball)) fail("packed artifact missing");
@@ -208,7 +281,7 @@ const keyId = "ed25519:" + hash(keyPair.publicKey.export({ format: "der", type: 
 const signer = { identity: "test-mechanics.organization", class: "organization", keyId };
 const claims = {
   repository: "test-mechanics/aih-scan", workflow: ".github/workflows/mechanics.yml", issuer: "https://test.invalid/mechanics",
-  sourceRef: "refs/heads/mechanics", commit: "e53fe219002515c092ebb68c5b91c91a2fc6110d", environment: "test-mechanics", runId: "1", runAttempt: 1,
+  sourceRef: "refs/heads/mechanics", commit: "1111111111111111111111111111111111111111", environment: "test-mechanics", runId: "1", runAttempt: 1,
   signedAt: "2026-08-24T00:00:00.000Z", expiresAt: "2026-08-24T01:00:00.000Z",
 };
 const expected = { ...claims, now: "2026-08-24T00:30:00.000Z", subjectSha256: candidate.subject.digest.sha256, signer };
@@ -276,6 +349,8 @@ function exactSchemaCompatible(bytes, schemaBytes) {
 }
 
 const coreRoot = exactCleanCoreRoot();
+packageIdentity(coreRoot, CORE_PACKAGE);
+packageIdentity(scannerRoot, SCANNER_PACKAGE);
 const temporaryRoot = mkdtempSync(join(tmpdir(), "aih-cold-core-evidence-"));
 try {
   const packs = join(temporaryRoot, "packs");
@@ -287,10 +362,14 @@ try {
   runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"], coreRoot);
   runNpm(["run", "build"], coreRoot);
   exactCleanCoreRoot();
-  const coreTarball = packedTarball(coreRoot, packs);
-  const scannerTarball = packedTarball(scannerRoot, packs);
+  packageIdentity(coreRoot, CORE_PACKAGE);
+  const coreTarball = packedTarball(coreRoot, packs, CORE_PACKAGE);
+  const scannerTarball = packedTarball(scannerRoot, packs, SCANNER_PACKAGE);
   writeFileSync(join(consumer, "package.json"), '{"private":true}', { mode: 0o600 });
   runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", coreTarball, scannerTarball], consumer);
+  const consumerRequire = createRequire(join(consumer, "package.json"));
+  packageIdentity(join(consumer, "node_modules", "@aihq", "core"), CORE_PACKAGE);
+  packageIdentity(join(consumer, "node_modules", "@aihq", "scan"), SCANNER_PACKAGE);
   writeMechanicsSetup(join(consumer, "setup.mjs"));
   const setup = runNode("setup.mjs", [], consumer);
   if (setup.status !== 0)
@@ -305,12 +384,11 @@ try {
     if (result.status !== 0) fail("packed Scanner CLI mechanics");
   }
   const evidenceBytes = readFileSync(join(consumer, "core-evidence.json"));
-  const consumerRequire = createRequire(join(consumer, "package.json"));
-  const schemaBytes = readFileSync(consumerRequire.resolve(`@aihq/harness/${CORE_SCHEMA_PATH}`));
+  const schemaBytes = readFileSync(consumerRequire.resolve(`@aihq/core/${CORE_SCHEMA_PATH}`));
   if (sha256(schemaBytes) !== CORE_SCHEMA_SHA256) fail("packed Core schema digest");
   const evidenceDigest = exactSchemaCompatible(evidenceBytes, schemaBytes);
   writeFileSync(join(target, "evidence.json"), evidenceBytes, { mode: 0o600 });
-  const coreCli = join(consumer, "node_modules", "@aihq", "harness", "dist", "cli.js");
+  const coreCli = join(consumer, "node_modules", "@aihq", "core", "dist", "cli.js");
   const resolver = runNode(
     coreCli,
     [
@@ -336,7 +414,7 @@ try {
     evidenceDigest,
     schemaCompatible: true,
     resolver: { outcome: "refused", reason: "authority-unverified" },
-    limitation: "Core e53 has no exported organization-evidence parser; without genuine V3 authority the resolver does not reach qualification parsing. This proves schema compatibility and fail-closed refusal only.",
+    limitation: "Core 43609a21 has no exported organization-evidence parser; without genuine V3 authority the resolver does not reach qualification parsing. This proves schema compatibility and fail-closed refusal only.",
     mechanics: "The generated key and organization-class signer are non-public test mechanics only; they are not organization authority, qualification, or a production effect.",
   })}\n`);
 } finally {
