@@ -17,60 +17,57 @@ publicly obtainable with provenance; it does not approve a subject, create a
 Core decision, establish an organization trust root, or prove successful Core
 custody.
 
-## First-package bootstrap
+## Current release and steady-state custody
 
-The `@aihq/scan` package has not been published. npm's trusted-publisher
-contract requires that the package must already exist before an owner can bind
-GitHub OIDC. That makes the first registry creation an exceptional owner action.
-Do not fall back to an unprovenanced local publish.
+Exact `@aihq/scan@0.1.1` is public on npm from immutable tag
+`v-scan-0.1.1` and source `a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8`.
+The registry exposes signatures and npm provenance. The authorized release run
+published the exact tarball, then failed because its checkout-free `gh release
+create` command omitted `--repo`; the GitHub Release and assets are absent. The
+immutable `v-scan-0.1.0` attempt separately passed read-only verification before
+npm refused the protected publish with `EOTP`. Preserve both tags and failed runs
+as audit evidence; never delete, move, or reuse the tag.
 
-The immutable `v-scan-0.1.0` attempt passed the read-only `verify-and-pack` job,
-but npm refused the protected publish with `EOTP` and the registry remained
-`E404`. Preserve that tag and run as audit evidence. The next eligible bootstrap
-candidate is the reviewed `0.1.1` fix-forward; never delete, move, or reuse the
-failed tag.
+The one-use bootstrap source is absent. The GitHub bootstrap secret is absent.
+Current `.github/workflows/release.yml` rejects nonempty `NODE_AUTH_TOKEN` and
+`NPM_TOKEN`, accepts only an unambiguous stable npm CLI at or above `11.5.1`, and
+publishes through GitHub OIDC. The owner must still bind the steady-state trusted
+publisher with npm CLI 11.15.0 or newer and revoke the npm token:
 
-For the first version:
+```sh
+npm trust github @aihq/scan --file release.yml --repo samartomar/aih-scan --env npm-publish --allow-publish
+npm trust list @aihq/scan
+```
 
-1. Merge and fully verify the exact release candidate.
-2. Obtain full-SHA publication authorization naming `@aihq/scan@0.1.1` and the
-   exact `main` SHA.
-3. Confirm the existing `npm-publish` GitHub environment still requires its
-   reviewer and the active ruleset still protects immutable `v-scan-*` tags.
-   Replace the rejected credential with a short-lived granular npm access token
-   that has **Bypass 2FA** enabled and read/write access limited to the `@aihq`
-   scope, stored only as the environment secret `NPM_BOOTSTRAP_TOKEN`. Never
-   place it in a repository/organization variable, working-tree `.npmrc`,
-   read-only job, log, or issue.
-4. The temporary workflow accepts only `v-scan-0.1.1`. Before the secret is
-   available and again after `npm whoami` authenticates it, the workflow requires
-   one structured npm error whose exact code is `E404`. Mixed output, success, or
-   any other failure refuses publication. The packed manifest must contain exactly
-   `publishConfig: { "access": "public" }`; the publish command explicitly selects
-   `https://registry.npmjs.org/` and rehashes the tarball before the effect.
-5. Begin cleanup as soon as npm confirms package existence, regardless of whether
-   the later GitHub Release succeeds. Bind the steady-state trusted publisher
-   with npm CLI 11.15.0 or newer:
+The observed tuple must name `samartomar/aih-scan`, workflow `release.yml`,
+environment `npm-publish`, and `npm publish` permission. Future Scanner tags remain blocked
+until that binding and token revocation are independently observed. Finally require
+2FA and disallow traditional tokens in the package settings. Environment,
+ruleset, credential, tag, and trusted-publisher mutations are not source-code
+changes and require their own authorization.
 
-   ```sh
-   npm trust github @aihq/scan --file release.yml --repo samartomar/aih-scan --env npm-publish --allow-publish
-   npm trust list @aihq/scan
-   ```
+## Exact 0.1.1 Release-evidence recovery
 
-   The observed tuple must name samartomar/aih-scan, workflow `release.yml`,
-   environment `npm-publish`, and `npm publish` permission. Then delete the GitHub
-   `NPM_BOOTSTRAP_TOKEN` secret, revoke the npm token, and merge the cleanup that
-   restores trusted-publisher-only publication before any later Scanner tag.
-   Finally require 2FA and disallow traditional tokens in the package settings.
-
-Environment, ruleset, credential, tag, and trusted-publisher mutations are not
-source-code changes and require their own authorization.
+`.github/workflows/recover-v-scan-0.1.1.yml` is a bounded one-use recovery path.
+It is fixed to the authorized `0.1.1` source, original release run, retained
+artifact ID and service digest, original tarball SHA-256/SHA-1/integrity, and npm
+identity. Its read-only job verifies those facts, the exact immutable tag, the
+original GitHub build attestation, and an exact missing-Release observation. Its
+protected job receives only that rehashed tarball, runs no Scanner package code,
+cannot call `npm publish`, repeats live tag/npm/Release checks immediately before
+each public effect, and uses an explicit `--repo` plus `--verify-tag` to create
+the Release.
+The Release retains the original tag-run build attestation. Its checksum is
+newly signed under the
+`recover-v-scan-0.1.1.yml@refs/heads/main` certificate identity, and the Release
+notes record the exact recovery workflow source SHA; that signature must not be
+described as the original tag-run checksum signature. After success, verify
+every asset and remove the one-use recovery workflow in a reviewed cleanup.
 
 ## Normal release
 
-1. Re-observe the issue/milestone and current npm state. The first eligible
-   stable fix-forward is `0.1.1`; prerelease versions publish to `next`, while
-   stable versions publish to `latest`.
+1. Re-observe the issue/milestone and current npm state. Prerelease versions
+   publish to `next`, while stable versions publish to `latest`.
 2. Ensure `package.json` and `package-lock.json` name the exact version and the
    public README documents the shipped behavior.
 3. Run, sequentially:
@@ -88,7 +85,7 @@ source-code changes and require their own authorization.
    ```
 
 4. Merge the release candidate and wait for every required `main` check.
-5. Obtain the exact authorization statement:
+5. Obtain full-SHA publication authorization using the exact statement:
 
    ```text
    Authorize publishing @aihq/scan@X.Y.Z from <full-main-SHA> as v-scan-X.Y.Z.
@@ -107,12 +104,13 @@ source-code changes and require their own authorization.
    verify the published result from a disposable consumer:
 
    ```sh
-   npm view @aihq/scan@0.1.1
-   npm install --save-exact @aihq/scan@0.1.1
+   version=X.Y.Z # replace with the exact authorized release version
+   npm view "@aihq/scan@$version"
+   npm install --save-exact "@aihq/scan@$version"
    npm audit signatures
-   gh release download v-scan-0.1.1 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.1.tgz"
-   release_sha="$(gh api repos/samartomar/aih-scan/git/ref/tags/v-scan-0.1.1 --jq .object.sha)"
-   gh attestation verify ./aihq-scan-0.1.1.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.1 --source-digest "$release_sha" --deny-self-hosted-runners
+   gh release download "v-scan-$version" --repo samartomar/aih-scan --pattern "aihq-scan-$version.tgz"
+   release_sha="$(gh api "repos/samartomar/aih-scan/git/ref/tags/v-scan-$version" --jq .object.sha)"
+   gh attestation verify "./aihq-scan-$version.tgz" --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref "refs/tags/v-scan-$version" --source-digest "$release_sha" --deny-self-hosted-runners
    npx --no-install aih-scan --help
    ```
 
@@ -128,7 +126,8 @@ version. Preserve the failed run as audit evidence, correct the defect on a new
 reviewed commit/version, and fix forward. A green tag workflow is not evidence
 of organization authority, evidence acceptance, or a successful Core effect.
 
-If npm publication succeeded before a later workflow step failed, npm package
-existence is the cleanup trigger: complete step 5 immediately before repairing
-the missing GitHub Release evidence. Do not leave the bootstrap credential or
-source path active while repairing that evidence.
+If npm publication succeeds before a later workflow step fails, npm package
+existence is the cleanup trigger. Remove the bootstrap credential and source
+path before repairing missing GitHub Release evidence. For `0.1.1`, both are
+already absent and only the exact bounded recovery workflow may create the
+missing Release.

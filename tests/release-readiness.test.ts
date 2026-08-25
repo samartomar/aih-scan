@@ -42,20 +42,20 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain("verify-and-pack:");
     expect(workflow).toContain("npm-publish:");
     expect(workflow).toContain("needs: verify-and-pack");
-    expect(workflow).toContain("if: github.ref == 'refs/tags/v-scan-0.1.1'");
-    expect(workflow).toContain('test "$GITHUB_REF_NAME" = "v-scan-0.1.1"');
     expect(workflow).toContain("actions: read");
     expect(workflow).toMatch(/id-token:\s*write/);
     expect(workflow).toMatch(/attestations:\s*write/);
     expect(workflow).toMatch(/contents:\s*write/);
     expect(workflow).not.toContain("packages: write");
-    expect(workflow).not.toContain("NPM_TOKEN");
-    expect(workflow.match(/secrets\.NPM_BOOTSTRAP_TOKEN/gu)).toHaveLength(1);
-    expect(workflow.match(/npm view "@aihq\/scan" name --json/gu)).toHaveLength(2);
-    expect(workflow.match(/--loglevel silent/gu)).toHaveLength(2);
-    expect(workflow.match(/REGISTRY_OBSERVATION=/gu)).toHaveLength(2);
-    expect(workflow).not.toContain("grep -Eq 'E404'");
-    expect(workflow).toContain('npm whoami --registry "https://registry.npmjs.org/" >/dev/null');
+    expect(workflow).not.toContain("v-scan-0.1.1");
+    expect(workflow).not.toContain("NPM_BOOTSTRAP_TOKEN");
+    expect(workflow).not.toContain("REGISTRY_OBSERVATION");
+    expect(workflow).not.toContain('npm view "@aihq/scan"');
+    expect(workflow).not.toContain("npm whoami");
+    expect(workflow).toContain("Publish exact tarball through npm Trusted Publishing");
+    expect(workflow).toContain(
+      ['if [ -n "$', '{NODE_AUTH_TOKEN:-}" ] || [ -n "$', '{NPM_TOKEN:-}" ]; then'].join(""),
+    );
 
     const candidateJob = workflow.slice(
       workflow.indexOf("  verify-and-pack:\n"),
@@ -136,43 +136,48 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(publicationJob).not.toMatch(/actions\/checkout|npm ci|npm run |npm pack|--help/);
     expect(publicationJob).not.toContain("require('./package.json')");
 
-    const bootstrapStep = publicationJob.slice(
-      publicationJob.indexOf("Publish exact first tarball through the one-use npm bootstrap"),
+    const trustedPublishStep = publicationJob.slice(
+      publicationJob.indexOf("Publish exact tarball through npm Trusted Publishing"),
       publicationJob.indexOf("Verify exact tarball before GitHub release"),
     );
-    const authenticatedAbsenceIndex = bootstrapStep.indexOf('npm view "@aihq/scan" name --json');
-    const liveRefIndex = bootstrapStep.indexOf(
-      "Revalidate live main and tag after authenticated registry observation",
+    const liveRefIndex = trustedPublishStep.indexOf(
+      "Revalidate live main and tag immediately before the effect",
     );
-    const finalHashIndex = bootstrapStep.indexOf('actual_sha256="$(sha256sum "$TARBALL"');
-    const effectIndex = bootstrapStep.indexOf('npm publish "$tarball"');
-    expect(authenticatedAbsenceIndex).toBeGreaterThanOrEqual(0);
-    expect(liveRefIndex).toBeGreaterThan(authenticatedAbsenceIndex);
+    const finalHashIndex = trustedPublishStep.indexOf('actual_sha256="$(sha256sum "$TARBALL"');
+    const effectIndex = trustedPublishStep.indexOf('npm publish "$tarball"');
+    expect(liveRefIndex).toBeGreaterThanOrEqual(0);
     expect(finalHashIndex).toBeGreaterThan(liveRefIndex);
     expect(effectIndex).toBeGreaterThan(finalHashIndex);
-    expect(bootstrapStep).toContain("env -u NODE_AUTH_TOKEN git");
+    expect(trustedPublishStep).not.toContain("NPM_BOOTSTRAP_TOKEN");
+    expect(trustedPublishStep).not.toContain("secrets.");
+    expect(trustedPublishStep).not.toContain('npm view "@aihq/scan"');
   });
 
-  it("parses npm package-absence evidence as one exact JSON E404 error", () => {
+  it("accepts only a stable unambiguous npm CLI version at the Trusted Publishing boundary", () => {
     const workflow = read(".github/workflows/release.yml");
-    const validator = inlineModuleFollowing(workflow, "REGISTRY_OBSERVATION=");
-    const validate = (observation: string) =>
-      spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
-        env: { ...process.env, REGISTRY_OBSERVATION: observation },
+    const validator = inlineModuleFollowing(workflow, 'npm_version="$(npm --version)"');
+    const validate = (version: string) =>
+      spawnSync(process.execPath, ["--input-type=module", "-", version], {
+        input: validator,
         encoding: "utf8",
       });
 
-    expect(validate(JSON.stringify({ error: { code: "E404", summary: "missing" } })).status).toBe(
-      0,
-    );
-    expect(
-      validate(
-        JSON.stringify({
-          error: { code: "E500", summary: "upstream mentioned E404" },
-        }),
-      ).status,
-    ).not.toBe(0);
-    expect(validate('npm ERR! code E500\n{"error":{"code":"E404"}}').status).not.toBe(0);
+    for (const accepted of ["11.5.1", "11.5.2", "11.6.0", "12.0.0"]) {
+      expect(validate(accepted).status, accepted).toBe(0);
+    }
+    for (const rejected of [
+      "11.5.0",
+      "10.99.99",
+      "11.5.1-beta.0",
+      "11.5.1+build.1",
+      "v11.5.1",
+      "11.5",
+      "011.5.1",
+      "999999999999999999999999.5.1",
+      "",
+    ]) {
+      expect(validate(rejected).status, rejected).not.toBe(0);
+    }
   });
 
   it("rejects a packed manifest that tries to redirect npm publication", () => {
@@ -210,26 +215,24 @@ describe("@aihq/scan release boundary (#12)", () => {
     }
   });
 
-  it("documents bootstrap, authority, verification, and immutable failure behavior", () => {
+  it("documents tokenless publication, authority, verification, and immutable failure behavior", () => {
     const releasing = read("RELEASING.md");
-    expect(releasing).toContain("package must already exist");
-    expect(releasing).toMatch(
-      /samartomar\/aih-scan, workflow `release\.yml`,\s+environment `npm-publish`/u,
+    expect(releasing).toContain(
+      "npm trust github @aihq/scan --file release.yml --repo samartomar/aih-scan --env npm-publish --allow-publish",
     );
+    expect(releasing).toContain("npm trust list @aihq/scan");
     expect(releasing).toContain("full-SHA publication authorization");
-    expect(releasing).toContain("**Bypass 2FA** enabled");
-    expect(releasing).toMatch(/delete the GitHub\s+`NPM_BOOTSTRAP_TOKEN` secret/u);
+    expect(releasing).toContain("GitHub bootstrap secret is absent");
     expect(releasing).toContain("revoke the npm token");
-    expect(releasing).toMatch(/restores trusted-publisher-only\s+publication/u);
-    expect(releasing).toMatch(
-      /as soon as npm confirms package existence, regardless of whether\s+the later GitHub Release succeeds/u,
-    );
+    expect(releasing).toContain("Future Scanner tags remain blocked");
+    expect(releasing).not.toContain("**Bypass 2FA** enabled");
+    expect(releasing).not.toContain("NPM_BOOTSTRAP_TOKEN");
     expect(releasing).toContain("never delete, move, or reuse the tag");
     expect(releasing).toContain("npm refused the protected publish with `EOTP`");
     expect(releasing).toContain("read-only `verify-and-pack` job");
     expect(releasing).toContain("runs no Scanner package code");
-    expect(releasing).toContain("npm view @aihq/scan@0.1.1");
-    expect(releasing).toContain("gh attestation verify ./aihq-scan-0.1.1.tgz");
+    expect(releasing).toContain('npm view "@aihq/scan@$version"');
+    expect(releasing).toContain('gh attestation verify "./aihq-scan-$version.tgz"');
     expect(releasing).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
@@ -240,7 +243,11 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("without executing Scanner package code");
-    expect(readme).toContain("has not been published");
+    expect(readme).toContain("is public on npm");
+    expect(readme).toContain("GitHub Release evidence is incomplete");
+    expect(readme).toContain("recover-v-scan-0.1.1.yml@refs/heads/main");
+    expect(readme).toContain('--source-digest "$release_sha"');
+    expect(releasing).toContain("recovery workflow source SHA");
   });
 
   it("packs the license, README, command, and library under the exact identity", () => {
@@ -268,5 +275,211 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(paths).toContain("README.md");
     expect(paths).toContain("dist/cli.js");
     expect(paths).toContain("dist/index.js");
+  });
+
+  it("recovers only the exact retained 0.1.1 artifact through a protected no-execution boundary", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    expect(recovery).toContain("workflow_dispatch:");
+    expect(recovery).not.toMatch(/push:|pull_request:|workflow_call:/u);
+    expect(recovery).toContain("concurrency:");
+    expect(recovery).toContain("v-scan-0.1.1");
+    expect(recovery).toContain("a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8");
+    expect(recovery).toContain("32876377673");
+    expect(recovery).toContain("9574045679");
+    expect(recovery).toContain(
+      "sha256:16edeb32b197f2d42b40d9b2a9e96cbbf0ef85b847f0cde609d4e7dd1dbf8410",
+    );
+    expect(recovery).toContain("ac80c7a2254d796aa30e489f6c3b7c2b72afa1194a3e5ed9e31a128b8e7ae8ec");
+    expect(recovery).toContain("cccb6bb5b1a2a2b9c434e6468c25165a83e66f94");
+    expect(recovery).toContain("verify-recovery:");
+    expect(recovery).toContain("recover-release:");
+    expect(recovery).toContain("needs: verify-recovery");
+    expect(recovery).toContain("name: npm-publish");
+    expect(recovery).toContain("actions: read");
+    expect(recovery).toMatch(/contents:\s*write/u);
+    expect(recovery).toMatch(/id-token:\s*write/u);
+    expect(recovery).toContain("artifact-ids: 9574045679");
+    expect(recovery).toContain("run-id: 32876377673");
+    expect(recovery).toContain("digest-mismatch: error");
+    expect(recovery).toContain("gh attestation verify");
+    expect(recovery).toContain("--source-ref refs/tags/v-scan-0.1.1");
+    expect(recovery).toContain("--source-digest a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8");
+    expect(recovery).toContain("--deny-self-hosted-runners");
+    expect(recovery).toContain("gh attestation download");
+    expect(recovery).toContain("format: spdx-json");
+    expect(recovery).toContain("cosign sign-blob --yes");
+    expect(recovery).toContain('gh release create "$RELEASE_TAG"');
+    expect(recovery).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(recovery).toContain("--verify-tag");
+    expect(recovery).toContain("Recovery workflow source $GITHUB_SHA");
+    expect(recovery.match(/typeof signature\.keyid/gu)).toHaveLength(2);
+    expect(recovery).not.toContain("npm publish");
+    expect(recovery).not.toContain("NPM_BOOTSTRAP_TOKEN");
+    expect(recovery).not.toContain("NODE_AUTH_TOKEN");
+    expect(recovery).not.toContain("NPM_TOKEN");
+
+    const effectJob = recovery.slice(recovery.indexOf("  recover-release:\n"));
+    expect(effectJob).not.toMatch(
+      /actions\/checkout|npm ci|npm install|npm pack(?:\s|$)|npm run |--help/u,
+    );
+    const claimIndex = effectJob.indexOf("# Claim before the checksum-signing effect.");
+    const signIndex = effectJob.indexOf("cosign sign-blob --yes");
+    const revalidationIndex = effectJob.indexOf(
+      "# Revalidate every live claim immediately before the Release effect.",
+    );
+    const releaseIndex = effectJob.indexOf('gh release create "$RELEASE_TAG"');
+    expect(claimIndex).toBeGreaterThanOrEqual(0);
+    for (const call of [
+      "verify_live_tag",
+      "verify_npm_package",
+      "verify_release_absence",
+      "verify_tarball",
+    ]) {
+      const callIndex = effectJob.indexOf(call, claimIndex);
+      expect(callIndex, call).toBeGreaterThan(claimIndex);
+      expect(callIndex, call).toBeLessThan(signIndex);
+    }
+    expect(signIndex).toBeGreaterThan(claimIndex);
+    expect(revalidationIndex).toBeGreaterThan(signIndex);
+    for (const call of [
+      "verify_live_tag",
+      "verify_npm_package",
+      "verify_release_absence",
+      "verify_tarball",
+    ]) {
+      const callIndex = effectJob.indexOf(call, revalidationIndex);
+      expect(callIndex, call).toBeGreaterThan(revalidationIndex);
+      expect(callIndex, call).toBeLessThan(releaseIndex);
+    }
+    expect(releaseIndex).toBeGreaterThan(revalidationIndex);
+
+    const actions = [...recovery.matchAll(/^\s*(?:-\s*)?uses:\s*([^@\s]+)@([^\s#]+).*$/gmu)];
+    expect(actions.length).toBeGreaterThanOrEqual(5);
+    for (const [, action, revision] of actions) {
+      expect(action).toMatch(/^[\w.-]+\/[\w.-]+$/u);
+      expect(revision).toMatch(/^[0-9a-f]{40}$/u);
+    }
+  });
+
+  it("rejects substituted, expired, or ambiguous retained release artifacts", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    const validator = inlineModuleFollowing(recovery, "ARTIFACT_OBSERVATION=");
+    const valid = {
+      id: 9574045679,
+      name: "scan-release-32876377673-1",
+      expired: false,
+      digest: "sha256:16edeb32b197f2d42b40d9b2a9e96cbbf0ef85b847f0cde609d4e7dd1dbf8410",
+      workflow_run: {
+        id: 32876377673,
+        head_sha: "a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8",
+        head_branch: "v-scan-0.1.1",
+      },
+    };
+    const validate = (value: unknown) =>
+      spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
+        env: { ...process.env, ARTIFACT_OBSERVATION: JSON.stringify(value) },
+        encoding: "utf8",
+      });
+
+    expect(validate(valid).status).toBe(0);
+    for (const invalid of [
+      { ...valid, id: 9574045680 },
+      { ...valid, name: "scan-release-substituted" },
+      { ...valid, expired: true },
+      { ...valid, digest: `sha256:${"0".repeat(64)}` },
+      { ...valid, workflow_run: { ...valid.workflow_run, id: 32876377674 } },
+      { ...valid, workflow_run: { ...valid.workflow_run, head_sha: "0".repeat(40) } },
+      { ...valid, workflow_run: { ...valid.workflow_run, head_branch: "main" } },
+      [valid],
+      null,
+    ]) {
+      expect(validate(invalid).status, JSON.stringify(invalid)).not.toBe(0);
+    }
+  });
+
+  it("rejects mismatched or ambiguous npm observations during recovery", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    const validator = inlineModuleFollowing(recovery, "NPM_OBSERVATION=");
+    const sha1 = "cccb6bb5b1a2a2b9c434e6468c25165a83e66f94";
+    const integrity =
+      "sha512-NZchLJPGwVWY1V5U8GMei8Nts7g+wDcIPNmC4e6/bIV3p1JoktLc0TK0pLR/NTDtJ8J9DKlrv9XSON0yalmLXw==";
+    const valid = {
+      name: "@aihq/scan",
+      version: "0.1.1",
+      dist: {
+        shasum: sha1,
+        integrity,
+        tarball: "https://registry.npmjs.org/@aihq/scan/-/scan-0.1.1.tgz",
+        attestations: { provenance: { predicateType: "https://slsa.dev/provenance/v1" } },
+        signatures: [{ keyid: "SHA256:key", sig: "signature" }],
+      },
+    };
+    const validate = (value: unknown) =>
+      spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
+        env: {
+          ...process.env,
+          NPM_OBSERVATION: JSON.stringify(value),
+          EXPECTED_SHA1: sha1,
+          EXPECTED_INTEGRITY: integrity,
+        },
+        encoding: "utf8",
+      });
+
+    expect(validate(valid).status).toBe(0);
+    for (const invalid of [
+      { ...valid, extra: true },
+      { ...valid, name: "@aihq/core" },
+      { ...valid, version: "0.1.2" },
+      { ...valid, dist: { ...valid.dist, shasum: "0".repeat(40) } },
+      { ...valid, dist: { ...valid.dist, integrity: "sha512-substituted" } },
+      { ...valid, dist: { ...valid.dist, tarball: "https://attacker.invalid/scan.tgz" } },
+      { ...valid, dist: { ...valid.dist, attestations: undefined } },
+      { ...valid, dist: { ...valid.dist, signatures: [] } },
+      [valid],
+      null,
+    ]) {
+      expect(validate(invalid).status, JSON.stringify(invalid)).not.toBe(0);
+    }
+  });
+
+  it("rejects duplicate archive identities in a retained recovery tarball", () => {
+    const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
+    const validator = inlineModuleFollowing(
+      recovery,
+      'test "$actual_integrity" = "$TARBALL_INTEGRITY"',
+    );
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-release-recovery-archive-"));
+    try {
+      const packageRoot = join(fixtureRoot, "package");
+      mkdirSync(packageRoot);
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "@aihq/scan",
+          version: "0.1.1",
+          publishConfig: { access: "public" },
+        }),
+      );
+      execFileSync("tar", ["-czf", "valid.tgz", "package/package.json"], {
+        cwd: fixtureRoot,
+      });
+      execFileSync(
+        "tar",
+        ["-czf", "duplicate.tgz", "package/package.json", "package/package.json"],
+        { cwd: fixtureRoot },
+      );
+      const validate = (tarball: string) =>
+        spawnSync(process.execPath, ["--input-type=module", "-", tarball], {
+          cwd: fixtureRoot,
+          input: validator,
+          encoding: "utf8",
+        });
+
+      const validResult = validate("valid.tgz");
+      expect(validResult.status, `${validResult.stdout}${validResult.stderr}`).toBe(0);
+      expect(validate("duplicate.tgz").status).not.toBe(0);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 });
