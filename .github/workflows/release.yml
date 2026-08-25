@@ -1,0 +1,118 @@
+# Release only an exact v-scan-* tag on current main. The owner must first
+# approve the protected npm-publish environment and configure npm's trusted
+# publisher as documented in RELEASING.md. The package candidate never receives
+# a long-lived registry token.
+name: release
+
+on:
+  push:
+    tags:
+      - "v-scan-*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: npm-publish
+      url: https://www.npmjs.com/package/@aihq/scan
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert tag commit is current main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          main_sha="$(git rev-parse origin/main)"
+          if [ "$GITHUB_SHA" != "$main_sha" ]; then
+            echo "::error::tag commit $GITHUB_SHA does not match origin/main ($main_sha)"
+            exit 1
+          fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - name: Assert package version matches the tag
+        run: |
+          set -euo pipefail
+          ver="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v-scan-}"
+          if [ "$ver" != "$tag" ]; then
+            echo "::error::package.json version ($ver) does not match tag $GITHUB_REF_NAME"
+            exit 1
+          fi
+      - name: Verify exact source candidate
+        run: npm run verify
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Pack exact release tarball and checksum
+        id: pack
+        run: |
+          set -euo pipefail
+          npm pack --ignore-scripts --json > npm-pack.json
+          tarball="$(node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("npm-pack.json","utf8")); if(value.length!==1||typeof value[0]?.filename!=="string") process.exit(1); process.stdout.write(value[0].filename)')"
+          ver="$(node -p "require('./package.json').version")"
+          test "$tarball" = "aihq-scan-$ver.tgz"
+          test -f "$tarball"
+          printf 'tarball=%s\n' "$tarball" >> "$GITHUB_OUTPUT"
+          sha256sum "$tarball" | tee SHA256SUMS.txt
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          artifact-name: aih-scan-sbom.spdx.json
+          format: spdx-json
+          output-file: aih-scan-sbom.spdx.json
+      - name: Attest build provenance for the exact tarball
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "${{ steps.pack.outputs.tarball }}"
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign checksum and retain provenance bundle
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle SHA256SUMS.txt.sigstore.json SHA256SUMS.txt
+          cp "${{ steps.attest.outputs.bundle-path }}" provenance.intoto.jsonl
+      - name: Smoke-install the exact packed tarball
+        run: |
+          set -euo pipefail
+          tarball="$GITHUB_WORKSPACE/${{ steps.pack.outputs.tarball }}"
+          consumer="$(mktemp -d)"
+          npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund "$tarball"
+          "$consumer/node_modules/.bin/aih-scan" --help
+      - name: Publish exact tarball through npm trusted publishing
+        run: |
+          set -euo pipefail
+          tarball="${{ steps.pack.outputs.tarball }}"
+          ver="$(node -p "require('./package.json').version")"
+          case "$ver" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          npm publish "$tarball" --provenance --access public --tag "$dist_tag"
+      - name: Create immutable GitHub Release evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "AIH Scanner evidence producer. Scanner evidence is not organization authority." \
+            "${{ steps.pack.outputs.tarball }}" \
+            SHA256SUMS.txt \
+            SHA256SUMS.txt.sigstore.json \
+            provenance.intoto.jsonl \
+            aih-scan-sbom.spdx.json
