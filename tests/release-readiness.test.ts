@@ -15,7 +15,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(read("README.md")).toContain("[Apache-2.0](LICENSE)");
   });
 
-  it("pins one tag-only, main-bound trusted-publishing workflow", () => {
+  it("pins a tag-only, main-bound workflow that separates candidate code from publication authority", () => {
     const workflow = read(".github/workflows/release.yml");
     expect(workflow).toContain('- "v-scan-*"');
     expect(workflow).not.toMatch(/workflow_dispatch|workflow_call|pull_request_target/);
@@ -27,6 +27,10 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain('if [ "$ver" != "$tag" ]; then');
     expect(workflow).toContain("name: npm-publish");
     expect(workflow).toContain("https://www.npmjs.com/package/@aihq/scan");
+    expect(workflow).toContain("verify-and-pack:");
+    expect(workflow).toContain("npm-publish:");
+    expect(workflow).toContain("needs: verify-and-pack");
+    expect(workflow).toContain("actions: read");
     expect(workflow).toMatch(/id-token:\s*write/);
     expect(workflow).toMatch(/attestations:\s*write/);
     expect(workflow).toMatch(/contents:\s*write/);
@@ -56,20 +60,55 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain("npm ci --ignore-scripts");
     expect(workflow).toContain("npm run verify");
     expect(workflow.match(/npm pack --ignore-scripts/gmu)).toHaveLength(1);
-    expect(workflow).toContain('sha256sum "$tarball"');
-    expect(workflow.match(/sha256sum -c SHA256SUMS\.txt/gmu)).toHaveLength(3);
-    expect(workflow).toContain(['file: "$', '{{ steps.pack.outputs.tarball }}"'].join(""));
-    expect(workflow).toContain(['subject-path: "$', '{{ steps.pack.outputs.tarball }}"'].join(""));
+    expect(workflow).toContain('tarball_sha256="$(sha256sum "$tarball" | awk \'{print $1}\')"');
+    expect(workflow).toContain(
+      ["artifact_id: $", "{{ steps.upload.outputs.artifact-id }}"].join(""),
+    );
+    expect(workflow).toContain(
+      ["artifact_sha256: $", "{{ steps.upload.outputs.artifact-digest }}"].join(""),
+    );
+    expect(workflow).toContain("actions/upload-artifact@");
+    expect(workflow).toContain("actions/download-artifact@");
+    expect(workflow).toContain(
+      ["artifact-ids: $", "{{ needs.verify-and-pack.outputs.artifact_id }}"].join(""),
+    );
+    expect(workflow).toContain(
+      'api_digest="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$EXPECTED_ARTIFACT_ID" --jq .digest)"',
+    );
+    expect(workflow).toContain(
+      ['test "$api_digest" = "sha256:$', "{EXPECTED_ARTIFACT_SHA256}"].join(""),
+    );
+    expect(workflow).toContain('test "$actual_sha256" = "$EXPECTED_TARBALL_SHA256"');
+    expect(workflow).toContain('if [ "$TARBALL" != "aihq-scan-$tag.tgz" ]; then');
+    expect(workflow).toContain('manifest.name !== "@aihq/scan" || manifest.version !== tag');
+    expect(workflow).toContain(['file: "$', '{{ env.TARBALL }}"'].join(""));
+    expect(workflow).toContain(['subject-path: "$', '{{ env.TARBALL }}"'].join(""));
+    expect(workflow).toContain("upload-artifact: false");
+    expect(workflow).toContain("upload-release-assets: false");
     expect(workflow).toContain(
       'npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund "$tarball"',
     );
     expect(workflow).toContain('"$consumer/node_modules/.bin/aih-scan" --help');
     expect(workflow).toContain(
-      'npm publish "$tarball" --provenance --access public --tag "$dist_tag"',
+      'npm publish "$tarball" --ignore-scripts --provenance --access public --tag "$dist_tag"',
     );
+    expect(workflow).toContain("Revalidate current main and tag before publication");
+    expect(workflow).toContain('"+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"');
+    expect(workflow.match(/Verify exact tarball before /gmu)).toHaveLength(5);
     expect(workflow).toContain("format: spdx-json");
     expect(workflow).toContain("cosign sign-blob --yes");
     expect(workflow).toContain("gh release create");
+
+    const candidateJob = workflow.slice(
+      workflow.indexOf("  verify-and-pack:\n"),
+      workflow.indexOf("  npm-publish:\n"),
+    );
+    expect(candidateJob).not.toMatch(/environment:|id-token:\s*write|attestations:\s*write/);
+    expect(candidateJob).not.toMatch(/contents:\s*write|GH_TOKEN/);
+
+    const publicationJob = workflow.slice(workflow.indexOf("  npm-publish:\n"));
+    expect(publicationJob).not.toMatch(/actions\/checkout|npm ci|npm run |npm pack|--help/);
+    expect(publicationJob).not.toContain("require('./package.json')");
   });
 
   it("documents bootstrap, authority, verification, and immutable failure behavior", () => {
@@ -81,6 +120,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("full-SHA publication authorization");
     expect(releasing).toContain("one-use GitHub bootstrap path");
     expect(releasing).toContain("never delete, move, or reuse the tag");
+    expect(releasing).toContain("read-only `verify-and-pack` job");
+    expect(releasing).toContain("runs no Scanner package code");
     expect(releasing).toContain("npm view @aihq/scan@0.1.0");
     expect(releasing).toContain("gh attestation verify ./aihq-scan-0.1.0.tgz");
     expect(releasing).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
@@ -92,6 +133,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
+    expect(readme).toContain("without executing Scanner package code");
     expect(readme).toContain("has not been published");
   });
 

@@ -70,10 +70,13 @@ gh attestation verify ./aihq-scan-0.1.0.tgz --repo samartomar/aih-scan --signer-
 npx --no-install aih-scan --help
 ```
 
-The release workflow binds npm provenance, a GitHub build attestation, an SPDX
-SBOM, the tarball checksum, and a keyless cosign checksum bundle to the exact
-tagged source. Do not run this block until `npm view @aihq/scan@0.1.0` succeeds;
-source review or a local tarball is not publication evidence.
+The release workflow builds and smoke-installs the candidate in a read-only job.
+Its protected job verifies the workflow-artifact digest, original tarball digest,
+and packed identity without executing Scanner package code. It then binds
+npm provenance, a GitHub build attestation, an SPDX SBOM, the tarball checksum, and a keyless
+cosign checksum bundle to the exact tagged source. Do not run this block
+until `npm view @aihq/scan@0.1.0` succeeds; source review or a local tarball is not
+publication evidence.
 
 ## Evidence flow
 
