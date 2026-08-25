@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const AI_HARNESS_STRICT_V2_COMMIT = "38e01f49f2f4ff310e2f94651b292a1618b61f2e";
+export const AI_HARNESS_STRICT_V2_COMMIT = "c0324d331deffe6ca757be5ee9bbdcffb9927883";
 export const AI_HARNESS_DECISION_V2_SCHEMA_SHA256 =
   "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff";
 export const AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256 =
