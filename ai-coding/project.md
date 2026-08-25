@@ -1,7 +1,7 @@
 # Repository contract
 
 `aih-scan` is a public-remote, npm-published TypeScript/Node.js
-repository that builds the `@aihq/scan@0.1.1` V2 package and `aih-scan`
+repository that builds the `@aihq/scan@0.1.2` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
@@ -22,9 +22,12 @@ paths. Scanner facts never decide qualification, finding disposition, approval,
 installation, runtime/effect projection, or adoption. SBOM/provenance annexes remain
 `digest-bound-unverified`, broker enforcement remains `unverified`, and signing
 claims are signer-asserted with no OIDC provenance. The GitHub remote is public,
-and exact `@aihq/scan@0.1.1` plus its five-asset GitHub Release are public. The
-npm Trusted Publisher binding and short-lived-token revocation remain separate
-owner-controlled gates before future release custody is unblocked.
+and exact `@aihq/scan@0.1.1` plus its five-asset GitHub Release were the custody
+baseline observed while preparing source `0.1.2`; source state alone does not
+establish whether `0.1.2` is public. Package and Release evidence do not prove
+the npm Trusted Publisher binding or short-lived-token revocation; those remain
+separate owner-controlled facts to observe before future release custody is
+treated as unblocked.
 
 ## Commands
 

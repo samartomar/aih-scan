@@ -192,14 +192,14 @@ describe("@aihq/scan release boundary (#12)", () => {
           join(packageRoot, "package.json"),
           JSON.stringify({
             name: "@aihq/scan",
-            version: "0.1.1",
+            version: "0.1.2",
             publishConfig,
           }),
         );
         execFileSync("tar", ["-czf", "candidate.tgz", "package"], {
           cwd: fixtureRoot,
         });
-        return spawnSync(process.execPath, ["--input-type=module", "-", "candidate.tgz", "0.1.1"], {
+        return spawnSync(process.execPath, ["--input-type=module", "-", "candidate.tgz", "0.1.2"], {
           cwd: fixtureRoot,
           input: validator,
           encoding: "utf8",
@@ -237,13 +237,17 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
     const readme = read("README.md");
-    expect(readme).toContain("npm install --save-exact @aihq/scan@0.1.1");
-    expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-0.1.1.tgz"');
+    expect(readme).toContain("The source package is `@aihq/scan@0.1.2`");
+    expect(readme).toContain("version=0.1.2");
+    expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
+    expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
     expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("without executing Scanner package code");
-    expect(readme).toContain("is public on npm");
+    expect(readme).toContain("custody baseline independently observed while preparing this source");
+    expect(readme).toContain("`@aihq/scan@0.1.1`");
+    expect(readme).not.toContain("Source `0.1.2` is not published");
     expect(readme).not.toContain("GitHub Release evidence is incomplete");
     expect(readme).toContain("five-asset GitHub Release");
     expect(readme).toContain("recover-v-scan-0.1.1.yml@refs/heads/main");
@@ -269,8 +273,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     if (packed === undefined) throw new Error("npm pack produced no manifest");
     expect(packed).toMatchObject({
       name: "@aihq/scan",
-      version: "0.1.1",
-      filename: "aihq-scan-0.1.1.tgz",
+      version: "0.1.2",
+      filename: "aihq-scan-0.1.2.tgz",
     });
     const paths = packed.files.map(({ path }) => path);
     expect(paths).toContain("LICENSE");

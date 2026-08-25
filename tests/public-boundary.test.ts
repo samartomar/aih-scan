@@ -41,10 +41,10 @@ describe("Strict V2 public boundary", () => {
     expect(read("src/index.ts")).not.toMatch(/observation\/.+-v1\.js/);
   });
 
-  it("makes the 0.1 package boundary and verification CLI explicit without publication", () => {
+  it("makes the 0.1 package boundary explicit without treating source as publication evidence", () => {
     const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
     expect(manifest.name).toBe("@aihq/scan");
-    expect(manifest.version).toBe("0.1.1");
+    expect(manifest.version).toBe("0.1.2");
     expect(manifest.private).toBeUndefined();
     expect(manifest.bin).toEqual({ "aih-scan": "./dist/cli.js" });
     expect(manifest.exports).toEqual({

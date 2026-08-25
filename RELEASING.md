@@ -31,6 +31,12 @@ The immutable `v-scan-0.1.0` attempt separately passed read-only verification
 before npm refused the protected publish with `EOTP`. Preserve both tags and all
 failed and recovery runs as audit evidence; never delete, move, or reuse a tag.
 
+Current source designates `@aihq/scan@0.1.2` as a documentation-only patch
+version. Its source, package manifest, or local tarball is never publication
+evidence; use the live registry and Release checks in the README. Creating a
+tag, approving a protected deployment, publishing to npm, or creating a GitHub
+Release requires authorization naming the exact merged `main` SHA.
+
 The one-use bootstrap source is absent. The GitHub bootstrap secret is absent.
 Current `.github/workflows/release.yml` rejects nonempty `NODE_AUTH_TOKEN` and
 `NPM_TOKEN`, accepts only an unambiguous stable npm CLI at or above `11.5.1`, and
