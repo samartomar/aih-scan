@@ -262,7 +262,7 @@ function writeCandidateInput(path: string): void {
       candidate: {
         protocol: "ScanCandidateV2",
         coreContract: {
-          commit: "5c74400eebb1c1a6d2b25c53151664878c319afe",
+          commit: "aa93128ff56b3ed978ec428e29d1b1ce8036e53b",
           decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
         },
         subject: { name: "source-tree", digest: { sha256: seal.sourceTreeSha256 } },
