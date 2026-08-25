@@ -1,7 +1,7 @@
 # Repository contract
 
 `aih-scan` is a public-remote, npm-publication-deferred TypeScript/Node.js
-repository that builds the `@aihq/scan@0.1.0` V2 package and `aih-scan`
+repository that builds the `@aihq/scan@0.1.1` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact

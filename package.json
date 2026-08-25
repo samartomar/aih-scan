@@ -1,6 +1,6 @@
 {
   "name": "@aihq/scan",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AIH Scanner evidence producer for AI Development Assurance.",
   "repository": {
     "type": "git",
