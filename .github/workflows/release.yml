@@ -1,7 +1,7 @@
 # Release only an exact v-scan-* tag on current main. Candidate verification,
 # pack, and smoke execution stay in a read-only job. The protected job receives
 # one digest-bound tarball and runs no Scanner package code. This temporary
-# revision permits only @aihq/scan@0.1.0 through an environment-scoped one-use
+# revision permits only @aihq/scan@0.1.1 through an environment-scoped one-use
 # token; it is removed immediately after trusted publishing is bound.
 name: release
 
@@ -26,7 +26,7 @@ jobs:
       artifact_sha256: ${{ steps.upload.outputs.artifact-digest }}
     steps:
       - name: Refuse every tag outside the temporary bootstrap boundary
-        run: test "$GITHUB_REF_NAME" = "v-scan-0.1.0"
+        run: test "$GITHUB_REF_NAME" = "v-scan-0.1.1"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -96,7 +96,7 @@ jobs:
 
   npm-publish:
     needs: verify-and-pack
-    if: github.ref == 'refs/tags/v-scan-0.1.0'
+    if: github.ref == 'refs/tags/v-scan-0.1.1'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -127,7 +127,7 @@ jobs:
       - name: Assert one-use bootstrap package is still absent
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "v-scan-0.1.0"
+          test "$GITHUB_REF_NAME" = "v-scan-0.1.1"
           set +e
           registry_observation="$(npm view "@aihq/scan" name --json --registry "https://registry.npmjs.org/" --loglevel silent 2>&1)"
           registry_status=$?
@@ -273,7 +273,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "v-scan-0.1.0"
+          test "$GITHUB_REF_NAME" = "v-scan-0.1.1"
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
             echo "::error::the protected NPM_BOOTSTRAP_TOKEN secret is required"
             exit 1

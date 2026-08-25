@@ -24,18 +24,25 @@ contract requires that the package must already exist before an owner can bind
 GitHub OIDC. That makes the first registry creation an exceptional owner action.
 Do not fall back to an unprovenanced local publish.
 
+The immutable `v-scan-0.1.0` attempt passed the read-only `verify-and-pack` job,
+but npm refused the protected publish with `EOTP` and the registry remained
+`E404`. Preserve that tag and run as audit evidence. The next eligible bootstrap
+candidate is the reviewed `0.1.1` fix-forward; never delete, move, or reuse the
+failed tag.
+
 For the first version:
 
 1. Merge and fully verify the exact release candidate.
-2. Obtain full-SHA publication authorization naming `@aihq/scan@0.1.0` and the
+2. Obtain full-SHA publication authorization naming `@aihq/scan@0.1.1` and the
    exact `main` SHA.
-3. Create the `npm-publish` GitHub environment with a required reviewer and
-   protect immutable `v-scan-*` tags. Create a short-lived granular npm access
-   token with **Bypass 2FA** enabled and read/write access limited to the `@aihq`
-   scope, then store it only as the environment secret `NPM_BOOTSTRAP_TOKEN`.
-   Never place it in a repository/organization variable, working-tree `.npmrc`,
+3. Confirm the existing `npm-publish` GitHub environment still requires its
+   reviewer and the active ruleset still protects immutable `v-scan-*` tags.
+   Replace the rejected credential with a short-lived granular npm access token
+   that has **Bypass 2FA** enabled and read/write access limited to the `@aihq`
+   scope, stored only as the environment secret `NPM_BOOTSTRAP_TOKEN`. Never
+   place it in a repository/organization variable, working-tree `.npmrc`,
    read-only job, log, or issue.
-4. The temporary workflow accepts only `v-scan-0.1.0`. Before the secret is
+4. The temporary workflow accepts only `v-scan-0.1.1`. Before the secret is
    available and again after `npm whoami` authenticates it, the workflow requires
    one structured npm error whose exact code is `E404`. Mixed output, success, or
    any other failure refuses publication. The packed manifest must contain exactly
@@ -61,9 +68,9 @@ source-code changes and require their own authorization.
 
 ## Normal release
 
-1. Re-observe the issue/milestone and current npm state. A stable `0.1.0` cut is
-   preferred unless an RC is justified; prerelease versions publish to `next`,
-   while stable versions publish to `latest`.
+1. Re-observe the issue/milestone and current npm state. The first eligible
+   stable fix-forward is `0.1.1`; prerelease versions publish to `next`, while
+   stable versions publish to `latest`.
 2. Ensure `package.json` and `package-lock.json` name the exact version and the
    public README documents the shipped behavior.
 3. Run, sequentially:
@@ -100,12 +107,12 @@ source-code changes and require their own authorization.
    verify the published result from a disposable consumer:
 
    ```sh
-   npm view @aihq/scan@0.1.0
-   npm install --save-exact @aihq/scan@0.1.0
+   npm view @aihq/scan@0.1.1
+   npm install --save-exact @aihq/scan@0.1.1
    npm audit signatures
-   gh release download v-scan-0.1.0 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.0.tgz"
-   release_sha="$(gh api repos/samartomar/aih-scan/git/ref/tags/v-scan-0.1.0 --jq .object.sha)"
-   gh attestation verify ./aihq-scan-0.1.0.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.0 --source-digest "$release_sha" --deny-self-hosted-runners
+   gh release download v-scan-0.1.1 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.1.tgz"
+   release_sha="$(gh api repos/samartomar/aih-scan/git/ref/tags/v-scan-0.1.1 --jq .object.sha)"
+   gh attestation verify ./aihq-scan-0.1.1.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.1 --source-digest "$release_sha" --deny-self-hosted-runners
    npx --no-install aih-scan --help
    ```
 

@@ -15,20 +15,25 @@ load organization code into the Scanner process or grant governance authority.
 
 ## Status
 
-The `0.1.0` V2 library, `aih-scan` CLI, strict detector-registration grammar, detached
+The `0.1.1` V2 library, `aih-scan` CLI, strict detector-registration grammar, detached
 bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
 organization-evidence projection are implemented and tested in this
 repository. Projection is evidence transport only; it does not qualify,
 approve, admit, observe, or activate a subject.
 The repository is public and Apache-2.0 licensed. `@aihq/scan` has not been published
-to npm, and npm publication remains a separate owner-controlled release gate.
+to npm, and npm publication remains a separate owner-controlled release gate. The
+immutable `v-scan-0.1.0` attempt passed its read-only verification but npm refused
+publication with `EOTP`; the registry still returns `E404`. That tag and failed run
+remain audit evidence and must never be deleted, moved, or reused.
 The source repository contains the pinned provenance-capable release workflow and
-a temporary one-use path restricted to exact `@aihq/scan@0.1.0`. That path accepts
+a temporary one-use fix-forward path restricted to exact `@aihq/scan@0.1.1`. That path accepts
 only structured public and authenticated npm `E404` observations, rejects packed
 publication overrides, pins npmjs, and exposes the bootstrap credential only to
-the publish step. The protected GitHub environment, credential, exact tag,
-publication, immediate trusted-publisher binding, credential removal, and source
-cleanup remain owner actions documented in [RELEASING.md](RELEASING.md). That
+the publish step. The protected GitHub environment and immutable tag ruleset
+exist. Replacing the rejected credential, authorizing and creating the exact
+fix-forward tag, publication, immediate trusted-publisher binding, credential
+removal, and source cleanup remain owner actions documented in
+[RELEASING.md](RELEASING.md). That
 cleanup begins as soon as npm confirms package existence, even if later GitHub
 Release evidence fails. Until those actions are authorized and observed, use a
 local checkout or a reviewed package tarball.
@@ -57,7 +62,7 @@ npm pack
 Install the resulting tarball into a disposable consumer:
 
 ```sh
-npm install --save-dev /path/to/aihq-scan-0.1.0.tgz
+npm install --save-dev /path/to/aihq-scan-0.1.1.tgz
 npx aih-scan --help
 ```
 
@@ -68,10 +73,10 @@ After the exact release is visible on npm, a disposable consumer can install
 and verify the immutable version:
 
 ```sh
-npm install --save-exact @aihq/scan@0.1.0
+npm install --save-exact @aihq/scan@0.1.1
 npm audit signatures
-gh release download v-scan-0.1.0 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.0.tgz"
-gh attestation verify ./aihq-scan-0.1.0.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.0 --deny-self-hosted-runners
+gh release download v-scan-0.1.1 --repo samartomar/aih-scan --pattern "aihq-scan-0.1.1.tgz"
+gh attestation verify ./aihq-scan-0.1.1.tgz --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref refs/tags/v-scan-0.1.1 --deny-self-hosted-runners
 npx --no-install aih-scan --help
 ```
 
@@ -80,7 +85,7 @@ Its protected job verifies the workflow-artifact digest, original tarball digest
 and packed identity without executing Scanner package code. It then binds
 npm provenance, a GitHub build attestation, an SPDX SBOM, the tarball checksum, and a keyless
 cosign checksum bundle to the exact tagged source. Do not run this block
-until `npm view @aihq/scan@0.1.0` succeeds; source review or a local tarball is not
+until `npm view @aihq/scan@0.1.1` succeeds; source review or a local tarball is not
 publication evidence.
 
 ## Evidence flow
@@ -398,7 +403,7 @@ AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
 ```
 
 The proof builds and packs exact `@aihq/core@0.1.0`, packs
-`@aihq/scan@0.1.0`, installs both tarballs in
+`@aihq/scan@0.1.1`, installs both tarballs in
 disposable roots, captures a catalog-absent organization detector through the
 registered adapter boundary, signs and independently verifies the resulting V2
 bundle, projects the evidence, validates the exact packaged Core schema, and

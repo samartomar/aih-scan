@@ -42,8 +42,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain("verify-and-pack:");
     expect(workflow).toContain("npm-publish:");
     expect(workflow).toContain("needs: verify-and-pack");
-    expect(workflow).toContain("if: github.ref == 'refs/tags/v-scan-0.1.0'");
-    expect(workflow).toContain('test "$GITHUB_REF_NAME" = "v-scan-0.1.0"');
+    expect(workflow).toContain("if: github.ref == 'refs/tags/v-scan-0.1.1'");
+    expect(workflow).toContain('test "$GITHUB_REF_NAME" = "v-scan-0.1.1"');
     expect(workflow).toContain("actions: read");
     expect(workflow).toMatch(/id-token:\s*write/);
     expect(workflow).toMatch(/attestations:\s*write/);
@@ -187,14 +187,14 @@ describe("@aihq/scan release boundary (#12)", () => {
           join(packageRoot, "package.json"),
           JSON.stringify({
             name: "@aihq/scan",
-            version: "0.1.0",
+            version: "0.1.1",
             publishConfig,
           }),
         );
         execFileSync("tar", ["-czf", "candidate.tgz", "package"], {
           cwd: fixtureRoot,
         });
-        return spawnSync(process.execPath, ["--input-type=module", "-", "candidate.tgz", "0.1.0"], {
+        return spawnSync(process.execPath, ["--input-type=module", "-", "candidate.tgz", "0.1.1"], {
           cwd: fixtureRoot,
           input: validator,
           encoding: "utf8",
@@ -225,16 +225,17 @@ describe("@aihq/scan release boundary (#12)", () => {
       /as soon as npm confirms package existence, regardless of whether\s+the later GitHub Release succeeds/u,
     );
     expect(releasing).toContain("never delete, move, or reuse the tag");
+    expect(releasing).toContain("npm refused the protected publish with `EOTP`");
     expect(releasing).toContain("read-only `verify-and-pack` job");
     expect(releasing).toContain("runs no Scanner package code");
-    expect(releasing).toContain("npm view @aihq/scan@0.1.0");
-    expect(releasing).toContain("gh attestation verify ./aihq-scan-0.1.0.tgz");
+    expect(releasing).toContain("npm view @aihq/scan@0.1.1");
+    expect(releasing).toContain("gh attestation verify ./aihq-scan-0.1.1.tgz");
     expect(releasing).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
     const readme = read("README.md");
-    expect(readme).toContain("npm install --save-exact @aihq/scan@0.1.0");
-    expect(readme).toContain("gh attestation verify ./aihq-scan-0.1.0.tgz");
+    expect(readme).toContain("npm install --save-exact @aihq/scan@0.1.1");
+    expect(readme).toContain("gh attestation verify ./aihq-scan-0.1.1.tgz");
     expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
@@ -259,8 +260,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     if (packed === undefined) throw new Error("npm pack produced no manifest");
     expect(packed).toMatchObject({
       name: "@aihq/scan",
-      version: "0.1.0",
-      filename: "aihq-scan-0.1.0.tgz",
+      version: "0.1.1",
+      filename: "aihq-scan-0.1.1.tgz",
     });
     const paths = packed.files.map(({ path }) => path);
     expect(paths).toContain("LICENSE");
