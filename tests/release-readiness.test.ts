@@ -316,6 +316,10 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(recovery).toContain("--certificate-oidc-issuer");
     expect(recovery).toContain("SHA256SUMS.txt.sigstore.json");
     expect(recovery).toContain("sha256sum aih-scan-sbom.spdx.json");
+    expect(recovery).toContain("output-file: aih-scan-sbom.spdx.json");
+    expect(recovery).toContain("SBOM_PATH=aih-scan-sbom.spdx.json");
+    expect(recovery).toContain('SBOM_PATH="$release_root/aih-scan-sbom.spdx.json"');
+    expect(recovery).not.toContain("aihq-scan-sbom.spdx.json");
     expect(recovery).toContain('sha256sum "$TARBALL"');
     expect(recovery).toContain("sha256sum provenance.intoto.jsonl");
     expect(recovery).toContain("recovery checksum evidence is not exact for all release assets");
@@ -565,7 +569,7 @@ describe("@aihq/scan release boundary (#12)", () => {
 
   it("rejects malformed or mismatched tarball-scoped SPDX evidence", () => {
     const recovery = read(".github/workflows/recover-v-scan-0.1.1.yml");
-    const validator = inlineModuleFollowing(recovery, "SBOM_PATH=aihq-scan-sbom.spdx.json");
+    const validator = inlineModuleFollowing(recovery, "SBOM_PATH=aih-scan-sbom.spdx.json");
     const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-release-recovery-sbom-"));
     const tarball = "aihq-scan-0.1.1.tgz";
     const tarballSha256 = "ac80c7a2254d796aa30e489f6c3b7c2b72afa1194a3e5ed9e31a128b8e7ae8ec";

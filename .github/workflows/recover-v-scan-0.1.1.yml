@@ -302,7 +302,7 @@ jobs:
       - name: Validate tarball-scoped SPDX SBOM
         run: |
           set -euo pipefail
-          SBOM_PATH=aihq-scan-sbom.spdx.json \
+          SBOM_PATH=aih-scan-sbom.spdx.json \
           EXPECTED_TARBALL="$TARBALL" \
           EXPECTED_SHA256="$TARBALL_SHA256" \
           node --input-type=module <<'NODE'
@@ -587,7 +587,7 @@ jobs:
             throw new Error("released provenance verification is ambiguous");
           }
           NODE
-          SBOM_PATH="$release_root/aihq-scan-sbom.spdx.json" \
+          SBOM_PATH="$release_root/aih-scan-sbom.spdx.json" \
           EXPECTED_TARBALL="$TARBALL" \
           EXPECTED_SHA256="$TARBALL_SHA256" \
           node --input-type=module <<'NODE'
