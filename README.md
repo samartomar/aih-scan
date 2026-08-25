@@ -15,10 +15,9 @@ bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
 organization-evidence projection are implemented and tested in this
 repository. Projection is evidence transport only; it does not qualify,
 approve, admit, observe, or activate a subject.
-The repository is still private and `@aihq/scan` has not been published to npm.
-Repository visibility and npm publication require separate owner approval; the
-commands below can be exercised from a local checkout or a reviewed package
-tarball before then.
+The repository is public. `@aihq/scan` has not been published to npm, and npm
+publication remains a separate owner-controlled release gate. Until that gate is
+implemented and authorized, use a local checkout or a reviewed package tarball.
 
 The GitHub Actions example signs with a generated `test-ephemeral` key and
 uploads that public root beside the evidence. It proves the capture, signing,

@@ -8,8 +8,8 @@ implementation. For repository helper tooling, also read
 ## Repository facts
 
 - TypeScript/Node.js, npm, ESM, Vitest, and Biome.
-- This has a private GitHub remote and remains publication-deferred. It builds
-  the public-ready `@aihq/scan` V2 API and `aih-scan` CLI for one bounded Cisco
+- This has a public GitHub remote, while npm publication remains deferred. It
+  builds the public-ready `@aihq/scan` V2 API and `aih-scan` CLI for one bounded Cisco
   Linux `amd64` OCI capture/sign/verify chain. Internal V1 contracts are not
   public package exports, and scanner evidence has no qualification, approval,
   installation, or adoption authority.
