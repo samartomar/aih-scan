@@ -135,7 +135,7 @@ const candidate = () =>
   createScanCandidateV2({
     protocol: "ScanCandidateV2",
     coreContract: {
-      commit: "c0324d331deffe6ca757be5ee9bbdcffb9927883",
+      commit: "5c74400eebb1c1a6d2b25c53151664878c319afe",
       decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     },
     subject: { name: "source-tree", digest: { sha256: subjectSource } },
@@ -427,7 +427,7 @@ describe("ScanAttestationV2 signed evidence", () => {
     const input = {
       protocol: "ScanCandidateV2",
       coreContract: {
-        commit: "c0324d331deffe6ca757be5ee9bbdcffb9927883",
+        commit: "5c74400eebb1c1a6d2b25c53151664878c319afe",
         decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
       },
       subject: { name: "source-tree", digest: { sha256: sha("wrong") } },
