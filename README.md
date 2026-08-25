@@ -22,11 +22,16 @@ repository. Projection is evidence transport only; it does not qualify,
 approve, admit, observe, or activate a subject.
 The repository is public and Apache-2.0 licensed. `@aihq/scan` has not been published
 to npm, and npm publication remains a separate owner-controlled release gate.
-The source repository contains the pinned provenance-capable release workflow,
-but the protected GitHub environment, first-package bootstrap, npm trusted-
-publisher binding, exact tag, and publication remain owner actions documented
-in [RELEASING.md](RELEASING.md). Until those actions are authorized and observed,
-use a local checkout or a reviewed package tarball.
+The source repository contains the pinned provenance-capable release workflow and
+a temporary one-use path restricted to exact `@aihq/scan@0.1.0`. That path accepts
+only structured public and authenticated npm `E404` observations, rejects packed
+publication overrides, pins npmjs, and exposes the bootstrap credential only to
+the publish step. The protected GitHub environment, credential, exact tag,
+publication, immediate trusted-publisher binding, credential removal, and source
+cleanup remain owner actions documented in [RELEASING.md](RELEASING.md). That
+cleanup begins as soon as npm confirms package existence, even if later GitHub
+Release evidence fails. Until those actions are authorized and observed, use a
+local checkout or a reviewed package tarball.
 The new package line starts at `0.1.0` to describe its current maturity; it does
 not inherit the frozen Core legacy package's historical major version.
 
@@ -384,7 +389,7 @@ git diff --check
 
 The packed prepublication proof additionally requires
 `AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
-HEAD is exactly `c0324d331deffe6ca757be5ee9bbdcffb9927883`, identifying
+HEAD is exactly `5c74400eebb1c1a6d2b25c53151664878c319afe`, identifying
 `@aihq/core@0.1.0`:
 
 ```sh
