@@ -1,13 +1,14 @@
 # Repository contract
 
 `aih-scan` is a public-remote, npm-publication-deferred TypeScript/Node.js
-repository that builds the public-ready `@aihq/scan` V2 package and `aih-scan`
+repository that builds the `@aihq/scan@0.1.0` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
 claims against caller-supplied roots and replay state. Normal CI locks the
-contract to the exact Core Strict V2 decision and organization-evidence schema
-artifacts. An organization-signed, successful, already verified V2 attestation
+contract to exact `@aihq/core@0.1.0` package, commit, Strict V2 decision, and
+organization-evidence schema artifacts. An organization-signed, successful,
+already verified V2 attestation
 can be projected into one canonical Core organization-evidence envelope that
 binds the caller-selected exact Core subject plus the verified evidence,
 candidate, payload, source, signer, and annex identities. The envelope remains

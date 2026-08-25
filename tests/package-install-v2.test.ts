@@ -262,7 +262,7 @@ function writeCandidateInput(path: string): void {
       candidate: {
         protocol: "ScanCandidateV2",
         coreContract: {
-          commit: "e53fe219002515c092ebb68c5b91c91a2fc6110d",
+          commit: "43609a21ee3cc97834fc84f358f49d2196c91873",
           decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
         },
         subject: { name: "source-tree", digest: { sha256: seal.sourceTreeSha256 } },
@@ -508,7 +508,7 @@ describe("published V2 package installation", () => {
       workflow: ".github/workflows/package-install-v2.yml",
       issuer: "https://token.actions.githubusercontent.com",
       sourceRef: "refs/heads/main",
-      commit: "e53fe219002515c092ebb68c5b91c91a2fc6110d",
+      commit: "1".repeat(40),
       environment: "test",
       runId: "123",
       runAttempt: 1,

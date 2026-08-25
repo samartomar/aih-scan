@@ -102,6 +102,12 @@ describe("Core Strict V2 compatibility lock", () => {
     const verifierSource = lockVerifier();
     expect(verifierSource).toContain('name: "@aihq/core"');
     expect(verifierSource).toContain('version: "0.1.0"');
+    expect(verifierSource).toContain(
+      "af64feda4e3e57808e1a262e15a5cb8f41581f77e8f9b49eb9b459317b803ecd",
+    );
+    expect(verifierSource).toContain("packageManifest.name !== packageIdentity.name");
+    expect(verifierSource).toContain("packageManifest.version !== packageIdentity.version");
+    expect(verifierSource).toContain("packageManifest.private === true");
     expect(verifierSource).toContain("schemas/aih-organization-evidence-envelope-v1.schema.json");
     expect(verifierSource).toContain(AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256);
     const verifierIndex = workflow.indexOf(verifier);

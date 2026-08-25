@@ -3,7 +3,12 @@ import { execFileSync } from "node:child_process";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
-const commit = "e53fe219002515c092ebb68c5b91c91a2fc6110d";
+const commit = "43609a21ee3cc97834fc84f358f49d2196c91873";
+const packageIdentity = {
+  name: "@aihq/core",
+  version: "0.1.0",
+  sha256: "af64feda4e3e57808e1a262e15a5cb8f41581f77e8f9b49eb9b459317b803ecd",
+};
 const contracts = [
   {
     relativePath: "schemas/aih-governance-decision-v2.schema.json",
@@ -28,6 +33,41 @@ function sameIdentity(left, right) {
     left.ctimeMs === right.ctimeMs
   );
 }
+function readPinnedArtifact(coreRoot, relativePath) {
+  const artifactPath = resolve(coreRoot, relativePath);
+  const fromRoot = relative(coreRoot, artifactPath);
+  if (
+    !fromRoot ||
+    fromRoot === ".." ||
+    fromRoot.startsWith(`..\\`) ||
+    fromRoot.startsWith("../") ||
+    isAbsolute(fromRoot)
+  )
+    fail("artifact path escapes Core root");
+  const beforePath = lstatSync(artifactPath);
+  if (
+    !beforePath.isFile() ||
+    beforePath.isSymbolicLink() ||
+    beforePath.nlink !== 1 ||
+    beforePath.size <= 0 ||
+    beforePath.size > 2 * 1024 * 1024
+  )
+    fail("artifact shape");
+  const descriptor = openSync(artifactPath, "r");
+  try {
+    const beforeDescriptor = fstatSync(descriptor);
+    if (!beforeDescriptor.isFile() || !sameIdentity(beforePath, beforeDescriptor))
+      fail("artifact changed before read");
+    const bytes = readFileSync(descriptor);
+    const afterDescriptor = fstatSync(descriptor);
+    const afterPath = lstatSync(artifactPath);
+    if (!sameIdentity(beforeDescriptor, afterDescriptor) || !sameIdentity(afterDescriptor, afterPath))
+      fail("artifact changed during read");
+    return bytes;
+  } finally {
+    closeSync(descriptor);
+  }
+}
 
 const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== "--core-root" || !args[1])
@@ -45,40 +85,31 @@ const status = execFileSync("git", ["-C", coreRoot, "status", "--porcelain=v1", 
   stdio: ["ignore", "pipe", "ignore"],
 });
 if (status.length !== 0) fail("Core checkout must be clean");
+const packageManifestBytes = readPinnedArtifact(coreRoot, "package.json");
+if (createHash("sha256").update(packageManifestBytes).digest("hex") !== packageIdentity.sha256)
+  fail("Core package manifest digest");
+let packageManifest;
+try {
+  packageManifest = JSON.parse(packageManifestBytes.toString("utf8"));
+} catch {
+  fail("Core package manifest JSON");
+}
+if (
+  packageManifest === null ||
+  typeof packageManifest !== "object" ||
+  Array.isArray(packageManifest) ||
+  packageManifest.name !== packageIdentity.name ||
+  packageManifest.version !== packageIdentity.version ||
+  packageManifest.private === true
+)
+  fail("Core package identity");
 const verified = {};
 for (const contract of contracts) {
-  const schemaPath = resolve(coreRoot, contract.relativePath);
-  const fromRoot = relative(coreRoot, schemaPath);
-  if (!fromRoot || fromRoot === ".." || fromRoot.startsWith(`..\\`) || fromRoot.startsWith("../") || isAbsolute(fromRoot))
-    fail("schema path escapes Core root");
-  const beforePath = lstatSync(schemaPath);
-  if (
-    !beforePath.isFile() ||
-    beforePath.isSymbolicLink() ||
-    beforePath.nlink !== 1 ||
-    beforePath.size <= 0 ||
-    beforePath.size > 2 * 1024 * 1024
-  )
-    fail("schema artifact shape");
-  const descriptor = openSync(schemaPath, "r");
-  let bytes;
-  try {
-    const beforeDescriptor = fstatSync(descriptor);
-    if (!beforeDescriptor.isFile() || !sameIdentity(beforePath, beforeDescriptor))
-      fail("schema artifact changed before read");
-    bytes = readFileSync(descriptor);
-    const afterDescriptor = fstatSync(descriptor);
-    const afterPath = lstatSync(schemaPath);
-    if (
-      !sameIdentity(beforeDescriptor, afterDescriptor) ||
-      !sameIdentity(afterDescriptor, afterPath)
-    )
-      fail("schema artifact changed during read");
-  } finally {
-    closeSync(descriptor);
-  }
+  const bytes = readPinnedArtifact(coreRoot, contract.relativePath);
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== contract.sha256) fail(`schema digest drift: ${contract.relativePath}`);
   verified[contract.relativePath] = actual;
 }
-process.stdout.write(`${JSON.stringify({ coreCommit: commit, schemas: verified })}\n`);
+process.stdout.write(
+  `${JSON.stringify({ coreCommit: commit, package: packageIdentity, schemas: verified })}\n`,
+);
