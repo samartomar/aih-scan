@@ -20,22 +20,24 @@ bundle format, Ed25519 DSSE signing, Linux `amd64` OCI CI chain, and Core
 organization-evidence projection are implemented and tested in this
 repository. Projection is evidence transport only; it does not qualify,
 approve, admit, observe, or activate a subject.
-The source package is `@aihq/scan@0.1.2`, a documentation-only patch version that
-does not change Scanner runtime behavior. Source state is not publication
-evidence; only the live checks below establish whether this version is public.
-The custody baseline independently observed while preparing this source is
-`@aihq/scan@0.1.1`, with registry signatures, npm provenance, immutable tag
-`v-scan-0.1.1`, a passing disposable install/help check, and a five-asset GitHub
-Release. This is public package custody, not organization evidence custody.
+Exact `@aihq/scan@0.1.2` is public from immutable tag `v-scan-0.1.2` and source
+`762a4316070b45c04d9143d2f9f5c43b74f604a6`. The registry exposes signatures
+and npm provenance. Independent verification matched the registry and
+five-asset GitHub Release tarballs at SHA-256
+`9114ef3998d7f5b2a29943a885d251370cdef9f57f5092cbd8fe7f97aa58aa6a`,
+verified the exact-tag GitHub attestation, installed the registry package in a
+disposable root, and passed `aih-scan --help`. Source state alone never proves
+publication; the live checks below establish custody. Public package custody is
+not organization evidence custody.
 
 The one-use bootstrap source and GitHub environment secret are absent. The
-current release workflow rejects npm token credentials and uses GitHub OIDC
-Trusted Publishing only. The npm trusted-publisher binding still requires owner
-browser/2FA confirmation, and the short-lived npm token must still be revoked.
-Future Scanner tags remain blocked until those external facts are observed.
-The one-use recovery workflow was removed after success; its terminal run and
-the original failed publication runs remain durable audit evidence. See
-[RELEASING.md](RELEASING.md).
+protected environment is tag-only and secret-free. npm Trusted Publishing is
+bound to `samartomar/aih-scan`, workflow `release.yml`, environment
+`npm-publish`, and allows only `npm publish`; bypass tokens are disallowed and
+the old bootstrap token is revoked. The current workflow rejects npm token
+credentials and publishes through GitHub OIDC only. The one-use recovery
+workflow was removed after success; its terminal run and the original failed
+publication runs remain durable audit evidence. See [RELEASING.md](RELEASING.md).
 The new package line starts at `0.1.0` to describe its current maturity; it does
 not inherit the frozen Core legacy package's historical major version.
 
@@ -381,12 +383,11 @@ expected claims through an independent trusted process.
 - The package emits evidence facts only. It does not provide catalog promotion,
   organization approval, installation, runtime/effect projection, revocation
   custody, or publication authority.
-- Exact public `0.1.1` has an immutable tag, npm registry signatures and
-  provenance, and a five-asset GitHub Release. Source state alone does not prove
-  `0.1.2` publication. Package and Release evidence do not prove the npm
-  Trusted Publisher binding or short-lived-token revocation; those separate
-  owner-controlled facts must be independently observed before treating
-  steady-state future release custody as unblocked.
+- Exact public `0.1.2` has an immutable tag, npm registry signatures and
+  provenance, a verified five-asset Release, a passing disposable install, and
+  an independently observed least-privilege Trusted Publisher. The protected
+  environment is tag-only and secret-free, bypass tokens are disallowed, and
+  the old bootstrap token is revoked.
 
 Organizations are not required to use an AIH-maintained catalog entry. The
 Core Strict V2 contract can bind organization-qualified evidence for an exact
