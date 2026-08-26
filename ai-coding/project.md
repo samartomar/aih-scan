@@ -21,13 +21,14 @@ Internal V1 contracts remain implementation details and are not package export
 paths. Scanner facts never decide qualification, finding disposition, approval,
 installation, runtime/effect projection, or adoption. SBOM/provenance annexes remain
 `digest-bound-unverified`, broker enforcement remains `unverified`, and signing
-claims are signer-asserted with no OIDC provenance. The GitHub remote is public,
-and exact `@aihq/scan@0.1.1` plus its five-asset GitHub Release were the custody
-baseline observed while preparing source `0.1.2`; source state alone does not
-establish whether `0.1.2` is public. Package and Release evidence do not prove
-the npm Trusted Publisher binding or short-lived-token revocation; those remain
-separate owner-controlled facts to observe before future release custody is
-treated as unblocked.
+claims are signer-asserted with no OIDC provenance. The GitHub remote is public.
+Exact `@aihq/scan@0.1.2` is public from immutable tag `v-scan-0.1.2` with npm
+signatures/provenance, a verified five-asset GitHub Release, matching tarball
+custody, and a passing disposable install/help proof. The protected environment
+is tag-only and secret-free; the least-privilege Trusted Publisher allows only
+`npm publish`, bypass tokens are disallowed, and the old bootstrap token is
+revoked. Source state alone never establishes publication or organization
+evidence custody.
 
 ## Commands
 

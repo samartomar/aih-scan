@@ -19,41 +19,42 @@ custody.
 
 ## Current release and steady-state custody
 
-Exact `@aihq/scan@0.1.1` is public on npm from immutable tag
-`v-scan-0.1.1` and source `a1f3541cf36af7a128d4ce4554a4b6bbc3d53fa8`.
-The registry exposes signatures and npm provenance. The authorized release run
-published the exact tarball, then failed because its checkout-free `gh release
-create` command omitted `--repo`. Recovery run `32903155702`, from exact workflow
-source `dfbb3a98461731f3a3e98ebb0049e8cc97373611`, subsequently created the
-GitHub Release with exactly the retained tarball, original provenance bundle,
-tarball-scoped SPDX SBOM, checksum manifest, and recovery-workflow cosign bundle.
-The immutable `v-scan-0.1.0` attempt separately passed read-only verification
-before npm refused the protected publish with `EOTP`. Preserve both tags and all
-failed and recovery runs as audit evidence; never delete, move, or reuse a tag.
+Exact `@aihq/scan@0.1.2` is public on npm from immutable tag
+`v-scan-0.1.2` and source `762a4316070b45c04d9143d2f9f5c43b74f604a6`.
+The registry exposes signatures and npm provenance, and the five-asset GitHub
+Release binds the same tarball at SHA-256
+`9114ef3998d7f5b2a29943a885d251370cdef9f57f5092cbd8fe7f97aa58aa6a`.
+Independent verification covered the registry and Release tarballs, GitHub
+attestation, registry signatures/attestations, disposable install, and
+`aih-scan --help`. Source, package-manifest, or local-tarball state alone is
+never publication evidence; use the live checks in the README.
 
-Current source designates `@aihq/scan@0.1.2` as a documentation-only patch
-version. Its source, package manifest, or local tarball is never publication
-evidence; use the live registry and Release checks in the README. Creating a
-tag, approving a protected deployment, publishing to npm, or creating a GitHub
-Release requires authorization naming the exact merged `main` SHA.
+Exact `0.1.1` remains public with its bounded recovery evidence. Its authorized
+release run published the tarball, then failed because checkout-free `gh release
+create` omitted `--repo`. Recovery run `32903155702` completed the five-asset
+Release without republishing. Immutable `v-scan-0.1.0` separately passed
+read-only verification before npm refused the protected publish with `EOTP`.
+Preserve every immutable tag and all failed and recovery runs as audit evidence;
+never delete, move, or reuse a tag.
 
 The one-use bootstrap source is absent. The GitHub bootstrap secret is absent.
 Current `.github/workflows/release.yml` rejects nonempty `NODE_AUTH_TOKEN` and
 `NPM_TOKEN`, accepts only an unambiguous stable npm CLI at or above `11.5.1`, and
-publishes through GitHub OIDC. The owner must still bind the steady-state trusted
-publisher with npm CLI 11.15.0 or newer and revoke the npm token:
+publishes through GitHub OIDC. The least-privilege binding is active and can be
+re-observed with npm CLI 11.15.0 or newer:
 
 ```sh
 npm trust github @aihq/scan --file release.yml --repo samartomar/aih-scan --env npm-publish --allow-publish
 npm trust list @aihq/scan
 ```
 
-The observed tuple must name `samartomar/aih-scan`, workflow `release.yml`,
-environment `npm-publish`, and `npm publish` permission. Future Scanner tags remain blocked
-until that binding and token revocation are independently observed. Finally require
-2FA and disallow traditional tokens in the package settings. Environment,
-ruleset, credential, tag, and trusted-publisher mutations are not source-code
-changes and require their own authorization.
+The observed tuple names `samartomar/aih-scan`, workflow `release.yml`,
+environment `npm-publish`, and allows only `npm publish`. The protected
+environment is tag-only and secret-free, package settings require 2FA and
+disallow traditional/bypass tokens, and the old bootstrap token is revoked.
+Every future release still requires full-SHA publication authorization.
+Environment, ruleset, credential, tag, and trusted-publisher mutations are not
+source-code changes and require their own authorization.
 
 ## Recovered 0.1.1 Release evidence
 
