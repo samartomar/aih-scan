@@ -31,6 +31,11 @@ disposable root, and passed `aih-scan --help`. Source state alone never proves
 publication; the live checks below establish custody. Public package custody is
 not organization evidence custody.
 
+Current `main` also contains unreleased fixes for per-command help and the Core
+qualification-digest handoff. Those fixes are not present in immutable public
+`@aihq/scan@0.1.3`; they require a separately reviewed, versioned, and authorized
+future release before administrators can rely on them from npm.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment
@@ -325,8 +330,9 @@ npx aih-scan project-core-evidence \
   --output /path/to/new-core-evidence.json
 ```
 
-Discover the same command surface from the installed package with
-`npx aih-scan project-core-evidence --help`.
+An unreleased source candidate packed and installed into a disposable root exposes
+the same command surface through `aih-scan project-core-evidence --help`. Public
+`@aihq/scan@0.1.3` does not yet contain that per-command help fix.
 
 `--seen` is optional; all other options are required exactly once. The command
 repeats the complete V2 verification before writing anything. It accepts only
@@ -340,8 +346,8 @@ digest to the verified evidence, candidate, payload, source-seal, and annex
 identities, but it neither derives the Core subject nor decides whether the
 organization should associate that evidence with it. The output validity comes
 only from the signed scan claims. Its deterministic attestor binds the verified
-organization signer identity and key id. Stdout reports `envelopeSha256`, the raw
-output-file hash, and `organizationEvidenceDigest`, Core's domain-separated
+organization signer identity and key id. The unreleased candidate stdout reports
+`envelopeSha256`, the raw output-file hash, and `organizationEvidenceDigest`, Core's domain-separated
 qualification digest. Enter `organizationEvidenceDigest`—not
 `envelopeSha256`—in Policy Workbench's organization-evidence digest field. The
 must-not-exist output file is the evidence handoff, and the caller must preserve
@@ -447,9 +453,10 @@ generated organization-class key, and generated policy are disposable test
 mechanics—not human approval, public attestation, production authority, or a
 production effect.
 
-Public clean-machine reproduction uses `@aihq/core@0.2.0` and
-`@aihq/scan@0.1.3` from npm in a disposable installed root. Source and CI
-evidence do not substitute for those releases.
+The completed public clean-machine acceptance used `@aihq/core@0.2.0` and
+`@aihq/scan@0.1.3` from npm in a disposable installed root. The help and digest
+fixes above are later source changes and are not part of those immutable package
+bytes. Source and CI evidence do not substitute for a future release.
 
 Never run AIH product behavior against this repository checkout. Tests exercise
 scanner behavior only against disposable fixture roots.
