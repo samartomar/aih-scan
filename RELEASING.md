@@ -29,6 +29,11 @@ attestation, registry signatures/attestations, disposable install, and
 `aih-scan --help`. Source, package-manifest, or local-tarball state alone is
 never publication evidence; use the live checks in the README.
 
+Current source designates `@aihq/scan@0.1.4` as a patch candidate for the
+per-command help and Core qualification-digest handoff fixes. It remains
+unpublished until its reviewed release candidate is merged and separately
+authorized by exact current-main SHA.
+
 Exact `0.1.1` remains public with its bounded recovery evidence. Its authorized
 release run published the tarball, then failed because checkout-free `gh release
 create` omitted `--repo`. Recovery run `32903155702` completed the five-asset
