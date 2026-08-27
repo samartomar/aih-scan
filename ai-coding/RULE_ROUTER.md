@@ -10,7 +10,7 @@ implementation. For repository helper tooling, also read
 - TypeScript/Node.js, npm, ESM, Vitest, and Biome.
 - This has a public GitHub remote; source state never proves npm or Release
   publication, which requires the live checks documented in the README. It
-  builds the `@aihq/scan@0.1.2` V2 API and `aih-scan` CLI for one bounded Cisco
+  builds the `@aihq/scan@0.1.3` V2 API and `aih-scan` CLI for one bounded Cisco
   Linux `amd64` OCI capture/sign/verify chain. Internal V1 contracts are not
   public package exports, and scanner evidence has no qualification, approval,
   installation, or adoption authority.

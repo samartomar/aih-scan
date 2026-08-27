@@ -1,19 +1,22 @@
 # Repository contract
 
 `aih-scan` is a public-remote, npm-published TypeScript/Node.js
-repository that builds the `@aihq/scan@0.1.2` V2 package and `aih-scan`
+repository that builds the `@aihq/scan@0.1.3` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
 claims against caller-supplied roots and replay state. Normal CI locks the
-contract to exact `@aihq/core@0.1.0` package, commit, Strict V2 decision, and
+contract to exact `@aihq/core@0.1.1` package at
+`6130dd837b8e8bd41e999fb40733e0e460e69720`, Strict V2 decision, and
 organization-evidence schema artifacts. An organization-signed, successful,
 already verified V2 attestation
 can be projected into one canonical Core organization-evidence envelope that
 binds the caller-selected exact Core subject plus the verified evidence,
-candidate, payload, source, signer, and annex identities. The envelope remains
-evidence only and supplies no decision, qualification, observation, or effect
-authority. A separate three-job OCI
+candidate, payload, source, signer, and annex identities. Its deterministic
+attestor uses the existing Decision V2 stable-identifier grammar so the packed
+Core Workbench can bind the exact evidence without raw JSON authoring. The
+envelope remains evidence only and supplies no decision, qualification,
+observation, or effect authority. A separate three-job OCI
 workflow captures, signs with a test-ephemeral key, and independently verifies
 one generated public fixture.
 
@@ -28,7 +31,8 @@ custody, and a passing disposable install/help proof. The protected environment
 is tag-only and secret-free; the least-privilege Trusted Publisher allows only
 `npm publish`, bypass tokens are disallowed, and the old bootstrap token is
 revoked. Source state alone never establishes publication or organization
-evidence custody.
+evidence custody. Source `0.1.3` is an unpublished candidate until a separate
+exact-SHA publication authorization and successful release prove otherwise.
 
 ## Commands
 

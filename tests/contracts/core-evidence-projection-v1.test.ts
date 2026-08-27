@@ -254,6 +254,8 @@ describe("Core organization evidence projection V1", () => {
     expect(result.evidence.artifactDigests).toContain(
       `sha256:${result.evidence.payloadDigest.slice("sha256:".length)}`,
     );
+    expect(result.attestor).toMatch(/^scanner-[0-9a-f]{56}$/);
+    expect(result.attestor).toMatch(/^[a-z][a-z0-9-]{0,63}$/);
     expect(canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(result).toString("utf8")).toBe(
       JSON.stringify(
         JSON.parse(canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(result).toString("utf8")),

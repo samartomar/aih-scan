@@ -291,8 +291,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     if (packed === undefined) throw new Error("npm pack produced no manifest");
     expect(packed).toMatchObject({
       name: "@aihq/scan",
-      version: "0.1.2",
-      filename: "aihq-scan-0.1.2.tgz",
+      version: "0.1.3",
+      filename: "aihq-scan-0.1.3.tgz",
     });
     const paths = packed.files.map(({ path }) => path);
     expect(paths).toContain("LICENSE");

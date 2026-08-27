@@ -3,11 +3,11 @@ import { execFileSync } from "node:child_process";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
-const commit = "aa93128ff56b3ed978ec428e29d1b1ce8036e53b";
+const commit = "6130dd837b8e8bd41e999fb40733e0e460e69720";
 const packageIdentity = {
   name: "@aihq/core",
-  version: "0.1.0",
-  sha256: "af64feda4e3e57808e1a262e15a5cb8f41581f77e8f9b49eb9b459317b803ecd",
+  version: "0.1.1",
+  sha256: "f7bee7a2f8f3725f7aa54d47c4271b9848783380396bdea835a4ed96614f61fa",
 };
 const contracts = [
   {

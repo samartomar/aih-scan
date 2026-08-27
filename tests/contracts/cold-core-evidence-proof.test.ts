@@ -6,11 +6,12 @@ const root = resolve(import.meta.dirname, "..", "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
 describe("packed Core evidence proof", () => {
-  it("requires an exact clean Core checkout and runs only packed artifacts in disposable roots", () => {
+  it("requires an exact clean Core checkout and proves protected-file custody from packed UI", () => {
     const source = read("tools/verify-cold-core-evidence.mjs");
     expect(source).toContain("AIH_SCAN_CORE_SOURCE");
-    expect(source).toContain("aa93128ff56b3ed978ec428e29d1b1ce8036e53b");
-    expect(source).toContain("Core 0.1.0 has no exported organization-evidence parser");
+    expect(source).toContain("6130dd837b8e8bd41e999fb40733e0e460e69720");
+    expect(source).toContain('"@aihq/core"');
+    expect(source).toContain('version: "0.1.1"');
     expect(source).toContain('"@aihq/core"');
     expect(source).not.toContain('"@aihq/harness"');
     expect(source).toContain("git");
@@ -19,14 +20,26 @@ describe("packed Core evidence proof", () => {
     expect(source).toContain("pack");
     expect(source).toContain("--ignore-scripts");
     expect(source).toContain("project-core-evidence");
+    expect(source).toContain('"generate", "--apply", "--out"');
+    expect(source).toContain("authorProtectedPolicyViaPackedWorkbench");
+    expect(source).toContain("AIH_ORG_POLICY: policyPath");
     expect(source).toContain("policy");
     expect(source).toContain("resolve");
     expect(source).toContain("authority-unverified");
+    expect(source).toContain("organization-qualified");
+    expect(source).toContain("observation-missing");
     expect(source).toContain("createRequire");
     expect(source).toContain("schemaCompatible: true");
-    expect(source).toContain("parser; without genuine V3 authority");
-    expect(source).not.toContain("parseOrganizationEvidenceEnvelopeV1Bytes");
+    expect(source).toContain("workbenchGenerated: true");
     expect(source).not.toMatch(/ai-harness.*(?:src|dist)\//i);
     expect(source).not.toMatch(/\b(?:gh|docker|curl|fetch|npm publish|createRelease|git tag)\b/i);
+  });
+
+  it("drives the protected policy form without exposing editable raw JSON", () => {
+    const source = read("tools/lib/author-protected-policy-via-workbench.mjs");
+    expect(source).toContain('querySelectorAll("textarea:not([readonly])")');
+    expect(source).toContain("packed-workbench-raw-json-authoring-exposed");
+    expect(source).toContain("download-protected-bundle");
+    expect(source).toContain("aih-policy-bundle.json");
   });
 });
