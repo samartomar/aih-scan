@@ -19,20 +19,16 @@ custody.
 
 ## Current release and steady-state custody
 
-Exact `@aihq/scan@0.1.3` is public on npm from immutable tag
-`v-scan-0.1.3` and source `bb992f95332740a6708a6248b2002a64f261fa27`.
+Exact `@aihq/scan@0.1.4` is public on npm from immutable tag
+`v-scan-0.1.4` and source `3c84f4decc804e19a876d0120e2ece439bda8229`.
 The registry exposes signatures and npm provenance, and the five-asset GitHub
 Release binds the same tarball at SHA-256
-`f540af5a5783e095c6e5ff990185456db1c2a46c95b269f76c0a313eeebb93bf`.
+`801249dee266b7280f1b587022e11556d639f2f578e8e6a726874fa0355d8ec7`.
 Independent verification covered the registry and Release tarballs, GitHub
 attestation, registry signatures/attestations, disposable install, and
-`aih-scan --help`. Source, package-manifest, or local-tarball state alone is
-never publication evidence; use the live checks in the README.
-
-Current source designates `@aihq/scan@0.1.4` as a patch candidate for the
-per-command help and Core qualification-digest handoff fixes. It remains
-unpublished until its reviewed release candidate is merged and separately
-authorized by exact current-main SHA.
+`aih-scan --help`, and `aih-scan project-core-evidence --help`. Source,
+package-manifest, or local-tarball state alone is never publication evidence;
+use the live checks in the README.
 
 Exact `0.1.1` remains public with its bounded recovery evidence. Its authorized
 release run published the tarball, then failed because checkout-free `gh release
