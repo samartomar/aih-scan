@@ -224,6 +224,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("full-SHA publication authorization");
     expect(releasing).toContain("GitHub bootstrap secret is absent");
     expect(releasing).toContain("Exact `@aihq/scan@0.1.3` is public");
+    expect(releasing).toContain("`@aihq/scan@0.1.4` as a patch candidate");
     expect(releasing).toContain("old bootstrap token is revoked");
     expect(releasing).toContain("allows only `npm publish`");
     expect(releasing).not.toContain("Future Scanner tags remain blocked");
@@ -241,6 +242,7 @@ describe("@aihq/scan release boundary (#12)", () => {
 
     const readme = read("README.md");
     expect(readme).toContain("Exact `@aihq/scan@0.1.3` is public");
+    expect(readme).toContain("`@aihq/scan@0.1.4` source candidate");
     expect(readme).toContain("version=0.1.3");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
@@ -272,6 +274,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(project).not.toContain("custody baseline observed while preparing source `0.1.2`");
     expect(project).not.toContain("establish whether `0.1.2` is public");
     expect(project).not.toContain("before future release custody is treated as unblocked");
+
+    const router = read("ai-coding/RULE_ROUTER.md");
+    expect(router).toContain("builds the `@aihq/scan@0.1.4` V2 API");
   });
 
   it("packs the license, README, command, and library under the exact identity", () => {
@@ -291,8 +296,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     if (packed === undefined) throw new Error("npm pack produced no manifest");
     expect(packed).toMatchObject({
       name: "@aihq/scan",
-      version: "0.1.3",
-      filename: "aihq-scan-0.1.3.tgz",
+      version: "0.1.4",
+      filename: "aihq-scan-0.1.4.tgz",
     });
     const paths = packed.files.map(({ path }) => path);
     expect(paths).toContain("LICENSE");
