@@ -6,8 +6,9 @@ CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
 claims against caller-supplied roots and replay state. Normal CI locks the
-contract to exact `@aihq/core@0.1.1` package at
-`6130dd837b8e8bd41e999fb40733e0e460e69720`, Strict V2 decision, and
+contract to exact Core source
+`6130dd837b8e8bd41e999fb40733e0e460e69720`, whose manifest remains
+`@aihq/core@0.1.1`, plus the Strict V2 decision and
 organization-evidence schema artifacts. An organization-signed, successful,
 already verified V2 attestation
 can be projected into one canonical Core organization-evidence envelope that
@@ -33,6 +34,10 @@ is tag-only and secret-free; the least-privilege Trusted Publisher allows only
 revoked. Source state alone never establishes publication or organization
 evidence custody. Source `0.1.3` is an unpublished candidate until a separate
 exact-SHA publication authorization and successful release prove otherwise.
+The Core lock is likewise an unpublished post-`0.1.1` Core source candidate;
+public `@aihq/core@0.1.1` and `v-core-0.1.1` are immutable at
+`26ecc6686eef560cdee86c5ae1fccb2927e5a10c` and cannot reproduce the updated
+packed Workbench handoff.
 
 ## Commands
 

@@ -42,4 +42,12 @@ describe("packed Core evidence proof", () => {
     expect(source).toContain("download-protected-bundle");
     expect(source).toContain("aih-policy-bundle.json");
   });
+
+  it("distinguishes the exact Core source lock from the older public 0.1.1 release", () => {
+    for (const path of ["README.md", "ai-coding/project.md"]) {
+      const documentation = read(path);
+      expect(documentation).toContain("26ecc6686eef560cdee86c5ae1fccb2927e5a10c");
+      expect(documentation).toMatch(/unpublished post-`0\.1\.1` Core\s+source candidate/u);
+    }
+  });
 });

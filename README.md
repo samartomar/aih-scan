@@ -417,16 +417,19 @@ git diff --check
 
 The packed prepublication proof additionally requires
 `AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
-HEAD is exactly `6130dd837b8e8bd41e999fb40733e0e460e69720`, identifying
-`@aihq/core@0.1.1`:
+HEAD is exactly `6130dd837b8e8bd41e999fb40733e0e460e69720`. Its manifest still
+identifies as `@aihq/core@0.1.1`, but this is an unpublished post-`0.1.1` Core
+source candidate. Public `@aihq/core@0.1.1` and immutable tag `v-core-0.1.1`
+come from `26ecc6686eef560cdee86c5ae1fccb2927e5a10c` and cannot reproduce this
+updated Workbench proof:
 
 ```sh
 AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
   npm run verify:cold-core-evidence
 ```
 
-The proof builds and packs exact `@aihq/core@0.1.1`, packs
-the `@aihq/scan@0.1.3` source candidate, installs both tarballs in
+The proof builds and packs that exact Core source candidate, packs the
+`@aihq/scan@0.1.3` source candidate, installs both tarballs in
 disposable roots, captures a catalog-absent organization detector through the
 registered adapter boundary, signs and independently verifies the resulting V2
 bundle, projects the evidence, validates the exact packaged Core schema, and
@@ -438,6 +441,10 @@ honestly at `observation-missing` without an effect. The deterministic runner,
 generated organization-class key, and generated policy are disposable test
 mechanics—not human approval, public attestation, production authority, or a
 production effect.
+
+Public clean-machine reproduction requires separately authorized releases of
+the exact updated Core and Scanner candidates. Source and CI evidence do not
+substitute for those releases.
 
 Never run AIH product behavior against this repository checkout. Tests exercise
 scanner behavior only against disposable fixture roots.
