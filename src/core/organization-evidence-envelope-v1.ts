@@ -142,3 +142,13 @@ export function canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(
   if (bytes === undefined) fail("projected envelope custody");
   return Buffer.from(bytes);
 }
+
+/** Returns the exact domain-separated digest Core binds in an organization-qualified decision. */
+export function coreOrganizationEvidenceEnvelopeDigestV1(
+  value: CoreOrganizationEvidenceEnvelopeV1,
+): string {
+  return `sha256:${createHash("sha256")
+    .update("aih-organization-evidence/v1\0", "utf8")
+    .update(canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(value))
+    .digest("hex")}`;
+}

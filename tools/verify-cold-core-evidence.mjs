@@ -417,6 +417,7 @@ try {
     fail(`packed Scanner mechanics setup: ${(setup.stderr || setup.stdout).trim()}`);
   const scannerCli = join(consumer, "node_modules", "@aihq", "scan", "dist", "cli.js");
   const mechanics = JSON.parse(readFileSync(join(consumer, "mechanics.json"), "utf8"));
+  let projection;
   for (const args of [
     ["sign", "--bundle", "bundle", "--signer", "signer.json", "--private-key", "signer.pem", "--claims", "claims.json", "--output", "evidence.json"],
     ["verify", "--evidence", "evidence.json", "--bundle", "bundle", "--roots", "roots.json", "--expected", "expected.json"],
@@ -424,11 +425,17 @@ try {
   ]) {
     const result = runNode(scannerCli, args, consumer);
     if (result.status !== 0) fail("packed Scanner CLI mechanics");
+    if (args[0] === "project-core-evidence") projection = JSON.parse(result.stdout);
   }
   const evidenceBytes = readFileSync(join(consumer, "core-evidence.json"));
   const schemaBytes = readFileSync(consumerRequire.resolve(`@aihq/core/${CORE_SCHEMA_PATH}`));
   if (sha256(schemaBytes) !== CORE_SCHEMA_SHA256) fail("packed Core schema digest");
   const evidenceDigest = exactSchemaCompatible(evidenceBytes, schemaBytes);
+  if (
+    projection?.envelopeSha256 !== `sha256:${sha256(evidenceBytes)}` ||
+    projection?.organizationEvidenceDigest !== evidenceDigest
+  )
+    fail("packed Scanner Core digest handoff");
   const evidence = JSON.parse(evidenceBytes.toString("utf8"));
   writeFileSync(join(target, "evidence.json"), evidenceBytes, { mode: 0o600 });
   const coreCli = join(consumer, "node_modules", "@aihq", "core", "dist", "cli.js");

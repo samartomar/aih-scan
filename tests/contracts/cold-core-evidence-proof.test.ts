@@ -43,11 +43,12 @@ describe("packed Core evidence proof", () => {
     expect(source).toContain("aih-policy-bundle.json");
   });
 
-  it("distinguishes the exact Core source lock from the older public 0.1.1 release", () => {
+  it("distinguishes the exact Core compatibility lock from public Core 0.2.0", () => {
     for (const path of ["README.md", "ai-coding/project.md"]) {
       const documentation = read(path);
-      expect(documentation).toContain("26ecc6686eef560cdee86c5ae1fccb2927e5a10c");
-      expect(documentation).toMatch(/unpublished post-`0\.1\.1` Core\s+source candidate/u);
+      expect(documentation).toContain("6130dd837b8e8bd41e999fb40733e0e460e69720");
+      expect(documentation).toContain("0d63a9853bd51072a5108eee21013d5fb8a8472b");
+      expect(documentation).toMatch(/post-`0\.1\.1` compatibility fixture/u);
     }
   });
 });
