@@ -17,6 +17,7 @@ import { dockerRunner } from "./cli/docker-runner.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
   canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
+  coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "./core/organization-evidence-envelope-v1.js";
 import {
@@ -29,6 +30,8 @@ import { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation
 import { captureRegisteredDetectorCandidateV2 } from "./registration/capture-registered-detector-v2.js";
 
 const maxInputBytes = 2 * 1024 * 1024;
+const projectCoreEvidenceUsage =
+  "Usage: aih-scan project-core-evidence --evidence <file> --bundle <directory> --roots <file> --expected <file> --subject-digest <sha256:...> --output <new-file> [--seen <file>]\n";
 function fail(message: string): never {
   throw new TypeError(`aih-scan: ${message}`);
 }
@@ -286,6 +289,7 @@ function projectCoreEvidence(args: readonly string[]): void {
     `${canonicalStrictJsonBytesV1({
       outcome: "projected",
       envelopeSha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      organizationEvidenceDigest: coreOrganizationEvidenceEnvelopeDigestV1(envelope),
     }).toString("utf8")}\n`,
   );
 }
@@ -399,7 +403,13 @@ async function main(): Promise<void> {
     verify(args);
     return;
   }
-  if (command === "project-core-evidence") return projectCoreEvidence(args);
+  if (command === "project-core-evidence") {
+    if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+      process.stdout.write(projectCoreEvidenceUsage);
+      return;
+    }
+    return projectCoreEvidence(args);
+  }
   if (command === "capture") return capture(args);
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {

@@ -15,23 +15,26 @@ load organization code into the Scanner process or grant governance authority.
 
 ## Status
 
-The `0.1.3` source candidate contains the V2 library, `aih-scan` CLI, strict
+The public `@aihq/scan@0.1.3` release contains the V2 library, `aih-scan` CLI, strict
 detector-registration grammar, detached bundle format, Ed25519 DSSE signing,
 Linux `amd64` OCI CI chain, and Core organization-evidence projection. Its
 deterministic projected attestor fits the existing Decision V2 stable-identifier
 grammar, so Core's Workbench can bind the evidence without raw JSON authoring.
 Projection is evidence transport only; it does not qualify, approve, admit,
-observe, or activate a subject. Source `0.1.3` is not public until a separately
-authorized exact-SHA release succeeds.
-Exact `@aihq/scan@0.1.2` is public from immutable tag `v-scan-0.1.2` and source
-`762a4316070b45c04d9143d2f9f5c43b74f604a6`. The registry exposes signatures
-and npm provenance. Independent verification matched the registry and
-five-asset GitHub Release tarballs at SHA-256
-`9114ef3998d7f5b2a29943a885d251370cdef9f57f5092cbd8fe7f97aa58aa6a`,
+observe, or activate a subject. Exact `@aihq/scan@0.1.3` is public from immutable
+tag `v-scan-0.1.3` and source `bb992f95332740a6708a6248b2002a64f261fa27`.
+The registry exposes signatures and npm provenance. Independent verification
+matched the registry and five-asset GitHub Release tarballs at SHA-256
+`f540af5a5783e095c6e5ff990185456db1c2a46c95b269f76c0a313eeebb93bf`,
 verified the exact-tag GitHub attestation, installed the registry package in a
 disposable root, and passed `aih-scan --help`. Source state alone never proves
 publication; the live checks below establish custody. Public package custody is
 not organization evidence custody.
+
+Current `main` also contains unreleased fixes for per-command help and the Core
+qualification-digest handoff. Those fixes are not present in immutable public
+`@aihq/scan@0.1.3`; they require a separately reviewed, versioned, and authorized
+future release before administrators can rely on them from npm.
 
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
@@ -79,7 +82,7 @@ one leg fails; after publication every leg must succeed. Source never decides
 the result:
 
 ```sh
-version=0.1.2
+version=0.1.3
 npm view "@aihq/scan@$version" name version dist --json
 npm install --save-exact "@aihq/scan@$version"
 npm audit signatures
@@ -102,7 +105,7 @@ tarball is not publication evidence. Exact `0.1.1` required a bounded recovery
 after npm publication, so its checksum bundle has the historical
 `recover-v-scan-0.1.1.yml@refs/heads/main` identity while its provenance bundle
 remains the original tag-run build attestation. Do not use that recovery
-identity for a normal `0.1.2` release or describe either signature as the other.
+identity for a normal `0.1.3` release or describe either signature as the other.
 
 ## Evidence flow
 
@@ -327,6 +330,10 @@ npx aih-scan project-core-evidence \
   --output /path/to/new-core-evidence.json
 ```
 
+An unreleased source candidate packed and installed into a disposable root exposes
+the same command surface through `aih-scan project-core-evidence --help`. Public
+`@aihq/scan@0.1.3` does not yet contain that per-command help fix.
+
 `--seen` is optional; all other options are required exactly once. The command
 repeats the complete V2 verification before writing anything. It accepts only
 an organization-class signer and a successful scan, and it refuses an existing
@@ -339,10 +346,13 @@ digest to the verified evidence, candidate, payload, source-seal, and annex
 identities, but it neither derives the Core subject nor decides whether the
 organization should associate that evidence with it. The output validity comes
 only from the signed scan claims. Its deterministic attestor binds the verified
-organization signer identity and key id. Stdout reports only that evidence was
-written and its digest; the must-not-exist output file is the evidence handoff.
-The caller must preserve its custody until a separate authorized Core decision
-binds the exact envelope digest.
+organization signer identity and key id. The unreleased candidate stdout reports
+`envelopeSha256`, the raw output-file hash, and `organizationEvidenceDigest`, Core's domain-separated
+qualification digest. Enter `organizationEvidenceDigest`—not
+`envelopeSha256`—in Policy Workbench's organization-evidence digest field. The
+must-not-exist output file is the evidence handoff, and the caller must preserve
+its custody until a separate authorized Core decision binds that exact
+qualification digest.
 
 Core still requires exact organization authority and an exact decision before
 the envelope can qualify anything. The default Enterprise path is the protected
@@ -392,7 +402,7 @@ expected claims through an independent trusted process.
 - The package emits evidence facts only. It does not provide catalog promotion,
   organization approval, installation, runtime/effect projection, revocation
   custody, or publication authority.
-- Exact public `0.1.2` has an immutable tag, npm registry signatures and
+- Exact public `0.1.3` has an immutable tag, npm registry signatures and
   provenance, a verified five-asset Release, a passing disposable install, and
   an independently observed least-privilege Trusted Publisher. The protected
   environment is tag-only and secret-free, bypass tokens are disallowed, and
@@ -415,21 +425,22 @@ npm audit --omit=dev
 git diff --check
 ```
 
-The packed prepublication proof additionally requires
+The packed compatibility proof additionally requires
 `AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
 HEAD is exactly `6130dd837b8e8bd41e999fb40733e0e460e69720`. Its manifest still
-identifies as `@aihq/core@0.1.1`, but this is an unpublished post-`0.1.1` Core
-source candidate. Public `@aihq/core@0.1.1` and immutable tag `v-core-0.1.1`
-come from `26ecc6686eef560cdee86c5ae1fccb2927e5a10c` and cannot reproduce this
-updated Workbench proof:
+identifies as `@aihq/core@0.1.1`, but it is a post-`0.1.1` compatibility fixture
+rather than the public package. Public `@aihq/core@0.2.0` and immutable tag
+`v-core-0.2.0` carry the released Workbench handoff from later source
+`0d63a9853bd51072a5108eee21013d5fb8a8472b`; the cold lock preserves the exact
+schema bytes Scanner targets:
 
 ```sh
 AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
   npm run verify:cold-core-evidence
 ```
 
-The proof builds and packs that exact Core source candidate, packs the
-`@aihq/scan@0.1.3` source candidate, installs both tarballs in
+The proof builds and packs that exact locked Core source, packs the
+`@aihq/scan@0.1.3` source, installs both tarballs in
 disposable roots, captures a catalog-absent organization detector through the
 registered adapter boundary, signs and independently verifies the resulting V2
 bundle, projects the evidence, validates the exact packaged Core schema, and
@@ -442,9 +453,10 @@ generated organization-class key, and generated policy are disposable test
 mechanics—not human approval, public attestation, production authority, or a
 production effect.
 
-Public clean-machine reproduction requires separately authorized releases of
-the exact updated Core and Scanner candidates. Source and CI evidence do not
-substitute for those releases.
+The completed public clean-machine acceptance used `@aihq/core@0.2.0` and
+`@aihq/scan@0.1.3` from npm in a disposable installed root. The help and digest
+fixes above are later source changes and are not part of those immutable package
+bytes. Source and CI evidence do not substitute for a future release.
 
 Never run AIH product behavior against this repository checkout. Tests exercise
 scanner behavior only against disposable fixture roots.

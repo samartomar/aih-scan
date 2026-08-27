@@ -223,7 +223,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("npm trust list @aihq/scan");
     expect(releasing).toContain("full-SHA publication authorization");
     expect(releasing).toContain("GitHub bootstrap secret is absent");
-    expect(releasing).toContain("Exact `@aihq/scan@0.1.2` is public");
+    expect(releasing).toContain("Exact `@aihq/scan@0.1.3` is public");
     expect(releasing).toContain("old bootstrap token is revoked");
     expect(releasing).toContain("allows only `npm publish`");
     expect(releasing).not.toContain("Future Scanner tags remain blocked");
@@ -240,16 +240,16 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
     const readme = read("README.md");
-    expect(readme).toContain("Exact `@aihq/scan@0.1.2` is public");
-    expect(readme).toContain("version=0.1.2");
+    expect(readme).toContain("Exact `@aihq/scan@0.1.3` is public");
+    expect(readme).toContain("version=0.1.3");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
     expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("without executing Scanner package code");
-    expect(readme).toContain("Exact `@aihq/scan@0.1.2` is public");
-    expect(readme).toContain("`9114ef3998d7f5b2a29943a885d251370cdef9f57f5092cbd8fe7f97aa58aa6a`");
+    expect(readme).toContain("Exact `@aihq/scan@0.1.3` is public");
+    expect(readme).toContain("`f540af5a5783e095c6e5ff990185456db1c2a46c95b269f76c0a313eeebb93bf`");
     expect(readme).toContain("allows only `npm publish`");
     expect(readme).toContain("old bootstrap token is revoked");
     expect(readme).not.toContain(
@@ -267,7 +267,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("is no longer present on `main`");
 
     const project = read("ai-coding/project.md");
-    expect(project).toContain("Exact `@aihq/scan@0.1.2` is public");
+    expect(project).toContain("Exact `@aihq/scan@0.1.3` is public");
     expect(project).toMatch(/old bootstrap token is\s+revoked/u);
     expect(project).not.toContain("custody baseline observed while preparing source `0.1.2`");
     expect(project).not.toContain("establish whether `0.1.2` is public");

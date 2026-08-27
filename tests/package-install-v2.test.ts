@@ -491,6 +491,9 @@ describe("published V2 package installation", () => {
       "ERR_PACKAGE_PATH_NOT_EXPORTED",
     ]);
     expect(runInstalledBin(directory, ["--help"])).not.toMatch(/v1/i);
+    expect(runInstalledBin(directory, ["project-core-evidence", "--help"])).toContain(
+      "Usage: aih-scan project-core-evidence",
+    );
 
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
@@ -614,10 +617,17 @@ describe("published V2 package installation", () => {
     const projected = JSON.parse(runInstalledBin(directory, projectionArgs)) as {
       outcome?: unknown;
       envelopeSha256?: unknown;
+      organizationEvidenceDigest?: unknown;
     };
     expect(projected).toMatchObject({ outcome: "projected" });
     expect(projected.envelopeSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
     const coreEvidenceBytes = readFileSync(join(directory, "core-evidence.json"));
+    expect(projected.organizationEvidenceDigest).toBe(
+      `sha256:${sha256(
+        Buffer.concat([Buffer.from("aih-organization-evidence/v1\0", "utf8"), coreEvidenceBytes]),
+      )}`,
+    );
+    expect(projected.organizationEvidenceDigest).not.toBe(projected.envelopeSha256);
     const coreEvidence = JSON.parse(coreEvidenceBytes.toString("utf8")) as {
       subjectDigest?: unknown;
       evidence?: { summary?: unknown; payloadDigest?: unknown; artifactDigests?: unknown };
