@@ -74,14 +74,15 @@ function prefixed(value: string): string {
 }
 function deterministicAttestor(verified: VerifiedScanAttestationV2): string {
   const signer = verified.facts.signer;
-  return `scanner:${createHash("sha256")
+  const digest = createHash("sha256")
     .update(
       canonicalStrictJsonBytesV1({
         domain: "aih.scan-to-core-organization-evidence-v1.attestor",
         signer: { identity: signer.identity, class: signer.class, keyId: signer.keyId },
       }),
     )
-    .digest("hex")}`;
+    .digest("hex");
+  return `scanner-${digest.slice(0, 56)}`;
 }
 function artifactDigests(verified: VerifiedScanAttestationV2): string[] {
   const facts = verified.facts;

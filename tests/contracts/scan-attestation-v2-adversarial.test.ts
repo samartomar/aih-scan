@@ -131,7 +131,7 @@ const candidate = () => {
   return createScanCandidateV2({
     protocol: "ScanCandidateV2",
     coreContract: {
-      commit: "aa93128ff56b3ed978ec428e29d1b1ce8036e53b",
+      commit: "6130dd837b8e8bd41e999fb40733e0e460e69720",
       decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
     },
     subject: { name: "source-tree", digest: { sha256: seal().sourceTreeSha256 } },

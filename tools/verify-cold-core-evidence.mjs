@@ -16,19 +16,20 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { authorProtectedPolicyViaPackedWorkbench } from "./lib/author-protected-policy-via-workbench.mjs";
 
-const CORE_COMMIT = "aa93128ff56b3ed978ec428e29d1b1ce8036e53b";
+const CORE_COMMIT = "6130dd837b8e8bd41e999fb40733e0e460e69720";
 const CORE_PACKAGE = {
   name: "@aihq/core",
-  version: "0.1.0",
-  filename: "aihq-core-0.1.0.tgz",
-  sha256: "af64feda4e3e57808e1a262e15a5cb8f41581f77e8f9b49eb9b459317b803ecd",
+  version: "0.1.1",
+  filename: "aihq-core-0.1.1.tgz",
+  sha256: "f7bee7a2f8f3725f7aa54d47c4271b9848783380396bdea835a4ed96614f61fa",
 };
 const SCANNER_PACKAGE = {
   name: "@aihq/scan",
-  version: "0.1.2",
-  filename: "aihq-scan-0.1.2.tgz",
+  version: "0.1.3",
+  filename: "aihq-scan-0.1.3.tgz",
 };
 const CORE_SCHEMA_SHA256 = "88c0a36e9177201660e773351958d89059c7d5b54e1c437d0afd06f48c5288bc";
 const CORE_SCHEMA_PATH = "schemas/aih-organization-evidence-envelope-v1.schema.json";
@@ -83,6 +84,13 @@ function runNode(script, args, cwd, environment = process.env) {
     stderr: typeof result.stderr === "string" ? result.stderr : "",
     error: result.error,
   };
+}
+function authorityEnvironment(extra = {}) {
+  const environment = { ...process.env };
+  delete environment.AIH_ORG_POLICY;
+  delete environment.AIH_POLICY_AUTHORITY_REPOSITORY;
+  delete environment.AIH_POLICY_AUTHORITY_WORKFLOW;
+  return { ...environment, ...extra };
 }
 function exactCleanCoreRoot() {
   const supplied = process.env.AIH_SCAN_CORE_SOURCE;
@@ -279,19 +287,23 @@ scan.writeScanCaptureBundleV2({ outputDirectory: "bundle", ...captured });
 const keyPair = generateKeyPairSync("ed25519");
 const keyId = "ed25519:" + hash(keyPair.publicKey.export({ format: "der", type: "spki" }));
 const signer = { identity: "test-mechanics.organization", class: "organization", keyId };
+const signedAt = new Date();
+signedAt.setMilliseconds(0);
+const signedAtIso = signedAt.toISOString();
+const expiresAtIso = new Date(signedAt.getTime() + 60 * 60 * 1000).toISOString();
 const claims = {
   repository: "test-mechanics/aih-scan", workflow: ".github/workflows/mechanics.yml", issuer: "https://test.invalid/mechanics",
   sourceRef: "refs/heads/mechanics", commit: "1111111111111111111111111111111111111111", environment: "test-mechanics", runId: "1", runAttempt: 1,
-  signedAt: "2026-08-24T00:00:00.000Z", expiresAt: "2026-08-24T01:00:00.000Z",
+  signedAt: signedAtIso, expiresAt: expiresAtIso,
 };
-const expected = { ...claims, now: "2026-08-24T00:30:00.000Z", subjectSha256: candidate.subject.digest.sha256, signer };
+const expected = { ...claims, now: signedAtIso, subjectSha256: candidate.subject.digest.sha256, signer };
 writeFileSync("signer.json", canonical(signer), { mode: 0o600 });
 writeFileSync("claims.json", canonical(claims), { mode: 0o600 });
 writeFileSync("roots.json", canonical({ roots: [{ ...signer, publicKeySpkiBase64: Buffer.from(keyPair.publicKey.export({ format: "der", type: "spki" })).toString("base64") }] }), { mode: 0o600 });
 writeFileSync("expected.json", canonical(expected), { mode: 0o600 });
 writeFileSync("signer.pem", keyPair.privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600 });
 chmodSync("signer.pem", 0o600);
-writeFileSync("mechanics.json", canonical({ subjectDigest: "sha256:" + hash("Core mechanics subject"), signerClass: signer.class, label: "non-public-test-mechanics-only" }), { mode: 0o600 });
+writeFileSync("mechanics.json", canonical({ signedAt: signedAtIso, expiresAt: expiresAtIso, signerClass: signer.class, label: "non-public-test-mechanics-only" }), { mode: 0o600 });
 `,
     { mode: 0o600 },
   );
@@ -356,9 +368,11 @@ try {
   const packs = join(temporaryRoot, "packs");
   const consumer = join(temporaryRoot, "consumer");
   const target = join(temporaryRoot, "target");
+  const administrator = join(temporaryRoot, "administrator");
   mkdirSync(packs, { recursive: true, mode: 0o700 });
   mkdirSync(consumer, { recursive: true, mode: 0o700 });
   mkdirSync(target, { recursive: true, mode: 0o700 });
+  mkdirSync(administrator, { recursive: true, mode: 0o700 });
   runNpm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"], coreRoot);
   runNpm(["run", "build"], coreRoot);
   exactCleanCoreRoot();
@@ -368,17 +382,45 @@ try {
   writeFileSync(join(consumer, "package.json"), '{"private":true}', { mode: 0o600 });
   runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", coreTarball, scannerTarball], consumer);
   const consumerRequire = createRequire(join(consumer, "package.json"));
-  packageIdentity(join(consumer, "node_modules", "@aihq", "core"), CORE_PACKAGE);
+  const installedCore = join(consumer, "node_modules", "@aihq", "core");
+  packageIdentity(installedCore, CORE_PACKAGE);
   packageIdentity(join(consumer, "node_modules", "@aihq", "scan"), SCANNER_PACKAGE);
+  const corePublic = await import(pathToFileURL(join(installedCore, "dist", "index.js")).href);
+  for (const helper of [
+    "governanceDecisionDigestV2",
+    "governanceDecisionSourceDigestV2",
+    "governanceDecisionSubjectDigestV2",
+    "parsePolicyBundle",
+  ])
+    if (typeof corePublic[helper] !== "function") fail(`packed Core public helper: ${helper}`);
+  const governedSource = {
+    type: "github",
+    repository: "example-invalid/catalog-absent-scanner-subject",
+    commit: "2".repeat(40),
+    path: "skills/custom",
+  };
+  const sourceDigest = corePublic.governanceDecisionSourceDigestV2(governedSource);
+  const governedSubject = {
+    kind: "skill",
+    id: "catalog-absent-scanner-subject",
+    source: governedSource,
+    sourceDigest,
+    subjectDigest: corePublic.governanceDecisionSubjectDigestV2({
+      kind: "skill",
+      id: "catalog-absent-scanner-subject",
+      sourceDigest,
+    }),
+  };
   writeMechanicsSetup(join(consumer, "setup.mjs"));
   const setup = runNode("setup.mjs", [], consumer);
   if (setup.status !== 0)
     fail(`packed Scanner mechanics setup: ${(setup.stderr || setup.stdout).trim()}`);
   const scannerCli = join(consumer, "node_modules", "@aihq", "scan", "dist", "cli.js");
+  const mechanics = JSON.parse(readFileSync(join(consumer, "mechanics.json"), "utf8"));
   for (const args of [
     ["sign", "--bundle", "bundle", "--signer", "signer.json", "--private-key", "signer.pem", "--claims", "claims.json", "--output", "evidence.json"],
     ["verify", "--evidence", "evidence.json", "--bundle", "bundle", "--roots", "roots.json", "--expected", "expected.json"],
-    ["project-core-evidence", "--evidence", "evidence.json", "--bundle", "bundle", "--roots", "roots.json", "--expected", "expected.json", "--subject-digest", JSON.parse(readFileSync(join(consumer, "mechanics.json"), "utf8")).subjectDigest, "--output", "core-evidence.json"],
+    ["project-core-evidence", "--evidence", "evidence.json", "--bundle", "bundle", "--roots", "roots.json", "--expected", "expected.json", "--subject-digest", governedSubject.subjectDigest, "--output", "core-evidence.json"],
   ]) {
     const result = runNode(scannerCli, args, consumer);
     if (result.status !== 0) fail("packed Scanner CLI mechanics");
@@ -387,35 +429,110 @@ try {
   const schemaBytes = readFileSync(consumerRequire.resolve(`@aihq/core/${CORE_SCHEMA_PATH}`));
   if (sha256(schemaBytes) !== CORE_SCHEMA_SHA256) fail("packed Core schema digest");
   const evidenceDigest = exactSchemaCompatible(evidenceBytes, schemaBytes);
+  const evidence = JSON.parse(evidenceBytes.toString("utf8"));
   writeFileSync(join(target, "evidence.json"), evidenceBytes, { mode: 0o600 });
   const coreCli = join(consumer, "node_modules", "@aihq", "core", "dist", "cli.js");
-  const resolver = runNode(
+  const workbenchPath = join(administrator, "aih-policy-workbench.html");
+  const generated = runNode(
     coreCli,
-    [
-      "policy", "resolve", target, "--json", "--decision", "decision-test-mechanics",
-      "--decision-digest", `sha256:${"0".repeat(64)}`, "--target", "claude", "--effect", "configure", "--evidence", "evidence.json",
-    ],
-    consumer,
-    { ...process.env, AIH_POLICY_AUTHORITY_REPOSITORY: undefined, AIH_POLICY_AUTHORITY_WORKFLOW: undefined },
+    ["policy", "generate", "--apply", "--out", workbenchPath],
+    administrator,
+    authorityEnvironment(),
   );
-  if (resolver.status !== 1) fail("packed Core resolver must refuse without authority");
-  let output;
-  try {
-    output = JSON.parse(resolver.stdout);
-  } catch {
-    fail("packed Core resolver JSON");
-  }
-  const result = output?.digests?.[0]?.data;
-  if (result?.reason !== "authority-unverified" || result?.outcome !== "refused")
+  if (generated.status !== 0 || !existsSync(workbenchPath)) fail("packed Core workbench generation");
+  const policyPath = join(administrator, "aih-policy-bundle.json");
+  const decisionId = "decision-catalog-absent-scanner-subject";
+  const bundle = await authorProtectedPolicyViaPackedWorkbench({
+    htmlPath: workbenchPath,
+    outputPath: policyPath,
+    authorityFields: {
+      "protected-bundle-version": "test-mechanics-1",
+      "protected-expires-at": mechanics.expiresAt,
+      "protected-issued-at": mechanics.signedAt,
+      "protected-issuer": "test-mechanics-platform-security",
+      "protected-issuer-repository": "example-invalid/administrator-policy",
+    },
+    decisions: [
+      {
+        "protected-actor": "test-mechanics-administrator",
+        "protected-attestor": evidence.attestor,
+        "protected-control-digest": `sha256:${sha256("test mechanics control")}`,
+        "protected-control-id": "test-mechanics-review-control",
+        "protected-decision-id": decisionId,
+        "protected-effects": "configure",
+        "protected-evidence-digest": evidenceDigest,
+        "protected-evidence-id": evidence.evidence.id,
+        "protected-kind": governedSubject.kind,
+        "protected-policy-digest": `sha256:${sha256("test mechanics policy")}`,
+        "protected-policy-id": "test-mechanics-policy",
+        "protected-policy-version": "1",
+        "protected-reason": "Disposable proof of the protected-file Scanner evidence handoff.",
+        "protected-source-commit": governedSource.commit,
+        "protected-source-path": governedSource.path,
+        "protected-source-repository": governedSource.repository,
+        "protected-source-type": governedSource.type,
+        "protected-subject-id": governedSubject.id,
+        "protected-targets": "claude",
+      },
+    ],
+  });
+  const parsedBundle = corePublic.parsePolicyBundle(bundle);
+  if (!parsedBundle.ok) fail("packed Workbench policy bundle parser");
+  const decision = bundle.authorityReceipt.decisions.find((item) => item.id === decisionId);
+  if (decision === undefined || decision.subject.subjectDigest !== governedSubject.subjectDigest)
+    fail("packed Workbench decision identity");
+  const decisionDigest = corePublic.governanceDecisionDigestV2(decision);
+  const resolverArgs = [
+    "policy", "resolve", target, "--json", "--decision", decisionId,
+    "--decision-digest", decisionDigest, "--target", "claude", "--effect", "configure", "--evidence", "evidence.json",
+  ];
+  const parseResolver = (execution, label) => {
+    let output;
+    try {
+      output = JSON.parse(execution.stdout);
+    } catch {
+      fail(`packed Core resolver JSON: ${label}`);
+    }
+    return output?.digests?.[0]?.data;
+  };
+  const unauthorized = runNode(coreCli, resolverArgs, consumer, authorityEnvironment());
+  if (unauthorized.status !== 1) fail("packed Core resolver must refuse without authority");
+  const unauthorizedResult = parseResolver(unauthorized, "unauthorized");
+  if (
+    unauthorizedResult?.reason !== "authority-unverified" ||
+    unauthorizedResult?.outcome !== "refused"
+  )
     fail("packed Core resolver authority refusal");
+  const authorized = runNode(
+    coreCli,
+    resolverArgs,
+    consumer,
+    authorityEnvironment({ AIH_ORG_POLICY: policyPath }),
+  );
+  if (authorized.status !== 1) fail("packed Core read-only resolver terminal status");
+  const authorizedResult = parseResolver(authorized, "protected-file");
+  if (
+    authorizedResult?.authority !== "verified" ||
+    authorizedResult?.qualification !== "organization-qualified" ||
+    authorizedResult?.outcome !== "partial" ||
+    authorizedResult?.reason !== "observation-missing"
+  )
+    fail("packed Core protected-file evidence acceptance");
   process.stdout.write(`${JSON.stringify({
     status: "PASS",
     coreCommit: CORE_COMMIT,
     evidenceDigest,
     schemaCompatible: true,
-    resolver: { outcome: "refused", reason: "authority-unverified" },
-    limitation: "Core 0.1.0 has no exported organization-evidence parser; without genuine V3 authority the resolver does not reach qualification parsing. This proves schema compatibility and fail-closed refusal only.",
-    mechanics: "The generated key and organization-class signer are non-public test mechanics only; they are not organization authority, qualification, or a production effect.",
+    workbenchGenerated: true,
+    unauthorized: { outcome: "refused", reason: "authority-unverified" },
+    resolver: {
+      authority: "verified",
+      qualification: "organization-qualified",
+      outcome: "partial",
+      reason: "observation-missing",
+    },
+    limitation: "The packed Core resolver accepted the exact Scanner evidence under the Workbench-generated protected policy file. It intentionally performs no observation or effect.",
+    mechanics: "The generated Scanner key, organization-class signer, and protected policy are disposable test mechanics only; they are not human approval, public attestation, production authority, or a production effect.",
   })}\n`);
 } finally {
   if (basename(temporaryRoot).startsWith("aih-cold-core-evidence-"))
