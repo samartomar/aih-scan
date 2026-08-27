@@ -26,15 +26,13 @@ paths. Scanner facts never decide qualification, finding disposition, approval,
 installation, runtime/effect projection, or adoption. SBOM/provenance annexes remain
 `digest-bound-unverified`, broker enforcement remains `unverified`, and signing
 claims are signer-asserted with no OIDC provenance. The GitHub remote is public.
-Exact `@aihq/scan@0.1.3` is public from immutable tag `v-scan-0.1.3` with npm
+Exact `@aihq/scan@0.1.4` is public from immutable tag `v-scan-0.1.4` with npm
 signatures/provenance, a verified five-asset GitHub Release, matching tarball
 custody, and a passing disposable install/help proof. The protected environment
 is tag-only and secret-free; the least-privilege Trusted Publisher allows only
 `npm publish`, bypass tokens are disallowed, and the old bootstrap token is
 revoked. Source state alone never establishes publication or organization
-evidence custody. Source `0.1.4` is an unpublished patch candidate for the
-per-command help and Core qualification-digest handoff fixes. The Core lock is
-a post-`0.1.1` compatibility fixture whose
+evidence custody. The Core lock is a post-`0.1.1` compatibility fixture whose
 manifest predates public `@aihq/core@0.2.0`; the released Core Workbench handoff
 comes from immutable `v-core-0.2.0` at
 `0d63a9853bd51072a5108eee21013d5fb8a8472b`, while Scanner preserves the exact
