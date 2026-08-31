@@ -155,12 +155,24 @@ function scrubEnvironment(env: Readonly<NodeJS.ProcessEnv>): Record<string, stri
   return result;
 }
 
+function encodeDiagnosticLine(value: string): string {
+  const jsonEscaped = JSON.stringify(value).slice(1, -1);
+  return Array.from(jsonEscaped, (character) => {
+    const code = character.codePointAt(0) ?? 0;
+    const unsafe =
+      (code >= 0x80 && code <= 0x9f) ||
+      code === 0x61c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x2028 && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069);
+    return unsafe ? `\\u${code.toString(16).padStart(4, "0")}` : character;
+  }).join("");
+}
+
 function resultFailure(result: ProcessRunnerResult, label: string): never {
   const rawDetail = (result.stderr || result.stdout).trim();
-  const encodedDetail = JSON.stringify(rawDetail)
-    .slice(1, -1)
-    .replaceAll("\u2028", "\\u2028")
-    .replaceAll("\u2029", "\\u2029");
+  const encodedDetail = encodeDiagnosticLine(rawDetail);
   let detail = encodedDetail;
   if (encodedDetail.length > maxFailureDetailCharacters) {
     const marker = "\\n… middle omitted …\\n";

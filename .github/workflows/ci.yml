@@ -104,6 +104,28 @@ jobs:
               if (result.mediaType !== "application/sarif+json" || result.bytes.byteLength === 0)
                 throw new Error(`${analyzer} sandbox probe emitted no SARIF`);
             }
+            mkdirSync(join(sourceRoot, "skills", "broken"), { recursive: true });
+            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
+            let rejectedPartialCoverage = false;
+            try {
+              await execute({
+                analyzer: "cisco",
+                sourceRoot,
+                source: {
+                  id: "python-sandbox-partial-coverage-probe",
+                  owner: "aih",
+                  repository: "scanner-ci-fixture",
+                  pinnedCommit: "a".repeat(40),
+                  treeSha256: "b".repeat(64),
+                },
+              });
+            } catch (error) {
+              if (!(error instanceof TypeError) || !error.message.includes("skipped 1 skill"))
+                throw error;
+              rejectedPartialCoverage = true;
+            }
+            if (!rejectedPartialCoverage)
+              throw new Error("Cisco sandbox probe accepted partial skill coverage");
           } finally {
             rmSync(sourceRoot, { recursive: true, force: true });
           }

@@ -28,8 +28,8 @@ const CORE_PACKAGE = {
 };
 const SCANNER_PACKAGE = {
   name: "@aihq/scan",
-  version: "0.2.4",
-  filename: "aihq-scan-0.2.4.tgz",
+  version: "0.2.5",
+  filename: "aihq-scan-0.2.5.tgz",
 };
 const CORE_SCHEMA_SHA256 = "88c0a36e9177201660e773351958d89059c7d5b54e1c437d0afd06f48c5288bc";
 const CORE_SCHEMA_PATH = "schemas/aih-organization-evidence-envelope-v1.schema.json";
