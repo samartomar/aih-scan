@@ -226,6 +226,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("Exact `@aihq/scan@0.2.0` is public");
     expect(releasing).not.toContain("`@aihq/scan@0.1.4` as a patch candidate");
     expect(releasing).not.toContain("`@aihq/scan@0.2.0` as a minor candidate");
+    expect(releasing).toContain("`@aihq/scan@0.2.1` as a patch candidate");
     expect(releasing).toContain("old bootstrap token is revoked");
     expect(releasing).toContain("allows only `npm publish`");
     expect(releasing).not.toContain("Future Scanner tags remain blocked");
@@ -245,8 +246,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).toContain("Exact `@aihq/scan@0.2.0` is public");
     expect(readme).not.toContain("`@aihq/scan@0.1.4` source candidate");
     expect(readme).not.toContain("`@aihq/scan@0.2.0` source candidate");
-    expect(readme).not.toContain("is not public until");
-    expect(readme).not.toContain("the public release remains");
+    expect(readme).toContain("`@aihq/scan@0.2.1` source candidate");
+    expect(readme).toContain("is not public until");
+    expect(readme).toContain("the public release remains");
     expect(readme).toContain("version=0.2.0");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
@@ -274,13 +276,14 @@ describe("@aihq/scan release boundary (#12)", () => {
 
     const project = read("ai-coding/project.md");
     expect(project).toContain("Exact `@aihq/scan@0.2.0` is public");
+    expect(project).toContain("Source `0.2.1` is an unpublished patch candidate");
     expect(project).toMatch(/old bootstrap token is\s+revoked/u);
     expect(project).not.toContain("custody baseline observed while preparing source `0.1.2`");
     expect(project).not.toContain("establish whether `0.1.2` is public");
     expect(project).not.toContain("before future release custody is treated as unblocked");
 
     const router = read("ai-coding/RULE_ROUTER.md");
-    expect(router).toContain("builds the `@aihq/scan@0.2.0` V2 API");
+    expect(router).toContain("builds the `@aihq/scan@0.2.1` V2 API");
   });
 
   it("packs the license, README, command, and library under the exact identity", () => {
@@ -300,8 +303,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     if (packed === undefined) throw new Error("npm pack produced no manifest");
     expect(packed).toMatchObject({
       name: "@aihq/scan",
-      version: "0.2.0",
-      filename: "aihq-scan-0.2.0.tgz",
+      version: "0.2.1",
+      filename: "aihq-scan-0.2.1.tgz",
     });
     const paths = packed.files.map(({ path }) => path);
     expect(paths).toContain("LICENSE");
