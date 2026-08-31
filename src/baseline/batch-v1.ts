@@ -9,13 +9,15 @@ import {
   mkdtempSync,
   openSync,
   readdirSync,
+  readlinkSync,
   readSync,
   rmSync,
   type Stats,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { z } from "zod";
 import {
   assertSafeRelativePosixPathV1,
@@ -401,16 +403,131 @@ function readBoundedSourceFile(path: string, beforePath: Stats): Buffer {
   }
 }
 
+type SafeAnalyzerSourceSymlink = Readonly<{
+  target: string;
+  targetType: "directory" | "file";
+}>;
+
+function inspectSafeAnalyzerSource(
+  sourceRoot: string,
+): ReadonlyMap<string, SafeAnalyzerSourceSymlink> {
+  const root = resolve(sourceRoot);
+  const rootStat = lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("baseline source directory shape");
+  const budget = { entries: 0, bytes: 0 };
+  const entries = new Map<string, "directory" | "file">();
+  const symlinks = new Map<string, string>();
+  const visit = (path: string): void => {
+    const stat = lstatSync(path);
+    budget.entries += 1;
+    if (budget.entries > maxSourceEntries) fail("baseline source entry bound");
+    if (stat.isSymbolicLink()) {
+      const target = readlinkSync(path);
+      const after = lstatSync(path);
+      if (!sameIdentity(stat, after) || target !== readlinkSync(path))
+        fail("baseline source symbolic link replacement");
+      symlinks.set(path, target);
+      return;
+    }
+    if (stat.isDirectory()) {
+      entries.set(path, "directory");
+      for (const name of readdirSync(path).sort(codeUnitCompare)) visit(join(path, name));
+      const after = lstatSync(path);
+      if (!after.isDirectory() || after.isSymbolicLink() || !sameIdentity(stat, after))
+        fail("baseline source directory replacement");
+      return;
+    }
+    if (!stat.isFile() || stat.nlink !== 1) fail("baseline source file shape");
+    if (stat.size > maxAnnexBytes || stat.size > maxSourceBytes - budget.bytes)
+      fail("baseline source byte bound");
+    budget.bytes += stat.size;
+    entries.set(path, "file");
+  };
+  for (const name of readdirSync(root)
+    .filter((value) => value !== ".git")
+    .sort(codeUnitCompare))
+    visit(join(root, name));
+  const rootAfter = lstatSync(root);
+  if (!rootAfter.isDirectory() || rootAfter.isSymbolicLink() || !sameIdentity(rootStat, rootAfter))
+    fail("baseline source directory replacement");
+  if (budget.entries === 0) fail("baseline source has no content");
+
+  const safeSymlinks = new Map<string, SafeAnalyzerSourceSymlink>();
+  const directoriesContainingSymlinks = new Set<string>();
+  for (const path of symlinks.keys()) {
+    let parent = dirname(path);
+    while (true) {
+      if (directoriesContainingSymlinks.has(parent)) break;
+      directoriesContainingSymlinks.add(parent);
+      if (parent === root) break;
+      const next = dirname(parent);
+      if (next === parent) fail("baseline source symbolic link target");
+      parent = next;
+    }
+  }
+  const containedEntryType = (path: string): "directory" | "file" | undefined => {
+    const pathRelative = relative(root, path).replaceAll("\\", "/");
+    if (pathRelative === ".." || pathRelative.startsWith("../") || isAbsolute(pathRelative))
+      fail("baseline source symbolic link target");
+    return pathRelative === "" ? "directory" : entries.get(path);
+  };
+  for (const [path, target] of symlinks) {
+    if (
+      !target ||
+      target.includes("\\") ||
+      isAbsolute(target) ||
+      win32.isAbsolute(target) ||
+      /(^|\/)[A-Za-z]:/.test(target)
+    )
+      fail("baseline source symbolic link target");
+    let targetPath = dirname(path);
+    for (const segment of target.split("/")) {
+      if (containedEntryType(targetPath) !== "directory")
+        fail("baseline source symbolic link target");
+      if (segment === "" || segment === ".") continue;
+      targetPath = resolve(targetPath, segment);
+      containedEntryType(targetPath);
+    }
+    const targetType = containedEntryType(targetPath);
+    if (targetType === undefined) fail("baseline source symbolic link target");
+    if (targetType === "directory" && directoriesContainingSymlinks.has(targetPath))
+      fail("baseline source symbolic link cycle");
+    safeSymlinks.set(path, { target, targetType });
+  }
+  return safeSymlinks;
+}
+
 function copyAnalyzerSource(source: string, snapshot: string): void {
   const rootBefore = lstatSync(source);
   if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink())
     fail("baseline source directory shape");
+  const safeSymlinks = inspectSafeAnalyzerSource(source);
+  const rootAfterInspection = lstatSync(source);
+  if (
+    !rootAfterInspection.isDirectory() ||
+    rootAfterInspection.isSymbolicLink() ||
+    !sameIdentity(rootBefore, rootAfterInspection)
+  )
+    fail("baseline source directory replacement");
   const budget = { entries: 0, bytes: 0 };
   const copy = (from: string, to: string): void => {
     const before = lstatSync(from);
     budget.entries += 1;
     if (budget.entries > maxSourceEntries) fail("baseline source entry bound");
-    if (before.isSymbolicLink()) fail("baseline source symbolic link");
+    if (before.isSymbolicLink()) {
+      const expected = safeSymlinks.get(from);
+      const target = readlinkSync(from);
+      const after = lstatSync(from);
+      if (
+        expected === undefined ||
+        target !== expected.target ||
+        target !== readlinkSync(from) ||
+        !sameIdentity(before, after)
+      )
+        fail("baseline source symbolic link replacement");
+      symlinkSync(target, to, expected.targetType === "directory" ? "dir" : "file");
+      return;
+    }
     if (before.isDirectory()) {
       mkdirSync(to, { recursive: false, mode: 0o700 });
       for (const name of readdirSync(from).sort(codeUnitCompare))
@@ -442,29 +559,7 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
 }
 
 function assertSafeAnalyzerSource(sourceRoot: string): void {
-  const root = resolve(sourceRoot);
-  const rootStat = lstatSync(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("baseline source directory shape");
-  const budget = { entries: 0, bytes: 0 };
-  const visit = (path: string): void => {
-    const stat = lstatSync(path);
-    budget.entries += 1;
-    if (budget.entries > maxSourceEntries) fail("baseline source entry bound");
-    if (stat.isSymbolicLink()) fail("baseline source symbolic link");
-    if (stat.isDirectory()) {
-      for (const name of readdirSync(path).sort(codeUnitCompare)) visit(join(path, name));
-      return;
-    }
-    if (!stat.isFile() || stat.nlink !== 1) fail("baseline source file shape");
-    if (stat.size > maxAnnexBytes || stat.size > maxSourceBytes - budget.bytes)
-      fail("baseline source byte bound");
-    budget.bytes += stat.size;
-  };
-  for (const name of readdirSync(root)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    visit(join(root, name));
-  if (budget.entries === 0) fail("baseline source has no content");
+  inspectSafeAnalyzerSource(sourceRoot);
 }
 
 function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {

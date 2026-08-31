@@ -150,6 +150,12 @@ lock-backed uv execution against the canonical PyPI index, re-observes every
 source/component digest after the run, and writes one canonical
 content-addressed receipt with detached annexes. The execution host needs Docker,
 Bubblewrap, `uv`, and root-provisioned Python 3.13 on Linux.
+The private analyzer snapshot preserves an exact relative source symlink only
+when every raw path segment resolves inside the source root to an already
+validated regular file or directory. Absolute, drive-relative, UNC, backslash,
+escaping, dangling, chained, excluded `.git`, and cyclic targets fail closed.
+Component hashing remains stricter: any symlink inside a selected component is
+rejected before analyzer execution.
 The Scanner runtime invokes the root-provisioned `/usr/bin/docker`,
 `/usr/bin/bwrap`, `/usr/local/bin/uv`, and
 `/usr/bin/python3.13` paths directly; it does not discover Python through the
