@@ -185,12 +185,10 @@ describe("baseline batch execution", () => {
   it("preserves safe relative source symlinks to files and directories outside components", async () => {
     const { root, request } = fixture();
     writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
-    mkdirSync(join(root, "docs"));
     mkdirSync(join(root, "shared"));
     writeFileSync(join(root, "shared", "README.md"), "# Shared directory\n", "utf8");
     try {
       symlinkSync("CLAUDE.md", join(root, "AGENTS.md"), "file");
-      symlinkSync("../CLAUDE.md", join(root, "docs", "AGENTS.md"), "file");
       symlinkSync("shared", join(root, "shared-link"), "dir");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EPERM") return;
@@ -203,10 +201,6 @@ describe("baseline batch execution", () => {
       expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("CLAUDE.md");
       expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toBe("# Shared guidance\n");
-      expect(readlinkSync(join(sourceRoot, "docs", "AGENTS.md"))).toBe("../CLAUDE.md");
-      expect(readFileSync(join(sourceRoot, "docs", "AGENTS.md"), "utf8")).toBe(
-        "# Shared guidance\n",
-      );
       expect(lstatSync(join(sourceRoot, "shared-link")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "shared-link"))).toBe("shared");
       expect(readFileSync(join(sourceRoot, "shared-link", "README.md"), "utf8")).toBe(
@@ -233,6 +227,41 @@ describe("baseline batch execution", () => {
     ).resolves.toBeDefined();
     expect(calls).toBe(4);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an in-root parent-relative file symlink",
+    async () => {
+      const { root, request } = fixture();
+      writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
+      mkdirSync(join(root, "docs"));
+      symlinkSync("../CLAUDE.md", join(root, "docs", "AGENTS.md"), "file");
+      const currentRequest = requestForCurrentSource(root, request);
+      const execute: BaselineAnalyzerExecutionV1 = async ({ analyzer, sourceRoot }) => {
+        expect(readlinkSync(join(sourceRoot, "docs", "AGENTS.md"))).toBe("../CLAUDE.md");
+        expect(readFileSync(join(sourceRoot, "docs", "AGENTS.md"), "utf8")).toBe(
+          "# Shared guidance\n",
+        );
+        return analyzer === "aih-native"
+          ? {
+              mediaType: "application/vnd.aih.baseline-native+json",
+              bytes: canonicalStrictJsonBytesV1({
+                protocol: "BaselineNativeObservationV1",
+                files: [],
+              }),
+              analyzerVersion: "native.0123456789ab",
+            }
+          : {
+              mediaType: "application/sarif+json",
+              bytes: sarif(analyzer),
+              analyzerVersion: `${analyzer}.0123456789ab`,
+            };
+      };
+
+      await expect(
+        executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute }),
+      ).resolves.toBeDefined();
+    },
+  );
 
   it.each([
     ["a dangling target", "missing.md", false],
@@ -262,9 +291,12 @@ describe("baseline batch execution", () => {
     ["Windows drive-relative syntax", "C:outside.md", "C:outside.md"],
     ["a trailing file separator", "CLAUDE.md/", "CLAUDE.md"],
     ["a terminal file dot segment", "CLAUDE.md/.", "CLAUDE.md"],
-  ])("rejects source symlinks with %s on every platform", async (_label, target, targetName) => {
+    ["a POSIX absolute target", "/outside.md", undefined],
+    ["a backslash target", "..\\outside.md", undefined],
+    ["a UNC target", "\\\\server\\share\\outside.md", undefined],
+  ])("rejects source symlinks with %s before snapshotting", async (_label, target, targetName) => {
     const { root, request } = fixture();
-    writeFileSync(join(root, targetName), "target\n", "utf8");
+    if (targetName !== undefined) writeFileSync(join(root, targetName), "target\n", "utf8");
     symlinkSync(target, join(root, "AGENTS.md"), "file");
     const currentRequest = requestForCurrentSource(root, request);
     const never: BaselineAnalyzerExecutionV1 = async () => {
@@ -275,6 +307,43 @@ describe("baseline batch execution", () => {
       executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
     ).rejects.toThrow(/symbolic link/);
   });
+
+  it("rejects a symlink into the excluded Git directory", async () => {
+    const { root, request } = fixture();
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, ".git", "config"), "[core]\n", "utf8");
+    try {
+      symlinkSync(".git/config", join(root, "AGENTS.md"), "file");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    const currentRequest = requestForCurrentSource(root, request);
+    const never: BaselineAnalyzerExecutionV1 = async () => {
+      throw new Error("analyzer must not run");
+    };
+
+    await expect(
+      executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
+    ).rejects.toThrow(/symbolic link/);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a directory symlink cycle through an ancestor",
+    async () => {
+      const { root, request } = fixture();
+      mkdirSync(join(root, "docs", "nested"), { recursive: true });
+      symlinkSync("..", join(root, "docs", "nested", "loop"), "dir");
+      const currentRequest = requestForCurrentSource(root, request);
+      const never: BaselineAnalyzerExecutionV1 = async () => {
+        throw new Error("analyzer must not run");
+      };
+
+      await expect(
+        executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
+      ).rejects.toThrow(/symbolic link cycle/);
+    },
+  );
 
   it("rejects a safe internal symlink inside a selected component before analyzer execution", async () => {
     const { root, request } = fixture();

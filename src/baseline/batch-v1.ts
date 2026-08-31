@@ -459,12 +459,11 @@ function inspectSafeAnalyzerSource(
       target.includes("\\") ||
       isAbsolute(target) ||
       win32.isAbsolute(target) ||
-      target.split("/").includes("..")
+      /^[A-Za-z]:/.test(target)
     )
       fail("baseline source symbolic link target");
     const normalized = posix.normalize(target);
-    if (normalized === "." || normalized.startsWith("../"))
-      fail("baseline source symbolic link target");
+    if (normalized === ".") fail("baseline source symbolic link target");
     const targetPath = resolve(dirname(path), ...normalized.split("/"));
     const targetRelative = relative(root, targetPath).replaceAll("\\", "/");
     if (
@@ -478,6 +477,15 @@ function inspectSafeAnalyzerSource(
       fail("baseline source symbolic link target");
     const targetType = entries.get(targetPath);
     if (targetType === undefined) fail("baseline source symbolic link target");
+    if (targetType === "file" && (target.endsWith("/") || target.endsWith("/.")))
+      fail("baseline source symbolic link target");
+    if (targetType === "directory") {
+      for (const symlinkPath of symlinks.keys()) {
+        const nested = relative(targetPath, symlinkPath).replaceAll("\\", "/");
+        if (nested && nested !== ".." && !nested.startsWith("../") && !isAbsolute(nested))
+          fail("baseline source symbolic link cycle");
+      }
+    }
     safeSymlinks.set(path, { target, targetType });
   }
   return safeSymlinks;
