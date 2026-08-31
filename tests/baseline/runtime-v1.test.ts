@@ -193,6 +193,7 @@ describe("code-owned baseline analyzer runtime", () => {
         "UV_NO_ENV_FILE",
         "1",
       ]);
+      expect(noEnvFile).toBeGreaterThan(call.argv.indexOf("--clearenv"));
       expect(noEnvFile).toBeLessThan(call.argv.indexOf("--"));
       expect(call.argv).not.toContain("--offline");
       expect(call.argv).toContain("--share-net");
