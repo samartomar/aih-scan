@@ -162,6 +162,8 @@ describe("code-owned baseline analyzer runtime", () => {
           "--disable-userns",
           "--assert-userns-disabled",
           "--clearenv",
+          "UV_NO_ENV_FILE",
+          "1",
           "PYTHONSAFEPATH",
           "1",
           "--dir",
@@ -184,6 +186,15 @@ describe("code-owned baseline analyzer runtime", () => {
           "--no-sources",
         ]),
       );
+      expect(call.argv).not.toContain("--no-env-file");
+      const noEnvFile = call.argv.indexOf("UV_NO_ENV_FILE");
+      expect(call.argv.slice(noEnvFile - 1, noEnvFile + 2)).toEqual([
+        "--setenv",
+        "UV_NO_ENV_FILE",
+        "1",
+      ]);
+      expect(noEnvFile).toBeGreaterThan(call.argv.indexOf("--clearenv"));
+      expect(noEnvFile).toBeLessThan(call.argv.indexOf("--"));
       expect(call.argv).not.toContain("--offline");
       expect(call.argv).toContain("--share-net");
       expect(call.argv).not.toContain(sourceRoot);
