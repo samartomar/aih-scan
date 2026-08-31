@@ -449,10 +449,10 @@ describe("published V2 package installation", () => {
     ).toBe(false);
     expect(paths.some((path) => /(?:^|\/)\S+\.local(?:\.|\/|$)/i.test(path))).toBe(false);
     expect(readFileSync(tarball)).not.toContain(Buffer.from(root, "utf8"));
-    expect(basename(tarball)).toBe("aihq-scan-0.2.1.tgz");
+    expect(basename(tarball)).toBe("aihq-scan-0.2.2.tgz");
     expect(packedManifest(tarball)).toMatchObject({
       name: "@aihq/scan",
-      version: "0.2.1",
+      version: "0.2.2",
       bin: { "aih-scan": "./dist/cli.js" },
       ...npmDiscoveryMetadata,
     });
@@ -466,7 +466,9 @@ describe("published V2 package installation", () => {
       "utf8",
     );
     expect(installedReadme).toContain("Exact `@aihq/scan@0.2.1` is public");
-    expect(installedReadme).not.toContain("`@aihq/scan@0.2.1` source candidate");
+    expect(installedReadme).toContain("This package source declares version `0.2.2`");
+    expect(installedReadme).toContain("manifest identity is not publication evidence");
+    expect(installedReadme).not.toContain("source candidate");
     expect(installedReadme).not.toContain("is not public until");
     expect(installedReadme).not.toContain("the public release remains");
     writeCandidateInput(join(directory, "candidate-input.json"));

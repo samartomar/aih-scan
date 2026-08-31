@@ -12,8 +12,8 @@ describe("packed Core evidence proof", () => {
     expect(source).toContain("6130dd837b8e8bd41e999fb40733e0e460e69720");
     expect(source).toContain('"@aihq/core"');
     expect(source).toContain('version: "0.1.1"');
-    expect(source).toContain('version: "0.2.1"');
-    expect(source).toContain('filename: "aihq-scan-0.2.1.tgz"');
+    expect(source).toContain('version: "0.2.2"');
+    expect(source).toContain('filename: "aihq-scan-0.2.2.tgz"');
     expect(source).toContain('"@aihq/core"');
     expect(source).not.toContain('"@aihq/harness"');
     expect(source).toContain("git");

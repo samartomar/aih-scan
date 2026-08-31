@@ -31,6 +31,10 @@ baseline command help paths. Source,
 package-manifest, or local-tarball state alone is never publication evidence;
 use the live checks in the README.
 
+This release train declares source package version `0.2.2` for the Bubblewrap
+user-namespace compatibility fix. That source identity does not claim npm or
+GitHub Release publication; only the live custody checks establish it.
+
 Exact `0.1.1` remains public with its bounded recovery evidence. Its authorized
 release run published the tarball, then failed because checkout-free `gh release
 create` omitted `--repo`. Recovery run `32903155702` completed the five-asset
