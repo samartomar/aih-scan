@@ -131,6 +131,24 @@ Keep capture, signing, verification, and governance as separate phases:
    not approve findings or grant installation, runtime projection, or activation
    authority.
 
+### Core baseline-vet boundary
+
+Today, Core's repository-owned `baseline:vet` command still owns the selected
+catalog job manifest, directly orchestrates `aih-native`, SkillSpector, Semgrep,
+and Cisco, normalizes their receipts, and assembles Core's vendor lock and ECC
+preview. It is not an `@aihq/scan` command. Maintainer analyzer-offload runners
+only provide execution capacity; they do not change this public ownership or
+create approval authority.
+
+A future extraction must preserve this boundary: Scanner may own independent
+analyzer execution and publish canonical, content-addressed batch receipts.
+Core must continue to own catalog selection, verify the exact Scanner bundle,
+assemble its lock and preview, and apply qualification and organization policy.
+The direct Core path cannot be removed until both paths produce equivalent
+normalized receipts for the same pinned inputs and the installed public journey
+passes. Scanner evidence remains preflight evidence throughout; it never
+qualifies, approves, installs, or activates a component.
+
 The repository workflow at
 `.github/workflows/cisco-oci-equivalence.yml` is the complete current capture
 example. It builds the pinned Cisco runtime twice for OCI-layout and local
