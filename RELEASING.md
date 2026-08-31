@@ -9,15 +9,15 @@ downloads the artifact by ID, verifies GitHub's artifact digest plus the
 original tarball digest and packed identity, and runs no Scanner package code.
 It then produces a tarball-scoped SPDX SBOM and GitHub build attestation, signs
 a checksum reconstructed from the trusted digest, re-observes current `main`
-and the tag, publishes the same tarball with npm provenance, and
-creates the GitHub Release.
+and the tag, publishes the same tarball with npm provenance under `next`, and
+creates a prerelease GitHub Release. It never changes `latest`.
 
 Scanner evidence is not organization authority. A release makes Scanner bytes
 publicly obtainable with provenance; it does not approve a subject, create a
 Core decision, establish an organization trust root, or prove successful Core
 custody.
 
-## Current release and steady-state custody
+## Historical release custody
 
 Exact `@aihq/scan@0.2.1` is public on npm from immutable tag
 `v-scan-0.2.1` and source `5172cc5352c2eaa7d47a72fa7558acaf13073995`.
@@ -30,10 +30,6 @@ attestation, registry signatures/attestations, disposable install, and
 baseline command help paths. Source,
 package-manifest, or local-tarball state alone is never publication evidence;
 use the live checks in the README.
-
-This release train declares source package version `0.2.2` for the Bubblewrap
-user-namespace compatibility fix. That source identity does not claim npm or
-GitHub Release publication; only the live custody checks establish it.
 
 Exact `0.1.1` remains public with its bounded recovery evidence. Its authorized
 release run published the tarball, then failed because checkout-free `gh release
@@ -84,9 +80,14 @@ checksum signature.
 
 ## Normal release
 
-1. Re-observe the issue/milestone and current npm state. Prerelease versions
-   publish to `next`, while stable versions publish to `latest`.
-2. Ensure `package.json` and `package-lock.json` name the exact version and the
+1. Re-observe the issue/milestone and current npm state. Reconcile every merged
+   PR since the previous tag with exactly one `semver:none|patch|minor|major`
+   label. `semver:none` rides the train without requesting package bytes; an
+   all-`none` train cannot be cut. Related package-bearing work accumulates in
+   one release PR. Do not create an immediate release for ordinary docs, CI, or
+   low-impact cleanup; [VERSIONING.md](VERSIONING.md) defines the hotfix triggers.
+2. Compute the highest package-bearing class, then ensure `package.json` and
+   `package-lock.json` name that train's exact version and the
    public README documents the shipped behavior.
 3. Run, sequentially:
 
@@ -118,8 +119,9 @@ checksum signature.
 
 7. Confirm the read-only `verify-and-pack` job is green, then approve the
    protected `npm-publish` environment. That job rechecks artifact custody and
-   live `main`/tag state before publication. Drive both jobs to terminal, then
-   verify the published result from a disposable consumer:
+   live `main`/tag state before publishing under npm `next` and creating a
+   prerelease GitHub Release. Drive both jobs to terminal, then verify the public
+   candidate from a disposable consumer:
 
    ```sh
    version=X.Y.Z # replace with the exact authorized release version
@@ -135,13 +137,33 @@ checksum signature.
 Compare `release_sha` to the separately authorized full SHA. Also download the
 GitHub Release's `SHA256SUMS.txt`, cosign bundle, provenance bundle, and SBOM;
 verify the checksum, keyless signature, and SBOM subject before claiming the
-release complete.
+candidate publication complete. Then run the exact public installed Scanner/Core/
+Catalog acceptance. Source checkout or local tarball execution cannot satisfy this gate.
+
+8. After acceptance, obtain separate promotion authorization:
+
+   ```text
+   Authorize promoting @aihq/scan@X.Y.Z from next to latest after installed acceptance of <full-main-SHA>.
+   ```
+
+9. Promote the same bytes without rebuilding or republishing, then re-observe:
+
+   ```sh
+   npm dist-tag add @aihq/scan@X.Y.Z latest
+   npm dist-tag rm @aihq/scan next
+   gh release edit v-scan-X.Y.Z --repo samartomar/aih-scan --prerelease=false --latest
+   npm view @aihq/scan dist-tags --json
+   ```
+
+Only this promoted stable train is the supported default. Release notes state whether
+adoption is no action, recommended, required by date, or security urgent.
 
 ## Failure and immutability
 
 Once a tag or npm version exists, never delete, move, or reuse the tag or
 version. Preserve the failed run as audit evidence, correct the defect on a new
-reviewed commit/version, and fix forward. A green tag workflow is not evidence
+reviewed commit/version, and fix forward. Never promote a candidate that fails public
+installed acceptance. A green tag workflow is not evidence
 of organization authority, evidence acceptance, or a successful Core effect.
 
 If npm publication succeeds before a later workflow step fails, npm package

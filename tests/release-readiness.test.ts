@@ -53,6 +53,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).not.toContain('npm view "@aihq/scan"');
     expect(workflow).not.toContain("npm whoami");
     expect(workflow).toContain("Publish exact tarball through npm Trusted Publishing");
+    expect(workflow).toContain("dist_tag=next");
+    expect(workflow).not.toContain("dist_tag=latest");
+    expect(workflow).toContain("--prerelease");
     expect(workflow).toContain(
       ['if [ -n "$', '{NODE_AUTH_TOKEN:-}" ] || [ -n "$', '{NPM_TOKEN:-}" ]; then'].join(""),
     );
@@ -223,12 +226,11 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("npm trust list @aihq/scan");
     expect(releasing).toContain("full-SHA publication authorization");
     expect(releasing).toContain("GitHub bootstrap secret is absent");
-    expect(releasing).toContain("Exact `@aihq/scan@0.2.1` is public");
-    expect(releasing).not.toContain("`@aihq/scan@0.1.4` as a patch candidate");
-    expect(releasing).not.toContain("`@aihq/scan@0.2.0` as a minor candidate");
-    expect(releasing).not.toContain("`@aihq/scan@0.2.1` as a patch candidate");
-    expect(releasing).not.toContain("`@aihq/scan@0.2.2` as a patch candidate");
-    expect(releasing).toContain("source package version `0.2.2`");
+    expect(releasing).toContain("Historical release custody");
+    expect(releasing).toContain("semver:none|patch|minor|major");
+    expect(releasing).toContain("publishing under npm `next`");
+    expect(releasing).toContain("separate promotion authorization");
+    expect(releasing).toContain("public installed Scanner/Core/\nCatalog acceptance");
     expect(releasing).toContain("old bootstrap token is revoked");
     expect(releasing).toContain("allows only `npm publish`");
     expect(releasing).not.toContain("Future Scanner tags remain blocked");
@@ -245,15 +247,8 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
     const readme = read("README.md");
-    expect(readme).toContain("Exact `@aihq/scan@0.2.1` is public");
-    expect(readme).not.toContain("`@aihq/scan@0.1.4` source candidate");
-    expect(readme).not.toContain("`@aihq/scan@0.2.0` source candidate");
-    expect(readme).not.toContain("`@aihq/scan@0.2.1` source candidate");
-    expect(readme).not.toContain("`@aihq/scan@0.2.2` source candidate");
-    expect(readme).not.toContain("is not public until");
-    expect(readme).not.toContain("the public release remains");
-    expect(readme).toContain("This package source declares version `0.2.2`");
-    expect(readme).toContain("manifest identity is not publication evidence");
+    expect(readme).toContain("promoted `@aihq/scan` stable train");
+    expect(readme).toContain("Candidate versions are first published under npm `next`");
     expect(readme).toContain("version=X.Y.Z");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
@@ -261,8 +256,6 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("without executing Scanner package code");
-    expect(readme).toContain("Exact `@aihq/scan@0.2.1` is public");
-    expect(readme).toContain("`7a6f81de1b26078cbe6fdfdeba9c282aaad83cf5049651fb59fc91b1ccc80191`");
     expect(readme).toContain("allows only `npm publish`");
     expect(readme).toContain("old bootstrap token is revoked");
     expect(readme).not.toContain(
@@ -273,14 +266,13 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).not.toContain("Future Scanner tags remain blocked");
     expect(readme).not.toContain("Source `0.1.2` is not published");
     expect(readme).not.toContain("GitHub Release evidence is incomplete");
-    expect(readme).toContain("five-asset GitHub Release");
     expect(readme).toContain("recover-v-scan-0.1.1.yml@refs/heads/main");
     expect(readme).toContain('--source-digest "$release_sha"');
     expect(releasing).toContain("Recovery run `32903155702`");
     expect(releasing).toContain("is no longer present on `main`");
 
     const project = read("ai-coding/project.md");
-    expect(project).toContain("Exact `@aihq/scan@0.2.1` is public");
+    expect(project).toContain("promoted stable train");
     expect(project).not.toContain("Source `0.2.1` is an unpublished patch candidate");
     expect(project).toMatch(/old bootstrap token is\s+revoked/u);
     expect(project).not.toContain("custody baseline observed while preparing source `0.1.2`");
@@ -288,7 +280,14 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(project).not.toContain("before future release custody is treated as unblocked");
 
     const router = read("ai-coding/RULE_ROUTER.md");
-    expect(router).toContain("builds the `@aihq/scan@0.2.2` V2 API");
+    expect(router).toContain("builds the `@aihq/scan` V2 API");
+  });
+
+  it("enforces package-bearing and repository-only release classes in CI", () => {
+    const semver = read(".github/workflows/semver-label.yml");
+    expect(semver).toContain("semver:none|semver:patch|semver:minor|semver:major");
+    expect(semver).toContain("Exactly one semver:* label is required");
+    expect(read("VERSIONING.md")).toContain("cannot start or bump a package cut");
   });
 
   it("packs the license, README, command, and library under the exact identity", () => {

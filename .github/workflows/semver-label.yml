@@ -1,0 +1,36 @@
+name: semver-label
+
+# Every merged PR records whether it needs package bytes. semver:none changes ride
+# an open train but cannot trigger or bump a package release.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require exactly one recognized semver label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          mapfile -t labels < <(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" --paginate --jq '.[].name | select(startswith("semver:"))')
+          if [ "${#labels[@]}" -eq 0 ]; then
+            echo "::error::No semver:* label yet. A maintainer must add exactly one before merge."
+            echo "Allowed: semver:none, semver:patch, semver:minor, semver:major."
+            exit 1
+          fi
+          if [ "${#labels[@]}" -ne 1 ]; then
+            echo "::error::Exactly one semver:* label is required; found: ${labels[*]}"
+            exit 1
+          fi
+          case "${labels[0]}" in
+            semver:none|semver:patch|semver:minor|semver:major) ;;
+            *) echo "::error::Unknown semver label '${labels[0]}'"; exit 1 ;;
+          esac

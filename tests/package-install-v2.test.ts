@@ -465,9 +465,9 @@ describe("published V2 package installation", () => {
       join(directory, "node_modules/@aihq/scan/README.md"),
       "utf8",
     );
-    expect(installedReadme).toContain("Exact `@aihq/scan@0.2.1` is public");
-    expect(installedReadme).toContain("This package source declares version `0.2.2`");
-    expect(installedReadme).toContain("manifest identity is not publication evidence");
+    expect(installedReadme).toContain("promoted `@aihq/scan` stable train");
+    expect(installedReadme).toContain("Candidate versions are first published under npm `next`");
+    expect(installedReadme).toContain("Source state alone never proves publication");
     expect(installedReadme).not.toContain("source candidate");
     expect(installedReadme).not.toContain("is not public until");
     expect(installedReadme).not.toContain("the public release remains");
