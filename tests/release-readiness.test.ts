@@ -223,9 +223,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("npm trust list @aihq/scan");
     expect(releasing).toContain("full-SHA publication authorization");
     expect(releasing).toContain("GitHub bootstrap secret is absent");
-    expect(releasing).toContain("Exact `@aihq/scan@0.1.4` is public");
+    expect(releasing).toContain("Exact `@aihq/scan@0.2.0` is public");
     expect(releasing).not.toContain("`@aihq/scan@0.1.4` as a patch candidate");
-    expect(releasing).toContain("`@aihq/scan@0.2.0` as a minor candidate");
+    expect(releasing).not.toContain("`@aihq/scan@0.2.0` as a minor candidate");
     expect(releasing).toContain("old bootstrap token is revoked");
     expect(releasing).toContain("allows only `npm publish`");
     expect(releasing).not.toContain("Future Scanner tags remain blocked");
@@ -242,18 +242,20 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("Scanner evidence is not organization authority");
 
     const readme = read("README.md");
-    expect(readme).toContain("Exact `@aihq/scan@0.1.4` is public");
+    expect(readme).toContain("Exact `@aihq/scan@0.2.0` is public");
     expect(readme).not.toContain("`@aihq/scan@0.1.4` source candidate");
-    expect(readme).toContain("`@aihq/scan@0.2.0` source candidate");
-    expect(readme).toContain("version=0.1.4");
+    expect(readme).not.toContain("`@aihq/scan@0.2.0` source candidate");
+    expect(readme).not.toContain("is not public until");
+    expect(readme).not.toContain("the public release remains");
+    expect(readme).toContain("version=0.2.0");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
     expect(readme).not.toContain("gh attestation verify ./node_modules/@aihq/scan");
     expect(readme).toContain("npm provenance");
     expect(readme).toContain("GitHub build attestation");
     expect(readme).toContain("without executing Scanner package code");
-    expect(readme).toContain("Exact `@aihq/scan@0.1.4` is public");
-    expect(readme).toContain("`801249dee266b7280f1b587022e11556d639f2f578e8e6a726874fa0355d8ec7`");
+    expect(readme).toContain("Exact `@aihq/scan@0.2.0` is public");
+    expect(readme).toContain("`6a4481fdaf875b81d9debb15fa596dd46f1a7332855681cb951bce5fc508028f`");
     expect(readme).toContain("allows only `npm publish`");
     expect(readme).toContain("old bootstrap token is revoked");
     expect(readme).not.toContain(
@@ -271,7 +273,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("is no longer present on `main`");
 
     const project = read("ai-coding/project.md");
-    expect(project).toContain("Exact `@aihq/scan@0.1.4` is public");
+    expect(project).toContain("Exact `@aihq/scan@0.2.0` is public");
     expect(project).toMatch(/old bootstrap token is\s+revoked/u);
     expect(project).not.toContain("custody baseline observed while preparing source `0.1.2`");
     expect(project).not.toContain("establish whether `0.1.2` is public");
