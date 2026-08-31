@@ -52,7 +52,7 @@ jobs:
       - run: npm run lint
       - run: npm run test:cov
       - run: npm run build
-      - name: Verify the fixed Python runtime inside Bubblewrap
+      - name: Verify the fixed Python analyzer runtimes inside Bubblewrap
         shell: bash
         run: |
           set -euo pipefail
@@ -83,21 +83,49 @@ jobs:
           const sourceRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-probe-"));
           try {
             mkdirSync(join(sourceRoot, "skills", "probe"), { recursive: true });
-            writeFileSync(join(sourceRoot, "skills", "probe", "SKILL.md"), "# Probe\n", "utf8");
+            writeFileSync(
+              join(sourceRoot, "skills", "probe", "SKILL.md"),
+              "---\nname: probe\ndescription: Scanner CI fixture\n---\n\n# Probe\n",
+              "utf8",
+            );
             const execute = createBaselineAnalyzerExecutionV1();
-            const result = await execute({
-              analyzer: "semgrep",
-              sourceRoot,
-              source: {
-                id: "python-sandbox-probe",
-                owner: "aih",
-                repository: "scanner-ci-fixture",
-                pinnedCommit: "a".repeat(40),
-                treeSha256: "b".repeat(64),
-              },
-            });
-            if (result.mediaType !== "application/sarif+json" || result.bytes.byteLength === 0)
-              throw new Error("Semgrep sandbox probe emitted no SARIF");
+            for (const analyzer of ["semgrep", "cisco"]) {
+              const result = await execute({
+                analyzer,
+                sourceRoot,
+                source: {
+                  id: "python-sandbox-probe",
+                  owner: "aih",
+                  repository: "scanner-ci-fixture",
+                  pinnedCommit: "a".repeat(40),
+                  treeSha256: "b".repeat(64),
+                },
+              });
+              if (result.mediaType !== "application/sarif+json" || result.bytes.byteLength === 0)
+                throw new Error(`${analyzer} sandbox probe emitted no SARIF`);
+            }
+            mkdirSync(join(sourceRoot, "skills", "broken"), { recursive: true });
+            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
+            let rejectedPartialCoverage = false;
+            try {
+              await execute({
+                analyzer: "cisco",
+                sourceRoot,
+                source: {
+                  id: "python-sandbox-partial-coverage-probe",
+                  owner: "aih",
+                  repository: "scanner-ci-fixture",
+                  pinnedCommit: "a".repeat(40),
+                  treeSha256: "b".repeat(64),
+                },
+              });
+            } catch (error) {
+              if (!(error instanceof TypeError) || !error.message.includes("skipped 1 skill"))
+                throw error;
+              rejectedPartialCoverage = true;
+            }
+            if (!rejectedPartialCoverage)
+              throw new Error("Cisco sandbox probe accepted partial skill coverage");
           } finally {
             rmSync(sourceRoot, { recursive: true, force: true });
           }

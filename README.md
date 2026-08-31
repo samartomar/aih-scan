@@ -171,7 +171,12 @@ execution receives the source only inside a private network namespace. Scanner a
 digest-addressed public SkillSpector image with an isolated empty Docker client
 configuration and allows `uv` to acquire only the distributions selected and
 hashed by the bundled lock; neither route accepts caller-provided registries,
-images, commands, or configuration.
+images, commands, or configuration. Cisco recursively discovers every
+`SKILL.md` in the sealed source and emits JSON coverage accounting beside its
+SARIF. Scanner rejects any skipped skill or discovered/scanned count mismatch;
+an exit-zero partial report is not evidence. Analyzer failures retain a bounded,
+single-line encoded head and tail so the terminal cause remains visible without
+allowing source-controlled diagnostics to inject terminal or CI log controls.
 
 ```sh
 npx aih-scan baseline-vet \

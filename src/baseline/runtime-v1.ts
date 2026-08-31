@@ -42,6 +42,7 @@ const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.1
 
 const maxOutputBytes = 16 * 1024 * 1024;
 const maxStderrBytes = 64 * 1024;
+const maxFailureDetailCharacters = 400;
 const startupTimeoutMs = 120_000;
 const scanTimeoutMs = 900_000;
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -154,8 +155,33 @@ function scrubEnvironment(env: Readonly<NodeJS.ProcessEnv>): Record<string, stri
   return result;
 }
 
+function encodeDiagnosticLine(value: string): string {
+  const jsonEscaped = JSON.stringify(value).slice(1, -1);
+  return Array.from(jsonEscaped, (character) => {
+    const code = character.codePointAt(0) ?? 0;
+    const unsafe =
+      (code >= 0x80 && code <= 0x9f) ||
+      code === 0x61c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x2028 && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069);
+    return unsafe ? `\\u${code.toString(16).padStart(4, "0")}` : character;
+  }).join("");
+}
+
 function resultFailure(result: ProcessRunnerResult, label: string): never {
-  const detail = (result.stderr || result.stdout).trim().slice(0, 400);
+  const rawDetail = (result.stderr || result.stdout).trim();
+  const encodedDetail = encodeDiagnosticLine(rawDetail);
+  let detail = encodedDetail;
+  if (encodedDetail.length > maxFailureDetailCharacters) {
+    const marker = "\\n… middle omitted …\\n";
+    const retained = maxFailureDetailCharacters - marker.length;
+    const headLength = Math.ceil(retained / 2);
+    detail = `${encodedDetail.slice(0, headLength)}${marker}${encodedDetail.slice(
+      -(retained - headLength),
+    )}`;
+  }
   fail(`${label} failed${detail ? `: ${detail}` : ` with exit ${result.code}`}`);
 }
 
@@ -577,8 +603,31 @@ async function semgrep(
   }
 }
 
-function readBoundedAnalyzerOutput(path: string): Buffer {
-  return readBoundedRegularFile(path, maxOutputBytes, "Cisco SARIF output");
+function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
+  return readBoundedRegularFile(path, maxOutputBytes, label);
+}
+
+function verifyCiscoCoverage(output: Buffer, expectedSkills: number): void {
+  let report: Record<string, unknown>;
+  try {
+    report = parseStrictJsonObjectV1(output.toString("utf8"), "Cisco JSON report");
+  } catch {
+    fail("Cisco JSON report is invalid");
+  }
+  const summary = report.summary;
+  if (typeof summary !== "object" || summary === null || Array.isArray(summary))
+    fail("Cisco JSON report summary is invalid");
+  const values = summary as Record<string, unknown>;
+  const skipped = values.skills_skipped;
+  if (skipped !== undefined && !Array.isArray(skipped))
+    fail("Cisco JSON report skipped-skill state is invalid");
+  if (Array.isArray(skipped) && skipped.length > 0)
+    fail(`Cisco skill-scanner skipped ${skipped.length} skill${skipped.length === 1 ? "" : "s"}`);
+  const scanned = values.total_skills_scanned;
+  if (!Number.isSafeInteger(scanned) || (scanned as number) < 1)
+    fail("Cisco JSON report scanned-skill count is invalid");
+  if (scanned !== expectedSkills)
+    fail(`Cisco skill coverage mismatch: expected ${expectedSkills}, scanned ${String(scanned)}`);
 }
 
 async function cisco(
@@ -594,7 +643,12 @@ async function cisco(
     mkdirSync(workDirectory, { mode: 0o700 });
     mkdirSync(cacheDirectory, { mode: 0o700 });
     mkdirSync(venvDirectory, { mode: 0o700 });
-    const output = join(workDirectory, "results.sarif");
+    const sarifOutput = join(workDirectory, "results.sarif");
+    const jsonOutput = join(workDirectory, "results.json");
+    const expectedSkills = hashSourceTreeV1(sourceRoot).files.filter(
+      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
+    ).length;
+    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
     const sandboxState = {
       project: ciscoProject,
       workDirectory,
@@ -619,10 +673,15 @@ async function cisco(
       await sandbox(
         [
           executable,
-          "scan",
+          "scan-all",
           "/aih/source",
+          "--recursive",
+          "--format",
+          "json",
           "--format",
           "sarif",
+          "--output-json",
+          "/aih/work/results.json",
           "--output-sarif",
           "/aih/work/results.sarif",
         ],
@@ -630,9 +689,10 @@ async function cisco(
       ),
       "Cisco skill-scanner scan",
     );
+    verifyCiscoCoverage(readBoundedAnalyzerOutput(jsonOutput, "Cisco JSON output"), expectedSkills);
     return {
       mediaType: "application/sarif+json" as const,
-      bytes: readBoundedAnalyzerOutput(output),
+      bytes: readBoundedAnalyzerOutput(sarifOutput, "Cisco SARIF output"),
       analyzerVersion: lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject),
     };
   } finally {

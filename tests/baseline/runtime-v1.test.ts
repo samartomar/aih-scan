@@ -92,6 +92,13 @@ describe("code-owned baseline analyzer runtime", () => {
         if (output !== "/aih/work/results.sarif" || workDirectory === undefined)
           throw new Error("missing Cisco output custody");
         writeFileSync(join(workDirectory, "results.sarif"), sarif("cisco"), "utf8");
+        writeFileSync(
+          join(workDirectory, "results.json"),
+          canonicalStrictJsonBytesV1({
+            summary: { total_skills_scanned: 1 },
+            results: [],
+          }),
+        );
         return { code: 0, stdout: "", stderr: "", truncated: false };
       }
       if (command.includes("--sarif"))
@@ -223,6 +230,23 @@ describe("code-owned baseline analyzer runtime", () => {
     expect(analyzerCalls).toHaveLength(4);
     expect(analyzerCalls.every((call) => !call.argv.includes("--share-net"))).toBe(true);
     expect(analyzerCalls.every((call) => call.argv.includes(sourceRoot))).toBe(true);
+    const ciscoScan = analyzerCalls.find((call) => call.argv.includes("--output-sarif"));
+    expect(ciscoScan?.argv).toEqual(
+      expect.arrayContaining([
+        "/aih/venv/bin/skill-scanner",
+        "scan-all",
+        "/aih/source",
+        "--recursive",
+        "--format",
+        "json",
+        "--format",
+        "sarif",
+        "--output-json",
+        "/aih/work/results.json",
+        "--output-sarif",
+        "/aih/work/results.sarif",
+      ]),
+    );
     expect(
       analyzerCalls.every(
         (call) =>
@@ -278,6 +302,95 @@ describe("code-owned baseline analyzer runtime", () => {
       [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
     ]);
     expect(calls.find((argv) => argv.includes("run"))).toContain(SKILLSPECTOR_IMAGE_V1);
+  });
+
+  it("preserves bounded analyzer diagnostic head and tail", async () => {
+    const runner: BaselineProcessRunnerV1 = async (argv) => {
+      if (argv.includes(BASELINE_UV_EXECUTABLE_V1) && argv.includes("sync"))
+        return { code: 0, stdout: "", stderr: "", truncated: false };
+      if (argv.at(-1) === "--version")
+        return {
+          code: 0,
+          stdout: `skill-scanner ${CISCO_SKILL_SCANNER_VERSION_V1}`,
+          stderr: "",
+          truncated: false,
+        };
+      return {
+        code: 2,
+        stdout: "",
+        stderr: `python prefix warning\n::error::forged annotation\u001b[31m\u009b31m\u202e\n${"x".repeat(
+          600,
+        )}\nfinal Cisco exception`,
+        truncated: false,
+      };
+    };
+    const execute = createBaselineAnalyzerExecutionV1({ runner, env: { PATH: "C:\\tools" } });
+
+    const rejection = await execute({
+      analyzer: "cisco",
+      sourceRoot: sourceFixture(),
+      source,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(rejection).toBeInstanceOf(TypeError);
+    const message = (rejection as Error).message;
+    expect(message).toContain("python prefix warning");
+    expect(message).toContain("final Cisco exception");
+    expect(message).toContain("omitted");
+    expect(message).toContain("\\n");
+    for (const character of [
+      "\r",
+      "\n",
+      String.fromCharCode(27),
+      "\u009b",
+      "\u2028",
+      "\u2029",
+      "\u202e",
+    ])
+      expect(message).not.toContain(character);
+    expect(message.length).toBeLessThanOrEqual(520);
+  });
+
+  it("rejects Cisco evidence when recursive discovery skips any skill", async () => {
+    const runner: BaselineProcessRunnerV1 = async (argv) => {
+      if (argv.includes(BASELINE_UV_EXECUTABLE_V1) && argv.includes("sync"))
+        return { code: 0, stdout: "", stderr: "", truncated: false };
+      if (argv.at(-1) === "--version")
+        return {
+          code: 0,
+          stdout: `skill-scanner ${CISCO_SKILL_SCANNER_VERSION_V1}`,
+          stderr: "",
+          truncated: false,
+        };
+      if (argv.includes("--output-sarif")) {
+        const workBind = argv.findIndex(
+          (value, index) => value === "--bind" && argv[index + 2] === "/aih/work",
+        );
+        const workDirectory = workBind < 0 ? undefined : argv[workBind + 1];
+        if (workDirectory === undefined) throw new Error("missing Cisco output custody");
+        writeFileSync(join(workDirectory, "results.sarif"), sarif("cisco"), "utf8");
+        writeFileSync(
+          join(workDirectory, "results.json"),
+          canonicalStrictJsonBytesV1({
+            summary: {
+              total_skills_scanned: 1,
+              skills_skipped: [{ skill: "/aih/source/skills/broken", reason: "invalid metadata" }],
+            },
+            results: [],
+          }),
+        );
+        return { code: 0, stdout: "", stderr: "", truncated: false };
+      }
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    };
+    const execute = createBaselineAnalyzerExecutionV1({ runner, env: { PATH: "C:\\tools" } });
+
+    await expect(
+      execute({ analyzer: "cisco", sourceRoot: sourceFixture(), source }),
+    ).rejects.toThrow(/Cisco skill-scanner skipped 1 skill/u);
   });
 
   it.each([
