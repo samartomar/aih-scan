@@ -35,6 +35,13 @@ disposable root, audited npm signatures/attestations, and passed both
 alone never proves publication; the live checks below establish custody. Public
 package custody is not organization evidence custody.
 
+The `@aihq/scan@0.2.0` source candidate moves bounded baseline-vet execution
+into Scanner. It adds the fixed `aih-baseline-v1` analyzer profile, canonical
+receipt and annex contracts, organization/test signing and verification, and
+replay binding through `aih-scan baseline-vet`, `baseline-sign`, and
+`baseline-verify`. Source `0.2.0` is not public until a separately authorized
+exact-SHA release succeeds; the public release remains `0.1.4` until then.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment
@@ -68,7 +75,7 @@ npm pack
 Install the resulting tarball into a disposable consumer:
 
 ```sh
-npm install --save-dev /path/to/aihq-scan-0.1.4.tgz
+npm install --save-dev /path/to/aihq-scan-0.2.0.tgz
 npx aih-scan --help
 ```
 
@@ -104,7 +111,7 @@ tarball is not publication evidence. Exact `0.1.1` required a bounded recovery
 after npm publication, so its checksum bundle has the historical
 `recover-v-scan-0.1.1.yml@refs/heads/main` identity while its provenance bundle
 remains the original tag-run build attestation. Do not use that recovery
-identity for a normal `0.1.4` release or describe either signature as the other.
+identity for a normal `0.2.0` release or describe either signature as the other.
 
 ## Evidence flow
 
@@ -523,7 +530,7 @@ AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
 ```
 
 The proof builds and packs that exact locked Core source, packs the
-`@aihq/scan@0.1.4` source, installs both tarballs in
+`@aihq/scan@0.2.0` source, installs both tarballs in
 disposable roots, captures a catalog-absent organization detector through the
 registered adapter boundary, signs and independently verifies the resulting V2
 bundle, projects the evidence, validates the exact packaged Core schema, and
