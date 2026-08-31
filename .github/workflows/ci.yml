@@ -26,6 +26,12 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
       - run: npm ci --ignore-scripts
       - run: node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract
       - name: Verify packed registered-detector evidence handoff
@@ -46,3 +52,53 @@ jobs:
       - run: npm run lint
       - run: npm run test:cov
       - run: npm run build
+      - name: Verify the fixed Python runtime inside Bubblewrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
+          apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          test -r "$apparmor_profile"
+          sudo apparmor_parser --replace "$apparmor_profile"
+          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
+          case "$python_prefix" in
+            /usr|/usr/*)
+              echo "setup-python prefix unexpectedly visible through Scanner's /usr bind: $python_prefix" >&2
+              exit 1
+              ;;
+          esac
+          sudo cp -a "${python_prefix}/." /usr/local/
+          sudo install -m 0644 \
+            "${python_prefix}/lib/libpython3.13.so.1.0" \
+            /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
+          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
+          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
+          node --input-type=module <<'NODE'
+          import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { createBaselineAnalyzerExecutionV1 } from "./dist/baseline/runtime-v1.js";
+
+          const sourceRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-probe-"));
+          try {
+            mkdirSync(join(sourceRoot, "skills", "probe"), { recursive: true });
+            writeFileSync(join(sourceRoot, "skills", "probe", "SKILL.md"), "# Probe\n", "utf8");
+            const execute = createBaselineAnalyzerExecutionV1();
+            const result = await execute({
+              analyzer: "semgrep",
+              sourceRoot,
+              source: {
+                id: "python-sandbox-probe",
+                owner: "aih",
+                repository: "scanner-ci-fixture",
+                pinnedCommit: "a".repeat(40),
+                treeSha256: "b".repeat(64),
+              },
+            });
+            if (result.mediaType !== "application/sarif+json" || result.bytes.byteLength === 0)
+              throw new Error("Semgrep sandbox probe emitted no SARIF");
+          } finally {
+            rmSync(sourceRoot, { recursive: true, force: true });
+          }
+          NODE

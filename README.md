@@ -144,7 +144,10 @@ pinned SkillSpector image and bundled uv locks/versions, uses hardened Docker an
 lock-backed uv execution against the canonical PyPI index, re-observes every
 source/component digest after the run, and writes one canonical
 content-addressed receipt with detached annexes. The execution host needs Docker,
-Bubblewrap, `uv`, and root-provisioned Python 3.13 on Linux.
+Bubblewrap, `uv`, and root-provisioned Python 3.13 on Linux. The fixed Python
+runtime is rooted at `/usr/local`, with its standard library at
+`/usr/local/lib/python3.13` and its executable exposed as
+`/usr/bin/python3.13`.
 The private analyzer snapshot preserves an exact relative source symlink only
 when every raw path segment resolves inside the source root to an already
 validated regular file or directory. Absolute, drive-relative, UNC, backslash,
@@ -153,8 +156,11 @@ Component hashing remains stricter: any symlink inside a selected component is
 rejected before analyzer execution.
 The Scanner runtime invokes the root-provisioned `/usr/bin/docker`,
 `/usr/bin/bwrap`, `/usr/local/bin/uv`, and
-`/usr/bin/python3.13` paths directly; it does not discover Python through the
-ambient `PATH`, `HOME`, or uv environment variables. It
+`/usr/bin/python3.13` paths directly; after clearing the host environment it
+adds only the fixed read-only standard-library directories to `PYTHONPATH`, so
+the isolated analyzer virtual environment remains active. It does not discover
+Python through the ambient `PATH`, `HOME`, `PYTHONPATH`, or uv environment
+variables. It
 uses Docker's local `default` context, and terminates analyzer process groups as
 one unit. Semgrep and Cisco run as PID 1 inside Bubblewrap user/PID/mount namespaces
 with an empty explicit environment, no host user-manager socket, nested user
