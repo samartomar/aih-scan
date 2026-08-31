@@ -1,3 +1,26 @@
+export {
+  type BaselineVetTrustRootV1,
+  canonicalBaselineVetAttestationEnvelopeV1Bytes,
+  parseBaselineVetAttestationEnvelopeV1Json,
+  type SignedBaselineVetAttestationV1,
+  signBaselineVetBundleV1,
+  type VerifiedBaselineVetAttestationV1,
+  verifyBaselineVetAttestationV1,
+} from "./baseline/attestation-v1.js";
+export {
+  BASELINE_ANALYZERS_V1,
+  type BaselineAnalyzerV1,
+  type BaselineVetAnnexArtifactV1,
+  type BaselineVetBatchResultV1,
+  type BaselineVetReceiptV1,
+  type BaselineVetRequestV1,
+  canonicalBaselineVetReceiptV1Bytes,
+  canonicalBaselineVetRequestV1Bytes,
+  createBaselineVetRequestV1,
+  parseBaselineVetReceiptV1Json,
+  parseBaselineVetRequestV1Json,
+} from "./baseline/batch-v1.js";
+export { readBaselineVetBundleV1 } from "./baseline/bundle-v1.js";
 export { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 export {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,

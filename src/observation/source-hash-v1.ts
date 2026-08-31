@@ -21,6 +21,8 @@ type Entry = {
 const fail = (message: string): never => {
   throw new TypeError(message);
 };
+const codeUnitCompare = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
 const file = (path: string) => {
   const bytes = readFileSync(path);
   return { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -70,15 +72,15 @@ export function hashComponentTreeV1(
     if (stat.isSymbolicLink()) fail("symbolic link in component");
     if (stat.isDirectory()) {
       entries.set(pathRel, { type: "directory", path: pathRel });
-      for (const child of readdirSync(path).sort()) visit(resolve(path, child));
+      for (const child of readdirSync(path).sort(codeUnitCompare)) visit(resolve(path, child));
       return;
     }
     if (!stat.isFile()) fail("unsupported component entry");
     if (stat.nlink > 1) fail("hard link in component");
     entries.set(pathRel, { type: "file", path: pathRel, ...file(path) });
   };
-  for (const item of [...roots].sort()) visit(resolve(root, ...item.split("/")));
-  const ordered = [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  for (const item of [...roots].sort(codeUnitCompare)) visit(resolve(root, ...item.split("/")));
+  const ordered = [...entries.values()].sort((a, b) => codeUnitCompare(a.path, b.path));
   return {
     treeSha256: createHash("sha256").update(JSON.stringify(ordered)).digest("hex"),
     files: ordered.flatMap((e) =>
@@ -99,7 +101,7 @@ export function hashSourceTreeV1(sourceRoot: string): SourceTreeHashV1 {
     }
     if (stat.isDirectory()) {
       entries.set(pathRel, { type: "directory", path: pathRel });
-      for (const child of readdirSync(path).sort()) visit(resolve(path, child));
+      for (const child of readdirSync(path).sort(codeUnitCompare)) visit(resolve(path, child));
       return;
     }
     if (!stat.isFile()) fail("unsupported source entry");
@@ -108,10 +110,10 @@ export function hashSourceTreeV1(sourceRoot: string): SourceTreeHashV1 {
   };
   const names = readdirSync(root)
     .filter((x) => x !== ".git")
-    .sort();
+    .sort(codeUnitCompare);
   if (!names.length) fail("source tree has no content");
   for (const name of names) visit(resolve(root, name));
-  const ordered = [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  const ordered = [...entries.values()].sort((a, b) => codeUnitCompare(a.path, b.path));
   return {
     treeSha256: createHash("sha256").update(JSON.stringify(ordered)).digest("hex"),
     files: ordered.flatMap((e) =>

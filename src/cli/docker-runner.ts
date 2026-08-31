@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
-
-const terminationGraceMs = 1_000;
+import { processRunner } from "./process-runner.js";
 
 type DockerRunnerOptions = {
   readonly env: Readonly<Record<string, string>>;
@@ -18,86 +16,5 @@ export function dockerRunner(
   options: DockerRunnerOptions,
 ): Promise<unknown> {
   if (argv[0] !== "docker" || argv.length < 2) fail("registered Docker argv");
-  return new Promise((resolveResult, reject) => {
-    const child = spawn("docker", argv.slice(1), {
-      shell: false,
-      windowsHide: true,
-      env: options.env,
-      stdio: "pipe",
-    });
-    const stdout: Buffer[] = [],
-      stderr: Buffer[] = [];
-    let stdoutSize = 0,
-      stderrSize = 0,
-      truncated = false,
-      settled = false,
-      terminationRequested = false;
-    const result = () => ({
-      code: 1,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-      truncated,
-    });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
-    const settle = (outcome: { readonly result: unknown } | { readonly error: unknown }) => {
-      if (settled) return;
-      settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      if (terminationTimer !== undefined) clearTimeout(terminationTimer);
-      if ("error" in outcome) reject(outcome.error);
-      else resolveResult(outcome.result);
-    };
-    const finish = (code: number | null) => {
-      settle({
-        result: {
-          ...result(),
-          code: truncated ? 1 : (code ?? 1),
-        },
-      });
-    };
-    const terminate = () => {
-      if (settled || terminationRequested) return;
-      terminationRequested = true;
-      truncated = true;
-      try {
-        if (!child.kill("SIGTERM")) {
-          finish(1);
-          return;
-        }
-      } catch {
-        // The bounded runner result below is still authoritative after a failed termination request.
-        finish(1);
-        return;
-      }
-      terminationTimer = setTimeout(() => {
-        if (settled) return;
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // A failed escalation must not leave the capture runner pending.
-        }
-        finish(1);
-      }, terminationGraceMs);
-    };
-    timer = setTimeout(terminate, options.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      stdoutSize += chunk.byteLength;
-      if (stdoutSize > options.maxStdoutBytes) {
-        terminate();
-      } else stdout.push(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (settled) return;
-      stderrSize += chunk.byteLength;
-      if (stderrSize > options.maxStderrBytes) {
-        terminate();
-      } else stderr.push(chunk);
-    });
-    child.once("error", (error) => settle({ error }));
-    child.once("close", (code) => {
-      finish(code);
-    });
-  });
+  return processRunner(argv, options);
 }
