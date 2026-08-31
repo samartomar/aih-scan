@@ -182,11 +182,14 @@ describe("BaselineVetRequestV1", () => {
 });
 
 describe("baseline batch execution", () => {
-  it("preserves a safe relative source symlink outside selected components", async () => {
+  it("preserves safe relative source symlinks to files and directories outside components", async () => {
     const { root, request } = fixture();
     writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
+    mkdirSync(join(root, "shared"));
+    writeFileSync(join(root, "shared", "README.md"), "# Shared directory\n", "utf8");
     try {
       symlinkSync("CLAUDE.md", join(root, "AGENTS.md"), "file");
+      symlinkSync("shared", join(root, "shared-link"), "dir");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EPERM") return;
       throw error;
@@ -198,6 +201,11 @@ describe("baseline batch execution", () => {
       expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("CLAUDE.md");
       expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toBe("# Shared guidance\n");
+      expect(lstatSync(join(sourceRoot, "shared-link")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(join(sourceRoot, "shared-link"))).toBe("shared");
+      expect(readFileSync(join(sourceRoot, "shared-link", "README.md"), "utf8")).toBe(
+        "# Shared directory\n",
+      );
       return analyzer === "aih-native"
         ? {
             mediaType: "application/vnd.aih.baseline-native+json",
