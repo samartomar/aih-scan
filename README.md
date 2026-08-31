@@ -35,6 +35,11 @@ baseline command help paths. Source state alone never proves publication; the
 live checks below establish custody. Public package custody is not organization
 evidence custody.
 
+This package source declares version `0.2.2` for the Bubblewrap user-namespace
+compatibility fix. That manifest identity is not publication evidence; the same
+live registry, provenance, Release, checksum, signature, SBOM, and disposable
+installation checks below determine whether any exact version is public.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment
@@ -68,7 +73,7 @@ npm pack
 Install the resulting tarball into a disposable consumer:
 
 ```sh
-npm install --save-dev /path/to/aihq-scan-0.2.1.tgz
+npm install --save-dev /path/to/aihq-scan-0.2.2.tgz
 npx aih-scan --help
 ```
 
@@ -81,7 +86,7 @@ one leg fails; after publication every leg must succeed. Source never decides
 the result:
 
 ```sh
-version=0.2.1
+version=X.Y.Z
 npm view "@aihq/scan@$version" name version dist --json
 npm install --save-exact "@aihq/scan@$version"
 npm audit signatures
@@ -104,7 +109,7 @@ tarball is not publication evidence. Exact `0.1.1` required a bounded recovery
 after npm publication, so its checksum bundle has the historical
 `recover-v-scan-0.1.1.yml@refs/heads/main` identity while its provenance bundle
 remains the original tag-run build attestation. Do not use that recovery
-identity for a normal `0.2.1` release or describe either signature as the other.
+identity for a normal release or describe either signature as the other.
 
 ## Evidence flow
 
@@ -529,7 +534,7 @@ AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
 ```
 
 The proof builds and packs that exact locked Core source, packs the
-`@aihq/scan@0.2.1` source, installs both tarballs in
+`@aihq/scan@0.2.2` source, installs both tarballs in
 disposable roots, captures a catalog-absent organization detector through the
 registered adapter boundary, signs and independently verifies the resulting V2
 bundle, projects the evidence, validates the exact packaged Core schema, and

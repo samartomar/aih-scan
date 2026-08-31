@@ -1,7 +1,7 @@
 # Repository contract
 
 `aih-scan` is a public-remote, npm-published TypeScript/Node.js
-repository that builds the `@aihq/scan@0.2.1` V2 package and `aih-scan`
+repository that builds the `@aihq/scan@0.2.2` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
@@ -35,7 +35,9 @@ revoked. Source state alone never establishes publication or organization
 evidence custody. Public `0.2.1` moves bounded baseline-vet execution and its
 signed receipt/annex contract into Scanner and safely preserves validated
 in-root relative source symlinks in private analyzer snapshots while selected
-component trees remain symlink-free. The Core lock is a
+component trees remain symlink-free. Source package `0.2.2` adds the explicit
+Bubblewrap user-namespace setup required before disabling nested user
+namespaces; its manifest identity alone does not claim publication. The Core lock is a
 post-`0.1.1` compatibility fixture whose
 manifest predates public `@aihq/core@0.2.0`; the released Core Workbench handoff
 comes from immutable `v-core-0.2.0` at
