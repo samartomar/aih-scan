@@ -42,6 +42,7 @@ const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.1
 
 const maxOutputBytes = 16 * 1024 * 1024;
 const maxStderrBytes = 64 * 1024;
+const maxFailureDetailCharacters = 400;
 const startupTimeoutMs = 120_000;
 const scanTimeoutMs = 900_000;
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -155,7 +156,14 @@ function scrubEnvironment(env: Readonly<NodeJS.ProcessEnv>): Record<string, stri
 }
 
 function resultFailure(result: ProcessRunnerResult, label: string): never {
-  const detail = (result.stderr || result.stdout).trim().slice(0, 400);
+  const rawDetail = (result.stderr || result.stdout).trim();
+  let detail = rawDetail;
+  if (rawDetail.length > maxFailureDetailCharacters) {
+    const marker = "\n… middle omitted …\n";
+    const retained = maxFailureDetailCharacters - marker.length;
+    const headLength = Math.ceil(retained / 2);
+    detail = `${rawDetail.slice(0, headLength)}${marker}${rawDetail.slice(-(retained - headLength))}`;
+  }
   fail(`${label} failed${detail ? `: ${detail}` : ` with exit ${result.code}`}`);
 }
 

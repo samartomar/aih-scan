@@ -300,7 +300,11 @@ describe("code-owned baseline analyzer runtime", () => {
     };
     const execute = createBaselineAnalyzerExecutionV1({ runner, env: { PATH: "C:\\tools" } });
 
-    const rejection = await execute({ analyzer: "cisco", sourceRoot: sourceFixture(), source }).then(
+    const rejection = await execute({
+      analyzer: "cisco",
+      sourceRoot: sourceFixture(),
+      source,
+    }).then(
       () => undefined,
       (error: unknown) => error,
     );
