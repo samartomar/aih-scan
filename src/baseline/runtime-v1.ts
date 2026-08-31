@@ -157,12 +157,18 @@ function scrubEnvironment(env: Readonly<NodeJS.ProcessEnv>): Record<string, stri
 
 function resultFailure(result: ProcessRunnerResult, label: string): never {
   const rawDetail = (result.stderr || result.stdout).trim();
-  let detail = rawDetail;
-  if (rawDetail.length > maxFailureDetailCharacters) {
-    const marker = "\n… middle omitted …\n";
+  const encodedDetail = JSON.stringify(rawDetail)
+    .slice(1, -1)
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+  let detail = encodedDetail;
+  if (encodedDetail.length > maxFailureDetailCharacters) {
+    const marker = "\\n… middle omitted …\\n";
     const retained = maxFailureDetailCharacters - marker.length;
     const headLength = Math.ceil(retained / 2);
-    detail = `${rawDetail.slice(0, headLength)}${marker}${rawDetail.slice(-(retained - headLength))}`;
+    detail = `${encodedDetail.slice(0, headLength)}${marker}${encodedDetail.slice(
+      -(retained - headLength),
+    )}`;
   }
   fail(`${label} failed${detail ? `: ${detail}` : ` with exit ${result.code}`}`);
 }
@@ -585,8 +591,31 @@ async function semgrep(
   }
 }
 
-function readBoundedAnalyzerOutput(path: string): Buffer {
-  return readBoundedRegularFile(path, maxOutputBytes, "Cisco SARIF output");
+function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
+  return readBoundedRegularFile(path, maxOutputBytes, label);
+}
+
+function verifyCiscoCoverage(output: Buffer, expectedSkills: number): void {
+  let report: Record<string, unknown>;
+  try {
+    report = parseStrictJsonObjectV1(output.toString("utf8"), "Cisco JSON report");
+  } catch {
+    fail("Cisco JSON report is invalid");
+  }
+  const summary = report.summary;
+  if (typeof summary !== "object" || summary === null || Array.isArray(summary))
+    fail("Cisco JSON report summary is invalid");
+  const values = summary as Record<string, unknown>;
+  const skipped = values.skills_skipped;
+  if (skipped !== undefined && !Array.isArray(skipped))
+    fail("Cisco JSON report skipped-skill state is invalid");
+  if (Array.isArray(skipped) && skipped.length > 0)
+    fail(`Cisco skill-scanner skipped ${skipped.length} skill${skipped.length === 1 ? "" : "s"}`);
+  const scanned = values.total_skills_scanned;
+  if (!Number.isSafeInteger(scanned) || (scanned as number) < 1)
+    fail("Cisco JSON report scanned-skill count is invalid");
+  if (scanned !== expectedSkills)
+    fail(`Cisco skill coverage mismatch: expected ${expectedSkills}, scanned ${String(scanned)}`);
 }
 
 async function cisco(
@@ -602,7 +631,12 @@ async function cisco(
     mkdirSync(workDirectory, { mode: 0o700 });
     mkdirSync(cacheDirectory, { mode: 0o700 });
     mkdirSync(venvDirectory, { mode: 0o700 });
-    const output = join(workDirectory, "results.sarif");
+    const sarifOutput = join(workDirectory, "results.sarif");
+    const jsonOutput = join(workDirectory, "results.json");
+    const expectedSkills = hashSourceTreeV1(sourceRoot).files.filter(
+      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
+    ).length;
+    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
     const sandboxState = {
       project: ciscoProject,
       workDirectory,
@@ -631,7 +665,11 @@ async function cisco(
           "/aih/source",
           "--recursive",
           "--format",
+          "json",
+          "--format",
           "sarif",
+          "--output-json",
+          "/aih/work/results.json",
           "--output-sarif",
           "/aih/work/results.sarif",
         ],
@@ -639,9 +677,10 @@ async function cisco(
       ),
       "Cisco skill-scanner scan",
     );
+    verifyCiscoCoverage(readBoundedAnalyzerOutput(jsonOutput, "Cisco JSON output"), expectedSkills);
     return {
       mediaType: "application/sarif+json" as const,
-      bytes: readBoundedAnalyzerOutput(output),
+      bytes: readBoundedAnalyzerOutput(sarifOutput, "Cisco SARIF output"),
       analyzerVersion: lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject),
     };
   } finally {

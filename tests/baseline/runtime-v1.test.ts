@@ -341,7 +341,8 @@ describe("code-owned baseline analyzer runtime", () => {
     expect(message).toContain("final Cisco exception");
     expect(message).toContain("omitted");
     expect(message).toContain("\\n");
-    expect(message).not.toMatch(/[\r\n\u001b\u2028\u2029]/u);
+    for (const character of ["\r", "\n", String.fromCharCode(27), "\u2028", "\u2029"])
+      expect(message).not.toContain(character);
     expect(message.length).toBeLessThanOrEqual(520);
   });
 
