@@ -294,6 +294,8 @@ describe("baseline batch execution", () => {
     ["a POSIX absolute target", "/outside.md", undefined],
     ["a backslash target", "..\\outside.md", undefined],
     ["a UNC target", "\\\\server\\share\\outside.md", undefined],
+    ["a missing segment erased by parent traversal", "missing/../CLAUDE.md", "CLAUDE.md"],
+    ["file traversal erased by parent traversal", "CLAUDE.md/child/..", "CLAUDE.md"],
   ])("rejects source symlinks with %s before snapshotting", async (_label, target, targetName) => {
     const { root, request } = fixture();
     if (targetName !== undefined) writeFileSync(join(root, targetName), "target\n", "utf8");

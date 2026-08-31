@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { z } from "zod";
 import {
   assertSafeRelativePosixPathV1,
@@ -453,39 +453,44 @@ function inspectSafeAnalyzerSource(
   if (budget.entries === 0) fail("baseline source has no content");
 
   const safeSymlinks = new Map<string, SafeAnalyzerSourceSymlink>();
+  const directoriesContainingSymlinks = new Set<string>();
+  for (const path of symlinks.keys()) {
+    let parent = dirname(path);
+    while (true) {
+      directoriesContainingSymlinks.add(parent);
+      if (parent === root) break;
+      const next = dirname(parent);
+      if (next === parent) fail("baseline source symbolic link target");
+      parent = next;
+    }
+  }
+  const containedEntryType = (path: string): "directory" | "file" | undefined => {
+    const pathRelative = relative(root, path).replaceAll("\\", "/");
+    if (pathRelative === ".." || pathRelative.startsWith("../") || isAbsolute(pathRelative))
+      fail("baseline source symbolic link target");
+    return pathRelative === "" ? "directory" : entries.get(path);
+  };
   for (const [path, target] of symlinks) {
     if (
       !target ||
       target.includes("\\") ||
       isAbsolute(target) ||
       win32.isAbsolute(target) ||
-      /^[A-Za-z]:/.test(target)
+      /(^|\/)[A-Za-z]:/.test(target)
     )
       fail("baseline source symbolic link target");
-    const normalized = posix.normalize(target);
-    if (normalized === ".") fail("baseline source symbolic link target");
-    const targetPath = resolve(dirname(path), ...normalized.split("/"));
-    const targetRelative = relative(root, targetPath).replaceAll("\\", "/");
-    if (
-      !targetRelative ||
-      targetRelative === ".." ||
-      targetRelative.startsWith("../") ||
-      isAbsolute(targetRelative) ||
-      targetRelative === ".git" ||
-      targetRelative.startsWith(".git/")
-    )
-      fail("baseline source symbolic link target");
-    const targetType = entries.get(targetPath);
-    if (targetType === undefined) fail("baseline source symbolic link target");
-    if (targetType === "file" && (target.endsWith("/") || target.endsWith("/.")))
-      fail("baseline source symbolic link target");
-    if (targetType === "directory") {
-      for (const symlinkPath of symlinks.keys()) {
-        const nested = relative(targetPath, symlinkPath).replaceAll("\\", "/");
-        if (nested && nested !== ".." && !nested.startsWith("../") && !isAbsolute(nested))
-          fail("baseline source symbolic link cycle");
-      }
+    let targetPath = dirname(path);
+    for (const segment of target.split("/")) {
+      if (containedEntryType(targetPath) !== "directory")
+        fail("baseline source symbolic link target");
+      if (segment === "" || segment === ".") continue;
+      targetPath = resolve(targetPath, segment);
+      containedEntryType(targetPath);
     }
+    const targetType = containedEntryType(targetPath);
+    if (targetType === undefined) fail("baseline source symbolic link target");
+    if (targetType === "directory" && directoriesContainingSymlinks.has(targetPath))
+      fail("baseline source symbolic link cycle");
     safeSymlinks.set(path, { target, targetType });
   }
   return safeSymlinks;
