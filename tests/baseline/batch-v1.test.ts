@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -72,6 +74,18 @@ function fixture() {
     ],
   });
   return { root, request };
+}
+
+function requestForCurrentSource(root: string, request: ReturnType<typeof fixture>["request"]) {
+  return createBaselineVetRequestV1({
+    protocol: request.protocol,
+    profile: request.profile,
+    source: {
+      ...request.source,
+      treeSha256: hashSourceTreeV1(root).treeSha256,
+    },
+    components: request.components,
+  });
 }
 
 const sarif = (name: string) =>
@@ -168,6 +182,68 @@ describe("BaselineVetRequestV1", () => {
 });
 
 describe("baseline batch execution", () => {
+  it("preserves a safe relative source symlink outside selected components", async () => {
+    const { root, request } = fixture();
+    writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
+    try {
+      symlinkSync("CLAUDE.md", join(root, "AGENTS.md"), "file");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    const currentRequest = requestForCurrentSource(root, request);
+    let calls = 0;
+    const execute: BaselineAnalyzerExecutionV1 = async ({ analyzer, sourceRoot }) => {
+      calls += 1;
+      expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("CLAUDE.md");
+      expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toBe("# Shared guidance\n");
+      return analyzer === "aih-native"
+        ? {
+            mediaType: "application/vnd.aih.baseline-native+json",
+            bytes: canonicalStrictJsonBytesV1({
+              protocol: "BaselineNativeObservationV1",
+              files: [],
+            }),
+            analyzerVersion: "native.0123456789ab",
+          }
+        : {
+            mediaType: "application/sarif+json",
+            bytes: sarif(analyzer),
+            analyzerVersion: `${analyzer}.0123456789ab`,
+          };
+    };
+
+    await expect(
+      executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute }),
+    ).resolves.toBeDefined();
+    expect(calls).toBe(4);
+  });
+
+  it.each([
+    ["a dangling target", "missing.md", false],
+    ["a parent escape", "../outside.md", false],
+    ["a symlink chain", "alias.md", true],
+  ])("rejects source symlinks with %s before analyzer execution", async (_label, target, chain) => {
+    const { root, request } = fixture();
+    writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
+    if (chain) symlinkSync("CLAUDE.md", join(root, "alias.md"), "file");
+    try {
+      symlinkSync(target, join(root, "AGENTS.md"), "file");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    const currentRequest = requestForCurrentSource(root, request);
+    const never: BaselineAnalyzerExecutionV1 = async () => {
+      throw new Error("analyzer must not run");
+    };
+
+    await expect(
+      executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
+    ).rejects.toThrow(/symbolic link/);
+  });
+
   it("acquires each analyzer once and binds its observation to every requesting component", async () => {
     const { root, request } = fixture();
     const calls: string[] = [];
