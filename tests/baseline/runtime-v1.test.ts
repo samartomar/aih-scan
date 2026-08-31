@@ -223,6 +223,19 @@ describe("code-owned baseline analyzer runtime", () => {
     expect(analyzerCalls).toHaveLength(4);
     expect(analyzerCalls.every((call) => !call.argv.includes("--share-net"))).toBe(true);
     expect(analyzerCalls.every((call) => call.argv.includes(sourceRoot))).toBe(true);
+    const ciscoScan = analyzerCalls.find((call) => call.argv.includes("--output-sarif"));
+    expect(ciscoScan?.argv).toEqual(
+      expect.arrayContaining([
+        "/aih/venv/bin/skill-scanner",
+        "scan-all",
+        "/aih/source",
+        "--recursive",
+        "--format",
+        "sarif",
+        "--output-sarif",
+        "/aih/work/results.sarif",
+      ]),
+    );
     expect(
       analyzerCalls.every(
         (call) =>
