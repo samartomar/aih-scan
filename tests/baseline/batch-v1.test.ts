@@ -185,10 +185,12 @@ describe("baseline batch execution", () => {
   it("preserves safe relative source symlinks to files and directories outside components", async () => {
     const { root, request } = fixture();
     writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
+    mkdirSync(join(root, "docs"));
     mkdirSync(join(root, "shared"));
     writeFileSync(join(root, "shared", "README.md"), "# Shared directory\n", "utf8");
     try {
       symlinkSync("CLAUDE.md", join(root, "AGENTS.md"), "file");
+      symlinkSync("../CLAUDE.md", join(root, "docs", "AGENTS.md"), "file");
       symlinkSync("shared", join(root, "shared-link"), "dir");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EPERM") return;
@@ -201,6 +203,10 @@ describe("baseline batch execution", () => {
       expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("CLAUDE.md");
       expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toBe("# Shared guidance\n");
+      expect(readlinkSync(join(sourceRoot, "docs", "AGENTS.md"))).toBe("../CLAUDE.md");
+      expect(readFileSync(join(sourceRoot, "docs", "AGENTS.md"), "utf8")).toBe(
+        "# Shared guidance\n",
+      );
       expect(lstatSync(join(sourceRoot, "shared-link")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "shared-link"))).toBe("shared");
       expect(readFileSync(join(sourceRoot, "shared-link", "README.md"), "utf8")).toBe(
@@ -250,6 +256,45 @@ describe("baseline batch execution", () => {
     await expect(
       executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
     ).rejects.toThrow(/symbolic link/);
+  });
+
+  it.runIf(process.platform !== "win32").each([
+    ["Windows drive-relative syntax", "C:outside.md", "C:outside.md"],
+    ["a trailing file separator", "CLAUDE.md/", "CLAUDE.md"],
+    ["a terminal file dot segment", "CLAUDE.md/.", "CLAUDE.md"],
+  ])("rejects source symlinks with %s on every platform", async (_label, target, targetName) => {
+    const { root, request } = fixture();
+    writeFileSync(join(root, targetName), "target\n", "utf8");
+    symlinkSync(target, join(root, "AGENTS.md"), "file");
+    const currentRequest = requestForCurrentSource(root, request);
+    const never: BaselineAnalyzerExecutionV1 = async () => {
+      throw new Error("analyzer must not run");
+    };
+
+    await expect(
+      executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
+    ).rejects.toThrow(/symbolic link/);
+  });
+
+  it("rejects a safe internal symlink inside a selected component before analyzer execution", async () => {
+    const { root, request } = fixture();
+    try {
+      symlinkSync("base.md", join(root, "rules", "alias.md"), "file");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    const currentRequest = requestForCurrentSource(root, request);
+    let calls = 0;
+    const never: BaselineAnalyzerExecutionV1 = async () => {
+      calls += 1;
+      throw new Error("analyzer must not run");
+    };
+
+    await expect(
+      executeBaselineVetBatchV1(currentRequest, { sourceRoot: root, execute: never }),
+    ).rejects.toThrow(/symbolic link in component/);
+    expect(calls).toBe(0);
   });
 
   it("acquires each analyzer once and binds its observation to every requesting component", async () => {
