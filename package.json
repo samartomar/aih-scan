@@ -29,6 +29,7 @@
   },
   "files": [
     "dist",
+    "tools/baseline-analyzers",
     "tools/verify-core-contract-lock-v2.mjs"
   ],
   "scripts": {

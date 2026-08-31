@@ -314,15 +314,20 @@ describe("NativeObservationV1", () => {
     try {
       mkdirSync(join(sourceRoot, "alpha"), { recursive: true });
       writeFileSync(join(sourceRoot, "alpha", "note.txt"), "ASCII\n");
+      writeFileSync(join(sourceRoot, "alpha", "Z.txt"), "upper\n");
+      writeFileSync(join(sourceRoot, "alpha", "a.txt"), "lower\n");
       const source = hashSourceTreeV1(sourceRoot);
       const component = hashComponentTreeV1(sourceRoot, ["alpha"]);
-      expect(source.files).toEqual([
-        {
-          path: "alpha/note.txt",
-          bytes: 6,
-          sha256: createHash("sha256").update("ASCII\n", "utf8").digest("hex"),
-        },
+      expect(source.files.map((item) => item.path)).toEqual([
+        "alpha/Z.txt",
+        "alpha/a.txt",
+        "alpha/note.txt",
       ]);
+      expect(source.files).toContainEqual({
+        path: "alpha/note.txt",
+        bytes: 6,
+        sha256: createHash("sha256").update("ASCII\n", "utf8").digest("hex"),
+      });
       expect(component.files).toEqual(source.files);
       expect(() => hashComponentTreeV1(sourceRoot, ["alpha", "alpha/./"])).toThrow();
     } finally {

@@ -133,21 +133,88 @@ Keep capture, signing, verification, and governance as separate phases:
 
 ### Core baseline-vet boundary
 
-Today, Core's repository-owned `baseline:vet` command still owns the selected
-catalog job manifest, directly orchestrates `aih-native`, SkillSpector, Semgrep,
-and Cisco, normalizes their receipts, and assembles Core's vendor lock and ECC
-preview. It is not an `@aihq/scan` command. Maintainer analyzer-offload runners
-only provide execution capacity; they do not change this public ownership or
-create approval authority.
+Scanner owns the bounded analyzer-execution half of baseline vetting. Core still
+owns catalog selection, reuse, interpretation, finding dispositions, vendor-lock
+and ECC-preview assembly, qualification, and organization policy. Maintainer
+analyzer-offload runners provide execution capacity only; they grant no approval
+authority.
 
-A future extraction must preserve this boundary: Scanner may own independent
-analyzer execution and publish canonical, content-addressed batch receipts.
-Core must continue to own catalog selection, verify the exact Scanner bundle,
-assemble its lock and preview, and apply qualification and organization policy.
-The direct Core path cannot be removed until both paths produce equivalent
-normalized receipts for the same pinned inputs and the installed public journey
-passes. Scanner evidence remains preflight evidence throughout; it never
-qualifies, approves, installs, or activates a component.
+Core creates one canonical `BaselineVetRequestV1` for an exact source and at
+most 100 components. The fixed `aih-baseline-v1` profile requires native,
+SkillSpector, and Semgrep observations for every component and Cisco for every
+component declared as Skill content. Callers cannot weaken that floor or supply
+commands, image names, runtime paths, adapters, targets, approvals, or effects.
+Scanner acquires each required analyzer once per exact source, verifies the
+pinned SkillSpector image and bundled uv locks/versions, uses hardened Docker and
+lock-backed uv execution against the canonical PyPI index, re-observes every
+source/component digest after the run, and writes one canonical
+content-addressed receipt with detached annexes. The execution host needs Docker,
+Bubblewrap, `uv`, and root-provisioned Python 3.13 on Linux.
+The Scanner runtime invokes the root-provisioned `/usr/bin/docker`,
+`/usr/bin/bwrap`, `/usr/local/bin/uv`, and
+`/usr/bin/python3.13` paths directly; it does not discover Python through the
+ambient `PATH`, `HOME`, or uv environment variables. It
+uses Docker's local `default` context, and terminates analyzer process groups as
+one unit. Semgrep and Cisco run as PID 1 inside Bubblewrap user/PID/mount namespaces
+with an empty explicit environment, no host user-manager socket, nested user
+namespaces disabled, and a Scanner-owned runtime ceiling. Network is enabled only
+for locked, no-build wheel acquisition, where the hostile source is not mounted,
+the working directory is the bundled project, and `PYTHONSAFEPATH=1`; analyzer
+execution receives the source only inside a private network namespace. Scanner acquires the exact
+digest-addressed public SkillSpector image with an isolated empty Docker client
+configuration and allows `uv` to acquire only the distributions selected and
+hashed by the bundled lock; neither route accepts caller-provided registries,
+images, commands, or configuration.
+
+```sh
+npx aih-scan baseline-vet \
+  --request /path/to/canonical-baseline-request.json \
+  --source /path/to/exact-pinned-source \
+  --output /path/to/new-baseline-observation-bundle
+```
+
+That first command produces an unsigned observation bundle, not portable trusted
+evidence. Keep the organization evidence key out of the analyzer process. In a
+separate protected step, sign the exact canonical request and bundle, then verify
+the signature, trust root, freshness, annexes, request binding, and replay state:
+
+```sh
+npx aih-scan baseline-sign \
+  --request /path/to/canonical-baseline-request.json \
+  --bundle /path/to/baseline-observation-bundle \
+  --signer /protected/signer.json \
+  --private-key /protected/ed25519-private.pem \
+  --claims /protected/claims.json \
+  --output /path/to/new-baseline-attestation.json
+
+npx aih-scan baseline-verify \
+  --evidence /path/to/baseline-attestation.json \
+  --request /path/to/canonical-baseline-request.json \
+  --bundle /path/to/baseline-observation-bundle \
+  --roots /protected/trust-roots.json \
+  --expected /protected/expected-signer-and-time.json \
+  --seen /protected/seen-evidence-digests.json
+```
+
+The output directory must not exist. It contains only `receipt.json` and the
+exact `annex/*.json` files named and hashed by the receipt. Duplicate, missing,
+substituted, malformed, truncated, stale, drifted, unknown-profile, and
+replay-conflicting states fail closed. A single bundle therefore scales to 100
+requested components without importing 100 evidence files or rerunning the same
+analyzer 100 times. Core must independently verify the request, receipt, annexes,
+source identity, analyzer floor, and replay state before normalizing facts.
+An unsigned receipt cannot satisfy the public completion contract. Scanner
+evidence remains preflight evidence throughout even after organization-key
+authentication; it never qualifies, approves, installs, or activates a
+component.
+
+Organization-class `baseline-sign` custody is Linux-only. It opens the bundle
+and annex directories through protected `/proc/self/fd` descriptors, requires
+them to be owned by the signer account and not group/world-writable, and copies
+the bounded canonical bytes into process-private memory before signing. The
+optional baseline replay file has the exact shape
+`{"digests":["<accepted-evidence-sha256>"],"receipts":[{"requestSha256":"<request-sha256>","receiptSha256":"<accepted-receipt-sha256>"}]}`;
+both envelope replay and conflicting receipts for one request fail closed.
 
 The repository workflow at
 `.github/workflows/cisco-oci-equivalence.yml` is the complete current capture

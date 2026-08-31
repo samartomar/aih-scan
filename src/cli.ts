@@ -12,6 +12,23 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  canonicalBaselineVetAttestationEnvelopeV1Bytes,
+  parseBaselineVetAttestationEnvelopeV1Json,
+  signBaselineVetBundleV1,
+  verifyBaselineVetAttestationV1,
+} from "./baseline/attestation-v1.js";
+import {
+  canonicalBaselineVetRequestV1Bytes,
+  executeBaselineVetBatchV1,
+  parseBaselineVetRequestV1Json,
+} from "./baseline/batch-v1.js";
+import {
+  readBaselineVetBundleForSigningV1,
+  readBaselineVetBundleV1,
+  writeBaselineVetBundleV1,
+} from "./baseline/bundle-v1.js";
+import { createBaselineAnalyzerExecutionV1 } from "./baseline/runtime-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { dockerRunner } from "./cli/docker-runner.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
@@ -32,6 +49,12 @@ import { captureRegisteredDetectorCandidateV2 } from "./registration/capture-reg
 const maxInputBytes = 2 * 1024 * 1024;
 const projectCoreEvidenceUsage =
   "Usage: aih-scan project-core-evidence --evidence <file> --bundle <directory> --roots <file> --expected <file> --subject-digest <sha256:...> --output <new-file> [--seen <file>]\n";
+const baselineVetUsage =
+  "Usage: aih-scan baseline-vet --request <canonical-file> --source <directory> --output <new-directory>\n";
+const baselineSignUsage =
+  "Usage: aih-scan baseline-sign --request <canonical-file> --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file>\n";
+const baselineVerifyUsage =
+  "Usage: aih-scan baseline-verify --evidence <file> --request <canonical-file> --bundle <directory> --roots <file> --expected <file> [--seen <file>]\n";
 function fail(message: string): never {
   throw new TypeError(`aih-scan: ${message}`);
 }
@@ -127,30 +150,13 @@ function exactWire(value: Record<string, unknown>, fields: readonly string[], la
   )
     fail(`${label} fields`);
 }
-function readJson(path: string, label: string): Record<string, unknown> {
-  return parseStrictJsonObjectV1(readText(path, label), label);
-}
-function flag(args: readonly string[], name: string): string {
-  const index = args.indexOf(name);
-  if (index < 0 || index + 1 >= args.length || args[index + 1]?.startsWith("--"))
-    fail(`missing ${name}`);
-  if (args.filter((value) => value === name).length !== 1) fail(`duplicate ${name}`);
-  return args[index + 1] as string;
-}
-function verifiedFromCli(args: readonly string[], allowed: ReadonlySet<string>) {
-  if (args.length % 2 !== 0 || args.some((arg, index) => index % 2 === 0 && !allowed.has(arg)))
-    fail("unknown verify argument");
-  const evidence = parseScanAttestationEnvelopeV2Json(
-    readText(flag(args, "--evidence"), "evidence"),
-  );
-  const bundle = readScanCaptureBundleV2({ bundleDirectory: flag(args, "--bundle") });
-  const rootsWire = readJson(flag(args, "--roots"), "roots");
-  const expected = readJson(flag(args, "--expected"), "expected policy");
+function rootsFromFile(path: string) {
+  const rootsWire = readJson(path, "roots");
   exactWire(rootsWire, ["roots"], "roots");
   const rootsValue = rootsWire.roots;
   if (!Array.isArray(rootsValue) || rootsValue.length === 0 || rootsValue.length > 64)
     fail("roots shape");
-  const roots = rootsValue.map((value) => {
+  return rootsValue.map((value) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) fail("root object");
     const root = value as Record<string, unknown>;
     exactWire(root, ["identity", "class", "keyId", "publicKeySpkiBase64"], "root");
@@ -172,6 +178,26 @@ function verifiedFromCli(args: readonly string[], allowed: ReadonlySet<string>) 
       }),
     };
   });
+}
+function readJson(path: string, label: string): Record<string, unknown> {
+  return parseStrictJsonObjectV1(readText(path, label), label);
+}
+function flag(args: readonly string[], name: string): string {
+  const index = args.indexOf(name);
+  if (index < 0 || index + 1 >= args.length || args[index + 1]?.startsWith("--"))
+    fail(`missing ${name}`);
+  if (args.filter((value) => value === name).length !== 1) fail(`duplicate ${name}`);
+  return args[index + 1] as string;
+}
+function verifiedFromCli(args: readonly string[], allowed: ReadonlySet<string>) {
+  if (args.length % 2 !== 0 || args.some((arg, index) => index % 2 === 0 && !allowed.has(arg)))
+    fail("unknown verify argument");
+  const evidence = parseScanAttestationEnvelopeV2Json(
+    readText(flag(args, "--evidence"), "evidence"),
+  );
+  const bundle = readScanCaptureBundleV2({ bundleDirectory: flag(args, "--bundle") });
+  const expected = readJson(flag(args, "--expected"), "expected policy");
+  const roots = rootsFromFile(flag(args, "--roots"));
   const seen = (() => {
     if (!args.includes("--seen")) return [];
     const seenWire = readJson(flag(args, "--seen"), "replay identities");
@@ -352,6 +378,135 @@ async function capture(args: readonly string[]): Promise<void> {
     fail("capture request changed during capture");
   writeScanCaptureBundleV2({ outputDirectory: outputPath, ...captured });
 }
+async function baselineVet(args: readonly string[]): Promise<void> {
+  if (
+    args.length !== 6 ||
+    args[0] !== "--request" ||
+    args[2] !== "--source" ||
+    args[4] !== "--output"
+  )
+    fail("baseline-vet usage");
+  const requestPath = args[1];
+  const sourceRoot = args[3];
+  const outputDirectory = args[5];
+  if (
+    typeof requestPath !== "string" ||
+    typeof sourceRoot !== "string" ||
+    typeof outputDirectory !== "string"
+  )
+    fail("baseline-vet arguments");
+  const request = parseBaselineVetRequestV1Json(readText(requestPath, "baseline vet request"));
+  const requestBytes = canonicalBaselineVetRequestV1Bytes(request);
+  const result = await executeBaselineVetBatchV1(request, {
+    sourceRoot,
+    execute: createBaselineAnalyzerExecutionV1(),
+  });
+  const afterRequest = parseBaselineVetRequestV1Json(readText(requestPath, "baseline vet request"));
+  if (!requestBytes.equals(canonicalBaselineVetRequestV1Bytes(afterRequest)))
+    fail("baseline vet request changed during execution");
+  writeBaselineVetBundleV1({ outputDirectory, result });
+  process.stdout.write(
+    `${canonicalStrictJsonBytesV1({
+      outcome: "observed",
+      requestSha256: request.requestSha256,
+      receiptSha256: result.receipt.receiptSha256,
+      authority: "none",
+    }).toString("utf8")}\n`,
+  );
+}
+function baselineSign(args: readonly string[]): void {
+  if (
+    args.length !== 12 ||
+    args[0] !== "--request" ||
+    args[2] !== "--bundle" ||
+    args[4] !== "--signer" ||
+    args[6] !== "--private-key" ||
+    args[8] !== "--claims" ||
+    args[10] !== "--output"
+  )
+    fail("baseline-sign usage");
+  const requestPath = args[1],
+    bundleDirectory = args[3],
+    signerPath = args[5],
+    privateKeyPath = args[7],
+    claimsPath = args[9],
+    outputPath = args[11];
+  if (
+    [requestPath, bundleDirectory, signerPath, privateKeyPath, claimsPath, outputPath].some(
+      (entry) => typeof entry !== "string",
+    )
+  )
+    fail("baseline-sign arguments");
+  const request = parseBaselineVetRequestV1Json(
+    readText(requestPath as string, "baseline vet request"),
+  );
+  const signerWire = readJson(signerPath as string, "baseline signer");
+  exactWire(signerWire, ["identity", "class", "keyId"], "baseline signer");
+  if (
+    typeof signerWire.identity !== "string" ||
+    (signerWire.class !== "test-ephemeral" && signerWire.class !== "organization") ||
+    typeof signerWire.keyId !== "string"
+  )
+    fail("baseline signer fields");
+  const result =
+    signerWire.class === "organization"
+      ? readBaselineVetBundleForSigningV1({ bundleDirectory: bundleDirectory as string })
+      : readBaselineVetBundleV1({ bundleDirectory: bundleDirectory as string });
+  const evidence = signBaselineVetBundleV1({
+    request,
+    result,
+    signer: {
+      identity: signerWire.identity,
+      class: signerWire.class,
+      keyId: signerWire.keyId,
+      privateKey: createPrivateKey(readPrivateKey(privateKeyPath as string)),
+    },
+    claims: readJson(claimsPath as string, "baseline claims"),
+  });
+  writeNew(outputPath as string, canonicalBaselineVetAttestationEnvelopeV1Bytes(evidence));
+}
+function baselineVerify(args: readonly string[]): void {
+  const allowed = new Set([
+    "--evidence",
+    "--request",
+    "--bundle",
+    "--roots",
+    "--expected",
+    "--seen",
+  ]);
+  if (
+    (args.length !== 10 && args.length !== 12) ||
+    args.length % 2 !== 0 ||
+    args.some((arg, index) => index % 2 === 0 && !allowed.has(arg))
+  )
+    fail("baseline-verify usage");
+  for (const required of ["--evidence", "--request", "--bundle", "--roots", "--expected"])
+    flag(args, required);
+  const request = parseBaselineVetRequestV1Json(
+    readText(flag(args, "--request"), "baseline vet request"),
+  );
+  const result = readBaselineVetBundleV1({ bundleDirectory: flag(args, "--bundle") });
+  const seen = (() => {
+    if (!args.includes("--seen")) return { digests: [], receipts: [] };
+    const seen = readJson(flag(args, "--seen"), "baseline replay evidence");
+    exactWire(seen, ["digests", "receipts"], "baseline replay evidence");
+    if (!Array.isArray(seen.digests) || !Array.isArray(seen.receipts))
+      fail("baseline replay evidence entries");
+    return { digests: seen.digests, receipts: seen.receipts };
+  })();
+  const verified = verifyBaselineVetAttestationV1({
+    envelope: parseBaselineVetAttestationEnvelopeV1Json(
+      readText(flag(args, "--evidence"), "baseline evidence"),
+    ),
+    request,
+    result,
+    roots: rootsFromFile(flag(args, "--roots")),
+    expected: readJson(flag(args, "--expected"), "baseline expected policy"),
+    seenEvidenceDigests: seen.digests,
+    seenReceiptBindings: seen.receipts,
+  });
+  process.stdout.write(`${canonicalStrictJsonBytesV1(verified.facts).toString("utf8")}\n`);
+}
 function sign(args: readonly string[]): void {
   if (
     args.length !== 10 ||
@@ -411,10 +566,31 @@ async function main(): Promise<void> {
     return projectCoreEvidence(args);
   }
   if (command === "capture") return capture(args);
+  if (command === "baseline-vet") {
+    if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+      process.stdout.write(baselineVetUsage);
+      return;
+    }
+    return baselineVet(args);
+  }
+  if (command === "baseline-sign") {
+    if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+      process.stdout.write(baselineSignUsage);
+      return;
+    }
+    return baselineSign(args);
+  }
+  if (command === "baseline-verify") {
+    if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+      process.stdout.write(baselineVerifyUsage);
+      return;
+    }
+    return baselineVerify(args);
+  }
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan capture --request <file> --output <new-directory> | sign --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file> | verify --evidence <file> --bundle <directory> --roots <file> --expected <file> [--seen <file>] | project-core-evidence --evidence <file> --bundle <directory> --roots <file> --expected <file> --subject-digest <sha256:...> --output <new-file> [--seen <file>]\n",
+      "Usage: aih-scan baseline-vet ... | baseline-sign ... | baseline-verify ... | capture ... | sign ... | verify ... | project-core-evidence ...\n",
     );
     return;
   }

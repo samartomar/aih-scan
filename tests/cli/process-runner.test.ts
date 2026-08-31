@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dockerRunner } from "../../src/cli/docker-runner.js";
+import { BASELINE_UV_EXECUTABLE_V1, processRunner } from "../../src/cli/process-runner.js";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -14,6 +15,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 class FakeChild extends EventEmitter {
+  readonly pid = 4242;
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly kill = vi.fn(() => false);
@@ -141,6 +143,60 @@ describe("dockerRunner", () => {
   });
 });
 
+describe("processRunner process-group containment", () => {
+  it("kills a residual analyzer process group before settling leader success", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const child = new FakeChild();
+    spawnMock.mockReturnValue(child);
+    let groupAlive = true;
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0 && !groupAlive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      if (signal === "SIGKILL") groupAlive = false;
+      return true;
+    });
+
+    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+      ...options,
+      killProcessGroup: true,
+    });
+    child.emit("close", 0);
+
+    await expect(completed).resolves.toMatchObject({ code: 1, truncated: true });
+    expect(kill).toHaveBeenCalledWith(-child.pid, 0);
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+  });
+
+  it("retains SIGKILL escalation when the group leader closes after timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const child = new FakeChild();
+    spawnMock.mockReturnValue(child);
+    let groupAlive = true;
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0 && !groupAlive) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      if (signal === "SIGKILL") groupAlive = false;
+      return true;
+    });
+
+    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+      ...options,
+      killProcessGroup: true,
+    });
+    await vi.advanceTimersByTimeAsync(options.timeoutMs);
+    child.emit("close", 143);
+    await expect(
+      Promise.race([completed.then(() => "settled"), Promise.resolve("pending")]),
+    ).resolves.toBe("pending");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(completed).resolves.toMatchObject({ code: 1, truncated: true });
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+  });
+});
+
 describe("aih-scan bin", () => {
   it("executes through a symlinked installed-bin path", () => {
     const directory = mkdtempSync(join(process.cwd(), ".aih-scan-bin-"));
@@ -163,6 +219,6 @@ describe("aih-scan bin", () => {
     const result = spawnSync(process.execPath, [binPath, "--help"], { encoding: "utf8" });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Usage: aih-scan capture");
+    expect(result.stdout).toContain("baseline-sign");
   });
 });

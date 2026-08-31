@@ -12,7 +12,11 @@ describe("Strict V2 public boundary", () => {
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
       "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
       "AI_HARNESS_STRICT_V2_COMMIT",
+      "BASELINE_ANALYZERS_V1",
       "assertCompleteScanAnnexArtifactsV2",
+      "canonicalBaselineVetAttestationEnvelopeV1Bytes",
+      "canonicalBaselineVetReceiptV1Bytes",
+      "canonicalBaselineVetRequestV1Bytes",
       "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
       "canonicalDetectorRegistrationV1Bytes",
       "canonicalDssePaeV2",
@@ -21,19 +25,26 @@ describe("Strict V2 public boundary", () => {
       "canonicalSourceSealsV2Bytes",
       "captureCiscoOciCandidateV2",
       "captureRegisteredDetectorCandidateV2",
+      "createBaselineVetRequestV1",
       "createDetectorRegistrationV1",
       "createScanCandidateV2",
       "ed25519KeyIdV2",
       "isVerifiedScanAttestationV2",
+      "parseBaselineVetAttestationEnvelopeV1Json",
+      "parseBaselineVetReceiptV1Json",
+      "parseBaselineVetRequestV1Json",
       "parseDetectorRegistrationV1Json",
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
+      "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
       "sealSourceV2",
+      "signBaselineVetBundleV1",
       "signScanCandidateV2",
       "verifyAiHarnessCoreEvidenceContractV1",
       "verifyAiHarnessStrictV2Contract",
+      "verifyBaselineVetAttestationV1",
       "verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1",
       "verifyScanAttestationV2",
       "writeScanCaptureBundleV2",
@@ -53,6 +64,9 @@ describe("Strict V2 public boundary", () => {
     const cli = read("src/cli.ts");
     expect(cli).toContain('command === "verify"');
     expect(cli).toContain('command === "project-core-evidence"');
+    expect(cli).toContain('command === "baseline-vet"');
+    expect(cli).toContain('command === "baseline-sign"');
+    expect(cli).toContain('command === "baseline-verify"');
     expect(cli).not.toMatch(/npm publish|createRelease|git tag/i);
   });
 

@@ -15,12 +15,20 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  type BaselineAnalyzerExecutionV1,
+  canonicalBaselineVetRequestV1Bytes,
+  createBaselineVetRequestV1,
+  executeBaselineVetBatchV1,
+} from "../src/baseline/batch-v1.js";
+import { writeBaselineVetBundleV1 } from "../src/baseline/bundle-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../src/contract/strict-json-v1.js";
 import {
   createObservationKeyV1,
   createObservationSetV1,
 } from "../src/observation/observation-evidence-v1.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
+import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
 
 const root = resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
@@ -29,7 +37,11 @@ const publicV2Exports = [
   "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
   "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
   "AI_HARNESS_STRICT_V2_COMMIT",
+  "BASELINE_ANALYZERS_V1",
   "assertCompleteScanAnnexArtifactsV2",
+  "canonicalBaselineVetAttestationEnvelopeV1Bytes",
+  "canonicalBaselineVetReceiptV1Bytes",
+  "canonicalBaselineVetRequestV1Bytes",
   "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
   "canonicalDetectorRegistrationV1Bytes",
   "canonicalDssePaeV2",
@@ -38,18 +50,25 @@ const publicV2Exports = [
   "canonicalSourceSealsV2Bytes",
   "captureCiscoOciCandidateV2",
   "captureRegisteredDetectorCandidateV2",
+  "createBaselineVetRequestV1",
   "createDetectorRegistrationV1",
   "createScanCandidateV2",
   "ed25519KeyIdV2",
   "isVerifiedScanAttestationV2",
+  "parseBaselineVetReceiptV1Json",
+  "parseBaselineVetRequestV1Json",
+  "parseBaselineVetAttestationEnvelopeV1Json",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
   "parseDetectorRegistrationV1Json",
   "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
+  "readBaselineVetBundleV1",
   "readScanCaptureBundleV2",
   "sealSourceV2",
+  "signBaselineVetBundleV1",
   "signScanCandidateV2",
   "verifyAiHarnessCoreEvidenceContractV1",
+  "verifyBaselineVetAttestationV1",
   "verifyAiHarnessStrictV2Contract",
   "verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1",
   "verifyScanAttestationV2",
@@ -407,7 +426,7 @@ describe("npm CLI resolution", () => {
 });
 
 describe("published V2 package installation", () => {
-  it("packs a minimal public boundary and signs then verifies a fully detached bundle", () => {
+  it("packs a minimal public boundary and signs then verifies a fully detached bundle", async () => {
     const directory = mkdtempSync(join(tmpdir(), "aih-scan-package-install-v2-"));
     temporaryDirectories.push(directory);
     const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
@@ -419,6 +438,8 @@ describe("published V2 package installation", () => {
     expect(paths).toContain("dist/index.d.ts");
     expect(paths).toContain("dist/index.js");
     expect(paths).toContain("dist/cli.js");
+    expect(paths).toContain("tools/baseline-analyzers/cisco-skill-scanner/uv.lock");
+    expect(paths).toContain("tools/baseline-analyzers/semgrep/uv.lock");
     expect(paths).toContain("README.md");
     expect(paths).not.toContain("src/index.ts");
     expect(
@@ -494,6 +515,15 @@ describe("published V2 package installation", () => {
     expect(runInstalledBin(directory, ["project-core-evidence", "--help"])).toContain(
       "Usage: aih-scan project-core-evidence",
     );
+    expect(runInstalledBin(directory, ["baseline-vet", "--help"])).toContain(
+      "Usage: aih-scan baseline-vet",
+    );
+    expect(runInstalledBin(directory, ["baseline-sign", "--help"])).toContain(
+      "Usage: aih-scan baseline-sign",
+    );
+    expect(runInstalledBin(directory, ["baseline-verify", "--help"])).toContain(
+      "Usage: aih-scan baseline-verify",
+    );
 
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
@@ -548,6 +578,151 @@ describe("published V2 package installation", () => {
     };
     for (const [name, value] of Object.entries({ signer, claims, roots, expected }))
       writeFileSync(join(directory, `${name}.json`), JSON.stringify(value), { mode: 0o600 });
+
+    const baselineRoot = join(directory, "baseline-source");
+    mkdirSync(join(baselineRoot, "rules"), { recursive: true });
+    writeFileSync(join(baselineRoot, "rules", "base.md"), "# Baseline\n", { mode: 0o600 });
+    const baselineRequest = createBaselineVetRequestV1({
+      protocol: "BaselineVetRequestV1",
+      profile: "aih-baseline-v1",
+      source: {
+        id: "ecc",
+        owner: "affaan-m",
+        repository: "everything-claude-code",
+        pinnedCommit: "a".repeat(40),
+        treeSha256: hashSourceTreeV1(baselineRoot).treeSha256,
+      },
+      components: [
+        {
+          id: "rules-core",
+          content: "general",
+          paths: ["rules"],
+          treeSha256: hashComponentTreeV1(baselineRoot, ["rules"]).treeSha256,
+          analyzers: ["aih-native", "skillspector", "semgrep"],
+        },
+      ],
+    });
+    const baselineExecute: BaselineAnalyzerExecutionV1 = async ({ analyzer }) =>
+      analyzer === "aih-native"
+        ? {
+            mediaType: "application/vnd.aih.baseline-native+json",
+            bytes: canonicalStrictJsonBytesV1({
+              protocol: "BaselineNativeObservationV1",
+              files: [],
+            }),
+            analyzerVersion: "native.0123456789ab",
+          }
+        : {
+            mediaType: "application/sarif+json",
+            bytes: canonicalStrictJsonBytesV1({
+              version: "2.1.0",
+              runs: [{ tool: { driver: { name: analyzer } }, results: [] }],
+            }),
+            analyzerVersion: `${analyzer}.0123456789ab`,
+          };
+    const baselineResult = await executeBaselineVetBatchV1(baselineRequest, {
+      sourceRoot: baselineRoot,
+      execute: baselineExecute,
+    });
+    writeFileSync(
+      join(directory, "baseline-request.json"),
+      canonicalBaselineVetRequestV1Bytes(baselineRequest),
+      { mode: 0o600 },
+    );
+    writeBaselineVetBundleV1({
+      outputDirectory: join(directory, "baseline-bundle"),
+      result: baselineResult,
+    });
+    const baselineClaims = {
+      signedAt: "2026-08-22T00:00:00.000Z",
+      expiresAt: "2026-08-22T01:00:00.000Z",
+    };
+    const baselineSigner = {
+      ...signer,
+      class: process.platform === "linux" ? "organization" : "test-ephemeral",
+    };
+    const baselineRoots = {
+      roots: roots.roots.map((root) => ({ ...root, class: baselineSigner.class })),
+    };
+    const baselineExpected = {
+      now: "2026-08-22T00:30:00.000Z",
+      signer: baselineSigner,
+    };
+    writeFileSync(join(directory, "baseline-claims.json"), JSON.stringify(baselineClaims), {
+      mode: 0o600,
+    });
+    writeFileSync(join(directory, "baseline-expected.json"), JSON.stringify(baselineExpected), {
+      mode: 0o600,
+    });
+    writeFileSync(join(directory, "baseline-signer.json"), JSON.stringify(baselineSigner), {
+      mode: 0o600,
+    });
+    writeFileSync(join(directory, "baseline-roots.json"), JSON.stringify(baselineRoots), {
+      mode: 0o600,
+    });
+    runInstalledBin(directory, [
+      "baseline-sign",
+      "--request",
+      "baseline-request.json",
+      "--bundle",
+      "baseline-bundle",
+      "--signer",
+      "baseline-signer.json",
+      "--private-key",
+      "signer.pem",
+      "--claims",
+      "baseline-claims.json",
+      "--output",
+      "baseline-evidence.json",
+    ]);
+    const baselineVerified = JSON.parse(
+      runInstalledBin(directory, [
+        "baseline-verify",
+        "--evidence",
+        "baseline-evidence.json",
+        "--request",
+        "baseline-request.json",
+        "--bundle",
+        "baseline-bundle",
+        "--roots",
+        "baseline-roots.json",
+        "--expected",
+        "baseline-expected.json",
+      ]),
+    ) as { envelopeValid?: unknown; authority?: unknown; evidenceDigestSha256?: unknown };
+    expect(baselineVerified).toMatchObject({ envelopeValid: true, authority: "none" });
+    expect(baselineVerified.evidenceDigestSha256).toMatch(/^[0-9a-f]{64}$/);
+    writeFileSync(
+      join(directory, "baseline-seen.json"),
+      JSON.stringify({
+        digests: [baselineVerified.evidenceDigestSha256],
+        receipts: [
+          {
+            requestSha256: baselineRequest.requestSha256,
+            receiptSha256: baselineResult.receipt.receiptSha256,
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+    expect(
+      expectRejectedInstalledBin(directory, [
+        "baseline-verify",
+        "--evidence",
+        "baseline-evidence.json",
+        "--request",
+        "baseline-request.json",
+        "--bundle",
+        "baseline-bundle",
+        "--roots",
+        "baseline-roots.json",
+        "--expected",
+        "baseline-expected.json",
+        "--seen",
+        "baseline-seen.json",
+      ]),
+    ).toBe("invalid BaselineVetAttestationV1: replayed evidence\n");
+
     writeFileSync(join(directory, "invalid-capture-request.json"), "{}", { mode: 0o600 });
     expect(expectRejectedInstalledBin(directory, ["capture"])).toBe("aih-scan: capture usage\n");
     expect(
