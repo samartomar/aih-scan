@@ -627,8 +627,9 @@ async function cisco(
       await sandbox(
         [
           executable,
-          "scan",
+          "scan-all",
           "/aih/source",
+          "--recursive",
           "--format",
           "sarif",
           "--output-sarif",
