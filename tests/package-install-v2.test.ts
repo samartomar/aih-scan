@@ -465,11 +465,10 @@ describe("published V2 package installation", () => {
       join(directory, "node_modules/@aihq/scan/README.md"),
       "utf8",
     );
-    expect(installedReadme).toContain("Exact `@aihq/scan@0.2.0` is public");
-    expect(installedReadme).not.toContain("`@aihq/scan@0.2.0` source candidate");
-    expect(installedReadme).toContain("`@aihq/scan@0.2.1` source candidate");
-    expect(installedReadme).toContain("is not public until");
-    expect(installedReadme).toContain("the public release remains");
+    expect(installedReadme).toContain("Exact `@aihq/scan@0.2.1` is public");
+    expect(installedReadme).not.toContain("`@aihq/scan@0.2.1` source candidate");
+    expect(installedReadme).not.toContain("is not public until");
+    expect(installedReadme).not.toContain("the public release remains");
     writeCandidateInput(join(directory, "candidate-input.json"));
     writeFileSync(
       join(directory, "consumer.mjs"),
