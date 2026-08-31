@@ -83,7 +83,11 @@ jobs:
           const sourceRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-probe-"));
           try {
             mkdirSync(join(sourceRoot, "skills", "probe"), { recursive: true });
-            writeFileSync(join(sourceRoot, "skills", "probe", "SKILL.md"), "# Probe\n", "utf8");
+            writeFileSync(
+              join(sourceRoot, "skills", "probe", "SKILL.md"),
+              "---\nname: probe\ndescription: Scanner CI fixture\n---\n\n# Probe\n",
+              "utf8",
+            );
             const execute = createBaselineAnalyzerExecutionV1();
             for (const analyzer of ["semgrep", "cisco"]) {
               const result = await execute({
