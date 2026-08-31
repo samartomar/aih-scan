@@ -15,32 +15,25 @@ load organization code into the Scanner process or grant governance authority.
 
 ## Status
 
-The public `@aihq/scan@0.2.0` release contains the V2 library, `aih-scan` CLI,
+The public `@aihq/scan@0.2.1` release contains the V2 library, `aih-scan` CLI,
 strict detector-registration grammar, detached bundle format, Ed25519 DSSE
 signing, Linux `amd64` OCI CI chain, Core organization-evidence projection, and
 bounded baseline-vet execution. The fixed `aih-baseline-v1` profile emits
 canonical receipt and annex records and separates `baseline-vet`,
 `baseline-sign`, and `baseline-verify`. Projection and baseline evidence are
 transport only; neither qualifies, approves, admits, observes, installs, or
-activates a subject. Exact `@aihq/scan@0.2.0` is public from immutable tag
-`v-scan-0.2.0` and source
-`d790c7b73cf48017d5d383f32207d00ee6f7b963`.
+activates a subject. Exact `@aihq/scan@0.2.1` is public from immutable tag
+`v-scan-0.2.1` and source
+`5172cc5352c2eaa7d47a72fa7558acaf13073995`.
 The registry exposes signatures and npm provenance. Independent verification
 matched the registry and five-asset GitHub Release tarballs at SHA-256
-`6a4481fdaf875b81d9debb15fa596dd46f1a7332855681cb951bce5fc508028f`,
+`7a6f81de1b26078cbe6fdfdeba9c282aaad83cf5049651fb59fc91b1ccc80191`,
 verified the exact-tag GitHub attestation, installed the registry package in a
 disposable root, audited npm signatures/attestations, and passed both
 `aih-scan --help`, `aih-scan project-core-evidence --help`, and all three
 baseline command help paths. Source state alone never proves publication; the
 live checks below establish custody. Public package custody is not organization
 evidence custody.
-
-The `@aihq/scan@0.2.1` source candidate preserves an exact relative source
-symlink in a private analyzer snapshot only when every raw path segment resolves
-inside the source root to a validated regular file or directory. Selected
-component trees remain symlink-free. Source `0.2.1` is not public until a
-separately authorized exact-SHA release succeeds; the public release remains
-`0.2.0` until then.
 
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
@@ -88,7 +81,7 @@ one leg fails; after publication every leg must succeed. Source never decides
 the result:
 
 ```sh
-version=0.2.0
+version=0.2.1
 npm view "@aihq/scan@$version" name version dist --json
 npm install --save-exact "@aihq/scan@$version"
 npm audit signatures
@@ -427,7 +420,7 @@ npx aih-scan project-core-evidence \
   --output /path/to/new-core-evidence.json
 ```
 
-Public `@aihq/scan@0.2.0` exposes the same command surface through
+Public `@aihq/scan@0.2.1` exposes the same command surface through
 `aih-scan project-core-evidence --help`.
 
 `--seen` is optional; all other options are required exactly once. The command
@@ -442,7 +435,7 @@ digest to the verified evidence, candidate, payload, source-seal, and annex
 identities, but it neither derives the Core subject nor decides whether the
 organization should associate that evidence with it. The output validity comes
 only from the signed scan claims. Its deterministic attestor binds the verified
-organization signer identity and key id. The `0.2.0` stdout reports
+organization signer identity and key id. The `0.2.1` stdout reports
 `envelopeSha256`, the raw output-file hash, and `organizationEvidenceDigest`, Core's domain-separated
 qualification digest. Enter `organizationEvidenceDigest`—not
 `envelopeSha256`—in Policy Workbench's organization-evidence digest field. The
@@ -498,7 +491,7 @@ expected claims through an independent trusted process.
 - The package emits evidence facts only. It does not provide catalog promotion,
   organization approval, installation, runtime/effect projection, revocation
   custody, or publication authority.
-- Exact public `0.2.0` has an immutable tag, npm registry signatures and
+- Exact public `0.2.1` has an immutable tag, npm registry signatures and
   provenance, a verified five-asset Release, a passing disposable install, and
   an independently observed least-privilege Trusted Publisher. The protected
   environment is tag-only and secret-free, bypass tokens are disallowed, and
@@ -551,7 +544,8 @@ production effect.
 
 The completed public clean-machine acceptance used `@aihq/core@0.2.0` and
 `@aihq/scan@0.1.3` from npm in a disposable installed root. Exact public
-`@aihq/scan@0.2.0` now also carries bounded baseline-vet execution and
+`@aihq/scan@0.2.1` carries bounded baseline-vet execution, safely preserves
+validated in-root relative source symlinks in private analyzer snapshots, and
 independently passes its release-custody checks. The complete cross-package
 acceptance is repeated after the corresponding Core release; it is not
 publication authority.
