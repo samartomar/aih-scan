@@ -166,6 +166,8 @@ describe("code-owned baseline analyzer runtime", () => {
           "1",
           "PYTHONSAFEPATH",
           "1",
+          "PYTHONPATH",
+          "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload",
           "--dir",
           "/run",
           "sync",
@@ -195,6 +197,14 @@ describe("code-owned baseline analyzer runtime", () => {
       ]);
       expect(noEnvFile).toBeGreaterThan(call.argv.indexOf("--clearenv"));
       expect(noEnvFile).toBeLessThan(call.argv.indexOf("--"));
+      const pythonPath = call.argv.indexOf("PYTHONPATH");
+      expect(call.argv.slice(pythonPath - 1, pythonPath + 2)).toEqual([
+        "--setenv",
+        "PYTHONPATH",
+        "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload",
+      ]);
+      expect(pythonPath).toBeGreaterThan(call.argv.indexOf("--clearenv"));
+      expect(pythonPath).toBeLessThan(call.argv.indexOf("--"));
       expect(call.argv).not.toContain("--offline");
       expect(call.argv).toContain("--share-net");
       expect(call.argv).not.toContain(sourceRoot);

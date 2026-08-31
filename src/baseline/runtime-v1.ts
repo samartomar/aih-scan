@@ -38,6 +38,7 @@ export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
 export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.13";
 export const SEMGREP_VERSION_V1 = "1.173.0";
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
+const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
 
 const maxOutputBytes = 16 * 1024 * 1024;
 const maxStderrBytes = 64 * 1024;
@@ -318,6 +319,9 @@ function bubblewrapContainedRunner(
       "--setenv",
       "PYTHONSAFEPATH",
       "1",
+      "--setenv",
+      "PYTHONPATH",
+      baselinePythonPathV1,
       "--chdir",
       input.workingDirectory,
       "--",
