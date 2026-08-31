@@ -280,6 +280,39 @@ describe("code-owned baseline analyzer runtime", () => {
     expect(calls.find((argv) => argv.includes("run"))).toContain(SKILLSPECTOR_IMAGE_V1);
   });
 
+  it("preserves bounded analyzer diagnostic head and tail", async () => {
+    const runner: BaselineProcessRunnerV1 = async (argv) => {
+      if (argv.includes(BASELINE_UV_EXECUTABLE_V1) && argv.includes("sync"))
+        return { code: 0, stdout: "", stderr: "", truncated: false };
+      if (argv.at(-1) === "--version")
+        return {
+          code: 0,
+          stdout: `skill-scanner ${CISCO_SKILL_SCANNER_VERSION_V1}`,
+          stderr: "",
+          truncated: false,
+        };
+      return {
+        code: 2,
+        stdout: "",
+        stderr: `python prefix warning\n${"x".repeat(600)}\nfinal Cisco exception`,
+        truncated: false,
+      };
+    };
+    const execute = createBaselineAnalyzerExecutionV1({ runner, env: { PATH: "C:\\tools" } });
+
+    const rejection = await execute({ analyzer: "cisco", sourceRoot: sourceFixture(), source }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(rejection).toBeInstanceOf(TypeError);
+    const message = (rejection as Error).message;
+    expect(message).toContain("python prefix warning");
+    expect(message).toContain("final Cisco exception");
+    expect(message).toContain("omitted");
+    expect(message.length).toBeLessThanOrEqual(520);
+  });
+
   it.each([
     [
       "wrong image digest",
