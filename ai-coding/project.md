@@ -1,7 +1,7 @@
 # Repository contract
 
 `aih-scan` is a public-remote, npm-published TypeScript/Node.js
-repository that builds the `@aihq/scan@0.2.2` V2 package and `aih-scan`
+repository that builds the `@aihq/scan` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
@@ -26,18 +26,15 @@ paths. Scanner facts never decide qualification, finding disposition, approval,
 installation, runtime/effect projection, or adoption. SBOM/provenance annexes remain
 `digest-bound-unverified`, broker enforcement remains `unverified`, and signing
 claims are signer-asserted with no OIDC provenance. The GitHub remote is public.
-Exact `@aihq/scan@0.2.1` is public from immutable tag `v-scan-0.2.1` with npm
-signatures/provenance, a verified five-asset GitHub Release, matching tarball
-custody, and a passing disposable install/help proof. The protected environment
+The promoted stable train is established only by live npm and GitHub Release
+observation plus a passing disposable install/help proof. The protected environment
 is tag-only and secret-free; the least-privilege Trusted Publisher allows only
 `npm publish`, bypass tokens are disallowed, and the old bootstrap token is
 revoked. Source state alone never establishes publication or organization
-evidence custody. Public `0.2.1` moves bounded baseline-vet execution and its
-signed receipt/annex contract into Scanner and safely preserves validated
-in-root relative source symlinks in private analyzer snapshots while selected
-component trees remain symlink-free. Source package `0.2.2` adds the explicit
-Bubblewrap user-namespace setup required before disabling nested user
-namespaces; its manifest identity alone does not claim publication. The Core lock is a
+evidence custody. The package moves bounded baseline-vet execution and its signed
+receipt/annex contract into Scanner and safely preserves validated in-root relative
+source symlinks in private analyzer snapshots while selected component trees remain
+symlink-free. The Core lock is a
 post-`0.1.1` compatibility fixture whose
 manifest predates public `@aihq/core@0.2.0`; the released Core Workbench handoff
 comes from immutable `v-core-0.2.0` at
