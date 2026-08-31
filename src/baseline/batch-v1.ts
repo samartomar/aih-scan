@@ -457,6 +457,7 @@ function inspectSafeAnalyzerSource(
   for (const path of symlinks.keys()) {
     let parent = dirname(path);
     while (true) {
+      if (directoriesContainingSymlinks.has(parent)) break;
       directoriesContainingSymlinks.add(parent);
       if (parent === root) break;
       const next = dirname(parent);
