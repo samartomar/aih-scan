@@ -117,6 +117,19 @@ describe("code-owned baseline analyzer runtime", () => {
     }
 
     expect(calls.every((call) => call.options.env.API_TOKEN === undefined)).toBe(true);
+    const bubblewrapCalls = calls.filter((call) => call.argv[0] === BASELINE_BWRAP_EXECUTABLE_V1);
+    expect(bubblewrapCalls.length).toBeGreaterThan(0);
+    for (const call of bubblewrapCalls) {
+      expect(call.argv.slice(0, 3)).toEqual([
+        BASELINE_BWRAP_EXECUTABLE_V1,
+        "--unshare-all",
+        "--unshare-user",
+      ]);
+      expect(call.argv.filter((argument) => argument === "--unshare-user")).toHaveLength(1);
+      const disableUserns = call.argv.indexOf("--disable-userns");
+      expect(disableUserns).toBeGreaterThan(2);
+      expect(call.argv[disableUserns + 1]).toBe("--assert-userns-disabled");
+    }
     const dockerConfigs = calls
       .filter((call) => call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1)
       .map((call) => call.options.env.DOCKER_CONFIG);
@@ -142,6 +155,7 @@ describe("code-owned baseline analyzer runtime", () => {
         expect.arrayContaining([
           BASELINE_BWRAP_EXECUTABLE_V1,
           "--unshare-all",
+          "--unshare-user",
           "--share-net",
           "--die-with-parent",
           "--as-pid-1",

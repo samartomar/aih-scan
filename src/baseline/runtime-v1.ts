@@ -235,6 +235,7 @@ function bubblewrapContainedRunner(
     const namespace = [
       BASELINE_BWRAP_EXECUTABLE_V1,
       "--unshare-all",
+      "--unshare-user",
       ...(input.network ? ["--share-net"] : []),
       "--die-with-parent",
       "--as-pid-1",
