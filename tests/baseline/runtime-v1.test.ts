@@ -318,7 +318,7 @@ describe("code-owned baseline analyzer runtime", () => {
       return {
         code: 2,
         stdout: "",
-        stderr: `python prefix warning\n::error::forged annotation\u001b[31m\n${"x".repeat(
+        stderr: `python prefix warning\n::error::forged annotation\u001b[31m\u009b31m\u202e\n${"x".repeat(
           600,
         )}\nfinal Cisco exception`,
         truncated: false,
@@ -341,7 +341,15 @@ describe("code-owned baseline analyzer runtime", () => {
     expect(message).toContain("final Cisco exception");
     expect(message).toContain("omitted");
     expect(message).toContain("\\n");
-    for (const character of ["\r", "\n", String.fromCharCode(27), "\u2028", "\u2029"])
+    for (const character of [
+      "\r",
+      "\n",
+      String.fromCharCode(27),
+      "\u009b",
+      "\u2028",
+      "\u2029",
+      "\u202e",
+    ])
       expect(message).not.toContain(character);
     expect(message.length).toBeLessThanOrEqual(520);
   });
