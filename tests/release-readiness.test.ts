@@ -249,6 +249,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     const readme = read("README.md");
     expect(readme).toContain("promoted `@aihq/scan` stable train");
     expect(readme).toContain("Candidate versions are first published under npm `next`");
+    expect(readme).toContain("`@aihq/scan@0.3.0` adds immutable request-addressed publication");
     expect(readme).toContain("version=X.Y.Z");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
@@ -290,31 +291,21 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(read("VERSIONING.md")).toContain("cannot start or bump a package cut");
   });
 
-  it("packs the license, README, command, and library under the exact identity", () => {
-    const raw = execFileSync(
-      process.execPath,
-      [process.env.npm_execpath ?? "", "pack", "--ignore-scripts", "--dry-run", "--json"],
-      { cwd: root, encoding: "utf8" },
-    );
-    const packedManifests = JSON.parse(raw) as Array<{
-      name: string;
-      version: string;
-      filename: string;
-      files: Array<{ path: string }>;
-    }>;
-    expect(packedManifests).toHaveLength(1);
-    const packed = packedManifests[0];
-    if (packed === undefined) throw new Error("npm pack produced no manifest");
-    expect(packed).toMatchObject({
+  it("declares the exact package identity and public file roots", () => {
+    // package-install-v2 owns the one real npm-pack/install boundary. A second
+    // concurrent pack here races its prepack build and can read a partial dist file.
+    const manifest = JSON.parse(read("package.json")) as {
+      name?: unknown;
+      version?: unknown;
+      files?: unknown;
+    };
+    expect(manifest).toMatchObject({
       name: "@aihq/scan",
-      version: "0.2.5",
-      filename: "aihq-scan-0.2.5.tgz",
+      version: "0.3.0",
+      files: ["dist", "tools/baseline-analyzers", "tools/verify-core-contract-lock-v2.mjs"],
     });
-    const paths = packed.files.map(({ path }) => path);
-    expect(paths).toContain("LICENSE");
-    expect(paths).toContain("README.md");
-    expect(paths).toContain("dist/cli.js");
-    expect(paths).toContain("dist/index.js");
+    expect(existsSync(resolve(root, "LICENSE"))).toBe(true);
+    expect(existsSync(resolve(root, "README.md"))).toBe(true);
   });
 
   it("retires the one-use 0.1.1 recovery workflow after verified success", () => {
