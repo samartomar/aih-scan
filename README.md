@@ -208,6 +208,45 @@ npx aih-scan baseline-verify \
   --seen /protected/seen-evidence-digests.json
 ```
 
+To transfer a verified result across runs or repositories, pack the exact request,
+receipt, annex bytes, signature envelope, and its verification context into one
+canonical publication. The discovery record maps only the request digest to those
+exact publication bytes; it declares `authority: "none"` and is never an approval
+or mutable channel pointer.
+
+```sh
+npx aih-scan baseline-pack \
+  --evidence /path/to/baseline-attestation.json \
+  --request /path/to/canonical-baseline-request.json \
+  --bundle /path/to/baseline-observation-bundle \
+  --roots /protected/trust-roots.json \
+  --expected /protected/expected-signer-and-time.json \
+  --locator https://github.com/owner/repo/releases/download/baseline-v1-REQUEST_SHA/publication.json \
+  --publication /path/to/new-publication.json \
+  --discovery /path/to/new-discovery.json
+
+npx aih-scan baseline-inspect \
+  --discovery /path/to/new-discovery.json \
+  --publication /path/to/new-publication.json \
+  --request-sha256 REQUEST_SHA
+```
+
+`baseline-pack` verifies before it writes and refuses existing output files.
+`baseline-inspect` rechecks the discovery digest, canonical wire, request and
+receipt bindings, every annex, and the embedded custody signature. The embedded
+ephemeral public key makes the file portable but does not make that key trusted;
+publisher provenance is a separate verification boundary.
+
+`.github/workflows/baseline-publication.yml` is manual-dispatch only. It accepts
+exact 40-character Core and source commits, builds publications in a read-only
+job, transfers them by artifact digest, and gives write/OIDC permissions only to
+the protected publication job. That job attests the exact publication files and
+creates request-addressed GitHub Releases only when neither the release nor tag
+already exists. It never publishes an npm package. A consumer must verify the
+GitHub artifact attestation against this repository, workflow, source ref, and
+source digest before treating the embedded key as the custody key for those
+bytes.
+
 The output directory must not exist. It contains only `receipt.json` and the
 exact `annex/*.json` files named and hashed by the receipt. Duplicate, missing,
 substituted, malformed, truncated, stale, drifted, unknown-profile, and

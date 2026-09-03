@@ -28,6 +28,15 @@ import {
   readBaselineVetBundleV1,
   writeBaselineVetBundleV1,
 } from "./baseline/bundle-v1.js";
+import {
+  baselineVetPublicationResultV1,
+  canonicalBaselineVetDiscoveryV1Bytes,
+  canonicalBaselineVetPublicationV1Bytes,
+  createBaselineVetDiscoveryV1,
+  createBaselineVetPublicationV1,
+  parseBaselineVetDiscoveryV1Json,
+  resolveBaselineVetDiscoveryV1,
+} from "./baseline/publication-v1.js";
 import { createBaselineAnalyzerExecutionV1 } from "./baseline/runtime-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { dockerRunner } from "./cli/docker-runner.js";
@@ -55,6 +64,10 @@ const baselineSignUsage =
   "Usage: aih-scan baseline-sign --request <canonical-file> --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file>\n";
 const baselineVerifyUsage =
   "Usage: aih-scan baseline-verify --evidence <file> --request <canonical-file> --bundle <directory> --roots <file> --expected <file> [--seen <file>]\n";
+const baselinePackUsage =
+  "Usage: aih-scan baseline-pack --evidence <file> --request <canonical-file> --bundle <directory> --roots <file> --expected <file> --locator <immutable-https-url> --publication <new-file> --discovery <new-file> [--seen <file>]\n";
+const baselineInspectUsage =
+  "Usage: aih-scan baseline-inspect --discovery <file> --publication <file> --request-sha256 <sha256>\n";
 function fail(message: string): never {
   throw new TypeError(`aih-scan: ${message}`);
 }
@@ -103,8 +116,8 @@ function readBoundedRegularFile(path: string, label: string, maximumBytes: numbe
     if (descriptor !== undefined) closeSync(descriptor);
   }
 }
-function readText(path: string, label: string): string {
-  const bytes = readBoundedRegularFile(path, label, maxInputBytes);
+function readText(path: string, label: string, maximumBytes = maxInputBytes): string {
+  const bytes = readBoundedRegularFile(path, label, maximumBytes);
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
   return text;
@@ -169,7 +182,7 @@ function rootsFromFile(path: string) {
       fail("root fields");
     return {
       identity: root.identity,
-      class: root.class,
+      class: root.class as "test-ephemeral" | "organization",
       keyId: root.keyId,
       publicKey: createPublicKey({
         key: decodeCanonicalBase64(root.publicKeySpkiBase64, "root SPKI", 4096),
@@ -507,6 +520,106 @@ function baselineVerify(args: readonly string[]): void {
   });
   process.stdout.write(`${canonicalStrictJsonBytesV1(verified.facts).toString("utf8")}\n`);
 }
+function baselineReplayFromArgs(args: readonly string[]) {
+  if (!args.includes("--seen")) return { digests: [], receipts: [] };
+  const seen = readJson(flag(args, "--seen"), "baseline replay evidence");
+  exactWire(seen, ["digests", "receipts"], "baseline replay evidence");
+  if (!Array.isArray(seen.digests) || !Array.isArray(seen.receipts))
+    fail("baseline replay evidence entries");
+  return { digests: seen.digests, receipts: seen.receipts };
+}
+function baselinePack(args: readonly string[]): void {
+  const allowed = new Set([
+    "--evidence",
+    "--request",
+    "--bundle",
+    "--roots",
+    "--expected",
+    "--locator",
+    "--publication",
+    "--discovery",
+    "--seen",
+  ]);
+  if (
+    (args.length !== 16 && args.length !== 18) ||
+    args.length % 2 !== 0 ||
+    args.some((arg, index) => index % 2 === 0 && !allowed.has(arg))
+  )
+    fail("baseline-pack usage");
+  for (const required of [
+    "--evidence",
+    "--request",
+    "--bundle",
+    "--roots",
+    "--expected",
+    "--locator",
+    "--publication",
+    "--discovery",
+  ])
+    flag(args, required);
+  const replay = baselineReplayFromArgs(args);
+  const expected = readJson(flag(args, "--expected"), "baseline expected policy") as {
+    readonly now: string;
+    readonly signer: {
+      readonly identity: string;
+      readonly class: "test-ephemeral" | "organization";
+      readonly keyId: string;
+    };
+  };
+  const publication = createBaselineVetPublicationV1({
+    envelope: parseBaselineVetAttestationEnvelopeV1Json(
+      readText(flag(args, "--evidence"), "baseline evidence"),
+    ),
+    request: parseBaselineVetRequestV1Json(
+      readText(flag(args, "--request"), "baseline vet request"),
+    ),
+    result: readBaselineVetBundleV1({ bundleDirectory: flag(args, "--bundle") }),
+    roots: rootsFromFile(flag(args, "--roots")),
+    expected,
+    seenEvidenceDigests: replay.digests as string[],
+    seenReceiptBindings: replay.receipts as Array<{
+      requestSha256: string;
+      receiptSha256: string;
+    }>,
+  });
+  const discovery = createBaselineVetDiscoveryV1({
+    publication,
+    locator: flag(args, "--locator"),
+  });
+  writeNew(flag(args, "--publication"), canonicalBaselineVetPublicationV1Bytes(publication));
+  writeNew(flag(args, "--discovery"), canonicalBaselineVetDiscoveryV1Bytes(discovery));
+  process.stdout.write(`${canonicalStrictJsonBytesV1(discovery).toString("utf8")}\n`);
+}
+function baselineInspect(args: readonly string[]): void {
+  if (
+    args.length !== 6 ||
+    args.length % 2 !== 0 ||
+    args.some(
+      (arg, index) =>
+        index % 2 === 0 && !new Set(["--discovery", "--publication", "--request-sha256"]).has(arg),
+    )
+  )
+    fail("baseline-inspect usage");
+  const discovery = parseBaselineVetDiscoveryV1Json(
+    readText(flag(args, "--discovery"), "baseline discovery", 8 * 1024),
+  );
+  const publication = resolveBaselineVetDiscoveryV1({
+    discovery,
+    publicationBytes: readBoundedRegularFile(
+      flag(args, "--publication"),
+      "baseline publication",
+      96 * 1024 * 1024,
+    ),
+    expectedRequestSha256: flag(args, "--request-sha256"),
+  });
+  const portable = baselineVetPublicationResultV1(publication);
+  const verified = verifyBaselineVetAttestationV1({
+    ...portable,
+    seenEvidenceDigests: [],
+    seenReceiptBindings: [],
+  });
+  process.stdout.write(`${canonicalStrictJsonBytesV1(verified.facts).toString("utf8")}\n`);
+}
 function sign(args: readonly string[]): void {
   if (
     args.length !== 10 ||
@@ -587,10 +700,24 @@ async function main(): Promise<void> {
     }
     return baselineVerify(args);
   }
+  if (command === "baseline-pack") {
+    if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+      process.stdout.write(baselinePackUsage);
+      return;
+    }
+    return baselinePack(args);
+  }
+  if (command === "baseline-inspect") {
+    if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+      process.stdout.write(baselineInspectUsage);
+      return;
+    }
+    return baselineInspect(args);
+  }
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan baseline-vet ... | baseline-sign ... | baseline-verify ... | capture ... | sign ... | verify ... | project-core-evidence ...\n",
+      "Usage: aih-scan baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign ... | verify ... | project-core-evidence ...\n",
     );
     return;
   }

@@ -1,0 +1,304 @@
+name: immutable baseline publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      catalog:
+        description: Core baseline catalog to observe
+        required: true
+        type: choice
+        options:
+          - ecc
+          - superpowers
+      core_ref:
+        description: Exact 40-character ai-harness commit that authors the request
+        required: true
+        type: string
+      source_repository:
+        description: Exact owner/repository selected by the catalog
+        required: true
+        type: string
+      source_ref:
+        description: Exact 40-character source commit to observe
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_sha256: ${{ steps.upload.outputs.artifact-digest }}
+    env:
+      CATALOG: ${{ inputs.catalog }}
+      CORE_REF: ${{ inputs.core_ref }}
+      SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+    steps:
+      - name: Validate immutable inputs before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CORE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          case "$CATALOG:$SOURCE_REPOSITORY" in
+            ecc:samartomar/ECC|superpowers:obra/Superpowers) ;;
+            *) echo "::error::source repository does not match the selected catalog"; exit 1 ;;
+          esac
+
+      - name: Check out exact Scanner publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind publication to current protected Scanner main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+
+      - name: Check out exact Core request author
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: samartomar/ai-harness
+          ref: ${{ inputs.core_ref }}
+          path: .core
+          persist-credentials: false
+
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.source_repository }}
+          ref: ${{ inputs.source_ref }}
+          path: .source
+          persist-credentials: false
+
+      - name: Prove exact checkout identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CORE_REF" = "$(git -C .core rev-parse HEAD)"
+          test "$SOURCE_REF" = "$(git -C .source rev-parse HEAD)"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up fixed Python runtime
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up fixed uv runtime
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.8"
+
+      - name: Install exact Scanner and Core dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          npm --prefix .core ci --ignore-scripts
+
+      - name: Bind Scanner analyzer isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
+          apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          test -r "$apparmor_profile"
+          sudo apparmor_parser --replace "$apparmor_profile"
+          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
+          case "$python_prefix" in
+            /usr|/usr/*) echo "::error::unexpected setup-python prefix"; exit 1 ;;
+          esac
+          sudo cp -a "${python_prefix}/." /usr/local/
+          sudo install -m 0644 \
+            "${python_prefix}/lib/libpython3.13.so.1.0" \
+            /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
+          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
+          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
+          test "$(id -u)" -ne 0
+          test -x /usr/bin/docker
+          test -x /usr/bin/bwrap
+          test -x /usr/local/bin/uv
+          /usr/bin/python3.13 -c 'import sys; assert sys.version_info[:2] == (3, 13)'
+
+      - name: Author the canonical request independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/baseline/requests" "$RUNNER_TEMP/baseline/bundles"
+          npm --prefix .core run baseline:request -- \
+            --catalog "$CATALOG" \
+            --source "$GITHUB_WORKSPACE/.source" \
+            --output "$RUNNER_TEMP/baseline/requests"
+
+      - name: Execute Scanner analyzers once per canonical request
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          requests=("$RUNNER_TEMP/baseline/requests"/*.request.json)
+          test "${#requests[@]}" -gt 0
+          for request in "${requests[@]}"; do
+            batch="$(basename "$request" .request.json)"
+            node dist/cli.js baseline-vet \
+              --request "$request" \
+              --source "$GITHUB_WORKSPACE/.source" \
+              --output "$RUNNER_TEMP/baseline/bundles/$batch.bundle"
+          done
+
+      - name: Sign, pack, and independently inspect portable publications
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_root="$(mktemp -d)"
+          trap 'rm -rf -- "$signing_root"' EXIT
+          openssl genpkey -algorithm ED25519 -out "$signing_root/private.pem"
+          chmod 0600 "$signing_root/private.pem"
+          openssl pkey -in "$signing_root/private.pem" -pubout -outform DER \
+            -out "$signing_root/public.der"
+          key_id="ed25519:$(sha256sum "$signing_root/public.der" | cut -d ' ' -f 1)"
+          public_key="$(base64 -w 0 "$signing_root/public.der")"
+          signed_at="$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
+          expires_at="$(date -u -d '+45 minutes' +'%Y-%m-%dT%H:%M:%S.000Z')"
+          jq -n --arg key "$key_id" \
+            '{identity:"github-actions:aih-scan-baseline-publication",class:"test-ephemeral",keyId:$key}' \
+            > "$signing_root/signer.json"
+          jq -n --arg signed "$signed_at" --arg expires "$expires_at" \
+            '{signedAt:$signed,expiresAt:$expires}' > "$signing_root/claims.json"
+          jq -n --arg key "$key_id" --arg public "$public_key" \
+            '{roots:[{identity:"github-actions:aih-scan-baseline-publication",class:"test-ephemeral",keyId:$key,publicKeySpkiBase64:$public}]}' \
+            > "$signing_root/roots.json"
+          jq -n --arg now "$signed_at" --arg key "$key_id" \
+            '{now:$now,signer:{identity:"github-actions:aih-scan-baseline-publication",class:"test-ephemeral",keyId:$key}}' \
+            > "$signing_root/expected.json"
+          mkdir "$RUNNER_TEMP/baseline/publications"
+          for request in "$RUNNER_TEMP/baseline/requests"/*.request.json; do
+            batch="$(basename "$request" .request.json)"
+            bundle="$RUNNER_TEMP/baseline/bundles/$batch.bundle"
+            evidence="$signing_root/$batch.evidence.json"
+            node dist/cli.js baseline-sign \
+              --request "$request" --bundle "$bundle" \
+              --signer "$signing_root/signer.json" --private-key "$signing_root/private.pem" \
+              --claims "$signing_root/claims.json" --output "$evidence"
+            request_sha256="$(jq -er '.requestSha256 | select(test("^[0-9a-f]{64}$"))' "$request")"
+            output="$RUNNER_TEMP/baseline/publications/$request_sha256"
+            mkdir "$output"
+            tag="baseline-v1-$request_sha256"
+            locator="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/publication.json"
+            node dist/cli.js baseline-pack \
+              --evidence "$evidence" --request "$request" --bundle "$bundle" \
+              --roots "$signing_root/roots.json" --expected "$signing_root/expected.json" \
+              --locator "$locator" --publication "$output/publication.json" \
+              --discovery "$output/discovery.json"
+            node dist/cli.js baseline-inspect \
+              --discovery "$output/discovery.json" --publication "$output/publication.json" \
+              --request-sha256 "$request_sha256" > "$output/inspection.json"
+            (cd "$output" && sha256sum publication.json discovery.json inspection.json > SHA256SUMS)
+          done
+
+      - name: Transfer immutable publication candidates
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: baseline-publications-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/baseline/publications
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: baseline-evidence-publish
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      actions: read
+    steps:
+      - name: Download exact same-run publication candidates
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: publications
+          digest-mismatch: error
+
+      - name: Verify artifact custody and closed publication layout
+        env:
+          EXPECTED_ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          EXPECTED_ARTIFACT_SHA256: ${{ needs.build.outputs.artifact_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_ARTIFACT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          api_digest="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$EXPECTED_ARTIFACT_ID" --jq .digest)"
+          test "$api_digest" = "sha256:$EXPECTED_ARTIFACT_SHA256"
+          shopt -s nullglob
+          directories=(publications/*)
+          test "${#directories[@]}" -gt 0
+          for directory in "${directories[@]}"; do
+            test -d "$directory"
+            request_sha256="$(basename "$directory")"
+            [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(find "$directory" -maxdepth 1 -type f | wc -l)" -eq 4
+            (cd "$directory" && sha256sum -c SHA256SUMS)
+            test "$(jq -er '.requestSha256' "$directory/discovery.json")" = "$request_sha256"
+            test "$(jq -er '.authority' "$directory/discovery.json")" = "none"
+          done
+
+      - name: Attest exact publication bytes
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: publications/*/publication.json
+
+      - name: Create no-overwrite request-addressed releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for directory in publications/*; do
+            request_sha256="$(basename "$directory")"
+            tag="baseline-v1-$request_sha256"
+            expected_locator="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/publication.json"
+            test "$(jq -er '.locator' "$directory/discovery.json")" = "$expected_locator"
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "::error::publication release already exists: $tag"
+              exit 1
+            fi
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::publication tag already exists: $tag"
+              exit 1
+            fi
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$tag" \
+              --notes "Content-addressed Scanner evidence. Authority: none. Request: $request_sha256." \
+              "$directory/publication.json" \
+              "$directory/discovery.json" \
+              "$directory/inspection.json" \
+              "$directory/SHA256SUMS"
+          done

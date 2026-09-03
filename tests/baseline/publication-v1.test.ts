@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalBaselineVetAttestationEnvelopeV1Bytes,
   signBaselineVetBundleV1,
+  verifyBaselineVetAttestationV1,
 } from "../../src/baseline/attestation-v1.js";
 import {
   type BaselineAnalyzerExecutionV1,
@@ -13,6 +14,7 @@ import {
   executeBaselineVetBatchV1,
 } from "../../src/baseline/batch-v1.js";
 import {
+  baselineVetPublicationResultV1,
   canonicalBaselineVetDiscoveryV1Bytes,
   canonicalBaselineVetPublicationV1Bytes,
   createBaselineVetDiscoveryV1,
@@ -31,11 +33,11 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(rule = "# Rule\n") {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-baseline-publication-"));
   temporaryDirectories.push(root);
   mkdirSync(join(root, "rules"));
-  writeFileSync(join(root, "rules", "base.md"), "# Rule\n", "utf8");
+  writeFileSync(join(root, "rules", "base.md"), rule, "utf8");
   const request = createBaselineVetRequestV1({
     protocol: "BaselineVetRequestV1",
     profile: "aih-baseline-v1",
@@ -52,7 +54,7 @@ async function fixture() {
         content: "general",
         paths: ["rules"],
         treeSha256: hashComponentTreeV1(root, ["rules"]).treeSha256,
-        analyzers: ["aih-native", "semgrep"],
+        analyzers: ["aih-native", "skillspector", "semgrep"],
       },
     ],
   });
@@ -91,9 +93,7 @@ async function fixture() {
   return {
     request,
     result,
-    envelope: JSON.parse(
-      canonicalBaselineVetAttestationEnvelopeV1Bytes(signed).toString("utf8"),
-    ),
+    envelope: JSON.parse(canonicalBaselineVetAttestationEnvelopeV1Bytes(signed).toString("utf8")),
     roots: [{ ...signer, publicKey: keys.publicKey }],
     expected,
   };
@@ -116,12 +116,20 @@ describe("BaselineVetPublicationV1", () => {
     expect(parsed.annexes.map((annex) => annex.path)).toEqual(
       input.result.receipt.observations.map((observation) => observation.annex.path),
     );
+    const portable = baselineVetPublicationResultV1(parsed);
+    expect(
+      verifyBaselineVetAttestationV1({
+        ...portable,
+        seenEvidenceDigests: [],
+        seenReceiptBindings: [],
+      }).facts.evidenceDigestSha256,
+    ).toMatch(/^[0-9a-f]{64}$/);
     expect(Object.isFrozen(parsed)).toBe(true);
   });
 
   it("refuses a mismatched attestation before producing publication bytes", async () => {
     const input = await fixture();
-    const other = await fixture();
+    const other = await fixture("# Other rule\n");
 
     expect(() =>
       createBaselineVetPublicationV1({
@@ -147,11 +155,18 @@ describe("BaselineVetPublicationV1", () => {
     ).toThrow();
     expect(() =>
       parseBaselineVetPublicationV1Json(
-        JSON.stringify({ ...publication, annexes: [publication.annexes[0], publication.annexes[0]] }),
+        JSON.stringify({
+          ...publication,
+          annexes: [publication.annexes[0], publication.annexes[0]],
+        }),
       ),
     ).toThrow(/annex/);
-    const changed = structuredClone(publication);
-    changed.annexes[0].bytesBase64 = Buffer.from("changed", "utf8").toString("base64");
+    const changed = JSON.parse(canonical) as {
+      annexes: Array<{ bytesBase64: string }>;
+    };
+    const firstAnnex = changed.annexes[0];
+    if (firstAnnex === undefined) throw new Error("test fixture requires one annex");
+    firstAnnex.bytesBase64 = Buffer.from("changed", "utf8").toString("base64");
     expect(() => parseBaselineVetPublicationV1Json(JSON.stringify(changed))).toThrow(/annex/);
   });
 });

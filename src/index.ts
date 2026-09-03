@@ -21,6 +21,18 @@ export {
   parseBaselineVetRequestV1Json,
 } from "./baseline/batch-v1.js";
 export { readBaselineVetBundleV1 } from "./baseline/bundle-v1.js";
+export {
+  type BaselineVetDiscoveryV1,
+  type BaselineVetPublicationV1,
+  baselineVetPublicationResultV1,
+  canonicalBaselineVetDiscoveryV1Bytes,
+  canonicalBaselineVetPublicationV1Bytes,
+  createBaselineVetDiscoveryV1,
+  createBaselineVetPublicationV1,
+  parseBaselineVetDiscoveryV1Json,
+  parseBaselineVetPublicationV1Json,
+  resolveBaselineVetDiscoveryV1,
+} from "./baseline/publication-v1.js";
 export { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 export {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,

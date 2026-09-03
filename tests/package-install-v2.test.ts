@@ -40,6 +40,8 @@ const publicV2Exports = [
   "BASELINE_ANALYZERS_V1",
   "assertCompleteScanAnnexArtifactsV2",
   "canonicalBaselineVetAttestationEnvelopeV1Bytes",
+  "canonicalBaselineVetDiscoveryV1Bytes",
+  "canonicalBaselineVetPublicationV1Bytes",
   "canonicalBaselineVetReceiptV1Bytes",
   "canonicalBaselineVetRequestV1Bytes",
   "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
@@ -51,6 +53,8 @@ const publicV2Exports = [
   "captureCiscoOciCandidateV2",
   "captureRegisteredDetectorCandidateV2",
   "createBaselineVetRequestV1",
+  "createBaselineVetDiscoveryV1",
+  "createBaselineVetPublicationV1",
   "createDetectorRegistrationV1",
   "createScanCandidateV2",
   "ed25519KeyIdV2",
@@ -58,17 +62,21 @@ const publicV2Exports = [
   "parseBaselineVetReceiptV1Json",
   "parseBaselineVetRequestV1Json",
   "parseBaselineVetAttestationEnvelopeV1Json",
+  "parseBaselineVetDiscoveryV1Json",
+  "parseBaselineVetPublicationV1Json",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
   "parseDetectorRegistrationV1Json",
   "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
   "readBaselineVetBundleV1",
+  "resolveBaselineVetDiscoveryV1",
   "readScanCaptureBundleV2",
   "sealSourceV2",
   "signBaselineVetBundleV1",
   "signScanCandidateV2",
   "verifyAiHarnessCoreEvidenceContractV1",
   "verifyBaselineVetAttestationV1",
+  "baselineVetPublicationResultV1",
   "verifyAiHarnessStrictV2Contract",
   "verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1",
   "verifyScanAttestationV2",
@@ -534,6 +542,12 @@ describe("published V2 package installation", () => {
     expect(runInstalledBin(directory, ["baseline-verify", "--help"])).toContain(
       "Usage: aih-scan baseline-verify",
     );
+    expect(runInstalledBin(directory, ["baseline-pack", "--help"])).toContain(
+      "Usage: aih-scan baseline-pack",
+    );
+    expect(runInstalledBin(directory, ["baseline-inspect", "--help"])).toContain(
+      "Usage: aih-scan baseline-inspect",
+    );
 
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
@@ -702,6 +716,52 @@ describe("published V2 package installation", () => {
     ) as { envelopeValid?: unknown; authority?: unknown; evidenceDigestSha256?: unknown };
     expect(baselineVerified).toMatchObject({ envelopeValid: true, authority: "none" });
     expect(baselineVerified.evidenceDigestSha256).toMatch(/^[0-9a-f]{64}$/);
+    const locator =
+      "https://github.com/samartomar/aih-scan/releases/download/baseline-request/publication.json";
+    const packed = JSON.parse(
+      runInstalledBin(directory, [
+        "baseline-pack",
+        "--evidence",
+        "baseline-evidence.json",
+        "--request",
+        "baseline-request.json",
+        "--bundle",
+        "baseline-bundle",
+        "--roots",
+        "baseline-roots.json",
+        "--expected",
+        "baseline-expected.json",
+        "--locator",
+        locator,
+        "--publication",
+        "baseline-publication.json",
+        "--discovery",
+        "baseline-discovery.json",
+      ]),
+    ) as { authority?: unknown; requestSha256?: unknown; publicationSha256?: unknown };
+    expect(packed).toMatchObject({
+      authority: "none",
+      requestSha256: baselineRequest.requestSha256,
+    });
+    expect(packed.publicationSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(existsSync(join(directory, "baseline-publication.json"))).toBe(true);
+    expect(existsSync(join(directory, "baseline-discovery.json"))).toBe(true);
+    const inspected = JSON.parse(
+      runInstalledBin(directory, [
+        "baseline-inspect",
+        "--discovery",
+        "baseline-discovery.json",
+        "--publication",
+        "baseline-publication.json",
+        "--request-sha256",
+        baselineRequest.requestSha256,
+      ]),
+    ) as { envelopeValid?: unknown; authority?: unknown; requestSha256?: unknown };
+    expect(inspected).toMatchObject({
+      envelopeValid: true,
+      authority: "none",
+      requestSha256: baselineRequest.requestSha256,
+    });
     writeFileSync(
       join(directory, "baseline-seen.json"),
       JSON.stringify({
