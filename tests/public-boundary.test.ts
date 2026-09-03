@@ -14,7 +14,10 @@ describe("Strict V2 public boundary", () => {
       "AI_HARNESS_STRICT_V2_COMMIT",
       "BASELINE_ANALYZERS_V1",
       "assertCompleteScanAnnexArtifactsV2",
+      "baselineVetPublicationResultV1",
       "canonicalBaselineVetAttestationEnvelopeV1Bytes",
+      "canonicalBaselineVetDiscoveryV1Bytes",
+      "canonicalBaselineVetPublicationV1Bytes",
       "canonicalBaselineVetReceiptV1Bytes",
       "canonicalBaselineVetRequestV1Bytes",
       "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
@@ -25,12 +28,16 @@ describe("Strict V2 public boundary", () => {
       "canonicalSourceSealsV2Bytes",
       "captureCiscoOciCandidateV2",
       "captureRegisteredDetectorCandidateV2",
+      "createBaselineVetDiscoveryV1",
+      "createBaselineVetPublicationV1",
       "createBaselineVetRequestV1",
       "createDetectorRegistrationV1",
       "createScanCandidateV2",
       "ed25519KeyIdV2",
       "isVerifiedScanAttestationV2",
       "parseBaselineVetAttestationEnvelopeV1Json",
+      "parseBaselineVetDiscoveryV1Json",
+      "parseBaselineVetPublicationV1Json",
       "parseBaselineVetReceiptV1Json",
       "parseBaselineVetRequestV1Json",
       "parseDetectorRegistrationV1Json",
@@ -39,6 +46,7 @@ describe("Strict V2 public boundary", () => {
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
+      "resolveBaselineVetDiscoveryV1",
       "sealSourceV2",
       "signBaselineVetBundleV1",
       "signScanCandidateV2",
@@ -67,6 +75,8 @@ describe("Strict V2 public boundary", () => {
     expect(cli).toContain('command === "baseline-vet"');
     expect(cli).toContain('command === "baseline-sign"');
     expect(cli).toContain('command === "baseline-verify"');
+    expect(cli).toContain('command === "baseline-pack"');
+    expect(cli).toContain('command === "baseline-inspect"');
     expect(cli).not.toMatch(/npm publish|createRelease|git tag/i);
   });
 
