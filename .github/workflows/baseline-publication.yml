@@ -144,7 +144,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/baseline/requests" "$RUNNER_TEMP/baseline/bundles"
+          mkdir -p "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/baseline/bundles"
           npm --prefix .core run baseline:request -- \
             --catalog "$CATALOG" \
             --source "$GITHUB_WORKSPACE/.source" \
