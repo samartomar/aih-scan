@@ -25,6 +25,8 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain('test "$CORE_REF" = "$(git -C .core rev-parse HEAD)"');
     expect(workflow).toContain('test "$SOURCE_REF" = "$(git -C .source rev-parse HEAD)"');
     expect(workflow).toContain("npm --prefix .core run baseline:request");
+    expect(workflow).not.toContain('mkdir -p "$RUNNER_TEMP/baseline/requests"');
+    expect(workflow).toContain('mkdir -p "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/baseline/bundles"');
     expect(workflow).toContain("node dist/cli.js baseline-vet");
     expect(workflow).toContain("node dist/cli.js baseline-pack");
     expect(workflow).toContain("node dist/cli.js baseline-inspect");
