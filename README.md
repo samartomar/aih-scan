@@ -28,6 +28,11 @@ custody. Candidate versions are first published under npm `next`; only public
 installed acceptance plus separate authorization can promote the same bytes to
 `latest`.
 
+`@aihq/scan@0.3.0` adds immutable request-addressed publication through
+`baseline-pack`, `baseline-inspect`, and the protected manual baseline-publication
+workflow. Publication custody is established only when the live registry, Release,
+and artifact-attestation checks succeed.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment
