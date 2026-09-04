@@ -15,8 +15,8 @@ import { parseCiscoOciLayoutV1 } from "./oci-layout-v1.js";
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const RAW = /^raw-occurrence-v1:[a-f0-9]{64}$/;
-const LOCK_SHA256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
-const WHEEL_SHA256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
+const LOCK_SHA256 = "aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1";
+const WHEEL_SHA256 = "30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2";
 const brands = new WeakMap<object, Buffer>();
 
 type RecordValue = Record<string, unknown>;
@@ -148,7 +148,7 @@ function runtime(value: unknown): void {
   );
   if (
     parsed.packageName !== "cisco-ai-skill-scanner" ||
-    parsed.version !== "2.0.13" ||
+    parsed.version !== "2.0.14" ||
     parsed.uvVersion !== "0.12.5" ||
     parsed.lockSha256 !== LOCK_SHA256 ||
     parsed.wheelSha256 !== WHEEL_SHA256
@@ -629,7 +629,7 @@ export async function runCiscoOciEquivalenceLiveV1(
     platform: { os: "linux", architecture: "amd64" },
     runtime: {
       packageName: "cisco-ai-skill-scanner",
-      version: "2.0.13",
+      version: "2.0.14",
       uvVersion: "0.12.5",
       lockSha256: LOCK_SHA256,
       wheelSha256: WHEEL_SHA256,

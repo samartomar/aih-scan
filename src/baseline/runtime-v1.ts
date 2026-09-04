@@ -35,7 +35,7 @@ export const SKILLSPECTOR_IMAGE_V1 =
 export const SKILLSPECTOR_SOURCE_REVISION_V1 = "2d198ab910add401cad658d1087e7c7ba24fd640";
 export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
   "sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
-export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.13";
+export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.14";
 export const SEMGREP_VERSION_V1 = "1.173.0";
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";

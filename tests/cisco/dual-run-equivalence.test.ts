@@ -11,8 +11,8 @@ import { probeCiscoLinuxAmd64V1 } from "../../src/cisco/linux-amd64-probe-v1.js"
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { parseCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
 
-const lockSha256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
-const wheelSha256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
+const lockSha256 = "aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1";
+const wheelSha256 = "30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2";
 const fixtureBytes = "# Demo\n\nNeutral fixture.\n";
 const fixtureSha256 = "57b1967dfe7f3b898c1ec24f1f9057de112ba1aa346c1ba37c72106a5e0b6985";
 const coverageSha256 = "35239b0b0ae7907a5ddbb6af273cb356dd547327c21724122a22df53dbc8773d";
@@ -273,7 +273,7 @@ async function produce(
     platform: { os: "linux", architecture: "amd64" },
     runtime: {
       packageName: "cisco-ai-skill-scanner",
-      version: "2.0.13",
+      version: "2.0.14",
       uvVersion: "0.12.5",
       lockSha256,
       wheelSha256,

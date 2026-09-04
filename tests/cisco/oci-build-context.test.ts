@@ -8,9 +8,9 @@ const candidateRoot = resolve(root, "tools", "cisco-oci-candidate");
 const read = (name: string) => readFileSync(resolve(candidateRoot, name), "utf8");
 const sha256 = (name: string) => createHash("sha256").update(read(name)).digest("hex");
 
-const pyprojectSha256 = "ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41";
-const lockSha256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
-const ciscoWheelSha256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
+const pyprojectSha256 = "68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f";
+const lockSha256 = "aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1";
+const ciscoWheelSha256 = "30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2";
 const uvWheelSha256 = "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15";
 
 describe("Cisco OCI candidate build context", () => {
@@ -40,7 +40,7 @@ describe("Cisco OCI candidate build context", () => {
     expect(dockerfile).toContain(lockSha256);
     expect(dockerfile).toMatch(/sha256sum -c/);
     expect(dockerfile).toContain("SOURCE_DATE_EPOCH=1785167267");
-    expect(dockerfile).toContain("UV_EXCLUDE_NEWER=2026-08-15T00:00:00Z");
+    expect(dockerfile).toContain("UV_EXCLUDE_NEWER=2026-09-02T00:00:00Z");
     expect(dockerfile).toMatch(/tar[^\n]*--sort=name[^\n]*--mtime=@1785167267/);
     expect(dockerfile).toMatch(/USER\s+65532(?::65532)?/);
     expect(dockerfile).toContain('ENTRYPOINT ["/runtime/.venv/bin/skill-scanner"]');
@@ -48,7 +48,7 @@ describe("Cisco OCI candidate build context", () => {
       /ADD\s+https?:|curl\b|pip install\s+uv\b|latest|credential|policy/i,
     );
     expect(read("uv.lock")).toMatch(
-      /cisco-ai-skill-scanner[\s\S]*2\.0\.13[\s\S]*d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837/i,
+      /cisco-ai-skill-scanner[\s\S]*2\.0\.14[\s\S]*30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2/i,
     );
   });
 });

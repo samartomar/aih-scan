@@ -15,8 +15,8 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { probeCiscoLinuxAmd64V1 } from "../../src/cisco/linux-amd64-probe-v1.js";
 
-const lockSha256 = "3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3";
-const wheelSha256 = "d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837";
+const lockSha256 = "aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1";
+const wheelSha256 = "30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2";
 const roots: string[] = [];
 const maxStdioBytes = 64 * 1024;
 const maxSarifBytes = 16 * 1024 * 1024;
@@ -148,7 +148,7 @@ function input(root: string, overrides: Record<string, unknown> = {}) {
     platform: { os: "linux", architecture: "amd64" },
     runtime: {
       packageName: "cisco-ai-skill-scanner",
-      version: "2.0.13",
+      version: "2.0.14",
       uvVersion: "0.12.5",
       lockSha256,
       wheelSha256,
@@ -633,7 +633,7 @@ describe("Cisco Linux amd64 observation-only probe", () => {
     expect(result.platform).toEqual({ os: "linux", architecture: "amd64" });
     expect(result.runtime).toEqual({
       packageName: "cisco-ai-skill-scanner",
-      version: "2.0.13",
+      version: "2.0.14",
       uvVersion: "0.12.5",
       lockSha256,
       wheelSha256,

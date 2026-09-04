@@ -34,24 +34,22 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)\s*(?:#.*)?$/gm)].map(
       (match) => match[1] ?? "",
     );
-    expect(uses).toHaveLength(4);
+    expect(uses).toHaveLength(3);
     for (const action of uses) {
       expect(action).toMatch(
         /^(?:actions\/checkout|actions\/setup-python|actions\/upload-artifact)@[a-f0-9]{40}$/,
       );
     }
-    expect(uses.filter((action) => action.startsWith("actions/checkout@"))).toHaveLength(2);
+    expect(uses.filter((action) => action.startsWith("actions/checkout@"))).toHaveLength(1);
     expect(uses).toContain("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
     expect(uses).toContain("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97");
     expect(uses).not.toContain("astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d");
     expect(uses).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
     const checkoutSteps = stepBlocks(workflow).filter((step) => step.includes("actions/checkout@"));
-    expect(checkoutSteps).toHaveLength(2);
+    expect(checkoutSteps).toHaveLength(1);
     for (const checkout of checkoutSteps) expect(checkout).toMatch(/persist-credentials:\s*false/);
-    const aihCheckout = blockContaining(workflow, "repository: samartomar/ai-harness");
-    expect(aihCheckout).toContain("ref: c0b4931d1f5435f10dc5d2bc57480f9275ed3eff");
-    expect(aihCheckout).toContain("path: .candidate-sources/ai-harness");
-    expect(aihCheckout).toMatch(/persist-credentials:\s*false/);
+    expect(workflow).not.toMatch(/repository: samartomar\/ai-harness|candidate-sources/);
+    expect(workflow).toContain('runtime="tools/baseline-analyzers/cisco-skill-scanner"');
     expect(workflow).toMatch(/python-version:\s*["']?3\.12["']?/);
     const installUv = blockContaining(workflow, "Install exact uv 0.12.5");
     expect(installUv).toContain(uvWheelUrl);
@@ -64,23 +62,23 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     );
     expect(installUv).toContain("python -m uv --version >/dev/null");
     expect(workflow).not.toMatch(/astral-sh\/setup-uv|versions-manifest/i);
-    expect(workflow).toContain("ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41");
-    expect(workflow).toContain("3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3");
-    expect(workflow).toContain("d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837");
+    expect(workflow).toContain("68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f");
+    expect(workflow).toContain("aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1");
+    expect(workflow).toContain("30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2");
     const verification = blockContaining(workflow, "Verify exact runtime inputs");
     const warm = blockContaining(workflow, "Warm exact Cisco runtime");
     const live = blockContaining(workflow, "Capture Linux observation evidence");
     expect(verification).toMatch(/curl .*--output .*\.whl/);
-    expect(verification).toMatch(/cisco[-_]ai[-_]skill[-_]scanner.*2\.0\.13/i);
+    expect(verification).toMatch(/cisco[-_]ai[-_]skill[-_]scanner.*2\.0\.14/i);
     expect(verification).toMatch(/sha256sum -c\s+[^\s]+/);
     expect(verification).toMatch(
-      /ec52cc1cb4f7375a32ad56d3157820fe5aaf8cd9ba806e411c1bf9eb2f63bf41.*pyproject\.toml/i,
+      /68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f.*pyproject\.toml/i,
     );
     expect(verification).toMatch(
-      /3ba2452805078f18493e0d856127b99339b4aa61603b593886a8ba070758e2d3.*uv\.lock/i,
+      /aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1.*uv\.lock/i,
     );
     expect(verification).toMatch(
-      /d81fde291d60b6f8134375c33b49a2f41f5bb3072b74153dafea4774d627a837.*\.whl/i,
+      /30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2.*\.whl/i,
     );
     expect(warm).toMatch(/uv sync --project .*--locked --isolated --python 3\.12/);
     expect(warm).not.toMatch(/--offline/);

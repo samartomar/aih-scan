@@ -199,16 +199,16 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
   it("binds credential-free checkouts and contains execution in named steps", () => {
     const text = workflow();
     const scan = step(text, "Check out aih-scan");
-    const aih = step(text, "Check out public ai-harness");
     const execute = step(text, "Compare isolated direct and OCI observations");
     expect(scan).toContain("persist-credentials: false");
-    expect(aih).toContain("persist-credentials: false");
-    expect(aih).toContain("ref: c0b4931d1f5435f10dc5d2bc57480f9275ed3eff");
-    expect(aih).toContain("path: .candidate-sources/ai-harness");
+    expect(text).not.toMatch(/repository: samartomar\/ai-harness|candidate-sources/);
+    expect(text).toContain(
+      'AIH_SCAN_CISCO_RUNTIME_PROJECT="$GITHUB_WORKSPACE/tools/baseline-analyzers/cisco-skill-scanner"',
+    );
     expect(execute).toMatch(/RUNNER_TEMP[^\n]*(?:direct|oci)/i);
     expect(execute).toContain("dual-run-equivalence");
-    expect(text.match(/^ {6}- name: Check out /gm) ?? []).toHaveLength(4);
-    expect(text.match(/persist-credentials: false/g) ?? []).toHaveLength(4);
+    expect(text.match(/^ {6}- name: Check out /gm) ?? []).toHaveLength(3);
+    expect(text.match(/persist-credentials: false/g) ?? []).toHaveLength(3);
   });
 
   it("installs and uses the pinned Buildx builder and supplies every live-test prerequisite from isolated temporary paths", () => {
