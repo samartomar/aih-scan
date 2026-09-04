@@ -63,6 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_REF" = "refs/heads/main"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
@@ -202,7 +203,7 @@ jobs:
             request_sha256="$(jq -er '.requestSha256 | select(test("^[0-9a-f]{64}$"))' "$request")"
             output="$RUNNER_TEMP/baseline/publications/$request_sha256"
             mkdir "$output"
-            tag="baseline-v1-$request_sha256"
+            tag="baseline-v1-$GITHUB_SHA-$request_sha256"
             locator="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/publication.json"
             node dist/cli.js baseline-pack \
               --evidence "$evidence" --request "$request" --bundle "$bundle" \
@@ -273,15 +274,17 @@ jobs:
         with:
           subject-path: publications/*/publication.json
 
-      - name: Create no-overwrite request-addressed releases
+      - name: Create no-overwrite publisher-and-request-addressed releases
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           for directory in publications/*; do
             request_sha256="$(basename "$directory")"
-            tag="baseline-v1-$request_sha256"
+            [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]]
+            tag="baseline-v1-$GITHUB_SHA-$request_sha256"
             expected_locator="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/publication.json"
             test "$(jq -er '.locator' "$directory/discovery.json")" = "$expected_locator"
             if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -296,7 +299,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "$tag" \
-              --notes "Content-addressed Scanner evidence. Authority: none. Request: $request_sha256." \
+              --notes "Content-addressed Scanner evidence. Authority: none. Publisher: $GITHUB_SHA. Request: $request_sha256." \
               "$directory/publication.json" \
               "$directory/discovery.json" \
               "$directory/inspection.json" \
