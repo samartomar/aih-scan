@@ -250,6 +250,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).toContain("promoted `@aihq/scan` stable train");
     expect(readme).toContain("Candidate versions are first published under npm `next`");
     expect(readme).toContain("`@aihq/scan@0.3.0` adds immutable request-addressed publication");
+    expect(readme).toContain(
+      "`@aihq/scan@0.4.0` advances the bundled Cisco analyzer to `2.0.14+uvlock.aaba1f326049`",
+    );
     expect(readme).toContain("version=X.Y.Z");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
@@ -301,7 +304,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     };
     expect(manifest).toMatchObject({
       name: "@aihq/scan",
-      version: "0.3.0",
+      version: "0.4.0",
       files: ["dist", "tools/baseline-analyzers", "tools/verify-core-contract-lock-v2.mjs"],
     });
     expect(existsSync(resolve(root, "LICENSE"))).toBe(true);
