@@ -33,6 +33,10 @@ installed acceptance plus separate authorization can promote the same bytes to
 workflow. Publication custody is established only when the live registry, Release,
 and artifact-attestation checks succeed.
 
+`@aihq/scan@0.4.0` advances the bundled Cisco analyzer to `2.0.14+uvlock.aaba1f326049`
+with fail-closed coverage accounting and direct/OCI equivalence evidence. Source state does
+not prove this candidate is published or promoted; use the live custody checks below.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment
