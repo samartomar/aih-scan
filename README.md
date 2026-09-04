@@ -215,8 +215,10 @@ npx aih-scan baseline-verify \
 
 To transfer a verified result across runs or repositories, pack the exact request,
 receipt, annex bytes, signature envelope, and its verification context into one
-canonical publication. The discovery record maps only the request digest to those
-exact publication bytes; it declares `authority: "none"` and is never an approval
+canonical publication. The discovery record maps the request digest to those exact
+publication bytes; the release address additionally binds the protected Scanner publisher
+commit so analyzer rotations cannot collide at an existing request address. The record
+declares `authority: "none"` and is never an approval
 or mutable channel pointer.
 
 ```sh
@@ -226,7 +228,7 @@ npx aih-scan baseline-pack \
   --bundle /path/to/baseline-observation-bundle \
   --roots /protected/trust-roots.json \
   --expected /protected/expected-signer-and-time.json \
-  --locator https://github.com/owner/repo/releases/download/baseline-v1-REQUEST_SHA/publication.json \
+  --locator https://github.com/owner/repo/releases/download/baseline-v1-PUBLISHER_COMMIT-REQUEST_SHA/publication.json \
   --publication /path/to/new-publication.json \
   --discovery /path/to/new-discovery.json
 
@@ -246,7 +248,7 @@ publisher provenance is a separate verification boundary.
 exact 40-character Core and source commits, builds publications in a read-only
 job, transfers them by artifact digest, and gives write/OIDC permissions only to
 the protected publication job. That job attests the exact publication files and
-creates request-addressed GitHub Releases only when neither the release nor tag
+creates publisher-and-request-addressed GitHub Releases only when neither the release nor tag
 already exists. It never publishes an npm package. A consumer must verify the
 GitHub artifact attestation against this repository, workflow, source ref, and
 source digest before treating the embedded key as the custody key for those
