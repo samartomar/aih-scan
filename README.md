@@ -141,7 +141,13 @@ Scanner owns the bounded analyzer-execution half of baseline vetting. Core still
 owns catalog selection, reuse, interpretation, finding dispositions, vendor-lock
 and ECC-preview assembly, qualification, and organization policy. Maintainer
 analyzer-offload runners provide execution capacity only; they grant no approval
-authority.
+authority. The manually dispatched immutable publication workflow accepts `ecc`
+only for `affaan-m/ECC` and `superpowers` only for `obra/Superpowers`. After Core
+authors its request batch and before any analyzer runs, Scanner requires a closed,
+nonempty sequence of regular request files whose `source.id`,
+`source.owner + "/" + source.repository`, and `source.pinnedCommit` exactly match the
+dispatched catalog, repository, and commit. A fork is not interchangeable merely
+because it resolves to the same commit.
 
 Core creates one canonical `BaselineVetRequestV1` for an exact source and at
 most 100 components. The fixed `aih-baseline-v1` profile requires native,

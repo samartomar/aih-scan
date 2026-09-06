@@ -49,7 +49,7 @@ jobs:
           [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
           [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           case "$CATALOG:$SOURCE_REPOSITORY" in
-            ecc:samartomar/ECC|superpowers:obra/Superpowers) ;;
+            ecc:affaan-m/ECC|superpowers:obra/Superpowers) ;;
             *) echo "::error::source repository does not match the selected catalog"; exit 1 ;;
           esac
 
@@ -151,6 +151,58 @@ jobs:
             --source "$GITHUB_WORKSPACE/.source" \
             --output "$RUNNER_TEMP/baseline/requests"
 
+      - name: Verify each authored request binds to the dispatched source
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module - "$RUNNER_TEMP/baseline/requests" "$CATALOG" "$SOURCE_REPOSITORY" "$SOURCE_REF" <<'NODE'
+          import { lstatSync, readdirSync, readFileSync } from "node:fs";
+          import { join, resolve } from "node:path";
+
+          const [requestRoot, catalog, repository, pinnedCommit] = process.argv.slice(2);
+          const fail = (reason) => {
+            throw new Error(`canonical baseline request batch rejected: ${reason}`);
+          };
+          if (
+            typeof requestRoot !== "string" ||
+            typeof catalog !== "string" ||
+            typeof repository !== "string" ||
+            typeof pinnedCommit !== "string"
+          )
+            fail("arguments");
+          const root = resolve(requestRoot);
+          const rootStat = lstatSync(root);
+          if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("request directory");
+          const entries = readdirSync(root, { withFileTypes: true }).sort((left, right) =>
+            left.name.localeCompare(right.name),
+          );
+          if (entries.length === 0) fail("empty request directory");
+          for (const [index, entry] of entries.entries()) {
+            const expectedName = `batch-${String(index + 1).padStart(3, "0")}.request.json`;
+            if (entry.name !== expectedName || !entry.isFile() || entry.isSymbolicLink())
+              fail("request directory layout");
+            const requestPath = resolve(join(root, entry.name));
+            const requestStat = lstatSync(requestPath);
+            if (!requestStat.isFile() || requestStat.isSymbolicLink()) fail("request file");
+            let request;
+            try {
+              request = JSON.parse(readFileSync(requestPath, "utf8"));
+            } catch {
+              fail("request JSON");
+            }
+            const source = request !== null && typeof request === "object" ? request.source : undefined;
+            if (source === null || typeof source !== "object" || Array.isArray(source))
+              fail("request source");
+            if (
+              source.id !== catalog ||
+              typeof source.owner !== "string" ||
+              typeof source.repository !== "string" ||
+              `${source.owner}/${source.repository}` !== repository ||
+              source.pinnedCommit !== pinnedCommit
+            )
+              fail("request source identity");
+          }
+          NODE
       - name: Execute Scanner analyzers once per canonical request
         shell: bash
         run: |

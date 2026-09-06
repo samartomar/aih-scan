@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workflowPath = resolve(
@@ -11,6 +13,25 @@ const workflowPath = resolve(
   "baseline-publication.yml",
 );
 const readmePath = resolve(import.meta.dirname, "..", "..", "README.md");
+
+function requestBatchVerifier(workflow: string): string {
+  const marker = "Verify each authored request binds to the dispatched source";
+  const markerIndex = workflow.indexOf(marker);
+  expect(markerIndex).toBeGreaterThanOrEqual(0);
+  const delimiterIndex = workflow.indexOf("<<'NODE'\n", markerIndex);
+  expect(delimiterIndex).toBeGreaterThanOrEqual(0);
+  const bodyStart = delimiterIndex + "<<'NODE'\n".length;
+  const bodyEnd = workflow.indexOf("\n          NODE", bodyStart);
+  expect(bodyEnd).toBeGreaterThan(bodyStart);
+  return workflow.slice(bodyStart, bodyEnd).replace(/^ {10}/gmu, "");
+}
+
+function writeRequest(directory: string, batch: number, source: unknown): void {
+  writeFileSync(
+    join(directory, `batch-${String(batch).padStart(3, "0")}.request.json`),
+    JSON.stringify({ source }),
+  );
+}
 
 describe("immutable baseline publication workflow", () => {
   it("is explicit, exact-input, content-addressed, and split at the privilege boundary", () => {
@@ -27,6 +48,7 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain('test "$SOURCE_REF" = "$(git -C .source rev-parse HEAD)"');
     expect(workflow).toContain('[[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]');
     expect(workflow).toContain("npm --prefix .core run baseline:request");
+    expect(workflow).toContain("ecc:affaan-m/ECC|superpowers:obra/Superpowers");
     expect(workflow).not.toContain('mkdir -p "$RUNNER_TEMP/baseline/requests"');
     expect(workflow).toContain('mkdir -p "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/baseline/bundles"');
     expect(workflow).toContain("node dist/cli.js baseline-vet");
@@ -49,11 +71,91 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).not.toContain("npm publish");
   });
 
+  it("binds every authored request to the dispatched catalog source before analyzers run", () => {
+    const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");
+    const validator = requestBatchVerifier(workflow);
+    const root = mkdtempSync(join(tmpdir(), "aih-publication-requests-"));
+    const pin = "5caf398a91599029a176ca6d806409b00d1052c4";
+    const run = (directory: string, catalog: string, repository: string, commit: string) =>
+      spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", directory, catalog, repository, commit],
+        {
+          input: validator,
+          encoding: "utf8",
+        },
+      );
+    const source = (
+      overrides: Partial<{
+        id: unknown;
+        owner: unknown;
+        repository: unknown;
+        pinnedCommit: unknown;
+      }> = {},
+    ) => ({
+      id: "ecc",
+      owner: "affaan-m",
+      repository: "ECC",
+      pinnedCommit: pin,
+      ...overrides,
+    });
+
+    try {
+      const upstream = join(root, "upstream");
+      mkdirSync(upstream);
+      writeRequest(upstream, 1, source());
+      writeRequest(upstream, 2, source());
+      expect(run(upstream, "ecc", "affaan-m/ECC", pin).status).toBe(0);
+
+      const superpowers = join(root, "superpowers");
+      mkdirSync(superpowers);
+      writeRequest(superpowers, 1, {
+        id: "superpowers",
+        owner: "obra",
+        repository: "Superpowers",
+        pinnedCommit: pin,
+      });
+      expect(run(superpowers, "superpowers", "obra/Superpowers", pin).status).toBe(0);
+
+      for (const [name, overrides] of [
+        ["fork-owner", { owner: "samartomar" }],
+        ["array-owner", { owner: ["affaan-m"] }],
+        ["array-repository", { repository: ["ECC"] }],
+        ["repository", { repository: "not-ECC" }],
+        ["catalog", { id: "superpowers" }],
+        ["commit", { pinnedCommit: "a".repeat(40) }],
+      ] as const) {
+        const directory = join(root, name);
+        mkdirSync(directory);
+        writeRequest(directory, 1, source());
+        writeRequest(directory, 2, source(overrides));
+        expect(run(directory, "ecc", "affaan-m/ECC", pin).status, name).not.toBe(0);
+      }
+
+      const nullSource = join(root, "null-source");
+      mkdirSync(nullSource);
+      writeRequest(nullSource, 1, source());
+      writeRequest(nullSource, 2, null);
+      expect(run(nullSource, "ecc", "affaan-m/ECC", pin).status, "null-source").not.toBe(0);
+      for (const name of ["empty", "unexpected-file", "unexpected-directory"]) {
+        const directory = join(root, name);
+        mkdirSync(directory);
+        if (name === "unexpected-file") writeFileSync(join(directory, "notes.txt"), "unexpected");
+        if (name === "unexpected-directory") mkdirSync(join(directory, "batch-001.request.json"));
+        expect(run(directory, "ecc", "affaan-m/ECC", pin).status, name).not.toBe(0);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("documents publisher-and-request-addressed immutable releases", () => {
     const readme = readFileSync(readmePath, "utf8");
 
     expect(readme).toContain("publisher-and-request-addressed GitHub Releases");
     expect(readme).toContain("baseline-v1-PUBLISHER_COMMIT-REQUEST_SHA");
+    expect(readme).toContain("affaan-m/ECC");
+    expect(readme).toContain("same commit");
     expect(readme).not.toContain("creates request-addressed GitHub Releases");
   });
 });
