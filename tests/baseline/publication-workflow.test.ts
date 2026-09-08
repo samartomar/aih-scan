@@ -42,6 +42,27 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain("if: inputs.request_set_url == ''");
     expect(workflow).toContain("node tools/prepare-publication-request-set.mjs");
     expect(workflow).toContain('if [ -z "$REQUEST_SET_URL" ]; then');
+    const steps = workflow.split(/\n {6}- /u);
+    const step = (name: string) => {
+      const found = steps.find((value) => value.startsWith(`name: ${name}\n`));
+      if (found === undefined) throw new Error(`Missing workflow step: ${name}`);
+      return found;
+    };
+    expect(step("Check out exact Core request author")).toMatch(
+      /\n {8}if: inputs\.request_set_url == ''\n/u,
+    );
+    expect(step("Author the canonical request independently")).toMatch(
+      /\n {8}if: inputs\.request_set_url == '' && inputs\.catalog == ''\n/u,
+    );
+    expect(step("Install exact Scanner dependencies and optional Core client")).toContain(
+      'if [ -z "$REQUEST_SET_URL" ]; then\n            npm --prefix .core ci --ignore-scripts\n          fi',
+    );
+    expect(step("Validate immutable inputs before checkout")).toContain(
+      'if [ -n "$REQUEST_SET_URL" ]; then\n            test -z "$CORE_REF"\n            test -z "$LEGACY_CATALOG"',
+    );
+    expect(step("Author legacy active-catalog requests")).toContain("if: inputs.catalog != ''");
+    const independent = step("Prepare independently reviewed data-only requests");
+    expect(independent).not.toMatch(/\.core|npm|--import/u);
   });
   it("is explicit, exact-input, content-addressed, and split at the privilege boundary", () => {
     const workflow = readFileSync(workflowPath, "utf8");

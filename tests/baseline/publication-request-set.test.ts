@@ -111,6 +111,7 @@ describe("independent publication request sets", () => {
       { value: { ...valid, requests: [] } },
       { value: { ...valid, requests: [request(), request()] } },
       { value: { ...valid, requests: [request(), request("demo", ["skills/other"])] } },
+      { value: { ...valid, requests: [request(), request("other", ["skills/demo"])] } },
       { value: { ...valid, requests: [request(), request("other", ["skills/demo/child"])] } },
       {
         value: {
