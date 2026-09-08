@@ -141,13 +141,34 @@ Scanner owns the bounded analyzer-execution half of baseline vetting. Core still
 owns catalog selection, reuse, interpretation, finding dispositions, vendor-lock
 and ECC-preview assembly, qualification, and organization policy. Maintainer
 analyzer-offload runners provide execution capacity only; they grant no approval
-authority. The manually dispatched immutable publication workflow accepts six
+authority. The manually dispatched immutable publication workflow accepts a
+data-only `BaselinePublicationRequestSetV1` JSON object containing `protocol`
+and a nonempty `requests` array of canonical `BaselineVetRequestV1` objects.
+Supply `candidate` (the exact source id), `source_repository`, `source_ref`,
+`request_set_url`, and `request_set_sha256`. The URL must name a JSON file on
+`raw.githubusercontent.com` at an exact 40-character commit. Scanner checks the
+16 MiB input limit, exact SHA-256, closed schema, each canonical request digest,
+source identity, duplicate components, and overlapping component paths before
+writing any batch. This route never checks out Core, installs Core dependencies,
+or executes request-author code. It accepts independently prepared provider data
+without adding a source-specific switch to Scanner or changing Core inventories.
+Reviewed inputs for this delivery are isolated by provider and source commit in
+`.github/baseline-request-sets/`; they are data, not an allowlist in the producer.
+Dispatch their raw URL at the reviewed Scanner commit and hash the exact file
+bytes. A changed source revision requires a newly reviewed request set, not a
+package version change.
+
+The optional Core request-client route accepts six
 sealed Core candidates: `aih-core` only for `samartomar/ai-harness`,
 `anthropics-skills` only for `anthropics/skills`, `ecc` only for `affaan-m/ECC`,
 `mattpocock-skills` only for `mattpocock/skills`, `ponytail` only for
 `DietrichGebert/ponytail`, and `superpowers` only for `obra/Superpowers`. It reads
 the selected candidate inventory from the same exact Core commit that supplies
-the request authoring code; it does not reuse a locally produced unsigned bundle.
+the request authoring code. Legacy dispatch callers may still use `catalog=ecc`
+or `catalog=superpowers` with `core_ref` and the exact source tuple to author the
+active Core catalog requests. `catalog` and `candidate` are mutually exclusive;
+data-only input cannot be mixed with `core_ref` or `catalog`. Neither route
+reuses a locally produced unsigned bundle.
 After Core authors its request batch and before any analyzer runs, Scanner requires a closed,
 nonempty sequence of regular request files whose `source.id`,
 `source.owner + "/" + source.repository`, and `source.pinnedCommit` exactly match the
@@ -260,8 +281,8 @@ ephemeral public key makes the file portable but does not make that key trusted;
 publisher provenance is a separate verification boundary.
 
 `.github/workflows/baseline-publication.yml` is manual-dispatch only. It accepts
-one of those six exact candidate/repository pairs plus exact 40-character Core
-and source commits, builds publications in a read-only
+either the digest-bound request-set inputs above or the optional exact Core
+request-client inputs, builds publications in a read-only
 job, transfers them by artifact digest, and gives write/OIDC permissions only to
 the protected publication job. That job attests the exact publication files and
 creates publisher-and-request-addressed GitHub Releases only when neither the release nor tag
