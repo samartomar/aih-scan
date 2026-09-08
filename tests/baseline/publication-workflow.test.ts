@@ -48,6 +48,9 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain('test "$SOURCE_REF" = "$(git -C .source rev-parse HEAD)"');
     expect(workflow).toContain('[[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]');
     expect(workflow).toContain(".core/tools/prepare-candidate-baseline-requests.mjs");
+    expect(workflow).toContain(
+      "Author the canonical request independently\n        working-directory: .core",
+    );
     expect(workflow).toContain(".core/.github/baseline-candidates/$CANDIDATE.inventory.json");
     expect(workflow).not.toContain("npm --prefix .core run baseline:request");
     expect(workflow).toContain("aih-core:samartomar/ai-harness");
