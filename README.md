@@ -141,9 +141,14 @@ Scanner owns the bounded analyzer-execution half of baseline vetting. Core still
 owns catalog selection, reuse, interpretation, finding dispositions, vendor-lock
 and ECC-preview assembly, qualification, and organization policy. Maintainer
 analyzer-offload runners provide execution capacity only; they grant no approval
-authority. The manually dispatched immutable publication workflow accepts `ecc`
-only for `affaan-m/ECC` and `superpowers` only for `obra/Superpowers`. After Core
-authors its request batch and before any analyzer runs, Scanner requires a closed,
+authority. The manually dispatched immutable publication workflow accepts six
+sealed Core candidates: `aih-core` only for `samartomar/ai-harness`,
+`anthropics-skills` only for `anthropics/skills`, `ecc` only for `affaan-m/ECC`,
+`mattpocock-skills` only for `mattpocock/skills`, `ponytail` only for
+`DietrichGebert/ponytail`, and `superpowers` only for `obra/Superpowers`. It reads
+the selected candidate inventory from the same exact Core commit that supplies
+the request authoring code; it does not reuse a locally produced unsigned bundle.
+After Core authors its request batch and before any analyzer runs, Scanner requires a closed,
 nonempty sequence of regular request files whose `source.id`,
 `source.owner + "/" + source.repository`, and `source.pinnedCommit` exactly match the
 dispatched catalog, repository, and commit. A fork is not interchangeable merely
@@ -255,14 +260,16 @@ ephemeral public key makes the file portable but does not make that key trusted;
 publisher provenance is a separate verification boundary.
 
 `.github/workflows/baseline-publication.yml` is manual-dispatch only. It accepts
-exact 40-character Core and source commits, builds publications in a read-only
+one of those six exact candidate/repository pairs plus exact 40-character Core
+and source commits, builds publications in a read-only
 job, transfers them by artifact digest, and gives write/OIDC permissions only to
 the protected publication job. That job attests the exact publication files and
 creates publisher-and-request-addressed GitHub Releases only when neither the release nor tag
 already exists. It never publishes an npm package. A consumer must verify the
 GitHub artifact attestation against this repository, workflow, source ref, and
 source digest before treating the embedded key as the custody key for those
-bytes.
+bytes. Each candidate inventory and its request author are checked out from the
+same commit.
 
 The output directory must not exist. It contains only `receipt.json` and the
 exact `annex/*.json` files named and hashed by the receipt. Duplicate, missing,

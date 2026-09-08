@@ -47,8 +47,18 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain('test "$CORE_REF" = "$(git -C .core rev-parse HEAD)"');
     expect(workflow).toContain('test "$SOURCE_REF" = "$(git -C .source rev-parse HEAD)"');
     expect(workflow).toContain('[[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]');
-    expect(workflow).toContain("npm --prefix .core run baseline:request");
-    expect(workflow).toContain("ecc:affaan-m/ECC|superpowers:obra/Superpowers");
+    expect(workflow).toContain(".core/tools/prepare-candidate-baseline-requests.mjs");
+    expect(workflow).toContain(
+      "Author the canonical request independently\n        working-directory: .core",
+    );
+    expect(workflow).toContain(".core/.github/baseline-candidates/$CANDIDATE.inventory.json");
+    expect(workflow).not.toContain("npm --prefix .core run baseline:request");
+    expect(workflow).toContain("aih-core:samartomar/ai-harness");
+    expect(workflow).toContain("anthropics-skills:anthropics/skills");
+    expect(workflow).toContain("ecc:affaan-m/ECC");
+    expect(workflow).toContain("mattpocock-skills:mattpocock/skills");
+    expect(workflow).toContain("ponytail:DietrichGebert/ponytail");
+    expect(workflow).toContain("superpowers:obra/Superpowers");
     expect(workflow).not.toContain('mkdir -p "$RUNNER_TEMP/baseline/requests"');
     expect(workflow).toContain('mkdir -p "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/baseline/bundles"');
     expect(workflow).toContain("node dist/cli.js baseline-vet");
@@ -71,15 +81,15 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).not.toContain("npm publish");
   });
 
-  it("binds every authored request to the dispatched catalog source before analyzers run", () => {
+  it("binds every authored request to the dispatched candidate source before analyzers run", () => {
     const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");
     const validator = requestBatchVerifier(workflow);
     const root = mkdtempSync(join(tmpdir(), "aih-publication-requests-"));
     const pin = "5caf398a91599029a176ca6d806409b00d1052c4";
-    const run = (directory: string, catalog: string, repository: string, commit: string) =>
+    const run = (directory: string, candidate: string, repository: string, commit: string) =>
       spawnSync(
         process.execPath,
-        ["--input-type=module", "-", directory, catalog, repository, commit],
+        ["--input-type=module", "-", directory, candidate, repository, commit],
         {
           input: validator,
           encoding: "utf8",
@@ -101,21 +111,20 @@ describe("immutable baseline publication workflow", () => {
     });
 
     try {
-      const upstream = join(root, "upstream");
-      mkdirSync(upstream);
-      writeRequest(upstream, 1, source());
-      writeRequest(upstream, 2, source());
-      expect(run(upstream, "ecc", "affaan-m/ECC", pin).status).toBe(0);
-
-      const superpowers = join(root, "superpowers");
-      mkdirSync(superpowers);
-      writeRequest(superpowers, 1, {
-        id: "superpowers",
-        owner: "obra",
-        repository: "Superpowers",
-        pinnedCommit: pin,
-      });
-      expect(run(superpowers, "superpowers", "obra/Superpowers", pin).status).toBe(0);
+      const candidates = [
+        ["aih-core", "samartomar", "ai-harness"],
+        ["anthropics-skills", "anthropics", "skills"],
+        ["ecc", "affaan-m", "ECC"],
+        ["mattpocock-skills", "mattpocock", "skills"],
+        ["ponytail", "DietrichGebert", "ponytail"],
+        ["superpowers", "obra", "Superpowers"],
+      ] as const;
+      for (const [candidate, owner, repository] of candidates) {
+        const directory = join(root, candidate);
+        mkdirSync(directory);
+        writeRequest(directory, 1, { id: candidate, owner, repository, pinnedCommit: pin });
+        expect(run(directory, candidate, `${owner}/${repository}`, pin).status, candidate).toBe(0);
+      }
 
       for (const [name, overrides] of [
         ["fork-owner", { owner: "samartomar" }],
@@ -155,6 +164,10 @@ describe("immutable baseline publication workflow", () => {
     expect(readme).toContain("publisher-and-request-addressed GitHub Releases");
     expect(readme).toContain("baseline-v1-PUBLISHER_COMMIT-REQUEST_SHA");
     expect(readme).toContain("affaan-m/ECC");
+    expect(readme).toContain("anthropics/skills");
+    expect(readme).toContain("mattpocock/skills");
+    expect(readme).toContain("DietrichGebert/ponytail");
+    expect(readme).toContain("samartomar/ai-harness");
     expect(readme).toContain("same commit");
     expect(readme).not.toContain("creates request-addressed GitHub Releases");
   });
