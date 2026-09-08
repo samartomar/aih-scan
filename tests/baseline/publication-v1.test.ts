@@ -33,7 +33,7 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-async function fixture(rule = "# Rule\n") {
+async function fixture(rule = "# Rule\n", detail = "") {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-baseline-publication-"));
   temporaryDirectories.push(root);
   mkdirSync(join(root, "rules"));
@@ -72,7 +72,13 @@ async function fixture(rule = "# Rule\n") {
           mediaType: "application/sarif+json",
           bytes: canonicalStrictJsonBytesV1({
             version: "2.1.0",
-            runs: [{ tool: { driver: { name: analyzer } }, results: [] }],
+            runs: [
+              {
+                tool: { driver: { name: analyzer } },
+                results: [],
+                properties: { detail: analyzer === "skillspector" ? detail : "" },
+              },
+            ],
           }),
           analyzerVersion: `${analyzer}.0123456789ab`,
         };
@@ -100,6 +106,21 @@ async function fixture(rule = "# Rule\n") {
 }
 
 describe("BaselineVetPublicationV1", () => {
+  it("round-trips large bounded annexes without overflowing the validator stack", async () => {
+    const input = await fixture("# Rule\n", "x".repeat(4 * 1024 * 1024));
+    const publication = createBaselineVetPublicationV1({
+      ...input,
+      seenEvidenceDigests: [],
+      seenReceiptBindings: [],
+    });
+    const bytes = canonicalBaselineVetPublicationV1Bytes(publication);
+    const parsed = parseBaselineVetPublicationV1Json(bytes.toString("utf8"));
+    expect(canonicalBaselineVetPublicationV1Bytes(parsed)).toEqual(bytes);
+    expect(baselineVetPublicationResultV1(parsed).result.receipt.receiptSha256).toBe(
+      input.result.receipt.receiptSha256,
+    );
+  }, 60_000);
+
   it("packs one verified request, receipt, annex set, and attestation deterministically", async () => {
     const input = await fixture();
     const publication = createBaselineVetPublicationV1({
@@ -168,6 +189,32 @@ describe("BaselineVetPublicationV1", () => {
     if (firstAnnex === undefined) throw new Error("test fixture requires one annex");
     firstAnnex.bytesBase64 = Buffer.from("changed", "utf8").toString("base64");
     expect(() => parseBaselineVetPublicationV1Json(JSON.stringify(changed))).toThrow(/annex/);
+  });
+
+  it.each([
+    "",
+    "Zg=",
+    "Zg===",
+    "Zh==",
+    "Zm9=",
+    "Zg==\n   ",
+    "Zg-_",
+    "Zg$=",
+    "====",
+  ])("rejects noncanonical annex Base64 %j", async (bytesBase64) => {
+    const input = await fixture();
+    const publication = createBaselineVetPublicationV1({
+      ...input,
+      seenEvidenceDigests: [],
+      seenReceiptBindings: [],
+    });
+    const changed = {
+      ...publication,
+      annexes: publication.annexes.map((annex, index) =>
+        index === 0 ? { ...annex, bytesBase64 } : annex,
+      ),
+    };
+    expect(() => parseBaselineVetPublicationV1Json(JSON.stringify(changed))).toThrow();
   });
 });
 
