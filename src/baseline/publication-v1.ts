@@ -107,12 +107,10 @@ function canonicalJson(value: unknown): string {
 }
 
 function decodeCanonicalBase64(value: string): Buffer {
-  if (
-    value.length === 0 ||
-    value.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
-  )
+  if (value.length === 0 || value.length % 4 !== 0 || value.length > MAX_BASE64_LENGTH)
     fail("annex base64");
+  // Re-encoding rejects invalid alphabet, whitespace, padding and nonzero pad
+  // bits without a repeated-group regexp that overflows on large annexes.
   const bytes = Buffer.from(value, "base64");
   if (
     bytes.byteLength === 0 ||
