@@ -34,6 +34,15 @@ function writeRequest(directory: string, batch: number, source: unknown): void {
 }
 
 describe("immutable baseline publication workflow", () => {
+  it("offers data-only request-set input and preserves the legacy catalog dispatch", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+    expect(workflow).toContain("request_set_url:");
+    expect(workflow).toContain("request_set_sha256:");
+    expect(workflow).toContain("catalog:");
+    expect(workflow).toContain("if: inputs.request_set_url == ''");
+    expect(workflow).toContain("node tools/prepare-publication-request-set.mjs");
+    expect(workflow).toContain('if [ -z "$REQUEST_SET_URL" ]; then');
+  });
   it("is explicit, exact-input, content-addressed, and split at the privilege boundary", () => {
     const workflow = readFileSync(workflowPath, "utf8");
 
@@ -52,7 +61,7 @@ describe("immutable baseline publication workflow", () => {
       "Author the canonical request independently\n        working-directory: .core",
     );
     expect(workflow).toContain(".core/.github/baseline-candidates/$CANDIDATE.inventory.json");
-    expect(workflow).not.toContain("npm --prefix .core run baseline:request");
+    expect(workflow).toContain("npm --prefix .core run baseline:request");
     expect(workflow).toContain("aih-core:samartomar/ai-harness");
     expect(workflow).toContain("anthropics-skills:anthropics/skills");
     expect(workflow).toContain("ecc:affaan-m/ECC");
