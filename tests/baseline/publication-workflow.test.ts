@@ -52,7 +52,7 @@ describe("immutable baseline publication workflow", () => {
       /\n {8}if: inputs\.request_set_url == ''\n/u,
     );
     expect(step("Author the canonical request independently")).toMatch(
-      /\n {8}if: inputs\.request_set_url == '' && inputs\.catalog == ''\n/u,
+      /\n {8}if: inputs\.request_set_url == '' && inputs\.catalog == '' && inputs\.candidate != 'aih'\n/u,
     );
     expect(step("Install exact Scanner dependencies and optional Core client")).toContain(
       'if [ -z "$REQUEST_SET_URL" ]; then\n            npm --prefix .core ci --ignore-scripts\n          fi',
