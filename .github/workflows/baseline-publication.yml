@@ -65,6 +65,7 @@ jobs:
           if [ -n "$REQUEST_SET_URL" ]; then
             test -z "$CORE_REF"
             test -z "$LEGACY_CATALOG"
+            test "$CANDIDATE" != "aih"
             [[ "$REQUEST_SET_SHA256" =~ ^[0-9a-f]{64}$ ]]
             [[ "$REQUEST_SET_URL" =~ ^https://raw\.githubusercontent\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/[0-9a-f]{40}/[A-Za-z0-9_./-]+\.json$ ]]
             [[ "$REQUEST_SET_URL" != *"/../"* && "$REQUEST_SET_URL" != *"/./"* ]]
@@ -76,6 +77,7 @@ jobs:
             case "$LEGACY_CATALOG" in ecc|superpowers) ;; *) exit 1 ;; esac
           fi
           case "$CANDIDATE:$SOURCE_REPOSITORY" in
+            aih:samartomar/ai-harness) test "$CORE_REF" = "$SOURCE_REF" ;;
             aih-core:samartomar/ai-harness|\
             anthropics-skills:anthropics/skills|\
             ecc:affaan-m/ECC|\
@@ -180,7 +182,7 @@ jobs:
 
       - name: Author the canonical request independently
         working-directory: .core
-        if: inputs.request_set_url == '' && inputs.catalog == ''
+        if: inputs.request_set_url == '' && inputs.catalog == '' && inputs.candidate != 'aih'
         shell: bash
         run: |
           set -euo pipefail
@@ -189,6 +191,20 @@ jobs:
             --inventory "$GITHUB_WORKSPACE/.core/.github/baseline-candidates/$CANDIDATE.inventory.json" \
             --source "$GITHUB_WORKSPACE/.source" \
             --output "$RUNNER_TEMP/baseline/requests"
+
+      - name: Author exact Core delivery material requests
+        if: inputs.candidate == 'aih' && inputs.request_set_url == ''
+        working-directory: .core
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/baseline/bundles"
+          node --import tsx "$GITHUB_WORKSPACE/.core/tools/prepare-aih-delivery-baseline-requests.mjs" \
+            --source "$GITHUB_WORKSPACE/.core" --core-commit "$CORE_REF" \
+            --output "$RUNNER_TEMP/baseline/material"
+          node "$GITHUB_WORKSPACE/tools/prepare-aih-delivery-publication.mjs" \
+            "$RUNNER_TEMP/baseline/material" "$CORE_REF" "$RUNNER_TEMP/baseline/requests" \
+            > "$RUNNER_TEMP/baseline/aih-source-root.txt"
 
       - name: Author legacy active-catalog requests
         if: inputs.catalog != ''
@@ -271,11 +287,17 @@ jobs:
           shopt -s nullglob
           requests=("$RUNNER_TEMP/baseline/requests"/*.request.json)
           test "${#requests[@]}" -gt 0
+          scanner_source="$GITHUB_WORKSPACE/.source"
+          if [ "$CANDIDATE" = "aih" ]; then
+            scanner_source="$(cat "$RUNNER_TEMP/baseline/aih-source-root.txt")"
+            test -d "$scanner_source" && test ! -L "$scanner_source"
+            test "$(dirname "$scanner_source")" = "$RUNNER_TEMP/baseline/material"
+          fi
           for request in "${requests[@]}"; do
             batch="$(basename "$request" .request.json)"
             node dist/cli.js baseline-vet \
               --request "$request" \
-              --source "$GITHUB_WORKSPACE/.source" \
+              --source "$scanner_source" \
               --output "$RUNNER_TEMP/baseline/bundles/$batch.bundle"
           done
 

@@ -292,6 +292,15 @@ source digest before treating the embedded key as the custody key for those
 bytes. Each candidate inventory and its request author are checked out from the
 same commit.
 
+For Core's generated delivery materials, dispatch `candidate: aih` with
+`source_repository: samartomar/ai-harness` and identical exact `core_ref` and
+`source_ref` commits. This route cannot use a raw request-set override. The Core
+helper runs from its own clean pinned checkout and materializes delivery bytes
+outside that checkout. Scanner independently checks the canonical manifest,
+request identities, contained real source directory, whole-tree digest, and
+every component digest before scanning that generated tree. The broader
+`aih-core` repository-inventory route is separate and is not delivery coverage.
+
 The output directory must not exist. It contains only `receipt.json` and the
 exact `annex/*.json` files named and hashed by the receipt. Duplicate, missing,
 substituted, malformed, truncated, stale, drifted, unknown-profile, and
