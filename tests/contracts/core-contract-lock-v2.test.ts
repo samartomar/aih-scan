@@ -103,6 +103,7 @@ describe("Core Strict V2 compatibility lock", () => {
     expect(workflow).toContain(
       "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0",
     );
+    expect(workflow).toContain('version: "0.12.13"');
     expect(workflow).toContain(`ref: ${AI_HARNESS_STRICT_V2_COMMIT}`);
     expect(workflow).toContain("path: .core-contract");
     const verifier = "node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract";

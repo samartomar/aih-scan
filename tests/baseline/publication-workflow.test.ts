@@ -100,6 +100,7 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain(
       "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0",
     );
+    expect(workflow).toContain('version: "0.12.13"');
     expect(workflow).toContain(
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     );
