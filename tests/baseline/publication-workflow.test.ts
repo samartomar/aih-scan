@@ -98,6 +98,9 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).not.toContain('tag="baseline-v1-$request_sha256"');
     expect(workflow).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
     expect(workflow).toContain(
+      "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0",
+    );
+    expect(workflow).toContain(
       "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     );
     expect(workflow).toContain(

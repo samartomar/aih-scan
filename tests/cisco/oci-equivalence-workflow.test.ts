@@ -31,8 +31,8 @@ const uvWheelUrl =
 const uvWheelSha256 = "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15";
 const allowedActions = new Set([
   "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-  "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
-  "actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444",
+  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+  "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
   "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
   "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 ]);
@@ -53,6 +53,17 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
       expect(action).toMatch(/@[0-9a-f]{40}$/);
       expect(allowedActions.has(action ?? "")).toBe(true);
     }
+    expect(
+      text.match(
+        /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0/g,
+      ) ?? [],
+    ).toHaveLength(3);
+    expect(
+      text.match(
+        /actions\/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8\.0\.1/g,
+      ) ?? [],
+    ).toHaveLength(5);
+    expect(text.match(/node-version: 20/g) ?? []).toHaveLength(3);
     expect(text).toContain("buildx-v0.34.1.linux-amd64");
     expect(text).toContain(buildxSha256);
     expect(text).toContain(buildkit);

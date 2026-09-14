@@ -95,6 +95,14 @@ describe("Core Strict V2 compatibility lock", () => {
 
   it("verifies and removes the exact Core checkout before scanner checks", () => {
     const workflow = ciWorkflow();
+    expect(workflow).toContain(
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+    );
+    expect(workflow).toContain("node-version: 20");
+    expect(workflow).toContain("cache: npm");
+    expect(workflow).toContain(
+      "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0",
+    );
     expect(workflow).toContain(`ref: ${AI_HARNESS_STRICT_V2_COMMIT}`);
     expect(workflow).toContain("path: .core-contract");
     const verifier = "node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract";
