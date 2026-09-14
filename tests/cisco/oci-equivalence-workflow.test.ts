@@ -54,9 +54,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
       expect(allowedActions.has(action ?? "")).toBe(true);
     }
     expect(
-      text.match(
-        /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0/g,
-      ) ?? [],
+      text.match(/actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0/g) ?? [],
     ).toHaveLength(3);
     expect(
       text.match(

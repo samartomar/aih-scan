@@ -43,7 +43,7 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     expect(uses.filter((action) => action.startsWith("actions/checkout@"))).toHaveLength(1);
     expect(uses).toContain("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
     expect(uses).toContain("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97");
-    expect(uses).not.toContain("astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d");
+    expect(uses.some((action) => action.startsWith("astral-sh/setup-uv@"))).toBe(false);
     expect(uses).toContain("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
     const checkoutSteps = stepBlocks(workflow).filter((step) => step.includes("actions/checkout@"));
     expect(checkoutSteps).toHaveLength(1);
