@@ -334,7 +334,7 @@ describe("Cisco OCI capture evidence bridge", () => {
     expect(workflow).toMatch(/^permissions:\n {2}contents: read\s*$/m);
     expect(workflow.match(/timeout-minutes:/g)).toHaveLength(3);
     expect(
-      workflow.match(/actions\/setup-node@a0853c24544627f65ddf259abe73b1d18a591444/g),
+      workflow.match(/actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/g),
     ).toHaveLength(3);
     expect(workflow.match(/npm ci --ignore-scripts/g)).toHaveLength(3);
     expect(workflow.match(/node-version: 20/g)).toHaveLength(3);
