@@ -43,7 +43,10 @@ describe("independent publication request sets", () => {
           const bytes = readFileSync(file, "utf8");
           const set = JSON.parse(bytes);
           const subject = set.requests[0].source;
-          expect(name).toBe(`${subject.pinnedCommit}.json`);
+          expect(name).toMatch(
+            new RegExp(`^${subject.pinnedCommit}(?:-[a-z0-9][a-z0-9-]{0,63})?\\.json$`),
+          );
+          const output = join(root, `${id}-${name.slice(0, -5)}`);
           const result = spawnSync(
             process.execPath,
             [
@@ -53,12 +56,12 @@ describe("independent publication request sets", () => {
               id,
               `${subject.owner}/${subject.repository}`,
               subject.pinnedCommit,
-              join(root, id),
+              output,
             ],
             { cwd: root, encoding: "utf8" },
           );
           expect(result.status, `${id}: ${result.stderr}`).toBe(0);
-          expect(readdirSync(join(root, id))).toHaveLength(set.requests.length);
+          expect(readdirSync(output)).toHaveLength(set.requests.length);
         }
       }
     } finally {
