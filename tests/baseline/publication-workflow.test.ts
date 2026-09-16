@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -26,6 +27,30 @@ function requestBatchVerifier(workflow: string): string {
   return workflow.slice(bodyStart, bodyEnd).replace(/^ {10}/gmu, "");
 }
 
+function canonicalCoverageDigest(coverage: Record<string, unknown>): string {
+  const unsigned = { ...coverage };
+  delete unsigned.coverageDigest;
+  delete unsigned.requestSha256;
+  const canonical = (value: unknown): string => {
+    if (
+      value === null ||
+      typeof value === "boolean" ||
+      typeof value === "string" ||
+      typeof value === "number"
+    )
+      return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    if (typeof value === "object")
+      return `{${Object.keys(value)
+        .sort()
+        .map(
+          (key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
+        )
+        .join(",")}}`;
+    throw new TypeError("unsupported coverage value");
+  };
+  return `sha256:${createHash("sha256").update(canonical(unsigned), "utf8").digest("hex")}`;
+}
 function writeRequest(directory: string, batch: number, source: unknown): void {
   writeFileSync(
     join(directory, `batch-${String(batch).padStart(3, "0")}.request.json`),
@@ -195,7 +220,7 @@ describe("immutable baseline publication workflow", () => {
   it("documents publisher-and-request-addressed immutable releases", () => {
     const readme = readFileSync(readmePath, "utf8");
 
-    expect(readme).toContain("publisher-and-request-addressed GitHub Releases");
+    expect(readme).toContain("completed publisher-and-request-addressed GitHub Release");
     expect(readme).toContain("baseline-v1-PUBLISHER_COMMIT-REQUEST_SHA");
     expect(readme).toContain("affaan-m/ECC");
     expect(readme).toContain("anthropics/skills");
@@ -204,5 +229,166 @@ describe("immutable baseline publication workflow", () => {
     expect(readme).toContain("samartomar/ai-harness");
     expect(readme).toContain("same commit");
     expect(readme).not.toContain("creates request-addressed GitHub Releases");
+  });
+  it("serializes only equal immutable inputs and verifies completed releases before analyzer setup", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+    const reuse = workflow.indexOf("Reuse only exact completed publications before analyzers");
+    const isolation = workflow.indexOf("Bind Scanner analyzer isolation");
+    const analyzers = workflow.indexOf("Execute Scanner analyzers once per canonical request");
+
+    expect(workflow).toContain("concurrency:");
+    expect(workflow).toContain(
+      [
+        "baseline-publication-$",
+        "{{ github.repository }}-$",
+        "{{ github.sha }}-$",
+        "{{ inputs.source_repository }}-$",
+        "{{ inputs.source_ref }}",
+      ].join(""),
+    );
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow).toContain("attestations: read");
+    expect(workflow).toContain("node tools/verify-baseline-publication-reuse.mjs");
+    expect(workflow).toContain("mattpocock-skills:mattpocock/skills");
+    expect(workflow).toContain("ponytail:DietrichGebert/ponytail");
+    expect(workflow).toContain(
+      'cp "$RUNNER_TEMP/baseline/requests/coverage-map.json" "$RUNNER_TEMP/baseline/publications/coverage-map.json"',
+    );
+    expect(reuse).toBeGreaterThan(0);
+    expect(isolation).toBeGreaterThan(reuse);
+    expect(analyzers).toBeGreaterThan(isolation);
+    expect(workflow).toContain('requests=("$RUNNER_TEMP/baseline/pending"/*.request.json)');
+    expect(workflow).toContain('for request in "$RUNNER_TEMP/baseline/pending"/*.request.json; do');
+    expect(workflow).toContain("if: steps.completed.outputs.pending == 'true'");
+    expect(workflow).toContain("if: needs.build.outputs.pending == 'true'");
+  });
+  it("validates an optional non-authoritative provider coverage map and joins every component to authored requests", () => {
+    const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");
+    const validator = requestBatchVerifier(workflow);
+    const root = mkdtempSync(join(tmpdir(), "aih-publication-coverage-"));
+    const pin = "3cca18b368ae95cdbdebbff572ccafa662551015";
+    const requestSha256 = "a".repeat(64);
+    const treeSha256 = "b".repeat(64);
+    const digest = `sha256:${"c".repeat(64)}`;
+    const request = {
+      requestSha256,
+      source: {
+        id: "mattpocock-skills",
+        owner: "mattpocock",
+        repository: "skills",
+        pinnedCommit: pin,
+        treeSha256,
+      },
+      components: [
+        {
+          id: "skill:fixture",
+          paths: ["skills/fixture/SKILL.md"],
+          treeSha256,
+        },
+      ],
+    };
+    const coverage = {
+      version: "workbench-scanner-coverage/v1",
+      authority: "none",
+      scope: "declared-source-files",
+      compilerInputDigest: digest,
+      source: {
+        id: "source:mattpocock",
+        revisionId: pin,
+        contentDigest: digest,
+        repository: "https://github.com/mattpocock/skills",
+        inputFormat: "pinned-skill-collection/v1",
+      },
+      repository: "mattpocock/skills",
+      pinnedCommit: pin,
+      sourceTreeSha256: treeSha256,
+      components: [
+        {
+          componentId: "skill:fixture",
+          componentTreeSha256: treeSha256,
+          paths: ["skills/fixture/SKILL.md"],
+          subject: {
+            assetId: "mattpocock/skill:fixture",
+            sourceId: "source:mattpocock",
+            sourceRevisionId: pin,
+            contentDigest: digest,
+          },
+        },
+      ],
+      unmappedDerivedAssets: [],
+      coverageDigest: "sha256:pending",
+      requestSha256: [requestSha256],
+    };
+    coverage.coverageDigest = canonicalCoverageDigest(coverage);
+    const firstComponent = coverage.components[0];
+    if (firstComponent === undefined) throw new Error("coverage fixture component");
+    const withCoverageDigest = (value: typeof coverage) => ({
+      ...value,
+      coverageDigest: canonicalCoverageDigest(value),
+    });
+    const run = (directory: string) =>
+      spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", directory, "mattpocock-skills", "mattpocock/skills", pin],
+        { input: validator, encoding: "utf8" },
+      );
+    try {
+      const valid = join(root, "valid");
+      mkdirSync(valid);
+      writeFileSync(join(valid, "batch-001.request.json"), JSON.stringify(request));
+      writeFileSync(join(valid, "coverage-map.json"), JSON.stringify(coverage));
+      const validResult = run(valid);
+      if (validResult.status !== 0) throw new Error(validResult.stderr);
+      expect(validResult.status).toBe(0);
+
+      const withoutCoverage = join(root, "without-coverage");
+      mkdirSync(withoutCoverage);
+      writeFileSync(join(withoutCoverage, "batch-001.request.json"), JSON.stringify(request));
+      expect(run(withoutCoverage).status).toBe(0);
+
+      for (const [name, altered] of [
+        [
+          "wrong-source",
+          withCoverageDigest({
+            ...coverage,
+            source: { ...coverage.source, id: "source:ponytail" },
+          }),
+        ],
+        ["wrong-request", withCoverageDigest({ ...coverage, requestSha256: ["d".repeat(64)] })],
+        [
+          "wrong-component",
+          withCoverageDigest({
+            ...coverage,
+            components: [{ ...firstComponent, paths: ["other"] }],
+          }),
+        ],
+        ["wrong-digest", { ...coverage, coverageDigest: `sha256:${"d".repeat(64)}` }],
+      ] as const) {
+        const directory = join(root, name);
+        mkdirSync(directory);
+        writeFileSync(join(directory, "batch-001.request.json"), JSON.stringify(request));
+        if (altered !== undefined)
+          writeFileSync(join(directory, "coverage-map.json"), JSON.stringify(altered));
+        expect(run(directory).status, name).not.toBe(0);
+      }
+
+      const ecc = join(root, "ecc-map");
+      mkdirSync(ecc);
+      writeFileSync(
+        join(ecc, "batch-001.request.json"),
+        JSON.stringify({
+          source: { id: "ecc", owner: "affaan-m", repository: "ECC", pinnedCommit: pin },
+        }),
+      );
+      writeFileSync(join(ecc, "coverage-map.json"), JSON.stringify(coverage));
+      expect(
+        spawnSync(process.execPath, ["--input-type=module", "-", ecc, "ecc", "affaan-m/ECC", pin], {
+          input: validator,
+          encoding: "utf8",
+        }).status,
+      ).not.toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
