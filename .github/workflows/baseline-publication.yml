@@ -31,19 +31,29 @@ on:
         description: Exact 40-character source commit to observe
         required: true
         type: string
+      publication_generation:
+        description: Immutable renewal identifier (initial or opaque eight digits); renewal runs analyzers again
+        required: true
+        default: initial
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: baseline-publication-${{ github.repository }}-${{ github.sha }}-${{ inputs.source_repository }}-${{ inputs.source_ref }}-${{ inputs.publication_generation }}
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
       contents: read
+      attestations: read
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_sha256: ${{ steps.upload.outputs.artifact-digest }}
+      pending: ${{ steps.completed.outputs.pending }}
     env:
       CANDIDATE: ${{ inputs.candidate || inputs.catalog }}
       LEGACY_CATALOG: ${{ inputs.catalog }}
@@ -53,12 +63,14 @@ jobs:
       CORE_REF: ${{ inputs.core_ref }}
       SOURCE_REPOSITORY: ${{ inputs.source_repository }}
       SOURCE_REF: ${{ inputs.source_ref }}
+      PUBLICATION_GENERATION: ${{ inputs.publication_generation }}
     steps:
       - name: Validate immutable inputs before checkout
         shell: bash
         run: |
           set -euo pipefail
           [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PUBLICATION_GENERATION" = initial || "$PUBLICATION_GENERATION" =~ ^[0-9]{8}$ ]]
           [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "$CANDIDATE" =~ ^[a-z0-9][a-z0-9:._-]{0,127}$ ]]
           test -z "$LEGACY_CATALOG" || test -z "$EXPLICIT_CANDIDATE"
@@ -155,31 +167,6 @@ jobs:
             npm --prefix .core ci --ignore-scripts
           fi
 
-      - name: Bind Scanner analyzer isolation
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
-          apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
-          test -r "$apparmor_profile"
-          sudo apparmor_parser --replace "$apparmor_profile"
-          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
-          case "$python_prefix" in
-            /usr|/usr/*) echo "::error::unexpected setup-python prefix"; exit 1 ;;
-          esac
-          sudo cp -a "${python_prefix}/." /usr/local/
-          sudo install -m 0644 \
-            "${python_prefix}/lib/libpython3.13.so.1.0" \
-            /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
-          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
-          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
-          test "$(id -u)" -ne 0
-          test -x /usr/bin/docker
-          test -x /usr/bin/bwrap
-          test -x /usr/local/bin/uv
-          /usr/bin/python3.13 -c 'import sys; assert sys.version_info[:2] == (3, 13)'
-
       - name: Author the canonical request independently
         working-directory: .core
         if: inputs.request_set_url == '' && inputs.catalog == '' && inputs.candidate != 'aih'
@@ -233,6 +220,7 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module - "$RUNNER_TEMP/baseline/requests" "$CANDIDATE" "$SOURCE_REPOSITORY" "$SOURCE_REF" <<'NODE'
+          import { createHash } from "node:crypto";
           import { lstatSync, readdirSync, readFileSync } from "node:fs";
           import { join, resolve } from "node:path";
 
@@ -240,6 +228,76 @@ jobs:
           const fail = (reason) => {
             throw new Error(`canonical baseline request batch rejected: ${reason}`);
           };
+          const object = (value, label) => {
+            if (value === null || typeof value !== "object" || Array.isArray(value)) fail(label);
+            return value;
+          };
+          const exact = (value, keys, label) => {
+            const actual = Object.keys(object(value, label)).sort();
+            const expected = [...keys].sort();
+            if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) fail(label);
+            return value;
+          };
+          const sha256 = (value) => typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
+          const rawSha256 = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+          const strictJson = (value, label) => {
+            if (value === null || typeof value === "boolean") return;
+            if (typeof value === "string") {
+              for (let index = 0; index < value.length; index += 1) {
+                const unit = value.charCodeAt(index);
+                if (unit >= 0xd800 && unit <= 0xdbff) {
+                  const next = value.charCodeAt(index + 1);
+                  if (!(next >= 0xdc00 && next <= 0xdfff)) fail(`${label} Unicode`);
+                  index += 1;
+                } else if (unit >= 0xdc00 && unit <= 0xdfff || value.normalize("NFC") !== value)
+                  fail(`${label} text`);
+              }
+              return;
+            }
+            if (typeof value === "number") {
+              if (!Number.isFinite(value) || Object.is(value, -0)) fail(`${label} number`);
+              return;
+            }
+            if (Array.isArray(value)) {
+              for (const item of value) strictJson(item, label);
+              return;
+            }
+            if (value !== null && typeof value === "object") {
+              for (const [key, item] of Object.entries(value)) {
+                strictJson(key, `${label} key`);
+                strictJson(item, `${label}.${key}`);
+              }
+              return;
+            }
+            fail(`${label} value`);
+          };
+          const canonical = (value) => {
+            if (value === null || typeof value === "boolean" || typeof value === "string" || typeof value === "number")
+              return JSON.stringify(value);
+            if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+            return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+          };
+          const coverageDigest = (coverage) => {
+            const { coverageDigest: ignoredDigest, requestSha256: ignoredRequestSha256, ...unsigned } = coverage;
+            void ignoredDigest;
+            void ignoredRequestSha256;
+            strictJson(unsigned, "coverage map");
+            return `sha256:${createHash("sha256").update(canonical(unsigned), "utf8").digest("hex")}`;
+          };
+          const sameStrings = (left, right) =>
+            Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => value === right[index]);
+          const coverageSource = {
+            "mattpocock-skills": {
+              id: "source:mattpocock",
+              inputFormat: "pinned-skill-collection/v1",
+              repository: "https://github.com/mattpocock/skills",
+            },
+            ponytail: {
+              id: "source:ponytail",
+              inputFormat: "pinned-component-collection/v1",
+              repository: "https://github.com/DietrichGebert/ponytail",
+            },
+          }[candidate];
           if (
             typeof requestRoot !== "string" ||
             typeof candidate !== "string" ||
@@ -253,8 +311,17 @@ jobs:
           const entries = readdirSync(root, { withFileTypes: true }).sort((left, right) =>
             left.name.localeCompare(right.name),
           );
-          if (entries.length === 0) fail("empty request directory");
-          for (const [index, entry] of entries.entries()) {
+          const coverageEntries = entries.filter((entry) => entry.name === "coverage-map.json");
+          const requestEntries = entries.filter((entry) => entry.name !== "coverage-map.json");
+          if (
+            requestEntries.length === 0 ||
+            coverageEntries.length > 1 ||
+            entries.length !== requestEntries.length + coverageEntries.length ||
+            coverageEntries.some((entry) => !entry.isFile() || entry.isSymbolicLink()) ||
+            (coverageEntries.length === 1 && coverageSource === undefined)
+          )
+            fail("request directory layout");
+          const requests = requestEntries.map((entry, index) => {
             const expectedName = `batch-${String(index + 1).padStart(3, "0")}.request.json`;
             if (entry.name !== expectedName || !entry.isFile() || entry.isSymbolicLink())
               fail("request directory layout");
@@ -278,14 +345,151 @@ jobs:
               source.pinnedCommit !== pinnedCommit
             )
               fail("request source identity");
+            return request;
+          });
+          if (coverageEntries.length === 0) process.exit(0);
+          let coverage;
+          try {
+            coverage = JSON.parse(readFileSync(resolve(join(root, "coverage-map.json")), "utf8"));
+          } catch {
+            fail("coverage map JSON");
           }
+          exact(
+            coverage,
+            [
+              "authority",
+              "compilerInputDigest",
+              "components",
+              "coverageDigest",
+              "pinnedCommit",
+              "repository",
+              "requestSha256",
+              "scope",
+              "source",
+              "sourceTreeSha256",
+              "unmappedDerivedAssets",
+              "version",
+            ],
+            "coverage map",
+          );
+          if (
+            coverage.version !== "workbench-scanner-coverage/v1" ||
+            coverage.authority !== "none" ||
+            coverage.scope !== "declared-source-files" ||
+            coverage.repository !== repository ||
+            coverage.pinnedCommit !== pinnedCommit ||
+            !sha256(coverage.compilerInputDigest) ||
+            !sha256(coverage.coverageDigest) ||
+            coverage.coverageDigest !== coverageDigest(coverage) ||
+            !rawSha256(coverage.sourceTreeSha256) ||
+            !sameStrings(coverage.requestSha256, requests.map((request) => request.requestSha256))
+          )
+            fail("coverage map identity");
+          exact(coverage.source, ["contentDigest", "id", "inputFormat", "repository", "revisionId"], "coverage source");
+          if (
+            coverage.source.id !== coverageSource.id ||
+            coverage.source.revisionId !== pinnedCommit ||
+            coverage.source.repository !== coverageSource.repository ||
+            coverage.source.inputFormat !== coverageSource.inputFormat ||
+            !sha256(coverage.source.contentDigest)
+          )
+            fail("coverage source identity");
+          const requestComponents = new Map();
+          for (const request of requests) {
+            if (!rawSha256(request.requestSha256) || !rawSha256(request.source?.treeSha256) || request.source.treeSha256 !== coverage.sourceTreeSha256 || !Array.isArray(request.components))
+              fail("coverage request binding");
+            for (const component of request.components) {
+              if (
+                component === null ||
+                typeof component !== "object" ||
+                Array.isArray(component) ||
+                typeof component.id !== "string" ||
+                !Array.isArray(component.paths) ||
+                !component.paths.every((path) => typeof path === "string") ||
+                !rawSha256(component.treeSha256) ||
+                requestComponents.has(component.id)
+              )
+                fail("coverage request component");
+              requestComponents.set(component.id, component);
+            }
+          }
+          if (!Array.isArray(coverage.components) || coverage.components.length !== requestComponents.size || !Array.isArray(coverage.unmappedDerivedAssets) || !coverage.unmappedDerivedAssets.every((id) => typeof id === "string"))
+            fail("coverage components");
+          const mapped = new Set();
+          for (const component of coverage.components) {
+            exact(component, ["componentId", "componentTreeSha256", "paths", "subject"], "coverage component");
+            const request = requestComponents.get(component.componentId);
+            if (
+              request === undefined ||
+              mapped.has(component.componentId) ||
+              component.componentTreeSha256 !== request.treeSha256 ||
+              !sameStrings(component.paths, request.paths)
+            )
+              fail("coverage component binding");
+            exact(component.subject, ["assetId", "contentDigest", "sourceId", "sourceRevisionId"], "coverage subject");
+            if (
+              typeof component.subject.assetId !== "string" ||
+              component.subject.sourceId !== coverage.source.id ||
+              component.subject.sourceRevisionId !== pinnedCommit ||
+              !sha256(component.subject.contentDigest)
+            )
+              fail("coverage subject binding");
+            mapped.add(component.componentId);
+          }
+          if (mapped.size !== requestComponents.size) fail("coverage component completeness");
           NODE
+      - name: Reuse only exact completed publications before analyzers
+        id: completed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/verify-baseline-publication-reuse.mjs \
+            --requests "$RUNNER_TEMP/baseline/requests" \
+            --pending "$RUNNER_TEMP/baseline/pending" \
+            --reuse-directory "$RUNNER_TEMP/baseline/reused" \
+            --repository "$GITHUB_REPOSITORY" \
+            --publisher-sha "$GITHUB_SHA" \
+            --generation "$PUBLICATION_GENERATION" \
+            --source-ref "$GITHUB_REF" \
+            --workflow "$GITHUB_REPOSITORY/.github/workflows/baseline-publication.yml" \
+            --scanner "$GITHUB_WORKSPACE/dist/cli.js" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Bind Scanner analyzer isolation
+        if: steps.completed.outputs.pending == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
+          apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          test -r "$apparmor_profile"
+          sudo apparmor_parser --replace "$apparmor_profile"
+          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
+          case "$python_prefix" in
+            /usr|/usr/*) echo "::error::unexpected setup-python prefix"; exit 1 ;;
+          esac
+          sudo cp -a "${python_prefix}/." /usr/local/
+          sudo install -m 0644 \
+            "${python_prefix}/lib/libpython3.13.so.1.0" \
+            /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
+          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
+          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
+          test "$(id -u)" -ne 0
+          test -x /usr/bin/docker
+          test -x /usr/bin/bwrap
+          test -x /usr/local/bin/uv
+          /usr/bin/python3.13 -c 'import sys; assert sys.version_info[:2] == (3, 13)'
+
+
       - name: Execute Scanner analyzers once per canonical request
+        if: steps.completed.outputs.pending == 'true'
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          requests=("$RUNNER_TEMP/baseline/requests"/*.request.json)
+          requests=("$RUNNER_TEMP/baseline/pending"/*.request.json)
           test "${#requests[@]}" -gt 0
           scanner_source="$GITHUB_WORKSPACE/.source"
           if [ "$CANDIDATE" = "aih" ]; then
@@ -302,6 +506,7 @@ jobs:
           done
 
       - name: Sign, pack, and independently inspect portable publications
+        if: steps.completed.outputs.pending == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -327,7 +532,10 @@ jobs:
             '{now:$now,signer:{identity:"github-actions:aih-scan-baseline-publication",class:"test-ephemeral",keyId:$key}}' \
             > "$signing_root/expected.json"
           mkdir "$RUNNER_TEMP/baseline/publications"
-          for request in "$RUNNER_TEMP/baseline/requests"/*.request.json; do
+          if [[ -f "$RUNNER_TEMP/baseline/requests/coverage-map.json" ]]; then
+            cp "$RUNNER_TEMP/baseline/requests/coverage-map.json" "$RUNNER_TEMP/baseline/publications/coverage-map.json"
+          fi
+          for request in "$RUNNER_TEMP/baseline/pending"/*.request.json; do
             batch="$(basename "$request" .request.json)"
             bundle="$RUNNER_TEMP/baseline/bundles/$batch.bundle"
             evidence="$signing_root/$batch.evidence.json"
@@ -339,6 +547,7 @@ jobs:
             output="$RUNNER_TEMP/baseline/publications/$request_sha256"
             mkdir "$output"
             tag="baseline-v1-$GITHUB_SHA-$request_sha256"
+            if [[ "$PUBLICATION_GENERATION" != initial ]]; then tag="$tag-r$PUBLICATION_GENERATION"; fi
             locator="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/publication.json"
             node dist/cli.js baseline-pack \
               --evidence "$evidence" --request "$request" --bundle "$bundle" \
@@ -353,6 +562,7 @@ jobs:
 
       - name: Transfer immutable publication candidates
         id: upload
+        if: steps.completed.outputs.pending == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: baseline-publications-${{ github.run_id }}-${{ github.run_attempt }}
@@ -362,6 +572,7 @@ jobs:
           compression-level: 0
 
   publish:
+    if: needs.build.outputs.pending == 'true'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -392,7 +603,15 @@ jobs:
           api_digest="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$EXPECTED_ARTIFACT_ID" --jq .digest)"
           test "$api_digest" = "sha256:$EXPECTED_ARTIFACT_SHA256"
           shopt -s nullglob
-          directories=(publications/*)
+          for entry in publications/*; do
+            if [[ "$(basename "$entry")" = "coverage-map.json" ]]; then
+              test -f "$entry"
+              test ! -L "$entry"
+            else
+              test -d "$entry"
+            fi
+          done
+          directories=(publications/*/)
           test "${#directories[@]}" -gt 0
           for directory in "${directories[@]}"; do
             test -d "$directory"
@@ -412,14 +631,17 @@ jobs:
       - name: Create no-overwrite publisher-and-request-addressed releases
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLICATION_GENERATION: ${{ inputs.publication_generation }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          for directory in publications/*; do
+          [[ "$PUBLICATION_GENERATION" = initial || "$PUBLICATION_GENERATION" =~ ^[0-9]{8}$ ]]
+          for directory in publications/*/; do
             request_sha256="$(basename "$directory")"
             [[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]]
             tag="baseline-v1-$GITHUB_SHA-$request_sha256"
+            if [[ "$PUBLICATION_GENERATION" != initial ]]; then tag="$tag-r$PUBLICATION_GENERATION"; fi
             expected_locator="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/publication.json"
             test "$(jq -er '.locator' "$directory/discovery.json")" = "$expected_locator"
             if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

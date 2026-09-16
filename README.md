@@ -284,9 +284,34 @@ publisher provenance is a separate verification boundary.
 either the digest-bound request-set inputs above or the optional exact Core
 request-client inputs, builds publications in a read-only
 job, transfers them by artifact digest, and gives write/OIDC permissions only to
-the protected publication job. That job attests the exact publication files and
-creates publisher-and-request-addressed GitHub Releases only when neither the release nor tag
-already exists. It never publishes an npm package. A consumer must verify the
+the protected publication job, which attests the exact publication files.
+Before analyzer setup, the build job checks for a
+completed publisher-and-request-addressed GitHub Release.
+Reuse requires the exact four-file closure, checksums,
+independent inspection, and GitHub attestation binding this workflow,
+`refs/heads/main`, and the current publisher commit. Only an absent release and
+tag is pending work; lookup, network, authentication, incomplete-release, or
+verification failures stop the run. Only pending requests reach analyzers.
+
+Reuse checks the 90-day public-report freshness policy against the original
+authenticated report signing date and the verified publication timestamp.
+The verified publication timestamp must also fall inside the report's original
+short signature-verification window. Draft releases cannot be reused.
+Downloading, re-verifying, or republishing old bytes cannot restart report age.
+An expired publication fails explicitly instead of silently rescanning its tag.
+For a fresh scan, select a new opaque eight-digit `publication_generation` identifier
+(for example, `20261207`). The initial publication keeps its existing address;
+renewals append `-r<identifier>`. Each address is immutable. A missing renewal
+runs the analyzers before signing; retrying the same completed renewal reuses it
+only after all verification checks pass. Core pins the exact resulting locator.
+
+Matt Pocock and Ponytail request batches may carry a closed Core-derived source-file
+coverage map through the same artifact. When present, the map must match every
+request and component; current request-only producers remain supported. The map is not Scanner evidence,
+authority, or a release asset; Core must re-derive it from its exact pinned
+checkout before consumption. The workflow serializes identical inputs while
+distinct sources remain independent. It creates a release only when neither
+the release nor tag exists, and never publishes an npm package. A consumer must verify the
 GitHub artifact attestation against this repository, workflow, source ref, and
 source digest before treating the embedded key as the custody key for those
 bytes. Each candidate inventory and its request author are checked out from the
