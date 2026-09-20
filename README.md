@@ -681,3 +681,14 @@ scanner behavior only against disposable fixture roots.
 [Apache-2.0](LICENSE). Scanner evidence and software are provided on an "AS IS"
 basis without organization approval, qualification, warranty, support, or effect
 authority.
+
+## Public organization evidence digest
+
+`coreOrganizationEvidenceEnvelopeDigestV1` is exported from `@aihq/scan`.
+Call it on the envelope returned by
+`projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1`, after verifying the
+attestation. It returns the domain-separated `sha256:...` binding used by Core;
+this differs from hashing the serialized file. The helper preserves projection
+custody: a parsed or copied envelope is rejected. To import a saved envelope, use
+Core's public canonical-byte parser and digest helper, then run the normal Core
+evidence and authority checks. Neither digest establishes approval or authority.

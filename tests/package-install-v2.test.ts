@@ -53,6 +53,7 @@ const publicV2Exports = [
   "captureCiscoOciCandidateV2",
   "captureRegisteredDetectorCandidateV2",
   "createBaselineVetRequestV1",
+  "coreOrganizationEvidenceEnvelopeDigestV1",
   "createBaselineVetDiscoveryV1",
   "createBaselineVetPublicationV1",
   "createDetectorRegistrationV1",

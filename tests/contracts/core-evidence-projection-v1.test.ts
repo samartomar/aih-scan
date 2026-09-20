@@ -7,8 +7,9 @@ import {
 } from "../../src/core/core-contract-lock-v2.js";
 import {
   canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
+  coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
-} from "../../src/core/organization-evidence-envelope-v1.js";
+} from "../../src/index.js";
 import {
   createObservationKeyV1,
   createObservationSetV1,
@@ -250,6 +251,14 @@ describe("Core organization evidence projection V1", () => {
       notBefore: "2026-08-24T00:00:00.000Z",
       expiresAt: "2026-08-24T01:00:00.000Z",
     });
+    const bytes = canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(result);
+    expect(coreOrganizationEvidenceEnvelopeDigestV1(result)).toBe(
+      `sha256:${sha(Buffer.concat([Buffer.from("aih-organization-evidence/v1\0"), bytes]))}`,
+    );
+    expect(coreOrganizationEvidenceEnvelopeDigestV1(result)).not.toBe(`sha256:${sha(bytes)}`);
+    expect(() =>
+      coreOrganizationEvidenceEnvelopeDigestV1(JSON.parse(JSON.stringify(result))),
+    ).toThrow(/custody/);
     expect(result.evidence.artifactDigests).toEqual([...result.evidence.artifactDigests].sort());
     expect(result.evidence.artifactDigests).toContain(
       `sha256:${result.evidence.payloadDigest.slice("sha256:".length)}`,

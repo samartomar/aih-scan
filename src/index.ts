@@ -45,6 +45,7 @@ export {
 export {
   type CoreOrganizationEvidenceEnvelopeV1,
   canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
+  coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "./core/organization-evidence-envelope-v1.js";
 export {

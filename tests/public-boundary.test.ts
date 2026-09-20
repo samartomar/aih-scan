@@ -28,6 +28,7 @@ describe("Strict V2 public boundary", () => {
       "canonicalSourceSealsV2Bytes",
       "captureCiscoOciCandidateV2",
       "captureRegisteredDetectorCandidateV2",
+      "coreOrganizationEvidenceEnvelopeDigestV1",
       "createBaselineVetDiscoveryV1",
       "createBaselineVetPublicationV1",
       "createBaselineVetRequestV1",
