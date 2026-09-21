@@ -717,6 +717,22 @@ function runCapture(reader, runRoot, cliEntry, requestPath) {
   return { bundlePath, candidateSha256: manifest.candidate.candidateSha256 };
 }
 
+/**
+ * The consumer's reader module resolves bare specifiers against the installed
+ * tarballs, so this is also the first real proof that both tarballs were packed
+ * from the commits under test with their build output present.
+ */
+async function importReader(consumerRoot) {
+  try {
+    return await import(pathToFileURL(join(consumerRoot, "reader.mjs")).href);
+  } catch (error) {
+    refuse(
+      `the installed packages do not expose the public entry points this tool needs: ${reasonOf(error)}. ` +
+        "Check that each tarball was packed from the commit under test with dist/ built: @aihq/scan builds in prepack, @aihq/catalog has no prepack and must be built before packing",
+    );
+  }
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   assertPlatform();
@@ -724,7 +740,7 @@ async function main() {
   const consumerRoot = installConsumer(options);
   const catalog = installedPackage(consumerRoot, "@aihq/catalog");
   installedPackage(consumerRoot, "@aihq/scan");
-  const reader = await import(pathToFileURL(join(consumerRoot, "reader.mjs")).href);
+  const reader = await importReader(consumerRoot);
   const cliEntry = join(consumerRoot, "node_modules", "@aihq", "scan", "dist", "cli.js");
   regularBytes(cliEntry, "packaged aih-scan CLI", 1, 16 * 1024 * 1024);
 
