@@ -16,7 +16,14 @@
  *      image identity, SBOM and provenance through the installed package's public
  *      API, and cross-check them against each other;
  *   5. write the capture request the packaged `aih-scan capture` command requires;
- *   6. run that command and keep its capture bundle and execution log.
+ *   6. refuse unless the staged root is a skill root the registered route can load:
+ *      the broker mounts the request's `sourceRoot` at `/source`, so its own top
+ *      level must hold the item's original `SKILL.md`. Suitability is read from the
+ *      staged source material, never from the item's Catalog subject kind label,
+ *      and a verified digest proves published bytes, not a skill source;
+ *   7. if `--prepare-only` was not given: run the packaged command and keep its
+ *      capture bundle. A capture that yields no verified bundle is a failure and is
+ *      recorded as one, never as an empty scan.
  *
  * Every value that describes the detector runtime is an operator input. This tool
  * derives none of them and refuses instead: a registration, an OCI layout and its
@@ -28,6 +35,21 @@
  * Scanner output is evidence only. It is never qualification, approval, admission
  * or an effect. Signing is a separate step and is not performed here.
  *
+ * Suitability. The only route this tool runs is `cisco-oci-v1`, which loads the
+ * skill from the root the broker mounts at `/source`, so the staged root must be
+ * the skill root itself. An item whose material is a source *closure* rather than a
+ * skill is refused, and its assessment artifacts (`closure.json`, `profile.json`,
+ * `prose.md`, `recipe.json`) are refused even when every declared digest verifies.
+ * A nested `SKILL.md` is reported and never selected: the request binds one root,
+ * and scanning a nested directory would cover that directory and not the rest of
+ * the closure. Nothing is renamed, generated or substituted to make a root fit.
+ *
+ * Failure records. A run that stops after its run directory exists keeps both its
+ * input record and an explicit `capture-failure.json`: the phase, the reason, the
+ * exit status and the streams a capture command actually wrote, the selected source
+ * root, and the file paths the capture was asked to cover. Fields the phase never
+ * produced stay null and output is never reconstructed.
+ *
  * This helper belongs to one Scan commit and is not present at every package
  * checkpoint, so it must be run from the checkout that holds it, and the two
  * package checkpoints must be packed in their own `git archive` trees. Switching
@@ -35,10 +57,11 @@
  * block in `--help`.
  *
  * `--prepare-only` proves preparation: that the supplied tarballs install, that
- * the item's published bytes verify, and that the operator's detector inputs
- * agree. It is never evidence that a detector ran. Genuine execution is the
- * capture bundle that only a Linux x64 host with the loaded image can produce;
- * a zero-finding or successfully signed result is not a clean scan by itself.
+ * the item's published bytes verify, that the operator's detector inputs agree and
+ * that the staged root is a skill root. It is never evidence that a detector ran.
+ * Genuine execution is the capture bundle that only a Linux x64 host with the
+ * loaded image can produce; a zero-finding or successfully signed result is not a
+ * clean scan by itself.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -74,7 +97,8 @@ const USAGE = `Usage:
   --scan-tarball     npm pack output of the Scan commit under test.
   --output           New or empty run directory. It receives source/, detector/,
                      capture-request.json, catalog-item.json, preflight.json,
-                     execution.log and bundle/.
+                     execution.log and bundle/, plus capture-failure.json whenever
+                     the run stops after preparation without a verified bundle.
   --registration     The organization's own DetectorRegistrationV1 authoring document
                      (README "Capture"). Nothing here is derived or defaulted.
   --layout           Canonical CiscoOciLayoutV1 JSON for the loaded detector image,
@@ -88,7 +112,23 @@ const USAGE = `Usage:
   --detector-id      Required only when the registration declares more than one entry.
   --item             Catalog entry id. Default: ${DEFAULT_ITEM}.
   --consumer-root    Fresh install directory. Default: a new mkdtemp under the system temp root.
-  --prepare-only     Validate everything, write the request, and stop before capture.
+  --prepare-only     Validate everything, write the request, pass the subject and
+                     Docker gates, and stop before capture.
+
+Suitability. cisco-oci-v1 loads the skill from the root the broker mounts at
+/source, so the staged root must hold the item's own SKILL.md at its top level.
+Suitability is read from the staged material, never from the item's Catalog subject
+kind label: an item labelled 'agent' may be a skill pack, while closure.json,
+profile.json, prose.md and recipe.json are assessment artifacts whose verified
+digests prove published bytes and not a skill source. A nested SKILL.md is reported
+and never selected, because the request binds this one root and scanning a nested
+directory would not cover the rest of the closure. A run that reaches the Docker
+gate records the accepted skill entry beside the covered artifacts in
+preflight.json. A refusal before capture names
+the reason in execution.log and leaves the selected root and the covered paths in
+capture-request.json and catalog-item.json; a failed capture additionally leaves
+capture-failure.json with the command, the exit status, the streams that exist,
+that root and those paths. No failed run is recorded as an empty scan.
 
 Checkouts. This file exists only in some Scan commits. Run it from the checkout
 that holds it, at the reviewed helper commit, and record that commit separately
@@ -120,6 +160,8 @@ const DETECTOR_ID = /^detector\.[a-z0-9][a-z0-9.-]*$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const REFERENCE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const ADAPTER_CAPABILITY = "cisco-oci-v1";
+/** The skill entry the scanner loads from the capture root; never renamed or generated. */
+const SKILL_ENTRY = "SKILL.md";
 const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ARTIFACT_NAMES = ["closure", "profile", "prose", "recipe"];
 const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
@@ -129,6 +171,10 @@ const MAX_REGISTRATION_BYTES = 512 * 1024;
 const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_ANNEX_BYTES = 16 * 1024 * 1024;
 const MAX_ITEM_ARTIFACT_BYTES = 1024 * 1024;
+/** Bound on the staged-tree walk that reports a nested SKILL.md, never selects one. */
+const MAX_STAGED_TREE_DIRECTORIES = 256;
+/** Bound on each stream kept in capture-failure.json; the full text stays in execution.log. */
+const MAX_FAILURE_STREAM_CHARACTERS = 64 * 1024;
 const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 const DOCKER_TIMEOUT_MS = 120_000;
 const CAPTURE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -579,6 +625,98 @@ async function readCatalogItem(reader, catalogRoot, runRoot, itemId) {
   return { sourceRoot, selectedClosurePaths, content, entry, files };
 }
 
+/** Top-level entries of the staged root, with directories marked, for a refusal message. */
+function stagedTopLevelEntries(sourceRoot) {
+  return readdirSync(sourceRoot, { withFileTypes: true })
+    .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+    .sort();
+}
+
+/**
+ * Relative paths of `SKILL.md` files below the staged root. Reported only: the
+ * broker mounts exactly one root, so a nested skill is never selected in its place.
+ * Directories are walked in a bounded breadth-first order and symbolic links are
+ * ignored, so a hostile or cyclic tree cannot stall the refusal.
+ */
+function nestedSkillPaths(sourceRoot) {
+  const nested = [];
+  const queue = [[sourceRoot, ""]];
+  let visited = 0;
+  while (queue.length > 0 && visited < MAX_STAGED_TREE_DIRECTORIES) {
+    const [directory, prefix] = queue.shift();
+    visited += 1;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) queue.push([join(directory, entry.name), relative]);
+      else if (entry.isFile() && entry.name === SKILL_ENTRY) nested.push(relative);
+    }
+  }
+  return nested.sort();
+}
+
+function notSkillRootReason(item, itemId) {
+  const topLevel = stagedTopLevelEntries(item.sourceRoot);
+  const stagedPaths = item.files.map((file) => file.path).sort();
+  const nested = nestedSkillPaths(item.sourceRoot);
+  return (
+    `catalog item ${itemId} is not a skill source for ${ADAPTER_CAPABILITY}: the broker mounts the ` +
+    `capture source root at /source and the scanner loads the skill from that root, but ` +
+    `${item.sourceRoot} holds no staged ${SKILL_ENTRY} at its top level ` +
+    `(top-level entries: ${topLevel.join(", ") || "none"}; staged files: ${stagedPaths.join(", ") || "none"}). ` +
+    `The staged files are the item's published artifacts, and a verified digest proves these are the ` +
+    `published bytes, not that they are a skill source` +
+    (nested.length === 0
+      ? ""
+      : `. ${nested.length} nested ${SKILL_ENTRY} path(s) exist under this root (${nested.join(", ")}); ` +
+        `none is selected, because the request binds this one root and scanning a nested skill would ` +
+        `cover only that directory and not the rest of the staged closure`) +
+    "."
+  );
+}
+
+/**
+ * The registered `cisco-oci-v1` route mounts the capture `sourceRoot` at `/source`
+ * and loads the skill from that root, so the staged root must itself be the skill
+ * root: its own top level must hold the item's original `SKILL.md`, byte for byte
+ * as published.
+ *
+ * Suitability is read from the staged source material — the artifact paths and the
+ * staged bytes — and never from the item's Catalog subject kind label. An item
+ * labelled `agent` whose material is a skill pack passes; an item labelled `skill`
+ * whose material is an assessment closure does not. `closure.json`, `profile.json`,
+ * `prose.md` and `recipe.json` describe a source closure, and their verified
+ * digests do not make any of them a skill source.
+ *
+ * Only this root is considered. A nested `SKILL.md` is named in the refusal and
+ * never selected or copied: the request's `sourceRoot` and `selectedClosurePaths`
+ * bind this root, and scanning a nested directory would not cover the rest of the
+ * staged closure. Nothing is renamed and no `SKILL.md` is generated.
+ */
+function assertSkillSourceRoot(item) {
+  const itemId = item.entry.entryId;
+  const declared = item.files.find((file) => file.path === SKILL_ENTRY);
+  if (declared === undefined) refuse(notSkillRootReason(item, itemId));
+  const stagedPath = join(item.sourceRoot, SKILL_ENTRY);
+  let bytes;
+  try {
+    bytes = regularBytes(stagedPath, `staged ${SKILL_ENTRY}`, 1, MAX_ITEM_ARTIFACT_BYTES);
+  } catch (error) {
+    refuse(`catalog item ${itemId} declares ${SKILL_ENTRY} but the staged copy is unusable: ${reasonOf(error)}`);
+  }
+  const recomputed = sha256Hex(bytes);
+  if (recomputed !== declared.sha256)
+    refuse(
+      `the staged ${SKILL_ENTRY} of catalog item ${itemId} no longer matches its published digest: ` +
+        `sha256:${recomputed} != sha256:${declared.sha256}`,
+    );
+  return {
+    artifact: declared.name,
+    path: SKILL_ENTRY,
+    sha256: declared.sha256,
+    byteLength: declared.byteLength,
+  };
+}
+
 /**
  * Validates the operator's detector identity against the installed package's own
  * rules and against the other operator inputs. It chooses nothing.
@@ -803,26 +941,141 @@ function dockerPreflight(layout) {
   }
 }
 
-function runCapture(reader, runRoot, cliEntry, requestPath) {
+/**
+ * The run directory's record of a stop that produced no verified bundle. It keeps
+ * only what the phase actually made available: the reason, the capture command when
+ * one was built, the exit status and the streams the command really wrote, the
+ * selected source root and the file paths this capture was asked to cover. A field
+ * the phase never produced stays null — no output is reconstructed, a failed run is
+ * never recorded as an empty successful scan, and the full streams remain in
+ * execution.log rather than being truncated away here.
+ */
+function writeCaptureFailure(runRoot, prepared, failure) {
+  const excerpt = (text) => {
+    if (typeof text !== "string") return { characters: 0, text: null, truncated: false };
+    return text.length <= MAX_FAILURE_STREAM_CHARACTERS
+      ? { characters: text.length, text, truncated: false }
+      : {
+          characters: text.length,
+          text: text.slice(-MAX_FAILURE_STREAM_CHARACTERS),
+          truncated: true,
+        };
+  };
+  const stdout = excerpt(failure.stdout);
+  const stderr = excerpt(failure.stderr);
   const bundlePath = join(runRoot, "bundle");
-  if (existsSync(bundlePath)) refuse(`capture bundle directory already exists: ${bundlePath}`);
-  const result = spawnSync(
-    process.execPath,
-    [cliEntry, "capture", "--request", requestPath, "--output", bundlePath],
-    { encoding: "utf8", env: process.env, timeout: CAPTURE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
+  const executionLog = join(runRoot, "execution.log");
+  writeFileSync(
+    join(runRoot, "capture-failure.json"),
+    canonicalBytes({
+      protocol: "CatalogItemCaptureFailureV1",
+      outcome: "failed",
+      phase: failure.phase,
+      reason: failure.reason,
+      captureCommand: failure.captureCommand ?? null,
+      exitCode: failure.exitCode ?? null,
+      signal: failure.signal ?? null,
+      spawnError: failure.spawnError ?? null,
+      stdout: stdout.text,
+      stdoutCharacters: stdout.characters,
+      stdoutTruncated: stdout.truncated,
+      stderr: stderr.text,
+      stderrCharacters: stderr.characters,
+      stderrTruncated: stderr.truncated,
+      bundleDirectory: bundlePath,
+      bundlePresent: existsSync(bundlePath),
+      /* This record exists only because no verified bundle was produced. */
+      bundleVerified: false,
+      findingsProduced: false,
+      sourceRoot: prepared === undefined ? null : prepared.item.sourceRoot,
+      coveredFilePaths: prepared === undefined ? null : [...prepared.item.selectedClosurePaths],
+      captureRequestPath: prepared === undefined ? null : prepared.requestPath,
+      executionLog,
+    }),
   );
+  if (existsSync(executionLog))
+    writeFileSync(executionLog, `\n${failure.phase} failure: ${failure.reason}\n`, { flag: "a" });
+}
+
+/**
+ * Runs one step and, if it refuses, records the refusal in the run directory before
+ * it propagates. A failure during preparation has no staged root to name yet, so
+ * those fields are recorded as null rather than guessed.
+ */
+async function recordFailure(phase, runRoot, prepared, step) {
+  try {
+    return await step();
+  } catch (error) {
+    writeCaptureFailure(runRoot, prepared, {
+      captureCommand: null,
+      exitCode: null,
+      phase,
+      reason: reasonOf(error),
+      signal: null,
+      spawnError: null,
+      stderr: null,
+      stdout: null,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Runs the packaged capture command and returns its outcome instead of throwing: a
+ * capture that produced no verified bundle must still be recorded with the exit
+ * status and the streams the command actually wrote. Every failed attempt is
+ * written to the run directory before it is returned.
+ */
+function attemptCapture(prepared, runRoot) {
+  const bundlePath = join(runRoot, "bundle");
+  const captureCommand = [
+    process.execPath,
+    prepared.cliEntry,
+    "capture",
+    "--request",
+    prepared.requestPath,
+    "--output",
+    bundlePath,
+  ];
+  const failed = (phase, reason, result) => {
+    const failure = {
+      outcome: "failed",
+      phase,
+      reason,
+      captureCommand,
+      exitCode: result === undefined || typeof result.status !== "number" ? null : result.status,
+      signal: result === undefined ? null : (result.signal ?? null),
+      spawnError: result === undefined || result.error === undefined ? null : result.error.message,
+      stdout: result === undefined ? null : result.stdout,
+      stderr: result === undefined ? null : result.stderr,
+    };
+    writeCaptureFailure(runRoot, prepared, failure);
+    return failure;
+  };
+  if (existsSync(bundlePath))
+    return failed("capture", `capture bundle directory already exists: ${bundlePath}`, undefined);
+  const result = spawnSync(process.execPath, captureCommand.slice(1), {
+    encoding: "utf8",
+    env: process.env,
+    timeout: CAPTURE_TIMEOUT_MS,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   appendProcessLog("aih-scan capture", result);
-  if (result.error !== undefined) refuse(`capture could not run: ${result.error.message}`);
+  if (result.error !== undefined)
+    return failed("capture", `capture could not run: ${result.error.message}`, result);
   if (result.status !== 0)
-    refuse(
-      `capture exited ${result.status}: ` +
-        `${(result.stderr ?? "").trim().slice(0, 2000) || "no diagnostic output"}; full output is in execution.log`,
+    return failed(
+      "capture",
+      `capture exited ${result.status}: ${
+        (result.stderr ?? "").trim().slice(0, 2000) || "no diagnostic output"
+      }; full output is in execution.log`,
+      result,
     );
   let bundle;
   try {
-    bundle = reader.readScanCaptureBundleV2({ bundleDirectory: bundlePath });
+    bundle = prepared.reader.readScanCaptureBundleV2({ bundleDirectory: bundlePath });
   } catch (error) {
-    refuse(`the produced bundle failed its own reader: ${reasonOf(error)}`);
+    return failed("bundle", `the produced bundle failed its own reader: ${reasonOf(error)}`, result);
   }
   const manifest = JSON.parse(readFileSync(join(bundlePath, "bundle.json"), "utf8"));
   log(`bundle          ${bundlePath}`);
@@ -832,7 +1085,44 @@ function runCapture(reader, runRoot, cliEntry, requestPath) {
       .map((entry) => `${entry.descriptorId}:${entry.sha256}`)
       .join(" ")}`,
   );
-  return { bundlePath, candidateSha256: manifest.candidate.candidateSha256 };
+  return { outcome: "captured", bundlePath, candidateSha256: manifest.candidate.candidateSha256 };
+}
+
+/**
+ * Everything the command does after preparation, in this order: refuse a subject the
+ * registered route cannot load, refuse a host or daemon the broker cannot reach,
+ * record the preflight, then either stop (`--prepare-only`) or capture.
+ *
+ * The order is the point. A subject the scanner cannot load is refused before the
+ * Docker gate and before any container exists, and this function is separate from
+ * `main` so that order is observable on a host whose platform gate would otherwise
+ * refuse first. Every failure from here on leaves capture-failure.json behind.
+ */
+async function runPreparedCapture(options, runRoot, platform, prepared) {
+  const skill = await recordFailure("subject", runRoot, prepared, () =>
+    assertSkillSourceRoot(prepared.item),
+  );
+  log(`skill root      ${prepared.item.sourceRoot} (${skill.path} sha256:${skill.sha256})`);
+  const docker = await recordFailure("host", runRoot, prepared, () =>
+    dockerPreflight(prepared.detector.layout),
+  );
+  writePreflight(runRoot, platform, docker, prepared, skill);
+  if (options.prepareOnly === true) {
+    log("prepare-only    capture not attempted; this is preparation, not detector output");
+    return {
+      outcome: "prepared",
+      requestPath: prepared.requestPath,
+      captureCommand: `aih-scan capture --request ${prepared.requestPath} --output ${join(runRoot, "bundle")}`,
+    };
+  }
+  const attempt = attemptCapture(prepared, runRoot);
+  if (attempt.outcome !== "captured") refuse(attempt.reason);
+  return {
+    outcome: "captured",
+    bundlePath: attempt.bundlePath,
+    candidateSha256: attempt.candidateSha256,
+    executionLog: logPath,
+  };
 }
 
 /**
@@ -853,9 +1143,14 @@ async function importReader(consumerRoot) {
 
 /**
  * Steps 2 to 5 of the fixed order: the whole platform-independent preparation,
- * exactly as the command runs it. It stops before the host gate's Docker check
- * and before capture, so it is also the surface a test can drive against
- * supplied tarballs without pretending a detector ran.
+ * exactly as the command runs it. It stops before the subject gate, before the host
+ * gate's Docker check and before capture, so it is also the surface a test can drive
+ * against supplied tarballs without pretending a detector ran.
+ *
+ * Preparation decides nothing about suitability: it stages and verifies the item's
+ * published bytes and writes the request. `runPreparedCapture` then refuses a
+ * subject the registered route cannot load, using the staged material this function
+ * wrote and the digests it verified.
  */
 async function prepareCapture(options, runRoot) {
   const consumer = installConsumer(options);
@@ -898,7 +1193,7 @@ async function prepareCapture(options, runRoot) {
   };
 }
 
-function writePreflight(runRoot, platform, docker, prepared) {
+function writePreflight(runRoot, platform, docker, prepared, skill) {
   writeFileSync(
     join(runRoot, "preflight.json"),
     canonicalBytes({
@@ -917,6 +1212,8 @@ function writePreflight(runRoot, platform, docker, prepared) {
       entryId: prepared.item.entry.entryId,
       subjectDigest: prepared.item.entry.subject.subjectDigest,
       artifacts: prepared.item.files,
+      /* Which staged artifact the scanner loads as the skill, beside the closure it covers. */
+      skill,
     }),
   );
 }
@@ -925,40 +1222,25 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const platform = assertPlatform();
   const runRoot = createRunDirectory(options.output);
-  const prepared = await prepareCapture(options, runRoot);
-  const docker = dockerPreflight(prepared.detector.layout);
-  writePreflight(runRoot, platform, docker, prepared);
-  if (options.prepareOnly === true) {
-    log("prepare-only    capture not attempted; this is preparation, not detector output");
-    process.stdout.write(
-      `${JSON.stringify({
-        outcome: "prepared",
-        requestPath: prepared.requestPath,
-        captureCommand: `aih-scan capture --request ${prepared.requestPath} --output ${join(runRoot, "bundle")}`,
-      })}\n`,
-    );
-    return;
-  }
-  const captured = runCapture(prepared.reader, runRoot, prepared.cliEntry, prepared.requestPath);
-  process.stdout.write(
-    `${JSON.stringify({
-      outcome: "captured",
-      bundlePath: captured.bundlePath,
-      candidateSha256: captured.candidateSha256,
-      executionLog: logPath,
-    })}\n`,
+  const prepared = await recordFailure("preparation", runRoot, undefined, () =>
+    prepareCapture(options, runRoot),
   );
+  const outcome = await runPreparedCapture(options, runRoot, platform, prepared);
+  process.stdout.write(`${JSON.stringify(outcome)}\n`);
 }
 
 /* Importable for direct preparation checks; the command runs only as the entry point. */
 export {
   assertPlatform,
+  assertSkillSourceRoot,
+  attemptCapture,
   createRunDirectory,
   installEnvironment,
   npmCliPath,
   prepareCapture,
   readCatalogItem,
   readDetectorInputs,
+  runPreparedCapture,
 };
 
 const isEntryPoint =

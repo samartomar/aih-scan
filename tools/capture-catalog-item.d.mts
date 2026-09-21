@@ -1,7 +1,8 @@
 /**
  * Types for `tools/capture-catalog-item.mjs`, which is deliberately plain ESM.
- * They describe the preparation functions that command runs, so a test can drive
- * the production code path instead of a copy of it.
+ * They describe the functions the command runs — preparation, the subject gate and
+ * the capture attempt — so a test can drive the production code path instead of a
+ * copy of it.
  */
 
 export type CatalogCapturePlatformV1 = Readonly<{
@@ -132,3 +133,58 @@ export function readDetectorInputs(
   options: CatalogCaptureOptionsV1,
   runRoot: string,
 ): CatalogCaptureDetectorV1;
+
+/** The staged artifact the registered route loads as the skill: never renamed or generated. */
+export type CatalogCaptureSkillV1 = Readonly<{
+  /** The Catalog artifact slot these bytes were published under. */
+  artifact: string;
+  /** The staged path inside the capture source root, so far always `SKILL.md`. */
+  path: string;
+  sha256: string;
+  byteLength: number;
+}>;
+
+/** The outcome the command writes to stdout: preparation only, or a kept capture bundle. */
+export type CatalogCaptureOutcomeV1 = Readonly<{
+  outcome: "prepared" | "captured";
+  requestPath?: string;
+  captureCommand?: string;
+  bundlePath?: string;
+  candidateSha256?: string;
+  executionLog?: string;
+}>;
+
+/**
+ * Suitability of the staged root for the registered route, read from the staged
+ * material alone. It refuses rather than selecting any other directory.
+ */
+export function assertSkillSourceRoot(item: CatalogCaptureItemV1): CatalogCaptureSkillV1;
+export function runPreparedCapture(
+  options: CatalogCaptureOptionsV1,
+  runRoot: string,
+  platform: CatalogCapturePlatformV1,
+  prepared: CatalogCapturePreparedV1,
+): Promise<CatalogCaptureOutcomeV1>;
+
+/**
+ * One capture attempt. A failed attempt is already recorded in the run directory as
+ * `capture-failure.json`, with nulls for whatever that phase never produced.
+ */
+export type CatalogCaptureAttemptV1 =
+  | Readonly<{ outcome: "captured"; bundlePath: string; candidateSha256: string }>
+  | Readonly<{
+      outcome: "failed";
+      phase: string;
+      reason: string;
+      captureCommand: readonly string[];
+      exitCode: number | null;
+      signal: string | null;
+      spawnError: string | null;
+      stdout: string | null;
+      stderr: string | null;
+    }>;
+
+export function attemptCapture(
+  prepared: CatalogCapturePreparedV1,
+  runRoot: string,
+): CatalogCaptureAttemptV1;
