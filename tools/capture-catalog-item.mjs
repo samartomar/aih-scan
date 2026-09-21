@@ -5,7 +5,9 @@
  * capture behavior.
  *
  * Fixed order of operations:
- *   1. refuse unless this is Linux `amd64` with the Docker the broker can reach;
+ *   1. refuse unless this host is Linux on the Node architecture the adapter
+ *      supports (`linux/x64`, which is OCI `linux/amd64`) with the Docker the
+ *      broker can reach;
  *   2. install the exact Catalog and Scan tarballs with `--ignore-scripts` into a
  *      fresh consumer outside every Git repository;
  *   3. read the item's published artifact bytes through `@aihq/catalog`'s public
@@ -25,6 +27,18 @@
  *
  * Scanner output is evidence only. It is never qualification, approval, admission
  * or an effect. Signing is a separate step and is not performed here.
+ *
+ * This helper belongs to one Scan commit and is not present at every package
+ * checkpoint, so it must be run from the checkout that holds it, and the two
+ * package checkpoints must be packed in their own `git archive` trees. Switching
+ * a shared checkout to a package commit deletes this file; see the Checkouts
+ * block in `--help`.
+ *
+ * `--prepare-only` proves preparation: that the supplied tarballs install, that
+ * the item's published bytes verify, and that the operator's detector inputs
+ * agree. It is never evidence that a detector ran. Genuine execution is the
+ * capture bundle that only a Linux x64 host with the loaded image can produce;
+ * a zero-finding or successfully signed result is not a clean scan by itself.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -40,9 +54,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const DEFAULT_ITEM = "agent.aih.governance-quality";
 const USAGE = `Usage:
   node tools/capture-catalog-item.mjs \\
     --catalog-tarball <@aihq/catalog-*.tgz> \\
@@ -58,7 +73,8 @@ const USAGE = `Usage:
   --catalog-tarball  npm pack output of the Catalog commit under test.
   --scan-tarball     npm pack output of the Scan commit under test.
   --output           New or empty run directory. It receives source/, detector/,
-                     capture-request.json, catalog-item.json, execution.log and bundle/.
+                     capture-request.json, catalog-item.json, preflight.json,
+                     execution.log and bundle/.
   --registration     The organization's own DetectorRegistrationV1 authoring document
                      (README "Capture"). Nothing here is derived or defaulted.
   --layout           Canonical CiscoOciLayoutV1 JSON for the loaded detector image,
@@ -70,17 +86,36 @@ const USAGE = `Usage:
   --sbom             The exact SPDX bytes whose sha256 the registration declares.
   --provenance       The exact in-toto bytes whose sha256 the registration declares.
   --detector-id      Required only when the registration declares more than one entry.
-  --item             Catalog entry id. Default: agent.aih.governance-quality.
+  --item             Catalog entry id. Default: ${DEFAULT_ITEM}.
   --consumer-root    Fresh install directory. Default: a new mkdtemp under the system temp root.
   --prepare-only     Validate everything, write the request, and stop before capture.
 
-  The detector runs only when all of these hold: PATH=/usr/bin:/bin reaches
-  /usr/bin/docker or /bin/docker, that daemon reports Linux amd64 on its default
-  socket (the broker passes no DOCKER_HOST/DOCKER_CONTEXT), and the image is loaded
-  under the exact config digest the layout declares.
+Checkouts. This file exists only in some Scan commits. Run it from the checkout
+that holds it, at the reviewed helper commit, and record that commit separately
+from the two package checkpoint identities. Do not switch, reset or clean that
+checkout: packing an older package checkpoint would delete this file. Build each
+package checkpoint in its own extraction instead, then pass the two tarballs here:
+
+  git -C <catalog-checkout> archive --format=tar <catalog-commit> | \\
+    (mkdir -p /tmp/aih-catalog-build && tar -x -C /tmp/aih-catalog-build)
+  cd /tmp/aih-catalog-build && npm ci && npm run build && npm pack
+
+  git -C <scan-checkout> archive --format=tar <scan-commit> | \\
+    (mkdir -p /tmp/aih-scan-build && tar -x -C /tmp/aih-scan-build)
+  cd /tmp/aih-scan-build && npm ci && npm pack
+
+@aihq/catalog has no prepack script, so its dist/ must be built before packing;
+@aihq/scan builds itself in prepack. The produced tarball names carry each
+package version, and both tarball hashes plus both installed versions are written
+to preflight.json.
+
+Running it here proves preparation only. The detector runs only when all of these
+hold: Node reports linux/x64 (OCI amd64), PATH=/usr/bin:/bin reaches
+/usr/bin/docker or /bin/docker, that daemon reports Linux amd64 on its default
+socket (the broker passes no DOCKER_HOST/DOCKER_CONTEXT), and the image is loaded
+under the exact config digest the layout declares.
 `;
 
-const DEFAULT_ITEM = "agent.aih.governance-quality";
 const DETECTOR_ID = /^detector\.[a-z0-9][a-z0-9.-]*$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const REFERENCE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
@@ -339,11 +374,34 @@ function appendProcessLog(label, result) {
 
 /* ---------- phases ---------- */
 
-function assertPlatform() {
-  if (process.platform !== "linux" || process.arch !== "amd64")
+/**
+ * Node and OCI/Docker spell the same target architecture differently: Node
+ * reports `x64` and never `amd64`, while the adapter, the registration, the OCI
+ * layout and the daemon report `amd64` and never `x64`. The two vocabularies are
+ * mapped here explicitly and never mixed; see `assertPlatform`'s return value.
+ */
+const OCI_ARCHITECTURE_BY_NODE_ARCHITECTURE = new Map([["x64", "amd64"]]);
+
+/**
+ * The host gate. It takes an explicit descriptor so both outcomes are testable
+ * without a Linux host, a daemon or an image: this function never touches the
+ * filesystem, Docker or a detector.
+ */
+function assertPlatform(descriptor = { platform: process.platform, arch: process.arch }) {
+  if (
+    descriptor.platform !== "linux" ||
+    OCI_ARCHITECTURE_BY_NODE_ARCHITECTURE.get(descriptor.arch) !== "amd64"
+  )
     refuse(
-      `the cisco-oci-v1 adapter supports only Linux amd64; this host reports ${process.platform}/${process.arch}`,
+      "the cisco-oci-v1 adapter supports only Linux amd64, which Node reports as linux/x64; " +
+        `this Node host reports ${descriptor.platform}/${descriptor.arch}`,
     );
+  return {
+    /* What Node reports, in Node's vocabulary. */
+    node: { os: descriptor.platform, architecture: descriptor.arch },
+    /* What the adapter, registration, layout and daemon require, in OCI's. */
+    oci: { os: "linux", architecture: "amd64" },
+  };
 }
 
 function createRunDirectory(output) {
@@ -362,6 +420,55 @@ function createRunDirectory(output) {
   return runRoot;
 }
 
+/**
+ * npm is resolved the way this repository's other tools resolve it: through an
+ * absolute `npm_execpath`, otherwise through the CLI shipped with the running
+ * Node. A bare `npm` spawn is a shell shim on some hosts and not an executable,
+ * and this install must work on the operator's Linux host and in a direct
+ * repository check alike.
+ */
+function npmCliPath(environment = process.env) {
+  const fromEnvironment = environment.npm_execpath;
+  if (
+    typeof fromEnvironment === "string" &&
+    isAbsolute(fromEnvironment) &&
+    basename(fromEnvironment) === "npm-cli.js" &&
+    existsSync(fromEnvironment)
+  )
+    return fromEnvironment;
+  const nodeDirectory = dirname(process.execPath);
+  for (const candidate of [
+    join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+    resolve(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ])
+    if (existsSync(candidate)) return candidate;
+  refuse("the npm CLI entrypoint is unavailable; set npm_execpath or install npm beside Node");
+}
+
+/**
+ * npm exports its whole effective configuration into the environment of the
+ * processes it spawns. The consumer install must not inherit that: an exported
+ * `allow-scripts` conflicts with the `--ignore-scripts` this install requires
+ * (npm refuses with EALLOWSCRIPTS), and an exported registry, prefix or offline
+ * setting would change what gets installed and therefore what the run proves.
+ * Everything npm needs to run and to reach the network is preserved.
+ */
+function installEnvironment(environment = process.env) {
+  const kept = {};
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) continue;
+    const name = key.toUpperCase();
+    if (
+      name.startsWith("NPM_CONFIG_") ||
+      name.startsWith("NPM_LIFECYCLE_") ||
+      name.startsWith("NPM_PACKAGE_")
+    )
+      continue;
+    kept[key] = value;
+  }
+  return kept;
+}
+
 function installConsumer(options) {
   const consumerRoot =
     options.consumerRoot === undefined
@@ -373,16 +480,28 @@ function installConsumer(options) {
       refuse(`--consumer-root must be empty: ${consumerRoot}`);
     mkdirSync(consumerRoot, { recursive: true, mode: 0o700 });
   }
-  const catalogTarball = resolve(options.catalogTarball);
-  const scanTarball = resolve(options.scanTarball);
-  regularBytes(catalogTarball, "catalog tarball", 1, MAX_TARBALL_BYTES);
-  regularBytes(scanTarball, "scan tarball", 1, MAX_TARBALL_BYTES);
+  /*
+   * The tarball bytes are read and hashed before installation, so the run keeps
+   * the exact package checkpoint identities it consumed, not just their versions.
+   */
+  const tarballs = [
+    { flag: "--catalog-tarball", path: resolve(options.catalogTarball) },
+    { flag: "--scan-tarball", path: resolve(options.scanTarball) },
+  ].map((tarball) => ({
+    ...tarball,
+    sha256: `sha256:${sha256Hex(regularBytes(tarball.path, tarball.flag, 1, MAX_TARBALL_BYTES))}`,
+  }));
+  for (const tarball of tarballs)
+    log(`tarball         ${tarball.flag} ${tarball.sha256} ${tarball.path}`);
   writeFileSync(join(consumerRoot, "package.json"), CONSUMER_PACKAGE_JSON, { flag: "wx" });
   writeFileSync(join(consumerRoot, "reader.mjs"), READER_MODULE, { flag: "wx" });
   log(`consumer        ${consumerRoot}`);
+  const npmCli = npmCliPath();
+  log(`npm             ${npmCli}`);
   const installed = spawnSync(
-    "npm",
+    process.execPath,
     [
+      npmCli,
       "install",
       "--ignore-scripts",
       "--no-audit",
@@ -390,17 +509,16 @@ function installConsumer(options) {
       "--save-exact",
       "--loglevel",
       "error",
-      catalogTarball,
-      scanTarball,
+      ...tarballs.map((tarball) => tarball.path),
     ],
-    { cwd: consumerRoot, encoding: "utf8", env: process.env, timeout: INSTALL_TIMEOUT_MS },
+    { cwd: consumerRoot, encoding: "utf8", env: installEnvironment(), timeout: INSTALL_TIMEOUT_MS },
   );
   appendProcessLog("npm install --ignore-scripts", installed);
   if (installed.error !== undefined)
     refuse(`npm install could not run: ${installed.error.message}`);
   if (installed.status !== 0)
     refuse("npm install of the supplied tarballs failed; see execution.log");
-  return consumerRoot;
+  return { consumerRoot, tarballs };
 }
 
 function installedPackage(consumerRoot, name) {
@@ -733,20 +851,22 @@ async function importReader(consumerRoot) {
   }
 }
 
-async function main() {
-  const options = parseArguments(process.argv.slice(2));
-  assertPlatform();
-  const runRoot = createRunDirectory(options.output);
-  const consumerRoot = installConsumer(options);
-  const catalog = installedPackage(consumerRoot, "@aihq/catalog");
-  installedPackage(consumerRoot, "@aihq/scan");
-  const reader = await importReader(consumerRoot);
-  const cliEntry = join(consumerRoot, "node_modules", "@aihq", "scan", "dist", "cli.js");
+/**
+ * Steps 2 to 5 of the fixed order: the whole platform-independent preparation,
+ * exactly as the command runs it. It stops before the host gate's Docker check
+ * and before capture, so it is also the surface a test can drive against
+ * supplied tarballs without pretending a detector ran.
+ */
+async function prepareCapture(options, runRoot) {
+  const consumer = installConsumer(options);
+  const catalog = installedPackage(consumer.consumerRoot, "@aihq/catalog");
+  const scan = installedPackage(consumer.consumerRoot, "@aihq/scan");
+  const reader = await importReader(consumer.consumerRoot);
+  const cliEntry = join(consumer.consumerRoot, "node_modules", "@aihq", "scan", "dist", "cli.js");
   regularBytes(cliEntry, "packaged aih-scan CLI", 1, 16 * 1024 * 1024);
 
   const item = await readCatalogItem(reader, catalog.root, runRoot, options.item);
   const detector = readDetectorInputs(reader, options, runRoot);
-  const docker = dockerPreflight(detector.layout);
 
   const request = {
     registration: detector.registrationInput,
@@ -762,35 +882,64 @@ async function main() {
   const requestPath = join(runRoot, "capture-request.json");
   writeFileSync(requestPath, canonicalBytes(request), { flag: "wx" });
   log(`request         ${requestPath}`);
+  return {
+    consumerRoot: consumer.consumerRoot,
+    tarballs: consumer.tarballs,
+    packages: [
+      { name: "@aihq/catalog", version: catalog.version },
+      { name: "@aihq/scan", version: scan.version },
+    ],
+    reader,
+    cliEntry,
+    item,
+    detector,
+    request,
+    requestPath,
+  };
+}
+
+function writePreflight(runRoot, platform, docker, prepared) {
   writeFileSync(
     join(runRoot, "preflight.json"),
     canonicalBytes({
       protocol: "CatalogItemCapturePreflightV1",
-      platform: { os: process.platform, architecture: process.arch },
+      /* Node's vocabulary and OCI's, labelled separately rather than merged. */
+      platform,
       docker,
-      detectorId: detector.detectorId,
-      registrationSha256: detector.registrationRecord.registrationSha256,
-      manifestDigestSha256: detector.layout.manifestDigestSha256,
-      configDigestSha256: detector.layout.configDigestSha256,
-      logicalReference: detector.layout.logicalReference,
-      catalogIndexSha256: item.content.digest,
-      entryId: item.entry.entryId,
-      subjectDigest: item.entry.subject.subjectDigest,
-      artifacts: item.files,
+      tarballs: prepared.tarballs,
+      packages: prepared.packages,
+      detectorId: prepared.detector.detectorId,
+      registrationSha256: prepared.detector.registrationRecord.registrationSha256,
+      manifestDigestSha256: prepared.detector.layout.manifestDigestSha256,
+      configDigestSha256: prepared.detector.layout.configDigestSha256,
+      logicalReference: prepared.detector.layout.logicalReference,
+      catalogIndexSha256: prepared.item.content.digest,
+      entryId: prepared.item.entry.entryId,
+      subjectDigest: prepared.item.entry.subject.subjectDigest,
+      artifacts: prepared.item.files,
     }),
   );
+}
+
+async function main() {
+  const options = parseArguments(process.argv.slice(2));
+  const platform = assertPlatform();
+  const runRoot = createRunDirectory(options.output);
+  const prepared = await prepareCapture(options, runRoot);
+  const docker = dockerPreflight(prepared.detector.layout);
+  writePreflight(runRoot, platform, docker, prepared);
   if (options.prepareOnly === true) {
-    log("prepare-only    capture not attempted");
+    log("prepare-only    capture not attempted; this is preparation, not detector output");
     process.stdout.write(
       `${JSON.stringify({
         outcome: "prepared",
-        requestPath,
-        captureCommand: `aih-scan capture --request ${requestPath} --output ${join(runRoot, "bundle")}`,
+        requestPath: prepared.requestPath,
+        captureCommand: `aih-scan capture --request ${prepared.requestPath} --output ${join(runRoot, "bundle")}`,
       })}\n`,
     );
     return;
   }
-  const captured = runCapture(reader, runRoot, cliEntry, requestPath);
+  const captured = runCapture(prepared.reader, runRoot, prepared.cliEntry, prepared.requestPath);
   process.stdout.write(
     `${JSON.stringify({
       outcome: "captured",
@@ -801,9 +950,27 @@ async function main() {
   );
 }
 
-try {
-  await main();
-} catch (error) {
-  process.stderr.write(`${error instanceof Refusal ? "refused" : "failed"}: ${reasonOf(error)}\n`);
-  process.exitCode = 1;
+/* Importable for direct preparation checks; the command runs only as the entry point. */
+export {
+  assertPlatform,
+  createRunDirectory,
+  installEnvironment,
+  npmCliPath,
+  prepareCapture,
+  readCatalogItem,
+  readDetectorInputs,
+};
+
+const isEntryPoint =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryPoint) {
+  try {
+    await main();
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Refusal ? "refused" : "failed"}: ${reasonOf(error)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
