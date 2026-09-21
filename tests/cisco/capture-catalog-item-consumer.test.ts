@@ -20,36 +20,31 @@
  * because no real operator inputs exist in this repository.
  */
 import { createHash } from "node:crypto";
-import {
-  cpSync,
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type {
+  CatalogCaptureCatalogRefV1,
   CatalogCaptureOptionsV1,
   CatalogCapturePreparedV1,
+  CatalogCaptureReaderV1,
 } from "../../tools/capture-catalog-item.mjs";
 import {
   createRunDirectory,
   prepareCapture,
-  readCatalogItem,
+  readCatalogSourceClosure,
 } from "../../tools/capture-catalog-item.mjs";
-import {
-  FIXTURE_ITEM_ID,
-  fixtureOptions,
-  writeDetectorInputFixtures,
-} from "./capture-catalog-fixtures.js";
+import { fixtureOptions, writeDetectorInputFixtures } from "./capture-catalog-fixtures.js";
 
 const suppliedCatalogTarball = process.env.AIH_SCAN_CATALOG_TARBALL;
 const suppliedScanTarball = process.env.AIH_SCAN_SCAN_TARBALL;
 const supplied = suppliedCatalogTarball !== undefined && suppliedScanTarball !== undefined;
+
+/** The declared skill root the governance-quality collection publishes. */
+const SKILL_ROOT = "packs/governance-quality/aih-gov-doctor";
+/** The entry identity the reader returned before this flow read the closure. */
+const PREVIOUS_DEFAULT_ENTRY = "agent.aih.governance-quality";
 
 function requireSupplied(value: string | undefined, name: string): string {
   if (value === undefined) throw new Error(`${name} is required by this suite`);
@@ -77,23 +72,50 @@ function walkFiles(directory: string): string[] {
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
+/** The served closure, read again from the installed package for these assertions. */
+type ServedClosureV1 = Readonly<{
+  entryId: string;
+  files: readonly Readonly<{
+    path: string;
+    sha256: string;
+    byteLength: number;
+    bytes: Uint8Array;
+  }>[];
+}>;
+
 describe.skipIf(!supplied)(
   "supplied-tarball consumer preparation (set AIH_SCAN_CATALOG_TARBALL and AIH_SCAN_SCAN_TARBALL)",
   () => {
     let root = "";
+    let options: CatalogCaptureOptionsV1;
     let prepared: CatalogCapturePreparedV1 | undefined;
     let runRoot = "";
+    let served: ServedClosureV1 | undefined;
 
     const preparation = (): CatalogCapturePreparedV1 => {
       if (prepared === undefined) throw new Error("preparation did not run");
       return prepared;
     };
-    const catalogRoot = () => join(preparation().consumerRoot, "node_modules", "@aihq", "catalog");
+    const servedClosure = (): ServedClosureV1 => {
+      if (served === undefined) throw new Error("the reader did not answer");
+      return served;
+    };
+    const catalogRef = (): CatalogCaptureCatalogRefV1 => {
+      const result = preparation();
+      const tarball = result.tarballs.find((entry) => entry.flag === "--catalog-tarball");
+      const version = result.packages.find((entry) => entry.name === "@aihq/catalog")?.version;
+      if (tarball === undefined || version === undefined)
+        throw new Error("the installed catalog tarball is missing from the record");
+      return { name: "@aihq/catalog", tarball, version };
+    };
+    const stagedRoot = (): string => join(runRoot, "source");
+    const relativeToStaged = (path: string): string =>
+      relative(stagedRoot(), path).split(sep).join("/");
 
     beforeAll(async () => {
       root = mkdtempSync(join(tmpdir(), "aih-scan-capture-consumer-"));
       const paths = writeDetectorInputFixtures(root);
-      const options: CatalogCaptureOptionsV1 = fixtureOptions(root, paths, {
+      options = fixtureOptions(root, paths, {
         catalogTarball: requireSupplied(suppliedCatalogTarball, "AIH_SCAN_CATALOG_TARBALL"),
         consumerRoot: join(root, "consumer"),
         output: join(root, "run"),
@@ -102,6 +124,12 @@ describe.skipIf(!supplied)(
       runRoot = createRunDirectory(options.output);
       try {
         prepared = await prepareCapture(options, runRoot);
+        const answer = prepared.reader.readCatalogSourceClosureV1({
+          collectionId: options.collectionId,
+          subjectId: options.subjectId,
+        });
+        if (answer.state !== "verified") throw new Error(`the reader answered ${answer.state}`);
+        served = { entryId: answer.closure.entry.entryId, files: answer.closure.files };
       } catch (error) {
         // The run directory is temporary, so surface the tool's own log before it is removed.
         const logFile = join(runRoot, "execution.log");
@@ -157,36 +185,82 @@ describe.skipIf(!supplied)(
         console.log(`recorded ${tarball.flag} ${tarball.sha256} ${tarball.path}`);
     });
 
-    it("stages every published artifact byte-for-byte under its declared digest", () => {
+    it("stages the whole served closure under its published paths, byte for byte", () => {
       const result = preparation();
-      const artifacts = result.item.files;
-      expect(artifacts.map((artifact) => artifact.name).sort()).toEqual([
-        "closure",
-        "profile",
-        "prose",
-        "recipe",
-      ]);
-      const staged = walkFiles(result.item.sourceRoot);
-      expect(staged).toHaveLength(artifacts.length);
-      const relative = (path: string) =>
-        path
-          .slice(result.item.sourceRoot.length + 1)
-          .split(sep)
-          .join("/");
-      expect(staged.map(relative).sort()).toEqual(
-        artifacts.map((artifact) => artifact.path).sort(),
-      );
-      for (const artifact of artifacts) {
-        const declared = result.item.entry.artifacts[artifact.name];
-        expect(declared?.state).toBe("verified");
-        expect(declared?.sha256).toBe(artifact.sha256);
-        const bytes = readFileSync(join(result.item.sourceRoot, ...artifact.path.split("/")));
-        expect(sha256(bytes)).toBe(artifact.sha256);
-        expect(Buffer.compare(bytes, Buffer.from(declared?.bytes ?? Buffer.alloc(0)))).toBe(0);
+      const closure = servedClosure();
+      const published = closure.files.map((file) => file.path).sort();
+
+      /* Every served file is staged under its own published path, byte for byte. */
+      const staged = walkFiles(stagedRoot()).map(relativeToStaged);
+      expect(staged).toEqual(published);
+      expect(result.item.stagedFiles.map((file) => file.publishedPath).sort()).toEqual(published);
+      for (const file of result.item.stagedFiles) {
+        const bytes = readFileSync(file.stagedPath);
+        const servedFile = closure.files.find((entry) => entry.path === file.publishedPath);
+        expect(servedFile).toBeDefined();
+        expect(sha256(bytes)).toBe(file.sha256);
+        expect(sha256(bytes)).toBe(servedFile?.sha256);
+        expect(Buffer.compare(bytes, Buffer.from(servedFile?.bytes ?? Buffer.alloc(0)))).toBe(0);
+        console.log(`staged ${file.publishedPath} sha256:${file.sha256}`);
       }
-      expect(result.item.selectedClosurePaths).toEqual(
-        artifacts.map((artifact) => artifact.path).sort(),
+    });
+
+    it("selects the declared skill root, and takes the entry identity from the reader", () => {
+      const result = preparation();
+      const closure = servedClosure();
+
+      expect(result.item.skillRoot.declaredPath).toBe(SKILL_ROOT);
+      expect(result.item.sourceRoot).toBe(join(stagedRoot(), ...SKILL_ROOT.split("/")));
+      expect(result.item.selectedClosurePaths).toEqual(["LICENSE", "SKILL.md", "profile.json"]);
+      expect(result.item.entry.entryId).toBe(closure.entryId);
+      /* The entry that names the skill's own source, not the assessment entry. */
+      expect(result.item.entry.entryId).not.toBe(PREVIOUS_DEFAULT_ENTRY);
+      console.log(`entry ${result.item.entry.entryId}`);
+
+      /* The mounted root holds exactly the selected files, and nothing else. */
+      expect(
+        walkFiles(result.item.sourceRoot).map((path) =>
+          relative(result.item.sourceRoot, path).split(sep).join("/"),
+        ),
+      ).toEqual(["LICENSE", "SKILL.md", "profile.json"]);
+      expect(readFileSync(join(result.item.sourceRoot, "SKILL.md")).length).toBe(
+        result.item.files.find((file) => file.path === "SKILL.md")?.byteLength,
       );
+    });
+
+    it("records the file the mounted root cannot cover instead of implying coverage", () => {
+      const result = preparation();
+      expect(result.item.uncoveredPublishedPaths.map((file) => file.publishedPath)).toEqual([
+        "aih-packs.json",
+      ]);
+      /* It is staged, outside the root the capture mounts. */
+      expect(existsSync(join(stagedRoot(), "aih-packs.json"))).toBe(true);
+      expect(existsSync(join(result.item.sourceRoot, "aih-packs.json"))).toBe(false);
+
+      const record = JSON.parse(readFileSync(result.sourceClosurePath, "utf8")) as {
+        authority: string;
+        closure: {
+          declaredTreeDigest: { reproduced: boolean; value: string };
+          files: readonly { path: string }[];
+        };
+        coverage: {
+          selectedPaths: readonly string[];
+          uncoveredPublishedPaths: readonly { publishedPath: string }[];
+        };
+      };
+      expect(record.authority).toBe("diagnostic-record-not-evidence");
+      expect(record.closure.files.map((file) => file.path).sort()).toEqual(
+        servedClosure()
+          .files.map((file) => file.path)
+          .sort(),
+      );
+      expect(record.coverage.selectedPaths).toEqual(["LICENSE", "SKILL.md", "profile.json"]);
+      expect(record.coverage.uncoveredPublishedPaths.map((file) => file.publishedPath)).toEqual([
+        "aih-packs.json",
+      ]);
+      /* Catalog's own tree digest is recorded as declared, never as reproduced here. */
+      expect(record.closure.declaredTreeDigest.reproduced).toBe(false);
+      console.log(`closure tree digest declared ${record.closure.declaredTreeDigest.value}`);
     });
 
     it("writes exactly the registered capture request and stops before the Docker gate and capture", () => {
@@ -202,41 +276,63 @@ describe.skipIf(!supplied)(
       const onDisk = JSON.parse(readFileSync(result.requestPath, "utf8")) as {
         registration: Record<string, unknown>;
         sourceRoot: string;
+        selectedClosurePaths: readonly string[];
       };
       expect(onDisk).toEqual(result.request);
       // The authoring document travels to the CLI; computed wire fields would be rejected there.
       expect(onDisk.registration).not.toHaveProperty("registrationSha256");
       expect(onDisk.sourceRoot).toBe(result.item.sourceRoot);
+      expect(onDisk.selectedClosurePaths).toEqual(["LICENSE", "SKILL.md", "profile.json"]);
       expect(existsSync(join(runRoot, "bundle"))).toBe(false);
       expect(existsSync(join(runRoot, "preflight.json"))).toBe(false);
     });
 
-    it("refuses an entry the installed catalog does not publish", async () => {
-      const absentRun = createRunDirectory(join(root, "run-absent-entry"));
-      await expect(
-        readCatalogItem(
+    it("refuses a subject the installed catalog does not serve, and stages nothing", async () => {
+      const absentRun = createRunDirectory(join(root, "run-absent-subject"));
+      let reason = "";
+      try {
+        readCatalogSourceClosure(
           preparation().reader,
-          catalogRoot(),
+          { ...options, subjectId: "fixture-absent-subject" },
           absentRun,
-          "agent.aih.fixture-absent-entry",
-        ),
-      ).rejects.toThrow(/publishes no entry agent\.aih\.fixture-absent-entry/);
+          catalogRef(),
+        );
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+      expect(reason).toMatch(
+        /serves no verified source closure for aih-core\/fixture-absent-subject/,
+      );
+      expect(existsSync(join(absentRun, "source"))).toBe(false);
+      expect(existsSync(join(absentRun, "source-closure.json"))).toBe(false);
     });
 
-    it("refuses a tampered artifact instead of staging it", async () => {
-      const tampered = join(root, "tampered-catalog");
-      // The installed catalog package carries every published item, so this copy is large.
-      cpSync(catalogRoot(), tampered, { recursive: true });
-      const [firstArtifact] = preparation().item.files;
-      if (firstArtifact === undefined) throw new Error("the item published no artifact");
-      const artifactPath = join(tampered, ...firstArtifact.path.split("/"));
-      const bytes = readFileSync(artifactPath);
-      bytes[0] = (bytes[0] ?? 0) === 0x7b ? 0x5b : 0x7b;
-      writeFileSync(artifactPath, bytes);
-      const tamperedRun = createRunDirectory(join(root, "run-tampered-artifact"));
-      await expect(
-        readCatalogItem(preparation().reader, tampered, tamperedRun, FIXTURE_ITEM_ID),
-      ).rejects.toThrow(/artifact is unverified, not verified/);
+    it("refuses source bytes the reader serves that no longer match their declared digest", () => {
+      const real = preparation().reader;
+      const tampering = {
+        ...real,
+        readCatalogSourceClosureV1: (request: { collectionId: string; subjectId: string }) => {
+          const answer = real.readCatalogSourceClosureV1(request);
+          if (answer.state !== "verified") return answer;
+          return {
+            state: "verified",
+            closure: {
+              ...answer.closure,
+              files: answer.closure.files.map((file) => {
+                if (!file.path.endsWith("SKILL.md")) return file;
+                const bytes = Buffer.from(file.bytes);
+                bytes[0] = (bytes[0] ?? 0) === 0x2d ? 0x23 : 0x2d;
+                return { ...file, bytes: new Uint8Array(bytes) };
+              }),
+            },
+          };
+        },
+      } as unknown as CatalogCaptureReaderV1;
+      const tamperedRun = createRunDirectory(join(root, "run-tampered-source"));
+      expect(() => readCatalogSourceClosure(tampering, options, tamperedRun, catalogRef())).toThrow(
+        /served .*SKILL\.md with bytes that do not match its declared digest/,
+      );
+      expect(existsSync(join(tamperedRun, "source"))).toBe(false);
     }, 120_000);
   },
 );

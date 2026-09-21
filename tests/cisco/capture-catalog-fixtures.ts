@@ -21,7 +21,11 @@ const hex = (digit: string) => digit.repeat(64);
 const sha256Hex = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
 export const FIXTURE_DETECTOR_ID = "detector.fixture.organization";
-export const FIXTURE_ITEM_ID = "agent.aih.governance-quality";
+/** The collection view and subject a case asks the public reader for. */
+export const FIXTURE_COLLECTION_ID = "aih-core";
+export const FIXTURE_SUBJECT_ID = "governance-quality";
+/** The entry identity the source reader returns for that subject; never a helper default. */
+export const FIXTURE_ENTRY_ID = "agent.aih.governance-quality.core-0-6-2";
 export const FIXTURE_MANIFEST_SHA256 = hex("a");
 export const FIXTURE_CONFIG_SHA256 = hex("b");
 export const FIXTURE_LOGICAL_REFERENCE = `local.invalid/aih-scan/cisco@sha256:${FIXTURE_MANIFEST_SHA256}`;
@@ -125,15 +129,16 @@ export function fixtureOptions(
 ): CatalogCaptureOptionsV1 {
   return {
     catalogTarball: join(directory, "fixture-catalog.tgz"),
+    collectionId: FIXTURE_COLLECTION_ID,
     consumerRoot: join(directory, "consumer"),
     imageId: paths.imageId,
-    item: FIXTURE_ITEM_ID,
     layout: paths.layout,
     output: join(directory, "run"),
     provenance: paths.provenance,
     registration: paths.registration,
     sbom: paths.sbom,
     scanTarball: join(directory, "fixture-scan.tgz"),
+    subjectId: FIXTURE_SUBJECT_ID,
     ...overrides,
   };
 }

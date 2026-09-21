@@ -2,19 +2,20 @@
  * Labelled stub packages for `tools/capture-catalog-item.mjs`.
  *
  * Nothing here proves anything about the published `@aihq/catalog` or `@aihq/scan`.
- * These are stubs, so the helper's own preparation and subject gate can be driven
- * on any host, including one that is not Linux and has no Docker:
+ * These are stubs, so the helper's own preparation, source selection and subject
+ * gate can be driven on any host, including one that is not Linux and has no Docker:
  *
- * - the stub Catalog answers `readCatalogContentV1` from a fixture descriptor the
- *   caller writes, so the bytes it "publishes" are the caller's fixture bytes;
- * - the stub Scan exports only the two names the helper imports, and its CLI entry
- *   point records that it was spawned and then exits nonzero, so a suite can assert
- *   that no capture subprocess exists at all;
+ * - the stub Catalog answers `readCatalogSourceClosureV1` from a fixture descriptor
+ *   the caller writes, so the closure it "serves" is the caller's fixture closure,
+ *   and it records the arguments it was called with;
+ * - the stub Scan exports only the names the helper imports, and its CLI entry point
+ *   records that it was spawned and then exits nonzero, so a suite can assert that
+ *   no capture subprocess exists at all;
  * - no detector runs, no capture bundle exists and no finding is produced.
  *
- * The stub Catalog's artifact `state` is always `"verified"` and its digests are
- * computed over the fixture bytes: that is the point of these fixtures, since an
- * unsuitable source must be refused even when every published digest verifies.
+ * The stub Catalog's `state` is `"verified"` and its digests are computed over the
+ * fixture bytes: that is the point of these fixtures, since a source that is not the
+ * declared skill root must be refused even when every served digest verifies.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -24,57 +25,69 @@ import { installEnvironment, npmCliPath } from "../../tools/capture-catalog-item
 
 /** The stub Catalog reads the fixture descriptor from this variable. */
 export const FIXTURE_CATALOG_CONTENT_ENV = "AIH_SCAN_FIXTURE_CATALOG_CONTENT";
+/** The stub Catalog appends each reader call here, so a suite can read the request. */
+export const FIXTURE_CLOSURE_CALL_ENV = "AIH_SCAN_FIXTURE_CLOSURE_CALL";
 /** The stub CLI appends its argv here when it is spawned; a suite asserts it stays absent. */
 export const FIXTURE_CLI_MARKER_ENV = "AIH_SCAN_FIXTURE_CLI_MARKER";
 /** When set to a line count, the stub CLI writes that many stderr lines before refusing. */
 export const FIXTURE_CLI_LOUD_ENV = "AIH_SCAN_FIXTURE_CLI_LOUD";
 
-/** The four artifact slots the current public Catalog reader exposes. */
-export const FIXTURE_ARTIFACT_SLOTS = ["closure", "profile", "prose", "recipe"] as const;
-export type FixtureArtifactSlotV1 = (typeof FIXTURE_ARTIFACT_SLOTS)[number];
-
-export type FixtureSourceFileV1 = Readonly<{
-  artifact: FixtureArtifactSlotV1;
-  /** The relative path the stub Catalog publishes this slot under. */
+export type FixtureClosureFileV1 = Readonly<{
+  /** The path the fixture closure publishes this file at, relative to its root. */
   path: string;
   content: string;
+  /** Declared instead of the true digest, so a case can serve bytes that do not verify. */
+  declareSha256?: string;
+  /** Declared instead of the true length, so a case can serve a wrong length. */
+  declareByteLength?: number;
 }>;
 
-export type FixtureCatalogV1 = Readonly<{
-  entryId: string;
+export type FixtureClosureV1 = Readonly<{
+  /** Omitted means served; any other value is returned verbatim with its reason. */
+  state?: string;
+  reason?: string;
+  entryId?: string;
   /** Recorded verbatim, so a test can prove the kind label decides nothing. */
-  subject: Readonly<Record<string, unknown>>;
-  files: readonly FixtureSourceFileV1[];
+  subject?: Readonly<Record<string, unknown>>;
+  /** Declared material roots, passed through verbatim. */
+  materialRoots?: readonly Readonly<Record<string, unknown>>[];
+  /** Used only when `materialRoots` is omitted: one declared skill root here. */
+  skillRootPath?: string;
+  skillMarker?: string;
+  declaredTreeDigest?: string;
+  files: readonly FixtureClosureFileV1[];
 }>;
 
 export type StubPackagesV1 = Readonly<{ catalogTarball: string; scanTarball: string }>;
 
 const CATALOG_STUB = `import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
-/** Stub catalog: it publishes exactly the fixture bytes its descriptor names. */
-export const readCatalogContentV1 = () => {
+/** Stub catalog: it serves exactly the fixture closure its descriptor names. */
+export const readCatalogSourceClosureV1 = (request) => {
+  const calls = process.env["${FIXTURE_CLOSURE_CALL_ENV}"];
+  if (typeof calls === "string" && calls !== "")
+    appendFileSync(calls, JSON.stringify(request) + "\\n");
   const descriptorPath = process.env["${FIXTURE_CATALOG_CONTENT_ENV}"];
   if (typeof descriptorPath !== "string" || descriptorPath === "")
     throw new Error("stub catalog: ${FIXTURE_CATALOG_CONTENT_ENV} is not set");
   const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8"));
-  const artifacts = {};
-  for (const [slot, source] of Object.entries(descriptor.artifactSources)) {
-    const bytes = readFileSync(source.source);
-    artifacts[slot] = {
-      state: "verified",
-      path: source.path,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      byteLength: bytes.length,
-      bytes,
+  if (descriptor.state !== "verified")
+    return {
+      state: descriptor.state,
+      ...(descriptor.reason === undefined ? {} : { reason: descriptor.reason }),
     };
-  }
-  return {
-    digest: descriptor.indexIdentity,
-    package: { name: "@aihq/catalog", version: "0.0.0-fixture" },
-    organizationAdmission: "fixture-organization-admission",
-    entries: [{ entryId: descriptor.entryId, subject: descriptor.subject, artifacts }],
-  };
+  const files = Object.entries(descriptor.fileSources).map(([path, source]) => {
+    const bytes = readFileSync(source.source);
+    return {
+      path,
+      sha256: source.declareSha256 ?? createHash("sha256").update(bytes).digest("hex"),
+      byteLength: source.declareByteLength ?? bytes.length,
+      /* A plain Uint8Array, as the real reader serves: never a Buffer. */
+      bytes: new Uint8Array(bytes),
+    };
+  });
+  return { state: "verified", closure: { ...descriptor.closure, files } };
 };
 `;
 
@@ -139,12 +152,8 @@ export function packStubPackages(workRoot: string): StubPackagesV1 {
     name: "@aihq/catalog",
     version: "0.0.0-fixture",
     type: "module",
-    exports: { ".": "./index.mjs", "./catalog-index.json": "./catalog-index.json" },
+    exports: { ".": "./index.mjs" },
   });
-  writeFileSync(
-    join(catalogRoot, "catalog-index.json"),
-    `${JSON.stringify({ protocol: "FixtureCatalogIndexV1" })}\n`,
-  );
   writeFileSync(join(catalogRoot, "index.mjs"), CATALOG_STUB);
   writeJson(join(scanRoot, "package.json"), {
     name: "@aihq/scan",
@@ -169,31 +178,100 @@ export function packStubPackages(workRoot: string): StubPackagesV1 {
   return { catalogTarball: only("aihq-catalog-"), scanTarball: only("aihq-scan-") };
 }
 
+/** A path the fixture may declare but never write through, so hostile shapes stay data. */
+function isUnsafePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  );
+}
+
 /**
- * Writes one fixture item's published bytes and the descriptor the stub Catalog
- * answers from. Paths are preserved exactly as given: a fixture that publishes a
- * nested skill keeps it nested.
+ * Writes one fixture closure's bytes and the descriptor the stub Catalog answers
+ * from. Published paths are preserved exactly as given, including a path a case
+ * declares deliberately to prove it is refused: bytes for such a path are written
+ * under a neutral name, because the fixture must not follow a hostile path itself.
  */
-export function writeFixtureCatalog(caseRoot: string, fixture: FixtureCatalogV1): string {
+export function writeFixtureClosure(caseRoot: string, fixture: FixtureClosureV1): string {
   const published = join(caseRoot, "fixture-published");
-  const artifactSources: Record<string, { path: string; source: string }> = {};
-  for (const file of fixture.files) {
-    if (file.path.startsWith("/") || file.path.split("/").includes(".."))
-      throw new Error(`fixture path must stay inside the item: ${file.path}`);
-    if (artifactSources[file.artifact] !== undefined)
-      throw new Error(`fixture declares the ${file.artifact} slot twice`);
-    const target = join(published, ...file.path.split("/"));
+  const fileSources: Record<
+    string,
+    { source: string; declareSha256?: string; declareByteLength?: number }
+  > = {};
+  fixture.files.forEach((file, index) => {
+    if (fileSources[file.path] !== undefined)
+      throw new Error(`fixture publishes ${file.path} twice`);
+    const target = isUnsafePath(file.path)
+      ? join(published, `declared-unsafe-${index}`)
+      : join(published, ...file.path.split("/"));
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, file.content);
-    artifactSources[file.artifact] = { path: file.path, source: target };
-  }
-  const descriptor = join(caseRoot, "fixture-catalog-content.json");
+    const source: { source: string; declareSha256?: string; declareByteLength?: number } = {
+      source: target,
+    };
+    if (file.declareSha256 !== undefined) source.declareSha256 = file.declareSha256;
+    if (file.declareByteLength !== undefined) source.declareByteLength = file.declareByteLength;
+    fileSources[file.path] = source;
+  });
+  const paths = fixture.files.map((file) => file.path);
+  const materialRoots =
+    fixture.materialRoots ??
+    (() => {
+      const declared: Record<string, unknown>[] = [
+        { kind: "closure", path: ".", files: paths, excludes: [] },
+      ];
+      const skillRootPath = fixture.skillRootPath;
+      if (skillRootPath !== undefined) {
+        const prefix = `${skillRootPath}/`;
+        declared.push({
+          kind: "skill",
+          path: skillRootPath,
+          marker: fixture.skillMarker ?? "SKILL.md",
+          files: paths.filter((path) => path.startsWith(prefix)),
+          excludes: paths.filter((path) => !path.startsWith(prefix)),
+        });
+      }
+      return declared;
+    })();
+  const descriptor = join(caseRoot, "fixture-source-closure.json");
   writeJson(descriptor, {
-    protocol: "FixtureCatalogContentV1",
-    entryId: fixture.entryId,
-    subject: fixture.subject,
-    indexIdentity: "fixture-catalog-index-v1",
-    artifactSources,
+    protocol: "FixtureCatalogSourceClosureV1",
+    state: fixture.state ?? "verified",
+    ...(fixture.reason === undefined ? {} : { reason: fixture.reason }),
+    closure: {
+      format: "aih-catalog-source-closure",
+      version: 1,
+      collection: { id: "aih-core", release: "0.6.2-fixture" },
+      entry: {
+        entryId: fixture.entryId ?? "agent.aih.governance-quality.core-0-6-2",
+        subject: fixture.subject ?? {
+          id: "governance-quality",
+          kind: "agent",
+          sourceDigest: `sha256:${"0".repeat(64)}`,
+          subjectDigest: `sha256:${"1".repeat(64)}`,
+        },
+      },
+      asset: {
+        assetId: "aih/package:skill-pack/governance-quality",
+        sourceRevisionId: "package:@aihq/core@0.6.2",
+      },
+      assessment: {
+        profile: {
+          path: "defaults/workbench/aih-core-0.6.2/agent.aih.governance-quality.core-0-6-2/artifacts/profile.json",
+          sha256: "2".repeat(64),
+        },
+      },
+      source: {
+        host: "github.com",
+        repository: "samartomar/ai-harness",
+        revision: "5".repeat(40),
+      },
+      root: `defaults/sources/github.com/samartomar/ai-harness/${"5".repeat(40)}`,
+      materialRoots,
+      declaredTreeDigest: fixture.declaredTreeDigest ?? `sha256:${"a".repeat(64)}`,
+    },
+    fileSources,
   });
   return descriptor;
 }

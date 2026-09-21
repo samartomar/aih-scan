@@ -10,18 +10,24 @@
  *      broker can reach;
  *   2. install the exact Catalog and Scan tarballs with `--ignore-scripts` into a
  *      fresh consumer outside every Git repository;
- *   3. read the item's published artifact bytes through `@aihq/catalog`'s public
- *      content reader and re-verify every declared sha256;
- *   4. validate the operator's detector registration, canonical OCI layout, local
+ *   3. read the item's original source closure through `@aihq/catalog`'s public
+ *      source-closure reader, selected by collection and subject. The entry
+ *      identity is the one that reader returns, never a packaged default id;
+ *   4. stage every file of that closure under the path Catalog publishes it at and
+ *      re-verify every declared sha256, then select the skill material root Catalog
+ *      declares and mount that directory as the capture source root;
+ *   5. validate the operator's detector registration, canonical OCI layout, local
  *      image identity, SBOM and provenance through the installed package's public
  *      API, and cross-check them against each other;
- *   5. write the capture request the packaged `aih-scan capture` command requires;
- *   6. refuse unless the staged root is a skill root the registered route can load:
+ *   6. write the capture request the packaged `aih-scan capture` command requires:
+ *      `sourceRoot` is the declared skill root and `selectedClosurePaths` are
+ *      relative to that root;
+ *   7. refuse unless the staged root is a skill root the registered route can load:
  *      the broker mounts the request's `sourceRoot` at `/source`, so its own top
  *      level must hold the item's original `SKILL.md`. Suitability is read from the
  *      staged source material, never from the item's Catalog subject kind label,
  *      and a verified digest proves published bytes, not a skill source;
- *   7. if `--prepare-only` was not given: run the packaged command and keep its
+ *   8. if `--prepare-only` was not given: run the packaged command and keep its
  *      capture bundle. A capture that yields no verified bundle is a failure and is
  *      recorded as one, never as an empty scan.
  *
@@ -35,20 +41,44 @@
  * Scanner output is evidence only. It is never qualification, approval, admission
  * or an effect. Signing is a separate step and is not performed here.
  *
+ * Source selection. The source is not inferred from the item index and never from a
+ * packaged default entry id: the helper calls the installed package's public
+ * `readCatalogSourceClosureV1({ collectionId, subjectId })` and takes the entry,
+ * subject digest, source revision and file list from the closure it returns. Every
+ * file of that closure is staged under its published path and re-hashed, so a
+ * served byte that does not match its declared sha256 stops the run before it is
+ * written. The capture source root is then the `skill` material root Catalog
+ * declares — not a directory the helper goes looking for. A closure that declares
+ * no skill material root, or more than one, is refused rather than guessed at, and
+ * a nested `SKILL.md` is never discovered and never substituted. Files that fall
+ * outside the declared skill root stay staged, outside the mounted root, and are
+ * recorded as uncovered: a scan of the skill root does not cover them.
+ *
+ * Diagnostic record. `source-closure.json` records the complete closure, the
+ * selected skill root, the mapping from every published path to its staged path
+ * and to the path the capture selects, and the files the mount cannot cover. It is
+ * a diagnostic record written by this helper: it is not signed evidence, not a
+ * capture bundle and not authority. A capture bundle seals the mounted root over
+ * the selected paths only; that seal is not the closure's declaredTreeDigest, not
+ * the four-file closure and not the entry's subjectDigest.
+ *
  * Suitability. The only route this tool runs is `cisco-oci-v1`, which loads the
  * skill from the root the broker mounts at `/source`, so the staged root must be
- * the skill root itself. An item whose material is a source *closure* rather than a
- * skill is refused, and its assessment artifacts (`closure.json`, `profile.json`,
- * `prose.md`, `recipe.json`) are refused even when every declared digest verifies.
- * A nested `SKILL.md` is reported and never selected: the request binds one root,
- * and scanning a nested directory would cover that directory and not the rest of
- * the closure. Nothing is renamed, generated or substituted to make a root fit.
+ * the declared skill root itself, holding its own `SKILL.md` at the top level. An
+ * item whose matter is an assessment closure rather than source files is refused
+ * by the source reader itself, and its assessment artifacts (`closure.json`,
+ * `profile.json`, `prose.md`, `recipe.json`) are never staged as a source. Nothing
+ * is renamed, generated or substituted to make a root fit.
  *
- * Failure records. A run that stops after its run directory exists keeps both its
- * input record and an explicit `capture-failure.json`: the phase, the reason, the
- * exit status and the streams a capture command actually wrote, the selected source
+ * Failure records. A run that stops after its run directory exists keeps its input
+ * records and an explicit `capture-failure.json`: the phase, the reason, the exit
+ * status and the streams a capture command actually wrote, the selected source
  * root, and the file paths the capture was asked to cover. Fields the phase never
- * produced stay null and output is never reconstructed.
+ * produced stay null and output is never reconstructed. `findingsProduced` is
+ * deliberately not `false` for a capture that ran and failed, or for a bundle that
+ * failed validation: this helper does not inspect detector output, so it records
+ * the answer as unknown. Only a run in which no capture process existed at all
+ * records false.
  *
  * This helper belongs to one Scan commit and is not present at every package
  * checkpoint, so it must be run from the checkout that holds it, and the two
@@ -77,10 +107,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_ITEM = "agent.aih.governance-quality";
+/** The collection view and subject this helper reads a source closure for. */
+const DEFAULT_COLLECTION_ID = "aih-core";
+const DEFAULT_SUBJECT_ID = "governance-quality";
 const USAGE = `Usage:
   node tools/capture-catalog-item.mjs \\
     --catalog-tarball <@aihq/catalog-*.tgz> \\
@@ -91,12 +123,14 @@ const USAGE = `Usage:
     --image-id <docker image inspect --format '{{.Id}}' output> \\
     --sbom <SPDX JSON> \\
     --provenance <in-toto JSON> \\
-    [--detector-id <detector.*>] [--item <entryId>] [--consumer-root <empty-dir>] [--prepare-only]
+    [--detector-id <detector.*>] [--collection-id <id>] [--subject-id <id>]
+    [--consumer-root <empty-dir>] [--prepare-only]
 
   --catalog-tarball  npm pack output of the Catalog commit under test.
   --scan-tarball     npm pack output of the Scan commit under test.
-  --output           New or empty run directory. It receives source/, detector/,
-                     capture-request.json, catalog-item.json, preflight.json,
+  --output           New or empty run directory. It receives source/ (the complete
+                     published closure under its own paths), detector/,
+                     capture-request.json, source-closure.json, preflight.json,
                      execution.log and bundle/, plus capture-failure.json whenever
                      the run stops after preparation without a verified bundle.
   --registration     The organization's own DetectorRegistrationV1 authoring document
@@ -110,25 +144,47 @@ const USAGE = `Usage:
   --sbom             The exact SPDX bytes whose sha256 the registration declares.
   --provenance       The exact in-toto bytes whose sha256 the registration declares.
   --detector-id      Required only when the registration declares more than one entry.
-  --item             Catalog entry id. Default: ${DEFAULT_ITEM}.
+  --collection-id    Collection view the source closure is read from. Default: ${DEFAULT_COLLECTION_ID}.
+  --subject-id       Subject whose source closure is read. Default: ${DEFAULT_SUBJECT_ID}.
+                     The entry id and every digest come from what the public
+                     readCatalogSourceClosureV1 returns for this pair; no entry id
+                     is defaulted or supplied by the operator.
   --consumer-root    Fresh install directory. Default: a new mkdtemp under the system temp root.
   --prepare-only     Validate everything, write the request, pass the subject and
                      Docker gates, and stop before capture.
 
+Source selection. The item's original source is read through the installed
+package's public readCatalogSourceClosureV1(collectionId, subjectId). Every file of
+the returned closure is staged under the path Catalog publishes it at, re-hashed,
+and its declared digest verified before it is written. The capture source root is
+the 'skill' material root Catalog declares; a closure with no declared skill root,
+or with more than one, is refused rather than guessed at, and a nested SKILL.md is
+never discovered and never substituted for a declaration. Files outside that root,
+such as aih-packs.json, stay outside the mounted root and are recorded as
+uncovered: a scan of the skill root does not cover them.
+
+Diagnostic record. source-closure.json records the complete closure, the selected
+skill root, every published-to-staged-to-selected path mapping and the files the
+mount cannot cover. It is this helper's own diagnostic: not signed evidence, not a
+capture bundle and not authority. The capture seal covers the selected paths only
+and is never the closure's declaredTreeDigest or the entry's subjectDigest.
+
 Suitability. cisco-oci-v1 loads the skill from the root the broker mounts at
-/source, so the staged root must hold the item's own SKILL.md at its top level.
-Suitability is read from the staged material, never from the item's Catalog subject
-kind label: an item labelled 'agent' may be a skill pack, while closure.json,
-profile.json, prose.md and recipe.json are assessment artifacts whose verified
-digests prove published bytes and not a skill source. A nested SKILL.md is reported
-and never selected, because the request binds this one root and scanning a nested
-directory would not cover the rest of the closure. A run that reaches the Docker
-gate records the accepted skill entry beside the covered artifacts in
-preflight.json. A refusal before capture names
-the reason in execution.log and leaves the selected root and the covered paths in
-capture-request.json and catalog-item.json; a failed capture additionally leaves
-capture-failure.json with the command, the exit status, the streams that exist,
-that root and those paths. No failed run is recorded as an empty scan.
+/source, so the mounted root must hold the declared skill's SKILL.md at its top
+level. Suitability is read from the staged material, never from the item's Catalog
+subject kind label: an item labelled 'agent' may be a skill pack, while
+closure.json, profile.json, prose.md and recipe.json are assessment artifacts and
+are never staged as a source — Catalog's own source reader refuses a subject whose
+material is not source files. A run that reaches the Docker gate records the
+accepted skill entry, the covered published paths and the uncovered ones in
+preflight.json. A refusal before capture names the reason in execution.log and
+leaves the selected root and the covered paths in capture-request.json and
+source-closure.json; a failed capture additionally leaves capture-failure.json with
+the command, the exit status, the streams that exist, that root and those paths.
+findingsProduced stays null — unknown — for any capture that ran and failed or
+whose bundle failed validation, because this helper does not inspect detector
+output; it is false only when no capture process existed at all. No failed run is
+recorded as an empty scan.
 
 Checkouts. This file exists only in some Scan commits. Run it from the checkout
 that holds it, at the reviewed helper commit, and record that commit separately
@@ -162,15 +218,22 @@ const REFERENCE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const ADAPTER_CAPABILITY = "cisco-oci-v1";
 /** The skill entry the scanner loads from the capture root; never renamed or generated. */
 const SKILL_ENTRY = "SKILL.md";
-const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const ARTIFACT_NAMES = ["closure", "profile", "prose", "recipe"];
+/** The Catalog material root that names the skill directory to mount, and its marker. */
+const SKILL_MATERIAL_ROOT_KIND = "skill";
+const SOURCE_CLOSURE_FORMAT = "aih-catalog-source-closure";
+/** The helper's own diagnostic record of the staged closure; never part of the bundle. */
+const SOURCE_CLOSURE_RECORD_NAME = "source-closure.json";
+const SOURCE_CLOSURE_RECORD_PROTOCOL = "CatalogSourceClosureCaptureRecordV1";
+/** Collection and subject ids are Catalog's own lowercase id grammar. */
+const CATALOG_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json";
 const MAX_TARBALL_BYTES = 512 * 1024 * 1024;
 const MAX_LAYOUT_BYTES = 4 * 1024 * 1024;
 const MAX_REGISTRATION_BYTES = 512 * 1024;
-const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_ANNEX_BYTES = 16 * 1024 * 1024;
-const MAX_ITEM_ARTIFACT_BYTES = 1024 * 1024;
+/** Bounds on the source closure a package may serve and on one of its files. */
+const MAX_SOURCE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_SOURCE_FILES = 4096;
 /** Bound on the staged-tree walk that reports a nested SKILL.md, never selects one. */
 const MAX_STAGED_TREE_DIRECTORIES = 256;
 /** Bound on each stream kept in capture-failure.json; the full text stays in execution.log. */
@@ -188,21 +251,15 @@ const CONSUMER_PACKAGE_JSON = `${JSON.stringify({
   version: "0.0.0",
 })}\n`;
 /** The only import surface used from the installed packages: their public entry points. */
-const READER_MODULE = `import { createRequire } from "node:module";
-import { readCatalogContentV1 } from "@aihq/catalog";
+const READER_MODULE = `import { readCatalogSourceClosureV1 } from "@aihq/catalog";
 import {
   createDetectorRegistrationV1,
   readScanCaptureBundleV2,
 } from "@aihq/scan";
 
-const require = createRequire(import.meta.url);
-/** Public subpath export; resolves to defaults/catalog-index-v1.json. */
-const catalogIndexPath = require.resolve("@aihq/catalog/catalog-index.json");
-
 export {
-  catalogIndexPath,
   createDetectorRegistrationV1,
-  readCatalogContentV1,
+  readCatalogSourceClosureV1,
   readScanCaptureBundleV2,
 };
 `;
@@ -330,7 +387,8 @@ const VALUE_FLAGS = new Map([
   ["--sbom", "sbom"],
   ["--provenance", "provenance"],
   ["--detector-id", "detectorId"],
-  ["--item", "item"],
+  ["--collection-id", "collectionId"],
+  ["--subject-id", "subjectId"],
   ["--consumer-root", "consumerRoot"],
 ]);
 const BOOLEAN_FLAGS = new Map([["--prepare-only", "prepareOnly"]]);
@@ -389,8 +447,10 @@ function parseArguments(argv) {
       .join("");
     refuse(`missing required argument(s) ${missing.join(", ")}; run with --help${origins}`);
   }
-  values.item ??= DEFAULT_ITEM;
-  if (!ITEM_ID.test(values.item)) refuse("--item grammar");
+  values.collectionId ??= DEFAULT_COLLECTION_ID;
+  values.subjectId ??= DEFAULT_SUBJECT_ID;
+  if (!CATALOG_ID.test(values.collectionId)) refuse("--collection-id grammar");
+  if (!CATALOG_ID.test(values.subjectId)) refuse("--subject-id grammar");
   if (values.detectorId !== undefined && !DETECTOR_ID.test(values.detectorId))
     refuse("--detector-id grammar");
   return values;
@@ -575,54 +635,388 @@ function installedPackage(consumerRoot, name) {
   return { root, version: metadata.version };
 }
 
-async function readCatalogItem(reader, catalogRoot, runRoot, itemId) {
-  const indexBytes = regularBytes(reader.catalogIndexPath, "catalog index", 1, MAX_INDEX_BYTES);
-  const content = reader.readCatalogContentV1({
-    bytes: indexBytes,
-    input: { root: catalogRoot, verifyArtifacts: true },
-  });
-  if (content === undefined) refuse("the installed catalog index was refused by the public reader");
-  const entry = content.entries.find((candidate) => candidate.entryId === itemId);
-  if (entry === undefined) refuse(`the installed catalog publishes no entry ${itemId}`);
-  const sourceRoot = join(runRoot, "source");
-  const files = [];
-  for (const name of ARTIFACT_NAMES) {
-    const artifact = entry.artifacts[name];
-    if (artifact === undefined) refuse(`catalog item ${itemId} declares no ${name} artifact`);
-    if (artifact.state !== "verified")
-      refuse(`catalog ${name} artifact is ${artifact.state}, not verified`);
-    const recomputed = sha256Hex(artifact.bytes);
-    if (recomputed !== artifact.sha256)
-      refuse(`catalog ${name} artifact does not match its declared digest`);
-    if (artifact.byteLength > MAX_ITEM_ARTIFACT_BYTES)
-      refuse(`catalog ${name} artifact exceeds the scan bound`);
-    const target = join(sourceRoot, ...artifact.path.split("/"));
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, artifact.bytes, { flag: "wx" });
-    files.push({
-      name,
-      path: artifact.path,
-      sha256: artifact.sha256,
-      byteLength: artifact.byteLength,
-    });
-    log(`artifact        ${name} sha256:${artifact.sha256} (${artifact.byteLength} bytes)`);
+/* ---------- the published source closure: paths, selection, staging ---------- */
+
+/**
+ * A path as Catalog publishes it: relative, POSIX, and free of empty, `.` and `..`
+ * segments, so it can only name a file below the closure root it was served from.
+ */
+function closureRelativePath(path, label) {
+  if (typeof path !== "string" || path === "") refuse(`${label} must be a non-empty string`);
+  if (path.includes("\0")) refuse(`${label} must not contain a NUL byte`);
+  if (path.startsWith("/")) refuse(`${label} must be relative to the closure root: ${path}`);
+  if (path.includes("\\")) refuse(`${label} must use POSIX separators: ${path}`);
+  if (path.split("/").some((segment) => segment === "" || segment === "." || segment === ".."))
+    refuse(`${label} must not contain empty, '.' or '..' segments: ${path}`);
+  return path;
+}
+
+/** A declared material root path. `.` names the closure root itself. */
+const materialRootPath = (path, label) =>
+  path === "." ? "." : closureRelativePath(path, label);
+
+/**
+ * The staged path of one published path, proven to stay inside the staging root.
+ * The grammar above already rejects `..`; this is the second, filesystem-level
+ * check, so a path that somehow survived it cannot make the run write outside itself.
+ */
+function stagedPathWithin(stageRoot, relativePath, label) {
+  const root = resolve(stageRoot);
+  const target = relativePath === "." ? root : resolve(root, ...relativePath.split("/"));
+  if (target !== root && !target.startsWith(`${root}${sep}`))
+    refuse(`${label} escapes the staged closure root: ${relativePath}`);
+  return target;
+}
+
+/** Whether a published path lies at or below a declared material root path. */
+const isWithinRoot = (publishedPath, rootPath) =>
+  rootPath === "." || publishedPath.startsWith(`${rootPath}/`);
+
+/**
+ * A verbatim copy of what the installed package returned, limited to plain JSON
+ * data. A getter, a class instance or a function is refused rather than serialized
+ * into a record this helper would then be reporting as fact.
+ */
+function plainJsonCopy(value, label, depth = 0) {
+  if (depth > 16) refuse(`${label} is nested too deeply`);
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) refuse(`${label} carries a non-finite number`);
+    return value;
   }
-  if (files.length === 0) refuse(`catalog item ${itemId} publishes no artifacts`);
-  const selectedClosurePaths = files.map((file) => file.path).sort();
-  log(`source root     ${sourceRoot} (${selectedClosurePaths.length} published files)`);
+  if (Array.isArray(value))
+    return value.map((item, index) => plainJsonCopy(item, `${label}[${index}]`, depth + 1));
+  if (typeof value === "object") {
+    const copy = {};
+    for (const key of Object.keys(value))
+      copy[key] = plainJsonCopy(own(value, key), `${label}.${key}`, depth + 1);
+    return copy;
+  }
+  refuse(`${label} must be plain JSON data; found ${typeof value}`);
+}
+
+const optionalText = (value) => (typeof value === "string" && value !== "" ? value : null);
+
+/**
+ * The run directory's diagnostic record of the staged source, written during
+ * preparation so a run that stops at any later gate still carries it. It is the
+ * helper's own record: not signed evidence, not a capture bundle, not authority,
+ * and never part of `bundle/`.
+ */
+function writeSourceClosureRecord(runRoot, { selection, catalog, item }) {
+  const path = join(runRoot, SOURCE_CLOSURE_RECORD_NAME);
   writeFileSync(
-    join(runRoot, "catalog-item.json"),
+    path,
     canonicalBytes({
-      protocol: "CatalogItemCaptureSubjectV1",
-      catalogIndexSha256: content.digest,
-      catalogPackage: `${content.package.name}@${content.package.version}`,
-      organizationAdmission: content.organizationAdmission,
-      entryId: entry.entryId,
-      subject: entry.subject,
-      artifacts: files,
+      protocol: SOURCE_CLOSURE_RECORD_PROTOCOL,
+      authority: "diagnostic-record-not-evidence",
+      statement:
+        "Written by tools/capture-catalog-item.mjs to record which Catalog source files were " +
+        "staged and which of them this capture covers. It is not signed evidence, not a capture " +
+        "bundle and not an authority, and it seals nothing.",
+      selection: { collectionId: selection.collectionId, subjectId: selection.subjectId },
+      catalog: {
+        name: catalog.name,
+        version: catalog.version,
+        tarball: {
+          flag: catalog.tarball.flag,
+          path: catalog.tarball.path,
+          sha256: catalog.tarball.sha256,
+        },
+      },
+      closure: {
+        ...item.closure,
+        /* The complete served file list, as published, before any selection. */
+        files: item.stagedFiles.map((file) => ({
+          path: file.publishedPath,
+          sha256: `sha256:${file.sha256}`,
+          byteLength: file.byteLength,
+        })),
+        /* Catalog declares this value; nothing here recomputes it or seals it. */
+        declaredTreeDigest: {
+          value: item.closure.declaredTreeDigest,
+          reproduced: false,
+          note: "recorded as Catalog declares it; never presented as the capture seal",
+        },
+      },
+      stagedFiles: item.stagedFiles.map((file) => ({
+        publishedPath: file.publishedPath,
+        stagedPath: file.stagedPath,
+        sha256: `sha256:${file.sha256}`,
+        byteLength: file.byteLength,
+      })),
+      selectedSkillRoot: {
+        declaredPath: item.skillRoot.declaredPath,
+        stagedPath: item.sourceRoot,
+        marker: item.skillRoot.marker,
+        declaredFiles: item.skillRoot.files,
+        declaredExcludes: item.skillRoot.excludes,
+        selectedPaths: item.selectedClosurePaths,
+      },
+      pathMapping: item.stagedFiles.map((file) => {
+        const selected = item.files.find((entry) => entry.publishedPath === file.publishedPath);
+        return {
+          publishedPath: file.publishedPath,
+          stagedPath: file.stagedPath,
+          selectedPath: selected === undefined ? null : selected.path,
+        };
+      }),
+      coverage: {
+        mountedRoot: item.sourceRoot,
+        selectedPaths: item.selectedClosurePaths,
+        coveredPublishedPaths: item.skillRoot.files,
+        uncoveredPublishedPaths: item.uncoveredPublishedPaths,
+        statement:
+          `The capture requested from this run mounts ${item.sourceRoot} and covers the selected ` +
+          "paths listed here only. A scan of a skill root does not cover the rest of the closure, " +
+          "and no seal it produces is the complete closure, its declaredTreeDigest or the entry " +
+          "subjectDigest.",
+      },
+      sealScope: {
+        requestPath: join(runRoot, "capture-request.json"),
+        selectedPaths: item.selectedClosurePaths,
+        statement:
+          "A capture bundle produced from this request seals the mounted source root over the " +
+          "selected paths above, and describes this scan of this root only.",
+      },
     }),
+    { flag: "wx" },
   );
-  return { sourceRoot, selectedClosurePaths, content, entry, files };
+  log(`diagnostic      ${path} (not evidence; the staged closure and its coverage)`);
+  return path;
+}
+
+/**
+ * Reads the item's original source closure from the installed package's public
+ * `readCatalogSourceClosureV1` and stages it, then selects the skill material root
+ * that Catalog declares as the capture source root.
+ *
+ * The entry identity is the one that reader returns for the requested collection
+ * and subject: no entry id comes from the operator, and none is defaulted, so the
+ * staged source is the one the current collection view serves.
+ *
+ * Every served file is re-hashed against its own declared digest before it is
+ * written, and the written copy is re-read and re-hashed after staging. Selection
+ * is by declaration alone — the material root whose kind is `skill` — so a closure
+ * that declares none, or more than one, is refused, and a `SKILL.md` found anywhere
+ * else in the tree is never selected in its place. Files outside that root stay
+ * staged outside the mounted root and are recorded as uncovered, never as covered.
+ */
+function readCatalogSourceClosure(reader, options, runRoot, catalog) {
+  if (typeof reader.readCatalogSourceClosureV1 !== "function")
+    refuse(
+      "the installed @aihq/catalog does not expose readCatalogSourceClosureV1; pack a Catalog " +
+        "commit that publishes the source-closure reader",
+    );
+  const selection = { collectionId: options.collectionId, subjectId: options.subjectId };
+  let result;
+  try {
+    result = reader.readCatalogSourceClosureV1({
+      collectionId: selection.collectionId,
+      subjectId: selection.subjectId,
+    });
+  } catch (error) {
+    refuse(
+      `readCatalogSourceClosureV1 refused ${selection.collectionId}/${selection.subjectId}: ${reasonOf(error)}`,
+    );
+  }
+  if (typeof result !== "object" || result === null)
+    refuse("readCatalogSourceClosureV1 returned no result object");
+  if (result.state !== "verified")
+    refuse(
+      `the installed catalog serves no verified source closure for ` +
+        `${selection.collectionId}/${selection.subjectId}: state ${JSON.stringify(result.state)}` +
+        (typeof result.reason === "string" ? `, reason ${result.reason}` : "") +
+        (typeof result.path === "string" ? ` (${result.path})` : "") +
+        ". A subject whose material is not published source files is refused by Catalog itself, and " +
+        "this helper never substitutes the item's assessment artifacts for its source",
+    );
+  const closure = result.closure;
+  if (typeof closure !== "object" || closure === null)
+    refuse("the verified source closure carries no closure document");
+  if (closure.format !== SOURCE_CLOSURE_FORMAT)
+    refuse(
+      `source closure format must be ${SOURCE_CLOSURE_FORMAT}; it is ${JSON.stringify(closure.format)}`,
+    );
+  if (closure.version !== 1)
+    refuse(`source closure version must be 1; it is ${JSON.stringify(closure.version)}`);
+  const entry = closure.entry;
+  if (
+    typeof entry !== "object" ||
+    entry === null ||
+    typeof entry.entryId !== "string" ||
+    entry.entryId === ""
+  )
+    refuse("the source closure carries no entry identity");
+
+  /* The whole served file list is validated before any of it is written. */
+  const served = closure.files;
+  if (!Array.isArray(served) || served.length === 0)
+    refuse(`the source closure for ${selection.collectionId}/${selection.subjectId} serves no files`);
+  if (served.length > MAX_SOURCE_FILES)
+    refuse(`the source closure serves more than ${MAX_SOURCE_FILES} files`);
+  const files = [];
+  const byPath = new Map();
+  for (const file of served) {
+    if (typeof file !== "object" || file === null)
+      refuse("a source closure file entry is not an object");
+    const publishedPath = closureRelativePath(file.path, "a source closure file path");
+    if (byPath.has(publishedPath)) refuse(`the source closure publishes ${publishedPath} twice`);
+    if (!(file.bytes instanceof Uint8Array))
+      refuse(`source closure file ${publishedPath} carries no bytes`);
+    const bytes = Buffer.from(file.bytes);
+    if (!Number.isSafeInteger(file.byteLength) || bytes.length !== file.byteLength)
+      refuse(
+        `source closure file ${publishedPath} declares ${JSON.stringify(file.byteLength)} bytes ` +
+          `but serves ${bytes.length}`,
+      );
+    if (bytes.length === 0 || bytes.length > MAX_SOURCE_FILE_BYTES)
+      refuse(
+        `source closure file ${publishedPath} must be between 1 and ${MAX_SOURCE_FILE_BYTES} bytes`,
+      );
+    if (typeof file.sha256 !== "string" || !DIGEST.test(`sha256:${file.sha256}`))
+      refuse(`source closure file ${publishedPath} declares no sha256 digest`);
+    const recomputed = sha256Hex(bytes);
+    if (recomputed !== file.sha256)
+      refuse(
+        `the installed catalog served ${publishedPath} with bytes that do not match its declared ` +
+          `digest: sha256:${recomputed} != sha256:${file.sha256}`,
+      );
+    const staged = { publishedPath, sha256: file.sha256, byteLength: bytes.length, bytes };
+    files.push(staged);
+    byPath.set(publishedPath, staged);
+  }
+
+  /* Selection is by Catalog's declaration, never by searching the tree. */
+  const materialRoots = closure.materialRoots;
+  if (!Array.isArray(materialRoots) || materialRoots.length === 0)
+    refuse("the source closure declares no material roots");
+  const declaredKinds = materialRoots
+    .map((root) => (typeof root === "object" && root !== null ? String(root.kind) : "malformed"))
+    .join(", ");
+  const skillRoots = materialRoots.filter(
+    (root) => typeof root === "object" && root !== null && root.kind === SKILL_MATERIAL_ROOT_KIND,
+  );
+  if (skillRoots.length === 0)
+    refuse(
+      `the source closure for ${selection.collectionId}/${selection.subjectId} declares no ` +
+        `'${SKILL_MATERIAL_ROOT_KIND}' material root (declared kinds: ${declaredKinds}); this helper ` +
+        "mounts a declared skill root and never discovers one in the staged tree",
+    );
+  if (skillRoots.length > 1)
+    refuse(
+      `the source closure declares ${skillRoots.length} '${SKILL_MATERIAL_ROOT_KIND}' material ` +
+        `roots (${skillRoots.map((root) => JSON.stringify(root.path)).join(", ")}); the skill root ` +
+        "is ambiguous, so none is selected and none is guessed",
+    );
+  const [declaredRoot] = skillRoots;
+  const declaredPath = materialRootPath(declaredRoot.path, "the declared skill material root path");
+  if (typeof declaredRoot.marker !== "string" || declaredRoot.marker === "")
+    refuse(`the declared skill material root ${declaredPath} carries no marker`);
+  const marker = closureRelativePath(declaredRoot.marker, "the declared skill material root marker");
+  if (!Array.isArray(declaredRoot.files) || declaredRoot.files.length === 0)
+    refuse(`the declared skill material root ${declaredPath} lists no files`);
+  const skillFiles = declaredRoot.files.map((path) =>
+    closureRelativePath(path, "a declared skill material root file path"),
+  );
+  if (new Set(skillFiles).size !== skillFiles.length)
+    refuse(`the declared skill material root ${declaredPath} lists a file twice`);
+  for (const path of skillFiles) {
+    if (!byPath.has(path))
+      refuse(`the declared skill material root ${declaredPath} names ${path}, which the closure does not serve`);
+    if (!isWithinRoot(path, declaredPath))
+      refuse(`the declared skill material root ${declaredPath} names ${path}, which lies outside it`);
+  }
+  const markerPath = declaredPath === "." ? marker : `${declaredPath}/${marker}`;
+  if (!skillFiles.includes(markerPath))
+    refuse(
+      `the declared skill material root ${declaredPath} does not list its own marker ${markerPath} ` +
+        "among the files it declares",
+    );
+  const declaredExcludes = (Array.isArray(declaredRoot.excludes) ? declaredRoot.excludes : []).map(
+    (path) => closureRelativePath(path, "a declared skill material root exclusion"),
+  );
+  for (const excluded of declaredExcludes)
+    if (isWithinRoot(excluded, declaredPath))
+      refuse(
+        `the declared skill material root ${declaredPath} excludes ${excluded}, which lies inside ` +
+          "that root: a capture of this root would cover it, so the declared exclusion is false",
+      );
+
+  /* Only now is anything written. */
+  const stageRoot = join(runRoot, "source");
+  mkdirSync(stageRoot, { recursive: true, mode: 0o700 });
+  const stagedFiles = files.map((file) => {
+    const target = stagedPathWithin(stageRoot, file.publishedPath, "a published source path");
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.bytes, { flag: "wx" });
+    const written = regularBytes(target, `staged ${file.publishedPath}`, 1, MAX_SOURCE_FILE_BYTES);
+    if (sha256Hex(written) !== file.sha256)
+      refuse(`the staged copy of ${file.publishedPath} changed as it was written`);
+    log(`closure file    ${file.publishedPath} sha256:${file.sha256} (${file.byteLength} bytes)`);
+    return {
+      publishedPath: file.publishedPath,
+      stagedPath: target,
+      sha256: file.sha256,
+      byteLength: file.byteLength,
+    };
+  });
+  const sourceRoot = stagedPathWithin(stageRoot, declaredPath, "the declared skill material root");
+  const selectedFiles = skillFiles.map((publishedPath) => {
+    const file = byPath.get(publishedPath);
+    return {
+      publishedPath,
+      path: declaredPath === "." ? publishedPath : publishedPath.slice(declaredPath.length + 1),
+      sha256: file.sha256,
+      byteLength: file.byteLength,
+    };
+  });
+  const selectedClosurePaths = selectedFiles.map((file) => file.path).sort();
+  const selectedPublished = new Set(skillFiles);
+  const uncoveredPublishedPaths = stagedFiles
+    .filter((file) => !selectedPublished.has(file.publishedPath))
+    .map((file) => ({
+      publishedPath: file.publishedPath,
+      stagedPath: file.stagedPath,
+      declaredExcluded: declaredExcludes.includes(file.publishedPath),
+      reason: `outside the mounted skill root ${declaredPath}, so this capture does not cover it`,
+    }));
+
+  log(
+    `closure         ${selection.collectionId}/${selection.subjectId} entry ${entry.entryId} ` +
+      `(${stagedFiles.length} published files, format ${closure.format} v${closure.version})`,
+  );
+  log(
+    `declared root   ${declaredPath} (kind ${SKILL_MATERIAL_ROOT_KIND}, marker ${marker}, ` +
+      `${selectedFiles.length} files)`,
+  );
+  log(`source root     ${sourceRoot} (covers ${selectedClosurePaths.join(", ")})`);
+  if (uncoveredPublishedPaths.length > 0)
+    log(`uncovered       ${uncoveredPublishedPaths.map((file) => file.publishedPath).join(", ")}`);
+
+  const item = {
+    sourceRoot,
+    selectedClosurePaths,
+    /* The staged files this capture covers, with paths relative to the mounted root. */
+    files: selectedFiles,
+    entry: plainJsonCopy(entry, "the source closure entry"),
+    closure: {
+      format: closure.format,
+      version: closure.version,
+      collection: plainJsonCopy(closure.collection, "the source closure collection"),
+      entry: plainJsonCopy(entry, "the source closure entry"),
+      asset: plainJsonCopy(closure.asset, "the source closure asset"),
+      assessment: plainJsonCopy(closure.assessment, "the source closure assessment"),
+      source: plainJsonCopy(closure.source, "the source closure source"),
+      root: optionalText(closure.root),
+      declaredTreeDigest: optionalText(closure.declaredTreeDigest),
+      materialRoots: plainJsonCopy(materialRoots, "the source closure material roots"),
+    },
+    skillRoot: { declaredPath, marker, files: [...skillFiles], excludes: [...declaredExcludes] },
+    stagedFiles,
+    uncoveredPublishedPaths,
+  };
+  return { item, recordPath: writeSourceClosureRecord(runRoot, { selection, catalog, item }) };
 }
 
 /** Top-level entries of the staged root, with directories marked, for a refusal message. */
@@ -663,13 +1057,14 @@ function notSkillRootReason(item, itemId) {
     `capture source root at /source and the scanner loads the skill from that root, but ` +
     `${item.sourceRoot} holds no staged ${SKILL_ENTRY} at its top level ` +
     `(top-level entries: ${topLevel.join(", ") || "none"}; staged files: ${stagedPaths.join(", ") || "none"}). ` +
-    `The staged files are the item's published artifacts, and a verified digest proves these are the ` +
-    `published bytes, not that they are a skill source` +
+    `This root is the skill material root the source closure declares, and the entry the route loads ` +
+    `is read from the staged bytes: a verified digest proves these are the published bytes, not that ` +
+    `they are the skill entry this route can load` +
     (nested.length === 0
       ? ""
       : `. ${nested.length} nested ${SKILL_ENTRY} path(s) exist under this root (${nested.join(", ")}); ` +
-        `none is selected, because the request binds this one root and scanning a nested skill would ` +
-        `cover only that directory and not the rest of the staged closure`) +
+        `none is selected, because the request binds this one root and a nested skill would cover only ` +
+        `that directory and not the rest of the staged closure`) +
     "."
   );
 }
@@ -677,20 +1072,21 @@ function notSkillRootReason(item, itemId) {
 /**
  * The registered `cisco-oci-v1` route mounts the capture `sourceRoot` at `/source`
  * and loads the skill from that root, so the staged root must itself be the skill
- * root: its own top level must hold the item's original `SKILL.md`, byte for byte
+ * root: its own top level must hold the declared skill's `SKILL.md`, byte for byte
  * as published.
  *
- * Suitability is read from the staged source material — the artifact paths and the
- * staged bytes — and never from the item's Catalog subject kind label. An item
+ * Suitability is read from the staged source material — the declared file paths and
+ * the staged bytes — and never from the item's Catalog subject kind label. An item
  * labelled `agent` whose material is a skill pack passes; an item labelled `skill`
- * whose material is an assessment closure does not. `closure.json`, `profile.json`,
- * `prose.md` and `recipe.json` describe a source closure, and their verified
- * digests do not make any of them a skill source.
+ * whose material is an assessment closure never reaches this gate, because Catalog's
+ * source reader refuses that subject and its assessment artifacts are never staged
+ * as a source.
  *
- * Only this root is considered. A nested `SKILL.md` is named in the refusal and
- * never selected or copied: the request's `sourceRoot` and `selectedClosurePaths`
- * bind this root, and scanning a nested directory would not cover the rest of the
- * staged closure. Nothing is renamed and no `SKILL.md` is generated.
+ * Only this root is considered, and it is the root Catalog declared rather than one
+ * this helper found. A nested `SKILL.md` is named in the refusal and never selected
+ * or copied: the request's `sourceRoot` and `selectedClosurePaths` bind this root,
+ * and scanning a nested directory would not cover the rest of the staged closure.
+ * Nothing is renamed and no `SKILL.md` is generated.
  */
 function assertSkillSourceRoot(item) {
   const itemId = item.entry.entryId;
@@ -699,7 +1095,7 @@ function assertSkillSourceRoot(item) {
   const stagedPath = join(item.sourceRoot, SKILL_ENTRY);
   let bytes;
   try {
-    bytes = regularBytes(stagedPath, `staged ${SKILL_ENTRY}`, 1, MAX_ITEM_ARTIFACT_BYTES);
+    bytes = regularBytes(stagedPath, `staged ${SKILL_ENTRY}`, 1, MAX_SOURCE_FILE_BYTES);
   } catch (error) {
     refuse(`catalog item ${itemId} declares ${SKILL_ENTRY} but the staged copy is unusable: ${reasonOf(error)}`);
   }
@@ -710,7 +1106,7 @@ function assertSkillSourceRoot(item) {
         `sha256:${recomputed} != sha256:${declared.sha256}`,
     );
   return {
-    artifact: declared.name,
+    publishedPath: declared.publishedPath,
     path: SKILL_ENTRY,
     sha256: declared.sha256,
     byteLength: declared.byteLength,
@@ -949,6 +1345,11 @@ function dockerPreflight(layout) {
  * the phase never produced stays null — no output is reconstructed, a failed run is
  * never recorded as an empty successful scan, and the full streams remain in
  * execution.log rather than being truncated away here.
+ *
+ * `findingsProduced` answers only what this helper can establish. A capture that ran
+ * and failed, and a bundle that failed its own reader, may have written detector
+ * output this helper never inspects: there the answer is null and the basis says so.
+ * Only a run in which no capture process existed at all records false.
  */
 function writeCaptureFailure(runRoot, prepared, failure) {
   const excerpt = (text) => {
@@ -986,9 +1387,22 @@ function writeCaptureFailure(runRoot, prepared, failure) {
       bundlePresent: existsSync(bundlePath),
       /* This record exists only because no verified bundle was produced. */
       bundleVerified: false,
-      findingsProduced: false,
+      /*
+       * Whether a capture process existed at all, and then whether it is known to
+       * have produced no findings. Unknown, not false, once a capture process has
+       * existed: a failed command and a bundle that fails validation may each have
+       * written detector output, and this helper does not read detector output to
+       * find out.
+       */
+      captureProcessExisted: failure.captureProcessExisted === true,
+      findingsProduced: failure.captureProcessExisted === true ? null : false,
+      findingsProducedBasis:
+        failure.captureProcessExisted === true
+          ? "capture-output-not-inspected"
+          : "no-capture-process-existed",
       sourceRoot: prepared === undefined ? null : prepared.item.sourceRoot,
       coveredFilePaths: prepared === undefined ? null : [...prepared.item.selectedClosurePaths],
+      sourceClosureRecord: prepared === undefined ? null : prepared.sourceClosurePath,
       captureRequestPath: prepared === undefined ? null : prepared.requestPath,
       executionLog,
     }),
@@ -999,8 +1413,10 @@ function writeCaptureFailure(runRoot, prepared, failure) {
 
 /**
  * Runs one step and, if it refuses, records the refusal in the run directory before
- * it propagates. A failure during preparation has no staged root to name yet, so
- * those fields are recorded as null rather than guessed.
+ * it propagates. These phases all run before any capture command exists, so a
+ * failure during preparation has no staged root to name yet and no capture process
+ * to have produced findings: those fields are recorded as null and false rather
+ * than guessed.
  */
 async function recordFailure(phase, runRoot, prepared, step) {
   try {
@@ -1008,6 +1424,7 @@ async function recordFailure(phase, runRoot, prepared, step) {
   } catch (error) {
     writeCaptureFailure(runRoot, prepared, {
       captureCommand: null,
+      captureProcessExisted: false,
       exitCode: null,
       phase,
       reason: reasonOf(error),
@@ -1037,12 +1454,17 @@ function attemptCapture(prepared, runRoot) {
     "--output",
     bundlePath,
   ];
-  const failed = (phase, reason, result) => {
+  const failed = (phase, reason, result, captureProcessExisted) => {
     const failure = {
       outcome: "failed",
       phase,
       reason,
       captureCommand,
+      /*
+       * Whether a capture process existed decides what this run may claim about
+       * findings: with a process, its output was not inspected and stays unknown.
+       */
+      captureProcessExisted,
       exitCode: result === undefined || typeof result.status !== "number" ? null : result.status,
       signal: result === undefined ? null : (result.signal ?? null),
       spawnError: result === undefined || result.error === undefined ? null : result.error.message,
@@ -1053,7 +1475,12 @@ function attemptCapture(prepared, runRoot) {
     return failure;
   };
   if (existsSync(bundlePath))
-    return failed("capture", `capture bundle directory already exists: ${bundlePath}`, undefined);
+    return failed(
+      "capture",
+      `capture bundle directory already exists: ${bundlePath}`,
+      undefined,
+      false,
+    );
   const result = spawnSync(process.execPath, captureCommand.slice(1), {
     encoding: "utf8",
     env: process.env,
@@ -1062,7 +1489,7 @@ function attemptCapture(prepared, runRoot) {
   });
   appendProcessLog("aih-scan capture", result);
   if (result.error !== undefined)
-    return failed("capture", `capture could not run: ${result.error.message}`, result);
+    return failed("capture", `capture could not run: ${result.error.message}`, result, true);
   if (result.status !== 0)
     return failed(
       "capture",
@@ -1070,12 +1497,18 @@ function attemptCapture(prepared, runRoot) {
         (result.stderr ?? "").trim().slice(0, 2000) || "no diagnostic output"
       }; full output is in execution.log`,
       result,
+      true,
     );
   let bundle;
   try {
     bundle = prepared.reader.readScanCaptureBundleV2({ bundleDirectory: bundlePath });
   } catch (error) {
-    return failed("bundle", `the produced bundle failed its own reader: ${reasonOf(error)}`, result);
+    return failed(
+      "bundle",
+      `the produced bundle failed its own reader: ${reasonOf(error)}`,
+      result,
+      true,
+    );
   }
   const manifest = JSON.parse(readFileSync(join(bundlePath, "bundle.json"), "utf8"));
   log(`bundle          ${bundlePath}`);
@@ -1142,15 +1575,15 @@ async function importReader(consumerRoot) {
 }
 
 /**
- * Steps 2 to 5 of the fixed order: the whole platform-independent preparation,
+ * Steps 2 to 6 of the fixed order: the whole platform-independent preparation,
  * exactly as the command runs it. It stops before the subject gate, before the host
  * gate's Docker check and before capture, so it is also the surface a test can drive
  * against supplied tarballs without pretending a detector ran.
  *
- * Preparation decides nothing about suitability: it stages and verifies the item's
- * published bytes and writes the request. `runPreparedCapture` then refuses a
- * subject the registered route cannot load, using the staged material this function
- * wrote and the digests it verified.
+ * Preparation stages the published source closure under its own paths, selects the
+ * skill material root Catalog declares and writes the request. `runPreparedCapture`
+ * then refuses a subject the registered route cannot load, using the staged material
+ * this function wrote and the digests it verified.
  */
 async function prepareCapture(options, runRoot) {
   const consumer = installConsumer(options);
@@ -1159,8 +1592,16 @@ async function prepareCapture(options, runRoot) {
   const reader = await importReader(consumer.consumerRoot);
   const cliEntry = join(consumer.consumerRoot, "node_modules", "@aihq", "scan", "dist", "cli.js");
   regularBytes(cliEntry, "packaged aih-scan CLI", 1, 16 * 1024 * 1024);
+  const catalogTarball = consumer.tarballs.find((entry) => entry.flag === "--catalog-tarball");
+  if (catalogTarball === undefined)
+    refuse("the installed catalog tarball is missing from the consumer's own record");
 
-  const item = await readCatalogItem(reader, catalog.root, runRoot, options.item);
+  const source = readCatalogSourceClosure(reader, options, runRoot, {
+    name: "@aihq/catalog",
+    version: catalog.version,
+    tarball: catalogTarball,
+  });
+  const item = source.item;
   const detector = readDetectorInputs(reader, options, runRoot);
 
   const request = {
@@ -1187,6 +1628,7 @@ async function prepareCapture(options, runRoot) {
     reader,
     cliEntry,
     item,
+    sourceClosurePath: source.recordPath,
     detector,
     request,
     requestPath,
@@ -1194,6 +1636,7 @@ async function prepareCapture(options, runRoot) {
 }
 
 function writePreflight(runRoot, platform, docker, prepared, skill) {
+  const { item } = prepared;
   writeFileSync(
     join(runRoot, "preflight.json"),
     canonicalBytes({
@@ -1208,11 +1651,23 @@ function writePreflight(runRoot, platform, docker, prepared, skill) {
       manifestDigestSha256: prepared.detector.layout.manifestDigestSha256,
       configDigestSha256: prepared.detector.layout.configDigestSha256,
       logicalReference: prepared.detector.layout.logicalReference,
-      catalogIndexSha256: prepared.item.content.digest,
-      entryId: prepared.item.entry.entryId,
-      subjectDigest: prepared.item.entry.subject.subjectDigest,
-      artifacts: prepared.item.files,
-      /* Which staged artifact the scanner loads as the skill, beside the closure it covers. */
+      /* The closure this capture was staged from, as the public reader returned it. */
+      sourceClosure: {
+        record: prepared.sourceClosurePath,
+        protocol: SOURCE_CLOSURE_RECORD_PROTOCOL,
+        collection: item.closure.collection,
+        entryId: item.entry.entryId,
+        entrySubject: item.entry.subject,
+        source: item.closure.source,
+        declaredTreeDigest: item.closure.declaredTreeDigest,
+        declaredSkillRoot: item.skillRoot.declaredPath,
+        declaredMarker: item.skillRoot.marker,
+      },
+      sourceRoot: item.sourceRoot,
+      selectedClosurePaths: item.selectedClosurePaths,
+      coveredPublishedPaths: item.skillRoot.files,
+      uncoveredPublishedPaths: item.uncoveredPublishedPaths,
+      /* Which staged file the scanner loads as the skill, beside what the mount covers. */
       skill,
     }),
   );
@@ -1238,7 +1693,7 @@ export {
   installEnvironment,
   npmCliPath,
   prepareCapture,
-  readCatalogItem,
+  readCatalogSourceClosure,
   readDetectorInputs,
   runPreparedCapture,
 };
