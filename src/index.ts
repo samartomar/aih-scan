@@ -76,3 +76,19 @@ export {
   type DetectorRegistrationV1,
   parseDetectorRegistrationV1Json,
 } from "./registration/detector-registration-v1.js";
+export {
+  type ReadScanResultRecordV1Request,
+  type ReadScanResultSubjectBindingV1Request,
+  readScanResultRecordV1,
+  readScanResultSubjectBindingV1,
+  SCAN_RESULT_RECORD_FORMAT_V1,
+  SCAN_RESULT_RECORD_VERSION_V1,
+  SCAN_RESULT_SUBJECT_NAME_V1,
+  type ScanResultGapKindV1,
+  type ScanResultGapV1,
+  type ScanResultObservationV1,
+  type ScanResultReadStatusV1,
+  type ScanResultReadV1,
+  type ScanResultRecordV1,
+  type ScanResultSubjectBindingV1,
+} from "./scan-result-record.js";

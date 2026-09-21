@@ -598,7 +598,7 @@ function sortedAnnexes(
   return [...values].sort((left, right) => codeUnitCompare(left.descriptorId, right.descriptorId));
 }
 export function assertCompleteScanAnnexArtifactsV2(
-  descriptors: z.infer<typeof candidateInput>["annexes"],
+  descriptors: readonly z.infer<typeof candidateInput>["annexes"][number][],
   value: unknown,
 ): z.infer<typeof candidateInput>["annexes"] {
   if (!Array.isArray(value) || value.length !== descriptors.length) fail("annex artifact set");
@@ -627,7 +627,9 @@ export function assertCompleteScanAnnexArtifactsV2(
     )
       fail("annex artifact binding");
   }
-  return descriptors;
+  // The scan only reads these descriptors, so a readonly view is accepted; the
+  // returned type stays the mutable wire shape its callers already expect.
+  return descriptors as z.infer<typeof candidateInput>["annexes"];
 }
 
 /** Source-seal V2 bytes use strict JSON and code-unit sorted object keys. */
