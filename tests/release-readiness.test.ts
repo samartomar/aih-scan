@@ -290,6 +290,52 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(router).toContain("builds the `@aihq/scan` V2 API");
   });
 
+  it("gates promotion on Core's compatibility evidence without moving a dist tag", () => {
+    const workflow = read(".github/workflows/promotion-readiness.yml");
+    // The required check to protect with is the workflow name plus the job id.
+    expect(workflow).toContain("name: promotion-readiness");
+    expect(workflow).toContain("promotion-readiness / authorize");
+    expect(workflow).toContain("  authorize:");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).not.toMatch(
+      /^\s*(push|pull_request|workflow_call|schedule|pull_request_target):/mu,
+    );
+    expect(workflow).toMatch(/permissions:\n\s+contents: read\n\s+actions: read/u);
+    expect(workflow).not.toMatch(/contents:\s*write|id-token:\s*write|packages:\s*write/u);
+    for (const input of [
+      "candidate_version:",
+      "compatibility_run_id:",
+      "compatibility_run_attempt:",
+      "promotion_authorization_comment:",
+    ])
+      expect(workflow, input).toContain(input);
+    expect(workflow).toContain("core-sibling-compatibility");
+    expect(workflow).toContain("--repo samartomar/ai-harness");
+    expect(workflow).toContain('npm view "@aihq/scan@$CANDIDATE_VERSION" dist.integrity');
+    expect(workflow).toContain('npm view "@aihq/scan" dist-tags --json');
+    expect(workflow).toContain("--ignore-scripts");
+    expect(workflow).toContain(
+      "the published tarball bytes differ from the bytes the compatibility run tested",
+    );
+    expect(workflow).toContain("npm dist-tag add @aihq/scan@$CANDIDATE_VERSION latest");
+    // The commands exist only inside the printed heredoc, never as an executed step.
+    expect(workflow).toContain("Print the promotion commands without running them");
+    const heredocStart = workflow.indexOf("cat <<EOF");
+    const heredocEnd = workflow.indexOf("EOF", heredocStart + "cat <<EOF".length);
+    expect(heredocStart).toBeGreaterThan(0);
+    expect(heredocEnd).toBeGreaterThan(heredocStart);
+    const outsideHeredoc =
+      workflow.slice(0, heredocStart) + workflow.slice(heredocEnd + "EOF".length);
+    expect(outsideHeredoc).not.toMatch(/npm dist-tag (add|rm)/u);
+    expect(outsideHeredoc).not.toContain("gh release edit");
+    expect(workflow).toContain("it is not the owner's promotion authorization");
+
+    const releasing = read("RELEASING.md");
+    expect(releasing).toContain("promotion-readiness / authorize");
+    expect(releasing).toContain("A green run is evidence, not authorization.");
+    expect(releasing).toContain("Authorize promoting @aihq/scan@X.Y.Z from next to latest");
+  });
+
   it("enforces package-bearing and repository-only release classes in CI", () => {
     const semver = read(".github/workflows/semver-label.yml");
     expect(semver).toContain("semver:none|semver:patch|semver:minor|semver:major");
