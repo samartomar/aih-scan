@@ -17,6 +17,7 @@ import {
 import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
   AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
+  isAcceptedAiHarnessCoreContractV2,
 } from "../core/core-contract-lock-v2.js";
 import { createDetectorRegistrationV1 } from "../registration/detector-registration-v1.js";
 import { createObservationKeyV1, createObservationSetV1 } from "./observation-evidence-v1.js";
@@ -130,13 +131,22 @@ const candidateInput = z
   .object({
     protocol: z.literal("ScanCandidateV2"),
     // Membership, not equality: a candidate produced against an older accepted Core
-    // contract still verifies, while a fresh candidate declares the default pair.
+    // contract still verifies, while a fresh candidate declares the default pair. The
+    // commit and digest must be one accepted pair; a mixed pair never existed.
     coreContract: z
       .object({
         commit: z.enum([...AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED]),
         decisionSchemaSha256: z.enum([...AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED]),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, context) => {
+        if (!isAcceptedAiHarnessCoreContractV2(value.commit, value.decisionSchemaSha256))
+          context.addIssue({
+            code: "custom",
+            message: "Core commit and decision-schema digest are not one accepted pair",
+            path: [],
+          });
+      }),
     subject,
     sourceSeals: z.object({ before: sourceSeal, after: sourceSeal }).strict(),
     observation: z.object({ keySha256: sha256, setSha256: sha256 }).strict(),

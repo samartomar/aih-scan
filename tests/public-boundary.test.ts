@@ -9,6 +9,7 @@ const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 describe("Strict V2 public boundary", () => {
   it("exports only the bounded V2 evidence and compatibility contracts", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
+      "AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
       "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",

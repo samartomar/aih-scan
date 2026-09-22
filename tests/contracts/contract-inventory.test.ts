@@ -34,32 +34,32 @@ const prose = () => contracts().replace(/\s+/gu, " ");
 const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string }>[] = [
   {
     path: "src/observation/scan-attestation-v2.ts",
-    line: 131,
+    line: 132,
     contains: 'protocol: z.literal("ScanCandidateV2")',
   },
   {
     path: "src/observation/scan-attestation-v2.ts",
-    line: 136,
+    line: 138,
     contains: "commit: z.enum([...AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED])",
   },
   {
     path: "src/observation/scan-attestation-v2.ts",
-    line: 215,
+    line: 225,
     contains: 'predicateType: z.literal("https://aih.dev/ScanAttestationV2")',
   },
   {
     path: "src/observation/scan-attestation-v2.ts",
-    line: 218,
+    line: 228,
     contains: 'protocol: z.literal("ScanAttestationV2")',
   },
   {
     path: "src/observation/scan-attestation-v2.ts",
-    line: 255,
+    line: 265,
     contains: "export interface VerifiedScanAttestationV2",
   },
   {
     path: "src/observation/scan-attestation-v2.ts",
-    line: 1063,
+    line: 1073,
     contains: "export function isVerifiedScanAttestationV2",
   },
   {
@@ -104,17 +104,22 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/core/core-contract-lock-v2.ts",
-    line: 15,
+    line: 19,
+    contains: "export const AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
+  },
+  {
+    path: "src/core/core-contract-lock-v2.ts",
+    line: 31,
     contains: "export const AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
   },
   {
     path: "src/core/core-contract-lock-v2.ts",
-    line: 19,
+    line: 34,
     contains: "export const AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
   },
   {
     path: "src/core/core-contract-lock-v2.ts",
-    line: 30,
+    line: 43,
     contains: "export const AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
   },
   {
@@ -189,6 +194,7 @@ describe("published contract inventory", () => {
       expect(document, value).toContain(value);
     }
     expect(document).toContain(`version: ${SCAN_RESULT_RECORD_VERSION_V1}`);
+    expect(document).toContain("AI_HARNESS_CORE_CONTRACTS_ACCEPTED");
     expect(document).toContain("AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED");
     expect(document).toContain("AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED");
     // The default emitted pair must be the newest accepted member, and the document

@@ -37,6 +37,7 @@ const publicV2Exports = [
   // The packed tarball must expose exactly the boundary src/index.ts declares,
   // including Workstream D detector execution: the capability record, the production
   // runner and the findings reader.
+  "AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
   "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
   "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
   "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",

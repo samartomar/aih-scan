@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  AI_HARNESS_CORE_CONTRACTS_ACCEPTED,
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
   AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
@@ -13,6 +14,10 @@ import {
   verifyCoreDecisionSchemaLockV2,
   verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1,
 } from "../../src/core/core-contract-lock-v2.js";
+import {
+  createScanCandidateV2,
+  parseScanCandidateV2Json,
+} from "../../src/observation/scan-attestation-v2.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "..", "..");
 const ciWorkflow = () =>
@@ -26,6 +31,33 @@ const OLD_DIGEST = "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5
 const NEW_DIGEST = "7fdf101568cd7caa28516d0be37704c0dfd51198bc54d41d65829abbe77547cc";
 const THIRD_COMMIT = "0".repeat(40);
 const THIRD_DIGEST = "f".repeat(64);
+
+/** Core's real decision-schema bytes at each accepted commit, copied byte for byte. */
+const schemaBytes = (commit: string) =>
+  readFileSync(
+    resolve(
+      repositoryRoot,
+      "tests",
+      "fixtures",
+      "core",
+      `aih-governance-decision-v2.${commit.slice(0, 8)}.schema.json`,
+    ),
+  );
+const OLD_SCHEMA = () => schemaBytes(OLD_COMMIT);
+const NEW_SCHEMA = () => schemaBytes(NEW_COMMIT);
+/** The genuine capture candidate, which declares the older accepted pair. */
+const genuineCandidateText = () =>
+  readFileSync(
+    resolve(repositoryRoot, "tests", "fixtures", "cisco", "genuine-oci-capture-candidate.json"),
+    "utf8",
+  );
+const candidateDeclaring = (coreContract: { commit: string; decisionSchemaSha256: string }) => {
+  const { candidateSha256: _digest, ...input } = JSON.parse(genuineCandidateText()) as Record<
+    string,
+    unknown
+  >;
+  return createScanCandidateV2({ ...input, coreContract });
+};
 
 describe("Core Strict V2 compatibility lock", () => {
   it("declares an accepted set whose newest member is the default emitted value", () => {
@@ -43,24 +75,59 @@ describe("Core Strict V2 compatibility lock", () => {
     );
   });
 
-  it("accepts every declared commit and digest, and refuses a third of either", () => {
-    // Each accepted digest is reached with bytes that genuinely hash to it, so the
-    // membership check and the byte check are exercised independently.
-    for (const digest of AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED) {
-      for (const commit of AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED) {
-        expect(() =>
-          verifyCoreDecisionSchemaLockV2({
-            coreCommit: commit,
-            schemaBytes: Buffer.from("{}", "utf8"),
-            expectedSchemaSha256: digest,
-          }),
-        ).toThrow(/schema digest mismatch/);
-      }
+  it("declares one frozen list of accepted pairs, from which both sets are derived", () => {
+    expect(AI_HARNESS_CORE_CONTRACTS_ACCEPTED).toEqual([
+      { commit: OLD_COMMIT, decisionSchemaSha256: OLD_DIGEST },
+      { commit: NEW_COMMIT, decisionSchemaSha256: NEW_DIGEST },
+    ]);
+    expect(AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED).toEqual(
+      AI_HARNESS_CORE_CONTRACTS_ACCEPTED.map((contract) => contract.commit),
+    );
+    expect(AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED).toEqual(
+      AI_HARNESS_CORE_CONTRACTS_ACCEPTED.map((contract) => contract.decisionSchemaSha256),
+    );
+    // The default emitted pair is the newest accepted pair, not a mix of two.
+    expect(AI_HARNESS_CORE_CONTRACTS_ACCEPTED.at(-1)).toEqual({
+      commit: AI_HARNESS_STRICT_V2_COMMIT,
+      decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+    });
+    expect(Object.isFrozen(AI_HARNESS_CORE_CONTRACTS_ACCEPTED)).toBe(true);
+    for (const contract of AI_HARNESS_CORE_CONTRACTS_ACCEPTED)
+      expect(Object.isFrozen(contract), contract.commit).toBe(true);
+  });
+
+  it("accepts every declared pair with Core's real schema bytes, and refuses a third of either", () => {
+    // The fixtures are Core's own schema bytes at each accepted commit, so the positive
+    // path is reached with bytes that genuinely hash to each accepted digest.
+    expect(createHash("sha256").update(OLD_SCHEMA()).digest("hex")).toBe(OLD_DIGEST);
+    expect(createHash("sha256").update(NEW_SCHEMA()).digest("hex")).toBe(NEW_DIGEST);
+    for (const [commit, digest, bytes] of [
+      [OLD_COMMIT, OLD_DIGEST, OLD_SCHEMA()],
+      [NEW_COMMIT, NEW_DIGEST, NEW_SCHEMA()],
+    ] as const) {
+      expect(() =>
+        verifyCoreDecisionSchemaLockV2({
+          coreCommit: commit,
+          schemaBytes: bytes,
+          expectedSchemaSha256: digest,
+        }),
+      ).not.toThrow();
+      expect(() =>
+        verifyAiHarnessStrictV2Contract({ coreCommit: commit, schemaBytes: bytes }),
+      ).not.toThrow();
+      // Bytes that do not hash to the declared digest still fail.
+      expect(() =>
+        verifyCoreDecisionSchemaLockV2({
+          coreCommit: commit,
+          schemaBytes: Buffer.from("{}", "utf8"),
+          expectedSchemaSha256: digest,
+        }),
+      ).toThrow(/schema digest mismatch/);
     }
     expect(() =>
       verifyCoreDecisionSchemaLockV2({
         coreCommit: THIRD_COMMIT,
-        schemaBytes: Buffer.from("{}", "utf8"),
+        schemaBytes: NEW_SCHEMA(),
         expectedSchemaSha256: NEW_DIGEST,
       }),
     ).toThrow(/unexpected Core commit/);
@@ -71,6 +138,49 @@ describe("Core Strict V2 compatibility lock", () => {
         expectedSchemaSha256: THIRD_DIGEST,
       }),
     ).toThrow(/schema digest mismatch/);
+  });
+
+  it("refuses a mixed pair of accepted values in the lock and in a candidate", () => {
+    // Each value alone is accepted; together they name a Core contract that never existed.
+    for (const [commit, digest, bytes] of [
+      [OLD_COMMIT, NEW_DIGEST, NEW_SCHEMA()],
+      [NEW_COMMIT, OLD_DIGEST, OLD_SCHEMA()],
+    ] as const) {
+      expect(() =>
+        verifyCoreDecisionSchemaLockV2({
+          coreCommit: commit,
+          schemaBytes: bytes,
+          expectedSchemaSha256: digest,
+        }),
+      ).toThrow(/schema digest mismatch/);
+      expect(() =>
+        verifyAiHarnessStrictV2Contract({ coreCommit: commit, schemaBytes: bytes }),
+      ).toThrow(/schema digest mismatch/);
+      let refusal: unknown;
+      try {
+        candidateDeclaring({ commit, decisionSchemaSha256: digest });
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal, commit).toBeDefined();
+      const issues = (refusal as { issues?: { path: unknown[]; message: string }[] }).issues;
+      expect(issues).toEqual([
+        expect.objectContaining({
+          path: ["coreContract"],
+          message: "Core commit and decision-schema digest are not one accepted pair",
+        }),
+      ]);
+    }
+    // Both genuine pairs mint a candidate; the genuine capture still parses unchanged.
+    expect(
+      candidateDeclaring({ commit: OLD_COMMIT, decisionSchemaSha256: OLD_DIGEST }).coreContract,
+    ).toEqual({ commit: OLD_COMMIT, decisionSchemaSha256: OLD_DIGEST });
+    expect(
+      candidateDeclaring({ commit: NEW_COMMIT, decisionSchemaSha256: NEW_DIGEST }).coreContract,
+    ).toEqual({ commit: NEW_COMMIT, decisionSchemaSha256: NEW_DIGEST });
+    expect(parseScanCandidateV2Json(genuineCandidateText()).candidateSha256).toBe(
+      "b3f4a192b521ccd3af667dc5e1ef1c2317880473bb214483e2c514eda9b2ddd1",
+    );
   });
 
   it("observes the digest from the supplied bytes rather than letting a caller pick one", () => {

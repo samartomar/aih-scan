@@ -47,6 +47,7 @@ export {
 } from "./capability/detector-capability-v1.js";
 export { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 export {
+  AI_HARNESS_CORE_CONTRACTS_ACCEPTED,
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
   AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
