@@ -15,8 +15,8 @@ import {
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
 import {
-  AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
-  AI_HARNESS_STRICT_V2_COMMIT,
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
+  AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
 } from "../core/core-contract-lock-v2.js";
 import { createDetectorRegistrationV1 } from "../registration/detector-registration-v1.js";
 import { createObservationKeyV1, createObservationSetV1 } from "./observation-evidence-v1.js";
@@ -129,10 +129,12 @@ const subject = z
 const candidateInput = z
   .object({
     protocol: z.literal("ScanCandidateV2"),
+    // Membership, not equality: a candidate produced against an older accepted Core
+    // contract still verifies, while a fresh candidate declares the default pair.
     coreContract: z
       .object({
-        commit: z.literal(AI_HARNESS_STRICT_V2_COMMIT),
-        decisionSchemaSha256: z.literal(AI_HARNESS_DECISION_V2_SCHEMA_SHA256),
+        commit: z.enum([...AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED]),
+        decisionSchemaSha256: z.enum([...AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED]),
       })
       .strict(),
     subject,
