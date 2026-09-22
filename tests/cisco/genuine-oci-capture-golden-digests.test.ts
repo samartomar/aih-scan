@@ -32,6 +32,13 @@ describe("genuine Cisco OCI capture golden digests", () => {
   it("still reproduces the candidate, observation-set and applied-facts digests", () => {
     const candidate = parseScanCandidateV2Json(candidateText);
 
+    // This capture was produced against the OLDER accepted Core contract. It still
+    // parses because the lock is an accepted set, not the newest value alone.
+    expect(candidate.coreContract).toEqual({
+      commit: "6130dd837b8e8bd41e999fb40733e0e460e69720",
+      decisionSchemaSha256: "27295aee8d8be333abe2c73adc72884b534b1c9980a9b7a39d12be8d34c5caff",
+    });
+
     expect(candidate.candidateSha256).toBe(
       "b3f4a192b521ccd3af667dc5e1ef1c2317880473bb214483e2c514eda9b2ddd1",
     );

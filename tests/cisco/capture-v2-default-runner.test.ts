@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { captureCiscoOciCandidateV2 } from "../../src/cisco/capture-v2.js";
+import {
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
+  AI_HARNESS_STRICT_V2_COMMIT,
+  AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
+} from "../../src/core/core-contract-lock-v2.js";
 
 const roots: string[] = [];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -170,6 +176,17 @@ describe("captureCiscoOciCandidateV2 input boundary", () => {
     });
 
     expect(captured.candidate.protocol).toBe("ScanCandidateV2");
+    // A fresh candidate declares the default pair, which is the newest accepted member.
+    expect(captured.candidate.coreContract).toEqual({
+      commit: AI_HARNESS_STRICT_V2_COMMIT,
+      decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+    });
+    expect(captured.candidate.coreContract.commit).toBe(
+      AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED.at(-1),
+    );
+    expect(captured.candidate.coreContract.decisionSchemaSha256).toBe(
+      AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED.at(-1),
+    );
     expect(calls.length).toBeGreaterThan(0);
   });
 
