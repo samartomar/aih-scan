@@ -109,17 +109,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/core/core-contract-lock-v2.ts",
-    line: 31,
+    line: 35,
     contains: "export const AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
   },
   {
     path: "src/core/core-contract-lock-v2.ts",
-    line: 34,
+    line: 39,
     contains: "export const AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
   },
   {
     path: "src/core/core-contract-lock-v2.ts",
-    line: 43,
+    line: 49,
     contains: "export const AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
   },
   {

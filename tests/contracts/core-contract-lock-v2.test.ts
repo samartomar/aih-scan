@@ -96,6 +96,22 @@ describe("Core Strict V2 compatibility lock", () => {
       expect(Object.isFrozen(contract), contract.commit).toBe(true);
   });
 
+  it("freezes every exported accepted set, so no consumer can widen what Scan accepts", () => {
+    for (const [name, accepted] of [
+      ["AI_HARNESS_CORE_CONTRACTS_ACCEPTED", AI_HARNESS_CORE_CONTRACTS_ACCEPTED],
+      ["AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED", AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED],
+      [
+        "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
+        AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
+      ],
+    ] as const) {
+      expect(Object.isFrozen(accepted), name).toBe(true);
+      expect(() => (accepted as unknown as unknown[]).push(THIRD_DIGEST), name).toThrow(TypeError);
+    }
+    expect(AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED).toEqual([OLD_COMMIT, NEW_COMMIT]);
+    expect(AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED).toEqual([OLD_DIGEST, NEW_DIGEST]);
+  });
+
   it("accepts every declared pair with Core's real schema bytes, and refuses a third of either", () => {
     // The fixtures are Core's own schema bytes at each accepted commit, so the positive
     // path is reached with bytes that genuinely hash to each accepted digest.

@@ -27,12 +27,18 @@ export const AI_HARNESS_CORE_CONTRACTS_ACCEPTED = Object.freeze([
   } as const),
 ] as const);
 
-/** The accepted commits, derived from the pairs; kept for compatibility. Newest last. */
-export const AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED: readonly string[] =
-  AI_HARNESS_CORE_CONTRACTS_ACCEPTED.map((contract) => contract.commit);
+/**
+ * The accepted commits, derived from the pairs; kept for compatibility. Newest last.
+ * Frozen, like the pairs: `isAccepted…` consults these arrays, so a mutable export would
+ * let any in-process consumer widen what Scan accepts.
+ */
+export const AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED: readonly string[] = Object.freeze(
+  AI_HARNESS_CORE_CONTRACTS_ACCEPTED.map((contract) => contract.commit),
+);
 /** The accepted decision-schema digests, derived from the pairs; kept for compatibility. */
-export const AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED: readonly string[] =
-  AI_HARNESS_CORE_CONTRACTS_ACCEPTED.map((contract) => contract.decisionSchemaSha256);
+export const AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED: readonly string[] = Object.freeze(
+  AI_HARNESS_CORE_CONTRACTS_ACCEPTED.map((contract) => contract.decisionSchemaSha256),
+);
 
 /** The default emitted values: the newest accepted pair. */
 export const AI_HARNESS_STRICT_V2_COMMIT: string = AI_HARNESS_CORE_CONTRACTS_ACCEPTED[1].commit;
