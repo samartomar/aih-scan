@@ -77,6 +77,17 @@ export type BaselineProcessRunnerV1 = (
   },
 ) => Promise<ProcessRunnerResult>;
 
+/**
+ * The exact analyzer identity the in-process `aih-native` observation records.
+ *
+ * Declared here so a capability record can state it without recomputing it, and so a
+ * test can prove the capability and the observation name the same identity.
+ */
+export const BASELINE_NATIVE_ANALYZER_IDENTITY_V1 = `native.${canonicalStrictJsonSha256V1({
+  domain: "aih.baseline-native-observation-v1",
+  algorithm: "source-hash-v1",
+}).slice(0, 12)}`;
+
 const safeEnvironmentKeys = new Set([
   "ALLUSERSPROFILE",
   "APPDATA",
@@ -99,6 +110,11 @@ const safeEnvironmentKeys = new Set([
   "XDG_DATA_HOME",
   "XDG_RUNTIME_DIR",
 ]);
+
+/** The exact environment allow-list every analyzer subprocess is scrubbed down to. */
+export const BASELINE_ENVIRONMENT_ALLOW_LIST_V1: readonly string[] = Object.freeze(
+  [...safeEnvironmentKeys].sort(),
+);
 
 function fail(reason: string): never {
   throw new TypeError(`aih-scan baseline analyzer: ${reason}`);
@@ -170,18 +186,20 @@ function encodeDiagnosticLine(value: string): string {
   }).join("");
 }
 
+/** Control-character encoded, head-and-tail bounded diagnostic text for evidence and errors. */
+export function boundedDiagnosticDetailV1(value: string): string {
+  const encodedDetail = encodeDiagnosticLine(value.trim());
+  if (encodedDetail.length <= maxFailureDetailCharacters) return encodedDetail;
+  const marker = "\\n… middle omitted …\\n";
+  const retained = maxFailureDetailCharacters - marker.length;
+  const headLength = Math.ceil(retained / 2);
+  return `${encodedDetail.slice(0, headLength)}${marker}${encodedDetail.slice(
+    -(retained - headLength),
+  )}`;
+}
+
 function resultFailure(result: ProcessRunnerResult, label: string): never {
-  const rawDetail = (result.stderr || result.stdout).trim();
-  const encodedDetail = encodeDiagnosticLine(rawDetail);
-  let detail = encodedDetail;
-  if (encodedDetail.length > maxFailureDetailCharacters) {
-    const marker = "\\n… middle omitted …\\n";
-    const retained = maxFailureDetailCharacters - marker.length;
-    const headLength = Math.ceil(retained / 2);
-    detail = `${encodedDetail.slice(0, headLength)}${marker}${encodedDetail.slice(
-      -(retained - headLength),
-    )}`;
-  }
+  const detail = boundedDiagnosticDetailV1(result.stderr || result.stdout);
   fail(`${label} failed${detail ? `: ${detail}` : ` with exit ${result.code}`}`);
 }
 
@@ -710,10 +728,43 @@ function native(sourceRoot: string) {
   return {
     mediaType: "application/vnd.aih.baseline-native+json" as const,
     bytes,
-    analyzerVersion: `native.${canonicalStrictJsonSha256V1({
-      domain: "aih.baseline-native-observation-v1",
-      algorithm: "source-hash-v1",
-    }).slice(0, 12)}`,
+    analyzerVersion: BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
+  };
+}
+
+export type BaselineAnalyzerRunV1 = (input: {
+  readonly analyzer: BaselineAnalyzerV1;
+  readonly sourceRoot: string;
+}) => Promise<{
+  readonly mediaType: "application/sarif+json" | "application/vnd.aih.baseline-native+json";
+  readonly bytes: Uint8Array;
+  readonly analyzerVersion: string;
+}>;
+
+/**
+ * Runs exactly one analyzer over one already-sealed snapshot.
+ *
+ * This is the single-detector entry point; `createBaselineAnalyzerExecutionV1` is the
+ * batch-shaped adapter over it. Neither invents subject metadata it was not given.
+ */
+export function createBaselineAnalyzerRunV1(
+  options: {
+    readonly runner?: BaselineProcessRunnerV1;
+    readonly env?: Readonly<NodeJS.ProcessEnv>;
+  } = {},
+): BaselineAnalyzerRunV1 {
+  if (process.platform === "linux" && process.getuid?.() === 0)
+    fail("analyzer execution refuses root identity");
+  const runner = options.runner ?? processRunner;
+  const env = scrubEnvironment(options.env ?? process.env);
+  return async ({ analyzer, sourceRoot }) => {
+    const implementations: Record<BaselineAnalyzerV1, () => ReturnType<BaselineAnalyzerRunV1>> = {
+      "aih-native": async () => native(sourceRoot),
+      skillspector: () => skillspector(sourceRoot, runner, env),
+      semgrep: () => semgrep(sourceRoot, runner, env),
+      cisco: () => cisco(sourceRoot, runner, env),
+    };
+    return implementations[analyzer]();
   };
 }
 
@@ -723,20 +774,6 @@ export function createBaselineAnalyzerExecutionV1(
     readonly env?: Readonly<NodeJS.ProcessEnv>;
   } = {},
 ): BaselineAnalyzerExecutionV1 {
-  if (process.platform === "linux" && process.getuid?.() === 0)
-    fail("analyzer execution refuses root identity");
-  const runner = options.runner ?? processRunner;
-  const env = scrubEnvironment(options.env ?? process.env);
-  return async ({ analyzer, sourceRoot }) => {
-    const implementations: Record<
-      BaselineAnalyzerV1,
-      () => ReturnType<BaselineAnalyzerExecutionV1>
-    > = {
-      "aih-native": async () => native(sourceRoot),
-      skillspector: () => skillspector(sourceRoot, runner, env),
-      semgrep: () => semgrep(sourceRoot, runner, env),
-      cisco: () => cisco(sourceRoot, runner, env),
-    };
-    return implementations[analyzer]();
-  };
+  const run = createBaselineAnalyzerRunV1(options);
+  return ({ analyzer, sourceRoot }) => run({ analyzer, sourceRoot });
 }
