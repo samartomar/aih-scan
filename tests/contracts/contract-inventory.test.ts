@@ -1,10 +1,12 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 import {
   listDetectorCapabilitiesV1,
   resolveDetectorExecutionProfileDocumentV1,
 } from "../../src/capability/detector-capability-v1.js";
+import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
@@ -12,6 +14,13 @@ import {
   AI_HARNESS_STRICT_V2_COMMIT,
   AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
 } from "../../src/core/core-contract-lock-v2.js";
+import {
+  createScanCandidateV2,
+  parseScanAttestationEnvelopeV2Json,
+  parseScanCandidateV2Json,
+} from "../../src/observation/scan-attestation-v2.js";
+import { createScannerManifestV1 } from "../../src/observation/scanner-manifest-v1.js";
+import { validateSourceSealV2 } from "../../src/observation/source-seal-v2.js";
 import {
   SCAN_RESULT_RECORD_FORMAT_V1,
   SCAN_RESULT_RECORD_VERSION_V1,
@@ -172,6 +181,95 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
 ];
 
+/**
+ * Each byte bound the inventory states, the row phrase that states it, and the source
+ * line that enforces it. A bound the source does not enforce cannot be published.
+ */
+const BOUNDS: readonly Readonly<{
+  path: string;
+  line: number;
+  contains: string;
+  phrase: string;
+}>[] = [
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 316,
+    contains: "maxBytes = 2 * 1024 * 1024",
+    phrase: "decoded payload 2 MiB",
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 740,
+    contains: "payload.byteLength > 2 * 1024 * 1024",
+    phrase: "decoded payload 2 MiB",
+  },
+  {
+    path: "src/observation/scan-bundle-v2.ts",
+    line: 116,
+    contains: "2 * 1024 * 1024",
+    phrase: "`candidate.json` 2 MiB",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 24,
+    contains: "maxFileBytes = 16 * 1024 * 1024",
+    phrase: "16 MiB per file",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 25,
+    contains: "maxTotalBytes = 256 * 1024 * 1024",
+    phrase: "256 MiB total",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 26,
+    contains: "maxSealBytes = 512 * 1024",
+    phrase: "512 KiB canonical seal",
+  },
+  {
+    path: "src/observation/scan-bundle-v2.ts",
+    line: 171,
+    contains: '"bundle annex", 16 * 1024 * 1024',
+    phrase: "16 MiB each",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 38,
+    contains: "maxAnnexBytes = 16 * 1024 * 1024",
+    phrase: "16 MiB per annex",
+  },
+];
+
+type GenuineCandidate = Record<string, unknown> & {
+  coreContract: Record<string, string>;
+  sourceSeals: { before: Record<string, unknown> };
+};
+const genuineCandidate = () =>
+  JSON.parse(read("tests/fixtures/cisco/genuine-oci-capture-candidate.json")) as GenuineCandidate;
+const candidateInput = (patch: Record<string, unknown>) => {
+  const { candidateSha256: _digest, ...input } = genuineCandidate();
+  return { ...input, ...patch };
+};
+/** The issue paths of the ZodError `action` throws; fails if it throws anything else. */
+const zodIssuePaths = (action: () => unknown): string[] => {
+  let thrown: unknown;
+  try {
+    action();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ZodError);
+  return (thrown as ZodError).issues.map((issue) => issue.path.join("."));
+};
+const envelopeText = (statement: Record<string, unknown>, payloadType: string) =>
+  JSON.stringify({
+    payload: canonicalStrictJsonBytesV1(statement).toString("base64"),
+    payloadType,
+    signatures: [{ keyid: ["ed25519:", "0".repeat(64)].join(""), sig: "AAAA" }],
+  });
+const IN_TOTO = "application/vnd.in-toto+json";
+
 describe("published contract inventory", () => {
   it("names a source line for every contract, and that line still defines it", () => {
     const document = contracts();
@@ -182,6 +280,94 @@ describe("published contract inventory", () => {
       expect(line, reference).toBeDefined();
       expect(line, reference).toContain(anchor.contains);
     }
+  });
+
+  it("anchors every source reference it publishes", () => {
+    const anchored = new Set([...ANCHORS, ...BOUNDS].map((a) => `${a.path}:${a.line}`));
+    const references = [...contracts().matchAll(/`((?:src|tools)\/[^`:]+:\d+)`/gu)].map(
+      (match) => match[1],
+    );
+    expect(references.length).toBeGreaterThan(0);
+    for (const reference of references) expect(anchored, reference).toContain(reference);
+  });
+
+  it("states only byte bounds the source enforces, on the row that cites them", () => {
+    const rows = contracts().split("\n");
+    for (const bound of BOUNDS) {
+      const reference = `${bound.path}:${bound.line}`;
+      const row = rows.find((candidate) => candidate.includes(`\`${reference}\``));
+      expect(row, reference).toBeDefined();
+      expect(row, reference).toContain(bound.phrase);
+      const line = read(bound.path).split("\n")[bound.line - 1];
+      expect(line, reference).toContain(bound.contains);
+    }
+    // The envelope never had an 8 MiB bound; the decoded payload is bounded to 2 MiB.
+    expect(contracts()).not.toContain("8 MiB");
+  });
+
+  it("describes the refusal each reader actually throws for an unknown identity", () => {
+    // Schema-checked identities surface as a ZodError naming the field, not a TypeError.
+    const document = contracts();
+    expect(document).toContain("a `ZodError` from `parseScanCandidateV2Json`");
+    expect(document).toContain("a `ZodError` from `parseScanAttestationEnvelopeV2Json`");
+    expect(document).not.toContain("`TypeError` naming the invalid field");
+    const candidate = genuineCandidate();
+    expect(
+      zodIssuePaths(() =>
+        parseScanCandidateV2Json(JSON.stringify({ ...candidate, protocol: "ScanCandidateV9" })),
+      ),
+    ).toContain("protocol");
+    const commit = { ...candidate.coreContract, commit: "0".repeat(40) };
+    expect(
+      zodIssuePaths(() => createScanCandidateV2(candidateInput({ coreContract: commit }))),
+    ).toEqual(["coreContract.commit"]);
+    const digest = { ...candidate.coreContract, decisionSchemaSha256: "f".repeat(64) };
+    expect(
+      zodIssuePaths(() => createScanCandidateV2(candidateInput({ coreContract: digest }))),
+    ).toEqual(["coreContract.decisionSchemaSha256"]);
+    const mixed = {
+      commit: AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED[0],
+      decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED[1],
+    };
+    expect(
+      zodIssuePaths(() => createScanCandidateV2(candidateInput({ coreContract: mixed }))),
+    ).toEqual(["coreContract"]);
+
+    const statement = {
+      _type: "https://in-toto.io/Statement/v1",
+      predicate: { protocol: "ScanAttestationV2" },
+      predicateType: "https://aih.dev/ScanAttestationV2",
+      subject: [],
+    };
+    expect(
+      zodIssuePaths(() =>
+        parseScanAttestationEnvelopeV2Json(envelopeText(statement, "text/plain")),
+      ),
+    ).toEqual(["payloadType"]);
+    for (const [field, patch] of [
+      ["_type", { _type: "https://in-toto.io/Statement/v9" }],
+      ["predicateType", { predicateType: "https://aih.dev/Other" }],
+      ["predicate.protocol", { predicate: { protocol: "ScanAttestationV9" } }],
+    ] as const) {
+      const text = envelopeText({ ...statement, ...patch }, IN_TOTO);
+      expect(
+        zodIssuePaths(() => parseScanAttestationEnvelopeV2Json(text)),
+        field,
+      ).toContain(field);
+    }
+
+    const seal = candidate.sourceSeals.before;
+    expect(
+      zodIssuePaths(() => validateSourceSealV2({ ...seal, protocol: "SourceSealV9" })),
+    ).toEqual(["protocol"]);
+    expect(zodIssuePaths(() => validateSourceSealV2({ ...seal, algorithm: "other" }))).toEqual([
+      "algorithm",
+    ]);
+    expect(
+      zodIssuePaths(() =>
+        createScannerManifestV1({ protocol: "ScannerManifestV9", detectors: [] }),
+      ),
+    ).toContain("protocol");
   });
 
   it("restates the exact constants this build compiles", () => {
@@ -222,6 +408,9 @@ describe("published contract inventory", () => {
       "execution-profile-unavailable",
       "unexpected Core commit",
       "schema digest mismatch",
+      "schema digest drift: <path>",
+      "a tree without git history requires --core-commit",
+      "declared commit is not the checked-out commit",
     ]) {
       expect(document, reason).toContain(reason);
     }
