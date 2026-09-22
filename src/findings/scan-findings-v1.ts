@@ -35,6 +35,11 @@ import type { ScanResultGapKindV1, ScanResultGapV1 } from "../scan-result-record
 const MAX_ANNEX_ENTRIES = 4096;
 const MAX_ANNEX_BYTES = 16 * 1024 * 1024;
 const RAW_OCCURRENCE = /^raw-occurrence-v1:[0-9a-f]{64}$/;
+/**
+ * The exact grouping separator `createCiscoFactsOnlyV1` uses when it assigns a
+ * canonical ordinal, written without embedding a control character in this source.
+ */
+const GROUP_SEPARATOR = String.fromCodePoint(0);
 
 export type FindingFieldV1<T> =
   | Readonly<{ state: "present"; value: T }>
@@ -279,7 +284,7 @@ export function buildScanFindingsV1(input: BuildScanFindingsV1Input): ScanFindin
 
   const ordinals = new Map<string, number>();
   const findings = entries.map((entry, ordinal) => {
-    const group = `${entry.nativeRuleId} ${entry.path} ${entry.fileSha256}`;
+    const group = [entry.nativeRuleId, entry.path, entry.fileSha256].join(GROUP_SEPARATOR);
     const canonicalOrdinal = ordinals.get(group) ?? 0;
     ordinals.set(group, canonicalOrdinal + 1);
     const fingerprint = rawOccurrenceFingerprintV1({ ...entry, canonicalOrdinal });
