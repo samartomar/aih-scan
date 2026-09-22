@@ -124,6 +124,7 @@ export {
   type ScanResultObservationV1,
   type ScanResultReadStatusV1,
   type ScanResultReadV1,
+  type ScanResultRecordIdentityV1,
   type ScanResultRecordParseRefusalV1,
   type ScanResultRecordParseV1,
   type ScanResultRecordV1,

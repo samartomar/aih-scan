@@ -411,8 +411,19 @@ export type ScanResultRecordParseRefusalV1 =
   | "unknown-subject-name"
   | "malformed-record";
 
+/**
+ * The part of a `ScanResultRecordV1` that `parseScanResultRecordV1` actually checks.
+ * It is not a verified record: signer, run, Core contract and every other field are
+ * neither checked nor returned, so none of them can be read as though they had been.
+ */
+export type ScanResultRecordIdentityV1 = Readonly<{
+  format: ScanResultRecordV1["format"];
+  version: ScanResultRecordV1["version"];
+  subject: ScanResultRecordV1["subject"];
+}>;
+
 export type ScanResultRecordParseV1 =
-  | Readonly<{ status: "read"; record: ScanResultRecordV1 }>
+  | Readonly<{ status: "read"; record: ScanResultRecordIdentityV1 }>
   | Readonly<{
       status: "refused";
       reason: ScanResultRecordParseRefusalV1;
@@ -438,8 +449,10 @@ const refusedRecord = (
  *
  * This is the reader side of the identity the writer mints. A future record version is
  * refused as a version this build does not know, never read as though it were version 1.
- * It checks the declared identity only: it performs no verification, grants no
- * authority and executes nothing.
+ * It checks the declared identity only, and returns only that identity as a new frozen
+ * value: every other field is dropped, because nothing here verified it. It performs no
+ * verification, grants no authority and executes nothing; a verified record comes only
+ * from `readScanResultRecordV1`.
  */
 export function parseScanResultRecordV1(value: unknown): ScanResultRecordParseV1 {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -465,7 +478,14 @@ export function parseScanResultRecordV1(value: unknown): ScanResultRecordParseV1
       "unknown-subject-name",
       `This build reads subject ${SCAN_RESULT_SUBJECT_NAME_V1}, not ${JSON.stringify(parsed.data.subject.name)}.`,
     );
-  return freeze({ status: "read" as const, record: value as ScanResultRecordV1 });
+  return freeze({
+    status: "read" as const,
+    record: freeze({
+      format: SCAN_RESULT_RECORD_FORMAT_V1,
+      version: SCAN_RESULT_RECORD_VERSION_V1,
+      subject: freeze({ name: SCAN_RESULT_SUBJECT_NAME_V1, sha256: parsed.data.subject.sha256 }),
+    }),
+  });
 }
 
 const envelopeSchema = z

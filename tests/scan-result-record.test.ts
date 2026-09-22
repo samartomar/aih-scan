@@ -418,12 +418,34 @@ describe("public Scan result record reader", () => {
 
     expect(read.status).toBe("read");
     if (read.status !== "read") return;
-    expect(read.record).toBe(written.result);
-    expect(read.record.format).toBe(SCAN_RESULT_RECORD_FORMAT_V1);
-    expect(read.record.version).toBe(SCAN_RESULT_RECORD_VERSION_V1);
-    expect(read.record.subject.name).toBe(SCAN_RESULT_SUBJECT_NAME_V1);
+    // The reader checks the declared identity only, so it returns only that identity.
+    expect(read.record).toEqual({
+      format: SCAN_RESULT_RECORD_FORMAT_V1,
+      version: SCAN_RESULT_RECORD_VERSION_V1,
+      subject: { name: SCAN_RESULT_SUBJECT_NAME_V1, sha256: written.result.subject.sha256 },
+    });
     // A record that survived JSON transport reads the same way.
-    expect(parseScanResultRecordV1(JSON.parse(JSON.stringify(written.result))).status).toBe("read");
+    const transported = parseScanResultRecordV1(JSON.parse(JSON.stringify(written.result)));
+    expect(transported).toEqual(read);
+  });
+
+  it("returns the checked identity alone, frozen, never an unverified record", () => {
+    // A bare identity carries no signer, run or Core contract; nothing unchecked comes back.
+    const forged = {
+      format: SCAN_RESULT_RECORD_FORMAT_V1,
+      version: SCAN_RESULT_RECORD_VERSION_V1,
+      subject: { name: SCAN_RESULT_SUBJECT_NAME_V1, sha256: "a".repeat(64), extra: true },
+      signer: { identity: "forged", class: "organization", keyId: `ed25519:${"0".repeat(64)}` },
+    };
+    const read = parseScanResultRecordV1(forged);
+    expect(read.status).toBe("read");
+    if (read.status !== "read") return;
+    expect(read.record).not.toBe(forged);
+    expect(Object.keys(read.record).sort()).toEqual(["format", "subject", "version"]);
+    expect(Object.keys(read.record.subject).sort()).toEqual(["name", "sha256"]);
+    expect("signer" in read.record).toBe(false);
+    expect(Object.isFrozen(read.record)).toBe(true);
+    expect(Object.isFrozen(read.record.subject)).toBe(true);
   });
 
   it("refuses an unknown record format, version or subject by name", () => {

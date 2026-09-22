@@ -148,7 +148,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/scan-result-record.ts",
-    line: 444,
+    line: 457,
     contains: "export function parseScanResultRecordV1",
   },
   {
