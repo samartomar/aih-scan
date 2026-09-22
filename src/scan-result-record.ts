@@ -403,6 +403,71 @@ export function readScanResultRecordV1(request: ReadScanResultRecordV1Request): 
   return freeze({ status: "available" as const, result: freeze(result) });
 }
 
+/** Why a reader refused a value that claims to be a Scan result record. */
+export type ScanResultRecordParseRefusalV1 =
+  | "not-an-object"
+  | "unknown-format"
+  | "unknown-version"
+  | "unknown-subject-name"
+  | "malformed-record";
+
+export type ScanResultRecordParseV1 =
+  | Readonly<{ status: "read"; record: ScanResultRecordV1 }>
+  | Readonly<{
+      status: "refused";
+      reason: ScanResultRecordParseRefusalV1;
+      detail: string;
+    }>;
+
+const declaredRecordIdentity = z
+  .object({
+    format: z.string(),
+    version: z.number(),
+    subject: z.object({ name: z.string(), sha256: z.string().regex(SHA256_HEX) }).loose(),
+  })
+  .loose();
+
+const refusedRecord = (
+  reason: ScanResultRecordParseRefusalV1,
+  detail: string,
+): ScanResultRecordParseV1 => freeze({ status: "refused" as const, reason, detail });
+
+/**
+ * Reads a value that claims to be a `ScanResultRecordV1`, refusing an unknown
+ * `format`, `version` or subject name by name.
+ *
+ * This is the reader side of the identity the writer mints. A future record version is
+ * refused as a version this build does not know, never read as though it were version 1.
+ * It checks the declared identity only: it performs no verification, grants no
+ * authority and executes nothing.
+ */
+export function parseScanResultRecordV1(value: unknown): ScanResultRecordParseV1 {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return refusedRecord("not-an-object", "A Scan result record must be a JSON object.");
+  const parsed = declaredRecordIdentity.safeParse(value);
+  if (!parsed.success)
+    return refusedRecord(
+      "malformed-record",
+      "The value does not declare a readable format, version and subject.",
+    );
+  if (parsed.data.format !== SCAN_RESULT_RECORD_FORMAT_V1)
+    return refusedRecord(
+      "unknown-format",
+      `This build reads format ${SCAN_RESULT_RECORD_FORMAT_V1}, not ${JSON.stringify(parsed.data.format)}.`,
+    );
+  if (parsed.data.version !== SCAN_RESULT_RECORD_VERSION_V1)
+    return refusedRecord(
+      "unknown-version",
+      `This build reads ${SCAN_RESULT_RECORD_FORMAT_V1} version ${SCAN_RESULT_RECORD_VERSION_V1}, not ${JSON.stringify(parsed.data.version)}.`,
+    );
+  if (parsed.data.subject.name !== SCAN_RESULT_SUBJECT_NAME_V1)
+    return refusedRecord(
+      "unknown-subject-name",
+      `This build reads subject ${SCAN_RESULT_SUBJECT_NAME_V1}, not ${JSON.stringify(parsed.data.subject.name)}.`,
+    );
+  return freeze({ status: "read" as const, record: value as ScanResultRecordV1 });
+}
+
 const envelopeSchema = z
   .object({
     payloadType: z.literal("application/vnd.in-toto+json"),

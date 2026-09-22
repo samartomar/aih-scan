@@ -18,8 +18,12 @@ import {
 } from "../src/observation/scan-attestation-v2.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import {
+  parseScanResultRecordV1,
   readScanResultRecordV1,
   readScanResultSubjectBindingV1,
+  SCAN_RESULT_RECORD_FORMAT_V1,
+  SCAN_RESULT_RECORD_VERSION_V1,
+  SCAN_RESULT_SUBJECT_NAME_V1,
   type ScanResultRecordV1,
 } from "../src/scan-result-record.js";
 
@@ -403,6 +407,55 @@ describe("public Scan result record reader", () => {
     expect(
       readScanResultRecordV1({ verified: real, envelopeBytes: Buffer.from("{}", "utf8") }).status,
     ).toBe("invalid-input");
+  });
+
+  it("round-trips the writer's own record through the reader", () => {
+    const written = readScanResultRecordV1({ verified: verified(), annexArtifacts });
+    expect(written.status).toBe("available");
+    if (written.status !== "available") return;
+
+    const read = parseScanResultRecordV1(written.result);
+
+    expect(read.status).toBe("read");
+    if (read.status !== "read") return;
+    expect(read.record).toBe(written.result);
+    expect(read.record.format).toBe(SCAN_RESULT_RECORD_FORMAT_V1);
+    expect(read.record.version).toBe(SCAN_RESULT_RECORD_VERSION_V1);
+    expect(read.record.subject.name).toBe(SCAN_RESULT_SUBJECT_NAME_V1);
+    // A record that survived JSON transport reads the same way.
+    expect(parseScanResultRecordV1(JSON.parse(JSON.stringify(written.result))).status).toBe("read");
+  });
+
+  it("refuses an unknown record format, version or subject by name", () => {
+    const written = readScanResultRecordV1({ verified: verified(), annexArtifacts });
+    if (written.status !== "available") throw new Error("record must be available");
+    const wire = JSON.parse(JSON.stringify(written.result)) as Record<string, unknown>;
+
+    const future = parseScanResultRecordV1({ ...wire, version: 2 });
+    expect(future.status).toBe("refused");
+    if (future.status !== "refused") return;
+    expect(future.reason).toBe("unknown-version");
+    // The refusal names both what this build reads and what it was handed.
+    expect(future.detail).toContain(`version ${SCAN_RESULT_RECORD_VERSION_V1}`);
+    expect(future.detail).toContain("2");
+
+    const otherFormat = parseScanResultRecordV1({ ...wire, format: "aih-other-record" });
+    expect(otherFormat.status === "refused" && otherFormat.reason).toBe("unknown-format");
+
+    const otherSubject = parseScanResultRecordV1({
+      ...wire,
+      subject: { ...(wire.subject as Record<string, unknown>), name: "container-image" },
+    });
+    expect(otherSubject.status === "refused" && otherSubject.reason).toBe("unknown-subject-name");
+
+    for (const value of [undefined, null, 0, "record", []]) {
+      const refusal = parseScanResultRecordV1(value);
+      expect(refusal.status === "refused" && refusal.reason, String(value)).toBe("not-an-object");
+    }
+    for (const value of [{}, { format: SCAN_RESULT_RECORD_FORMAT_V1 }, { ...wire, subject: {} }]) {
+      const refusal = parseScanResultRecordV1(value);
+      expect(refusal.status === "refused" && refusal.reason).toBe("malformed-record");
+    }
   });
 
   it("returns frozen data so a consumer cannot mutate declared facts", () => {
