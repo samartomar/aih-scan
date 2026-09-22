@@ -314,6 +314,16 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain('npm view "@aihq/scan@$CANDIDATE_VERSION" dist.integrity');
     expect(workflow).toContain('npm view "@aihq/scan" dist-tags --json');
     expect(workflow).toContain("--ignore-scripts");
+    // npm pack writes into --pack-destination without creating it, so the directory must
+    // be created before the pack runs, inside the same step.
+    const packIndex = workflow.indexOf(
+      'npm pack "@aihq/scan@$CANDIDATE_VERSION" --ignore-scripts --pack-destination candidate',
+    );
+    expect(packIndex).toBeGreaterThan(0);
+    const packStepStart = workflow.lastIndexOf("      - name:", packIndex);
+    const mkdirIndex = workflow.indexOf("mkdir -p candidate\n", packStepStart);
+    expect(mkdirIndex).toBeGreaterThan(packStepStart);
+    expect(mkdirIndex).toBeLessThan(packIndex);
     expect(workflow).toContain(
       "the published tarball bytes differ from the bytes the compatibility run tested",
     );

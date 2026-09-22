@@ -80,6 +80,8 @@ jobs:
           npm view "@aihq/scan" dist-tags --json > live-dist-tags.json
           # Downloading the exact published tarball is read-only; nothing is installed and
           # no package script runs, so the bytes are observed without executing them.
+          # npm pack does not create its destination directory.
+          mkdir -p candidate
           npm pack "@aihq/scan@$CANDIDATE_VERSION" --ignore-scripts --pack-destination candidate
           sha256sum "candidate/aihq-scan-$CANDIDATE_VERSION.tgz" | cut -d' ' -f1 > live-tarball-sha256.txt
           cat live-dist-tags.json
