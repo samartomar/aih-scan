@@ -196,7 +196,16 @@ function withEnvironment<T>(values: Readonly<Record<string, string>>, step: () =
 const readJson = (path: string): Record<string, unknown> =>
   JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 
-describe("published source closure staging", () => {
+/**
+ * Every case has the production helper install the packed stub packages into a fresh
+ * consumer root through a real npm process, so a case takes about a second on an idle
+ * machine and the path-escape case prepares many fixtures (about five seconds). The 5 s default fails
+ * them only when the machine is loaded, so each case gets a budget sized for that load.
+ * The assertions are unchanged.
+ */
+const CASE_BUDGET = { timeout: 120_000 } as const;
+
+describe("published source closure staging", CASE_BUDGET, () => {
   it("stages every published file and selects the skill root the closure declares", async () => {
     const caseV1 = closureCase(governanceClosure());
     const prepared = await prepare(caseV1);
@@ -584,7 +593,7 @@ describe("published source closure staging", () => {
   });
 });
 
-describe("capture subject gate", () => {
+describe("capture subject gate", CASE_BUDGET, () => {
   it("refuses a declared root whose marker is not at its top level, before any capture", async () => {
     const files: readonly FixtureClosureFileV1[] = [
       { content: PACKS_BYTES, path: "aih-packs.json" },
@@ -642,7 +651,7 @@ describe("capture subject gate", () => {
   });
 });
 
-describe("capture failure records", () => {
+describe("capture failure records", CASE_BUDGET, () => {
   it("records unknown findings, not none, when a capture process ran and failed", async () => {
     const caseV1 = closureCase(governanceClosure());
     const prepared = await prepare(caseV1);
