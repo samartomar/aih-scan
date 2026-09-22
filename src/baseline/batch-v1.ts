@@ -29,6 +29,7 @@ import {
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../observation/source-hash-v1.js";
+import { createBaselineAnalyzerExecutionV1 } from "./runtime-v1.js";
 
 export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "cisco"] as const;
 export type BaselineAnalyzerV1 = (typeof BASELINE_ANALYZERS_V1)[number];
@@ -321,7 +322,13 @@ export function parseBaselineVetReceiptV1Json(text: string): BaselineVetReceiptV
   }
 }
 
-function normalizedObservation(
+/**
+ * Contract-checks one analyzer result and returns its canonical annex bytes.
+ *
+ * Exported for Scan's own single-detector runner so both paths apply the same
+ * media-type, protocol and byte bounds; it is not part of the package API.
+ */
+export function normalizedObservation(
   analyzerName: BaselineAnalyzerV1,
   value: Awaited<ReturnType<BaselineAnalyzerExecutionV1>>,
 ): { bytes: Buffer; mediaType: typeof value.mediaType; analyzerVersion: string } {
@@ -562,7 +569,13 @@ function assertSafeAnalyzerSource(sourceRoot: string): void {
   inspectSafeAnalyzerSource(sourceRoot);
 }
 
-function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {
+/**
+ * Copies the source root into a private analyzer snapshot and proves the copy is safe.
+ *
+ * Exported for Scan's own single-detector runner so the snapshot, symbolic-link and
+ * byte-bound rules are one implementation; it is not part of the package API.
+ */
+export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
   const source = resolve(sourceRoot);
   const snapshot = mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"));
   try {
@@ -573,6 +586,21 @@ function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: strin
   try {
     copyAnalyzerSource(source, snapshot);
     assertSafeAnalyzerSource(snapshot);
+    return snapshot;
+  } catch (error) {
+    rmSync(snapshot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Re-proves that a snapshot still matches the source shape it was taken from. */
+export function assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot: string): void {
+  assertSafeAnalyzerSource(snapshotRoot);
+}
+
+function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {
+  const snapshot = createBaselineAnalyzerSnapshotV1(sourceRoot);
+  try {
     sourceAndComponentsMatch(request, snapshot);
     return snapshot;
   } catch (error) {
@@ -583,9 +611,14 @@ function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: strin
 
 export async function executeBaselineVetBatchV1(
   request: BaselineVetRequestV1,
-  runtime: { readonly sourceRoot: string; readonly execute: BaselineAnalyzerExecutionV1 },
+  runtime: {
+    readonly sourceRoot: string;
+    /** Optional: Scan's own hardened analyzer execution is the default. */
+    readonly execute?: BaselineAnalyzerExecutionV1;
+  },
 ): Promise<BaselineVetBatchResultV1> {
   canonicalBaselineVetRequestV1Bytes(request);
+  const execute = runtime.execute ?? createBaselineAnalyzerExecutionV1();
   const snapshotRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
   const selected = analyzerOrder(request.components.flatMap((component) => component.analyzers));
   const observations: z.infer<typeof observation>[] = [];
@@ -594,7 +627,7 @@ export async function executeBaselineVetBatchV1(
     for (const analyzerName of selected) {
       const observed = normalizedObservation(
         analyzerName,
-        await runtime.execute({
+        await execute({
           analyzer: analyzerName,
           sourceRoot: snapshotRoot,
           source: request.source,
