@@ -346,6 +346,114 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).toContain("Authorize promoting @aihq/scan@X.Y.Z from next to latest");
   });
 
+  it("refuses compatibility evidence unless it comes from Core's own main compatibility run", () => {
+    const workflow = read(".github/workflows/promotion-readiness.yml");
+    // The run is described before its artifact is downloaded, through env-only inputs.
+    const describeIndex = workflow.indexOf(
+      'gh api "repos/samartomar/ai-harness/actions/runs/$COMPATIBILITY_RUN_ID" > compatibility-run.json',
+    );
+    const downloadIndex = workflow.indexOf('gh run download "$COMPATIBILITY_RUN_ID"');
+    expect(describeIndex).toBeGreaterThan(0);
+    expect(downloadIndex).toBeGreaterThan(describeIndex);
+    const inputUses = workflow.split("\n").filter((line) => line.includes("${{ inputs."));
+    expect(inputUses.length).toBeGreaterThan(0);
+    for (const line of inputUses)
+      expect(line, line).toMatch(
+        /^(\s+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}|\s+group: promotion-readiness-\$\{\{ inputs\.candidate_version \}\})$/u,
+      );
+    // Each refusal is pinned by its condition and its named message.
+    for (const refusal of [
+      "refused: Core compatibility run $COMPATIBILITY_RUN_ID is unreadable",
+      'refuse("the compatibility run description is not readable JSON")',
+      'refuse("the compatibility run description is not an object")',
+      "if (String(run.id) !== process.env.COMPATIBILITY_RUN_ID)",
+      'if (run.head_repository?.full_name !== "samartomar/ai-harness")',
+      ", not samartomar/ai-harness`",
+      'if (run.path !== ".github/workflows/sibling-compatibility.yml")',
+      ", not .github/workflows/sibling-compatibility.yml`",
+      'if (run.event !== "schedule" && run.event !== "workflow_dispatch")',
+      ", not schedule or workflow_dispatch`",
+      'if (run.head_branch !== "main")',
+      ", not main`",
+      'if (run.conclusion !== "success")',
+      ", not success`",
+      "if (String(run.run_attempt) !== process.env.COMPATIBILITY_RUN_ATTEMPT)",
+      "the compatibility run's latest attempt is",
+    ])
+      expect(workflow, refusal).toContain(refusal);
+
+    const validator = inlineModuleFollowing(
+      workflow,
+      "Refuse evidence from any run but Core's own main compatibility run",
+    );
+    const genuine = {
+      id: 35733767496,
+      path: ".github/workflows/sibling-compatibility.yml",
+      event: "schedule",
+      head_branch: "main",
+      conclusion: "success",
+      run_attempt: 2,
+      head_repository: { full_name: "samartomar/ai-harness" },
+    };
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-promotion-run-"));
+    try {
+      const validate = (run: unknown, raw?: string) => {
+        writeFileSync(join(fixtureRoot, "compatibility-run.json"), raw ?? JSON.stringify(run));
+        return spawnSync(process.execPath, ["--input-type=module", "-"], {
+          cwd: fixtureRoot,
+          input: validator,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            COMPATIBILITY_RUN_ID: "35733767496",
+            COMPATIBILITY_RUN_ATTEMPT: "2",
+          },
+        });
+      };
+
+      expect(validate(genuine).status).toBe(0);
+      expect(validate({ ...genuine, event: "workflow_dispatch" }).status).toBe(0);
+      for (const [label, forged, reason] of [
+        ["other run", { ...genuine, id: 35733767497 }, "the compatibility run is 35733767497"],
+        [
+          "fork",
+          { ...genuine, head_repository: { full_name: "someone/ai-harness" } },
+          "ran from someone/ai-harness",
+        ],
+        [
+          "other workflow",
+          { ...genuine, path: ".github/workflows/ci.yml" },
+          "is .github/workflows/ci.yml",
+        ],
+        ["pull request", { ...genuine, event: "pull_request" }, "triggered by pull_request"],
+        [
+          "pull request target",
+          { ...genuine, event: "pull_request_target" },
+          "triggered by pull_request_target",
+        ],
+        ["push", { ...genuine, event: "push" }, "triggered by push"],
+        ["branch", { ...genuine, head_branch: "feature" }, "ran on feature, not main"],
+        ["failure", { ...genuine, conclusion: "failure" }, "concluded failure, not success"],
+        ["in progress", { ...genuine, conclusion: null }, "concluded null, not success"],
+        ["attempt", { ...genuine, run_attempt: 3 }, "latest attempt is 3, not 2"],
+        ["array", [genuine], "description is not an object"],
+        ["null", null, "description is not an object"],
+      ] as const) {
+        const result = validate(forged);
+        expect(result.status, label).toBe(1);
+        expect(result.stderr, label).toMatch(/^refused: the compatibility run('s)? /u);
+        expect(result.stderr, label).toContain(reason);
+      }
+      const unreadable = validate(undefined, "{not json");
+      expect(unreadable.status).toBe(1);
+      expect(unreadable.stderr).toContain(
+        "refused: the compatibility run description is not readable JSON",
+      );
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("enforces package-bearing and repository-only release classes in CI", () => {
     const semver = read(".github/workflows/semver-label.yml");
     expect(semver).toContain("semver:none|semver:patch|semver:minor|semver:major");

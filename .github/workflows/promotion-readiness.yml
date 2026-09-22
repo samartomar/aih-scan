@@ -56,6 +56,51 @@ jobs:
             | grep -Fq "Authorize promoting @aihq/scan@$CANDIDATE_VERSION from next to latest" \
             || { echo "refused: promotion_authorization_comment does not name this candidate" >&2; exit 1; }
 
+      - name: Refuse evidence from any run but Core's own main compatibility run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPATIBILITY_RUN_ID: ${{ inputs.compatibility_run_id }}
+          COMPATIBILITY_RUN_ATTEMPT: ${{ inputs.compatibility_run_attempt }}
+        run: |
+          set -euo pipefail
+          # Any ai-harness run can upload an artifact with the expected name, including a
+          # pull request from a fork, so the run itself is checked before its artifact is read.
+          # `gh run view --json` exposes no workflow file path; the REST run object does.
+          gh api "repos/samartomar/ai-harness/actions/runs/$COMPATIBILITY_RUN_ID" > compatibility-run.json \
+            || { echo "refused: Core compatibility run $COMPATIBILITY_RUN_ID is unreadable" >&2; exit 1; }
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const refuse = (reason) => {
+            process.stderr.write(`refused: ${reason}\n`);
+            process.exit(1);
+          };
+          let run;
+          try {
+            run = JSON.parse(readFileSync("compatibility-run.json", "utf8"));
+          } catch {
+            refuse("the compatibility run description is not readable JSON");
+          }
+          if (run === null || typeof run !== "object" || Array.isArray(run))
+            refuse("the compatibility run description is not an object");
+          if (String(run.id) !== process.env.COMPATIBILITY_RUN_ID)
+            refuse(`the compatibility run is ${run.id}, not ${process.env.COMPATIBILITY_RUN_ID}`);
+          if (run.head_repository?.full_name !== "samartomar/ai-harness")
+            refuse(`the compatibility run ran from ${run.head_repository?.full_name}, not samartomar/ai-harness`);
+          if (run.path !== ".github/workflows/sibling-compatibility.yml")
+            refuse(`the compatibility run is ${run.path}, not .github/workflows/sibling-compatibility.yml`);
+          if (run.event !== "schedule" && run.event !== "workflow_dispatch")
+            refuse(`the compatibility run was triggered by ${run.event}, not schedule or workflow_dispatch`);
+          if (run.head_branch !== "main")
+            refuse(`the compatibility run ran on ${run.head_branch}, not main`);
+          if (run.conclusion !== "success")
+            refuse(`the compatibility run concluded ${run.conclusion}, not success`);
+          if (String(run.run_attempt) !== process.env.COMPATIBILITY_RUN_ATTEMPT)
+            refuse(
+              `the compatibility run's latest attempt is ${run.run_attempt}, not ${process.env.COMPATIBILITY_RUN_ATTEMPT}`,
+            );
+          NODE
+
       - name: Download Core's sibling-compatibility evidence
         env:
           GH_TOKEN: ${{ github.token }}
