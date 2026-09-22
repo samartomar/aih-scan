@@ -77,20 +77,35 @@ const readJson = (path, label) => {
 
 const rootsDocument = readJson(args.roots, "trust roots");
 if (rootsDocument === undefined) process.exit(2);
-if (!Array.isArray(rootsDocument.roots) || rootsDocument.roots.length === 0) {
+if (
+  rootsDocument === null ||
+  typeof rootsDocument !== "object" ||
+  !Array.isArray(rootsDocument.roots) ||
+  rootsDocument.roots.length === 0
+) {
   refuse("trust roots must be { roots: [ … ] } with at least one operator-supplied root");
   process.exit(2);
 }
-const roots = rootsDocument.roots.map((root) => ({
-  identity: root.identity,
-  class: root.class,
-  keyId: root.keyId,
-  publicKey: createPublicKey({
-    key: Buffer.from(root.publicKeySpkiBase64, "base64"),
-    format: "der",
-    type: "spki",
-  }),
-}));
+const roots = [];
+for (const [index, root] of rootsDocument.roots.entries()) {
+  if (root === null || typeof root !== "object" || Array.isArray(root)) {
+    refuse(`trust root ${index} is not an object`);
+    process.exit(2);
+  }
+  let publicKey;
+  try {
+    if (typeof root.publicKeySpkiBase64 !== "string") throw new TypeError("not a string");
+    publicKey = createPublicKey({
+      key: Buffer.from(root.publicKeySpkiBase64, "base64"),
+      format: "der",
+      type: "spki",
+    });
+  } catch {
+    refuse(`trust root ${index} publicKeySpkiBase64 is not a readable SPKI public key`);
+    process.exit(2);
+  }
+  roots.push({ identity: root.identity, class: root.class, keyId: root.keyId, publicKey });
+}
 
 const expected = readJson(args.expected, "expected claims policy");
 if (expected === undefined) process.exit(2);

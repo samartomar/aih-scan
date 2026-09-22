@@ -1,6 +1,16 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -101,5 +111,107 @@ describe("public API examples", () => {
     expect(read("examples/verify-capture-bundle.mjs")).toContain(
       "Every custody input is supplied by the operator.",
     );
+  });
+
+  it.runIf(built)("refuses malformed trust roots by name, never with a stack trace", () => {
+    const fixture = mkdtempSync(join(tmpdir(), "aih-scan-example-roots-"));
+    try {
+      writeFileSync(join(fixture, "expected.json"), "{}");
+      const verify = (roots: string) => {
+        writeFileSync(join(fixture, "roots.json"), roots);
+        return spawnSync(
+          process.execPath,
+          [
+            resolve(root, "examples", "verify-capture-bundle.mjs"),
+            "--bundle",
+            join(fixture, "no-such-bundle"),
+            "--evidence",
+            join(fixture, "no-such-evidence.json"),
+            "--roots",
+            join(fixture, "roots.json"),
+            "--expected",
+            join(fixture, "expected.json"),
+          ],
+          { cwd: root, encoding: "utf8" },
+        );
+      };
+      const validRoot = {
+        identity: "organization-root",
+        class: "organization",
+        keyId: `ed25519:${"0".repeat(64)}`,
+      };
+      for (const [label, roots, reason] of [
+        ["null document", "null", "trust roots must be { roots: [ … ] }"],
+        ["array document", "[]", "trust roots must be { roots: [ … ] }"],
+        ["null root", JSON.stringify({ roots: [null] }), "trust root 0 is not an object"],
+        [
+          "malformed key",
+          JSON.stringify({ roots: [{ ...validRoot, publicKeySpkiBase64: "bm90LWEta2V5" }] }),
+          "trust root 0 publicKeySpkiBase64 is not a readable SPKI public key",
+        ],
+        [
+          "missing key",
+          JSON.stringify({ roots: [validRoot] }),
+          "trust root 0 publicKeySpkiBase64 is not a readable SPKI public key",
+        ],
+      ] as const) {
+        const result = verify(roots);
+        expect(result.status, label).toBe(2);
+        expect(result.stderr, label).toContain(`refused: ${reason}`);
+        expect(result.stderr, label).not.toMatch(/^\s+at /mu);
+      }
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the local build only when the package itself is not found", () => {
+    // A throwaway copy of the loader, beside a stand-in local build, outside every repository.
+    const fixture = mkdtempSync(join(tmpdir(), "aih-scan-example-loader-"));
+    try {
+      mkdirSync(join(fixture, "examples"));
+      mkdirSync(join(fixture, "dist"));
+      copyFileSync(
+        resolve(root, "examples", "load-scan.mjs"),
+        join(fixture, "examples", "load-scan.mjs"),
+      );
+      writeFileSync(join(fixture, "dist", "index.js"), 'export const marker = "local-build";\n');
+      const load = () =>
+        spawnSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            [
+              `const { loadScan } = await import(${JSON.stringify(
+                pathToFileURL(join(fixture, "examples", "load-scan.mjs")).href,
+              )});`,
+              "const { scan, from } = await loadScan();",
+              'process.stdout.write([scan.marker, from.endsWith("index.js")].join(" "));',
+            ].join("\n"),
+          ],
+          { cwd: fixture, encoding: "utf8" },
+        );
+
+      // Not installed at all: the package is not found, so the local build is used.
+      const missing = load();
+      expect(missing.status, missing.stderr).toBe(0);
+      expect(missing.stdout).toBe("local-build true");
+
+      // Installed but broken: its own error surfaces instead of being masked by the fallback.
+      const installed = join(fixture, "node_modules", "@aihq", "scan");
+      mkdirSync(installed, { recursive: true });
+      writeFileSync(
+        join(installed, "package.json"),
+        JSON.stringify({ name: "@aihq/scan", type: "module", exports: "./index.js" }),
+      );
+      writeFileSync(join(installed, "index.js"), 'throw new Error("installed package failed");\n');
+      const broken = load();
+      expect(broken.status).not.toBe(0);
+      expect(broken.stderr).toContain("installed package failed");
+      expect(broken.stdout).toBe("");
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   });
 });

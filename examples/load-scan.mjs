@@ -17,6 +17,9 @@ export async function loadScan() {
   try {
     return { scan: await import("@aihq/scan"), from: "@aihq/scan" };
   } catch (error) {
+    // Only a package that is not there at all falls back. An installed package that
+    // fails while loading reports its own error rather than being masked by the build.
+    if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error;
     if (!existsSync(localBuild)) {
       process.stderr.write(
         `Cannot load @aihq/scan: it is not installed, and ${localBuild} does not exist.\n` +
