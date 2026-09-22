@@ -42,7 +42,11 @@ export type ScanResultGapKindV1 =
   | "severity-not-declared-by-attestation"
   | "annex-and-signing-states-are-declared-not-verified"
   | "no-effect-or-qualification-authority"
-  | "ci-claim-set-not-restated";
+  | "ci-claim-set-not-restated"
+  /** The caller supplied no annex bytes, so per-finding detail could not be read. */
+  | "annex-bytes-not-supplied"
+  /** The SARIF projection drops `properties.severity`, so only the SARIF level survives. */
+  | "vendor-severity-not-projected";
 
 export interface ScanResultGapV1 {
   readonly kind: ScanResultGapKindV1;
