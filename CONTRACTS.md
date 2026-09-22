@@ -80,6 +80,13 @@ of the consumer's `package-lock.json`. A promotion authorization is valid only f
 byte set it names; if `next` moves to different bytes, the earlier result cannot
 authorize that candidate.
 
+Scan's promotion gate (`.github/workflows/promotion-readiness.yml`) reads Core's
+`core-sibling-compatibility` version 2 artifact and refuses version 1 by name. It accepts
+only the one `scan-candidate` combination, which names Scan at `next` together with the
+Core and Catalog it was installed with at `latest`, and it re-observes those two live:
+if either `latest` moved or its bytes changed, the evidence no longer applies. Core owns
+the artifact's shape; Scan only reads it.
+
 These records are evidence for the gate, not dependency pins imposed on users. No
 consumer is required to install a tested trio, and no release of one package requires a
 release of the other two. Compatibility is decided by the declared `format` and `version`
