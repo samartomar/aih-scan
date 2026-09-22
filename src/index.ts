@@ -33,7 +33,19 @@ export {
   parseBaselineVetPublicationV1Json,
   resolveBaselineVetDiscoveryV1,
 } from "./baseline/publication-v1.js";
-export { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
+export {
+  type DetectorBackendKindV1,
+  type DetectorCapabilityV1,
+  type DetectorExecutionProfileDocumentV1,
+  type DetectorExecutionProfileV1,
+  type DetectorPlatformV1,
+  type DetectorPrerequisiteV1,
+  type DetectorSubjectKindV1,
+  listDetectorCapabilitiesV1,
+  resolveDetectorCapabilityV1,
+  resolveDetectorExecutionProfileDocumentV1,
+} from "./capability/detector-capability-v1.js";
+export { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 export {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
@@ -48,6 +60,14 @@ export {
   coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "./core/organization-evidence-envelope-v1.js";
+export {
+  type FindingFieldV1,
+  type ReadScanFindingsV1Request,
+  readScanFindingsV1,
+  type ScanFindingsReadV1,
+  type ScanFindingsV1,
+  type ScanFindingV1,
+} from "./findings/scan-findings-v1.js";
 export {
   assertCompleteScanAnnexArtifactsV2,
   canonicalDssePaeV2,
@@ -76,6 +96,17 @@ export {
   type DetectorRegistrationV1,
   parseDetectorRegistrationV1Json,
 } from "./registration/detector-registration-v1.js";
+export {
+  type BaselineAnalyzerObservationV1,
+  type DetectorPrerequisiteStateV1,
+  type RunDetectorFailureStageV1,
+  type RunDetectorRefusalReasonV1,
+  type RunDetectorSeamsV1,
+  type RunDetectorV1Request,
+  type RunDetectorV1Result,
+  runDetectorV1,
+  type ScanCoverageV1,
+} from "./runner/run-detector-v1.js";
 export {
   type ReadScanResultRecordV1Request,
   type ReadScanResultSubjectBindingV1Request,

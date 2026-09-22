@@ -39,6 +39,9 @@ describe("Strict V2 public boundary", () => {
       "createScanCandidateV2",
       "ed25519KeyIdV2",
       "isVerifiedScanAttestationV2",
+      // Workstream D: Scan owns detector execution, so the capability record, the
+      // production runner and the findings reader are part of the public boundary.
+      "listDetectorCapabilitiesV1",
       "parseBaselineVetAttestationEnvelopeV1Json",
       "parseBaselineVetDiscoveryV1Json",
       "parseBaselineVetPublicationV1Json",
@@ -50,9 +53,13 @@ describe("Strict V2 public boundary", () => {
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
+      "readScanFindingsV1",
       "readScanResultRecordV1",
       "readScanResultSubjectBindingV1",
       "resolveBaselineVetDiscoveryV1",
+      "resolveDetectorCapabilityV1",
+      "resolveDetectorExecutionProfileDocumentV1",
+      "runDetectorV1",
       "sealSourceV2",
       "signBaselineVetBundleV1",
       "signScanCandidateV2",
