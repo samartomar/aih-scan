@@ -10,8 +10,10 @@ describe("Strict V2 public boundary", () => {
   it("exports only the bounded V2 evidence and compatibility contracts", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+      "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
       "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
       "AI_HARNESS_STRICT_V2_COMMIT",
+      "AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
       "BASELINE_ANALYZERS_V1",
       "SCAN_RESULT_RECORD_FORMAT_V1",
       "SCAN_RESULT_RECORD_VERSION_V1",
@@ -50,6 +52,7 @@ describe("Strict V2 public boundary", () => {
       "parseDetectorRegistrationV1Json",
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
+      "parseScanResultRecordV1",
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
@@ -81,6 +84,9 @@ describe("Strict V2 public boundary", () => {
     expect(manifest.bin).toEqual({ "aih-scan": "./dist/cli.js" });
     expect(manifest.exports).toEqual({
       ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      // Additive and idiomatic: a consumer can locate the package root without deep
+      // importing anything. No dist subpath becomes reachable.
+      "./package.json": "./package.json",
     });
     const cli = read("src/cli.ts");
     expect(cli).toContain('command === "verify"');

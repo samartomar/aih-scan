@@ -48,8 +48,10 @@ export {
 export { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 export {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
   AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
+  AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
   verifyAiHarnessCoreEvidenceContractV1,
   verifyAiHarnessStrictV2Contract,
   verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1,
@@ -108,6 +110,7 @@ export {
   type ScanCoverageV1,
 } from "./runner/run-detector-v1.js";
 export {
+  parseScanResultRecordV1,
   type ReadScanResultRecordV1Request,
   type ReadScanResultSubjectBindingV1Request,
   readScanResultRecordV1,
@@ -120,6 +123,8 @@ export {
   type ScanResultObservationV1,
   type ScanResultReadStatusV1,
   type ScanResultReadV1,
+  type ScanResultRecordParseRefusalV1,
+  type ScanResultRecordParseV1,
   type ScanResultRecordV1,
   type ScanResultSubjectBindingV1,
 } from "./scan-result-record.js";

@@ -38,8 +38,10 @@ const publicV2Exports = [
   // including Workstream D detector execution: the capability record, the production
   // runner and the findings reader.
   "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+  "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
   "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
   "AI_HARNESS_STRICT_V2_COMMIT",
+  "AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
   "BASELINE_ANALYZERS_V1",
   "SCAN_RESULT_RECORD_FORMAT_V1",
   "SCAN_RESULT_RECORD_VERSION_V1",
@@ -74,6 +76,7 @@ const publicV2Exports = [
   "parseBaselineVetReceiptV1Json",
   "parseBaselineVetRequestV1Json",
   "parseDetectorRegistrationV1Json",
+  "parseScanResultRecordV1",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
   "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
