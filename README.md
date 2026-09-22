@@ -55,6 +55,46 @@ uploads that public root beside the evidence. It proves the capture, signing,
 and verification mechanics. It is not an organization trust root or public
 qualification authority.
 
+## Node-only interfaces
+
+Every interface this package ships is Node-only. The library entry point, the
+`aih-scan` binary and the scripts under `examples/` all require Node.js 20 or
+newer, and none of them runs in a browser, an edge runtime, a service worker, or
+any other environment without full Node built-ins.
+
+That follows from what the package does rather than from a packaging oversight.
+It reads and seals real files through `node:fs` with `O_NOFOLLOW`, hard-link and
+`fstat`/`lstat` identity checks; it spawns bounded analyzer processes through
+`node:child_process`; it hashes and verifies Ed25519 signatures through
+`node:crypto`; and it writes bundles into directories it creates itself. None of
+that has a browser equivalent, and a shimmed one would not be the same evidence.
+
+Concretely:
+
+- `exports` declares exactly two entries: `"."` for the library and
+  `"./package.json"` so a consumer can locate the package root. There is no
+  `browser`, `module`, `unpkg`, or `jsdelivr` field, and no `dist` subpath is
+  reachable.
+- The package is ESM only (`"type": "module"`). There is no CommonJS build.
+- The hardened detector execution profiles additionally require Linux `amd64`;
+  see [CONTRACTS.md](CONTRACTS.md). Only the in-process `aih-native` analyzer
+  runs on any other platform, and it is not isolated because it spawns nothing.
+
+Runnable examples live in [`examples/`](examples). They reach the package
+through its public entry point only:
+
+```sh
+node examples/run-detector.mjs
+node examples/verify-capture-bundle.mjs --help
+```
+
+`run-detector.mjs` prints the published detector capabilities, shows the typed
+refusal a hardened detector produces before anything is spawned, and runs the
+in-process analyzer for real against a throwaway fixture.
+`verify-capture-bundle.mjs` verifies a capture bundle you supply, under trust
+roots and an expected-claims policy you supply, and ships neither. Both scripts
+are repository documentation and are not part of the published tarball.
+
 ## Install and verify the package boundary
 
 Node.js 20 or newer is required.
