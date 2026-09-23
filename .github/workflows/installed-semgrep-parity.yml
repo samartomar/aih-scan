@@ -13,7 +13,7 @@ on:
       core_ref:
         description: ai-harness git ref (full commit SHA) packed as the Core under test
         required: false
-        default: 75e75f1dfd9cde6fa67422d7bbfa7e556134a81c
+        default: 67ba9a24d8e3925e3bb5362797280c7f60f79192
         type: string
   pull_request:
     paths:
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      CORE_REF: ${{ inputs.core_ref || '75e75f1dfd9cde6fa67422d7bbfa7e556134a81c' }}
+      CORE_REF: ${{ inputs.core_ref || '67ba9a24d8e3925e3bb5362797280c7f60f79192' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

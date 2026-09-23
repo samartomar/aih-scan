@@ -22,9 +22,11 @@
  *      with no runner seam; the SARIF in `evidence.observation.bytes` is parsed;
  *   6. compares the two finding sets as (check code, fixture-relative path, start line), where the
  *      Semgrep rule ids map to Core's check codes exactly as Core's SEMGREP_RULE_MAP does;
- *   7. asserts: Core actually ran Semgrep (`semgrep=core-legacy`, no `skip`), Scan succeeded under
- *      `linux-namespace-uv-v1` with producer `@aihq/scan`, identical sets on `positive` (non-empty)
- *      and on `clean` (empty), and a typed refusal from Scan on `empty` (nothing to seal).
+ *   7. asserts: Core actually ran Semgrep to completion on every fixture (`semgrep=core-legacy`,
+ *      detector check `pass` with "Semgrep static scan completed"), Core kept every finding's file
+ *      path (no `semgrep.sarif` fallback), Scan succeeded under `linux-namespace-uv-v1` with
+ *      producer `@aihq/scan`, identical (code, path, line) sets on `positive` (non-empty) and on
+ *      `clean` (empty), and a typed refusal from Scan on `empty` (nothing to seal).
  *
  * usage: node tools/installed-semgrep-parity.mjs --core-tgz <path> --scan-tgz <path> --work <dir>
  *        --out <report.json> [--uv <path>] [--python <version>]
@@ -235,8 +237,10 @@ function compare(name, root) {
   const files = filesUnder(root);
   const core = coreScan(root);
   const scan = scanSide(root);
-  // Core replaces a SARIF URI it cannot make root-relative (an absolute path, as Semgrep prints
-  // for an absolute scan target) with the fallback "semgrep.sarif". When that happened the path
+  // Core before 67ba9a24 replaced a SARIF URI it could not make root-relative (an absolute path,
+  // as Semgrep prints for an absolute scan target) with the fallback "semgrep.sarif"; hosted runs
+  // 35836922237 and 35837687078 recorded that. The assertions now REQUIRE the kept path; the
+  // report still records what happened either way. When the path was lost the path
   // cannot be compared from Core's report, so both sides compare on (code, line) and the report
   // says so; when Core kept the path, the comparison is (code, path, line).
   const pathComparable = core.semgrepChecks.every((c) => !c.pathLost);
@@ -255,14 +259,25 @@ const emptyCore = coreScan(fixtures.empty);
 // 7. assertions
 const checks = [];
 const ok = (name, pass, detail = "") => checks.push({ name, pass: Boolean(pass), detail: String(detail).slice(0, 400) });
+// "Zero findings" is evidence only when Core's own detector check says the scan COMPLETED:
+// a skipped, unavailable or failed Semgrep also yields zero Semgrep findings.
+const coreRanSemgrep = (core) =>
+  core.parsedJson &&
+  /(^|\s)semgrep=core-legacy(,|\.|$)/.test(core.executorsLine ?? "") &&
+  core.semgrepDetector !== null &&
+  core.semgrepDetector.verdict === "pass" &&
+  /Semgrep static scan completed/.test(core.semgrepDetector.detail ?? "");
 ok("Core's Semgrep uv project warmed (uv sync --locked)", warm.status === 0, warm.stderr.slice(-300));
 ok("Core ran Semgrep itself on positive (semgrep=core-legacy; detector check not skipped)", positive.core.parsedJson && /semgrep=core-legacy/.test(positive.core.executorsLine ?? "") && positive.core.semgrepDetector !== null && positive.core.semgrepDetector.verdict !== "skip", `${positive.core.executorsLine} | ${JSON.stringify(positive.core.semgrepDetector)}`);
 ok("Scan succeeded on positive through the installed runDetectorV1 under linux-namespace-uv-v1", positive.scan.summary?.outcome === "succeeded" && positive.scan.summary?.executionProfileId === "linux-namespace-uv-v1" && positive.scan.summary?.producer?.name === "@aihq/scan", JSON.stringify(positive.scan.summary ?? positive.scan.stderrTail));
 ok("Scan used its own runner (no caller seam)", positive.scan.summary?.seams?.runner === "scan-owned-default", JSON.stringify(positive.scan.summary?.seams));
 ok("positive: both sides report findings", positive.coreKeys.length > 0 && positive.scanKeys.length > 0, `core ${positive.coreKeys.length}, scan ${positive.scanKeys.length}`);
 ok("positive: both rules fire (prompt-injection and malicious-code)", ["trust.prompt-injection", "trust.malicious-code"].every((c) => positive.scanKeys.some((k) => k.startsWith(`${c}|`)) && positive.coreKeys.some((k) => k.startsWith(`${c}|`))), `scan ${positive.scanKeys.join(", ")} | core ${positive.coreKeys.join(", ")}`);
-ok(positive.pathComparable ? "positive: identical finding sets (code, path, line)" : "positive: identical finding sets (code, line) — Core lost the file path to its semgrep.sarif fallback, recorded", positive.identical, `only core: ${positive.onlyCore.join(", ") || "none"}; only scan: ${positive.onlyScan.join(", ") || "none"}`);
-ok("clean: both sides report zero Semgrep findings", clean.identical && clean.coreKeys.length === 0 && clean.scanKeys.length === 0 && clean.scan.summary?.outcome === "succeeded", `core ${clean.coreKeys.length}, scan ${clean.scanKeys.length}, scan outcome ${clean.scan.summary?.outcome}`);
+ok("positive: Core kept every finding's file path (no semgrep.sarif fallback; Core >= 67ba9a24)", positive.pathComparable, `core uris: ${positive.core.semgrepChecks.map((c) => c.uri).join(", ")}`);
+ok("positive: identical finding sets (code, path, line)", positive.pathComparable && positive.identical, `only core: ${positive.onlyCore.join(", ") || "none"}; only scan: ${positive.onlyScan.join(", ") || "none"}`);
+ok("clean: Core ran Semgrep itself to completion (semgrep=core-legacy; detector check pass, not skipped or unavailable)", coreRanSemgrep(clean.core), `${clean.core.executorsLine} | ${JSON.stringify(clean.core.semgrepDetector)}`);
+ok("clean: both sides report zero Semgrep findings from completed scans", clean.identical && clean.coreKeys.length === 0 && clean.scanKeys.length === 0 && clean.scan.summary?.outcome === "succeeded" && coreRanSemgrep(clean.core), `core ${clean.coreKeys.length}, scan ${clean.scanKeys.length}, scan outcome ${clean.scan.summary?.outcome}`);
+ok("empty: Core ran Semgrep itself to completion (detector check pass)", coreRanSemgrep(emptyCore), `${emptyCore.executorsLine} | ${JSON.stringify(emptyCore.semgrepDetector)}`);
 ok("empty: Scan refuses with a typed reason (nothing to seal), no rejection", emptyScan.summary !== null && emptyScan.summary.outcome === "refused" && typeof emptyScan.summary.reason === "string", JSON.stringify(emptyScan.summary ?? emptyScan.stderrTail));
 ok("Scan's findings protocol is digest-bound (ScanFindingsV1 from the annex)", positive.scan.summary?.findings?.source === "annex" || positive.scan.summary?.findings?.source === "analyzer-output-digest-bound", JSON.stringify(positive.scan.summary?.findings));
 
