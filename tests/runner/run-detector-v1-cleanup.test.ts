@@ -45,7 +45,6 @@ function sourceFixture(): string {
   return root;
 }
 
-
 describe("runDetectorV1 snapshot cleanup", () => {
   it("resolves to a cleanup failure, not a rejection or a refusal, when the snapshot cannot be removed", async () => {
     failSnapshotRemoval.on = true;
