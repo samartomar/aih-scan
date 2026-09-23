@@ -669,3 +669,265 @@ describe("runDetectorV1 multi-skill trees", () => {
     expect(result.detail).toContain("one skill root per request");
   });
 });
+
+/**
+ * Session-5 review (finding 3): JSON-representable or Proxy-shaped values a caller can
+ * build must resolve to a typed refusal, never reject. Each of these reached a string
+ * coercion or an `IsArray` check outside a guard before the fix.
+ */
+describe("runDetectorV1 never rejects on malformed field values", () => {
+  type Settled =
+    | { readonly resolved: true; readonly value: Awaited<ReturnType<typeof runDetectorV1>> }
+    | { readonly resolved: false; readonly error: unknown };
+
+  async function settle(request: unknown): Promise<Settled> {
+    return runDetectorV1(request).then(
+      (value) => ({ resolved: true as const, value }),
+      (error: unknown) => ({ resolved: false as const, error }),
+    );
+  }
+
+  async function refusal(request: unknown) {
+    const settled = await settle(request);
+    if (!settled.resolved)
+      throw new Error(`runDetectorV1 rejected: ${String((settled.error as Error)?.message)}`);
+    const result = settled.value;
+    if (result.outcome !== "refused") throw new Error(`expected a refusal, got ${result.outcome}`);
+    return result;
+  }
+
+  function nativeRequest(extra: Record<string, unknown>, record = { calls: 0 }) {
+    return {
+      detectorId: "detector.aih-native",
+      subject: {
+        kind: "source-tree",
+        sourceRoot: sourceFixture(),
+        selectedClosurePaths: ["README.md"],
+      },
+      runner: forbiddenRunner(record),
+      ...extra,
+    };
+  }
+
+  function revokedProxy(): object {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    return proxy;
+  }
+
+  const throwingToString = () => ({
+    toString() {
+      throw new Error("hostile toString");
+    },
+  });
+
+  it("refuses the review probe's executionProfileId (null toString and valueOf) as an unavailable profile", async () => {
+    const record = { calls: 0 };
+    const result = await refusal(
+      nativeRequest({ executionProfileId: { toString: null, valueOf: null } }, record),
+    );
+
+    expect(result.reason).toBe("execution-profile-unavailable");
+    expect(result.detail).toContain("executionProfileId");
+    expect(result.detail).toContain("in-process-native-v1");
+    expect(result.capability?.detectorId).toBe("detector.aih-native");
+    expect(record.calls).toBe(0);
+  });
+
+  it.each([
+    ["a number", 7],
+    ["an array", ["in-process-native-v1"]],
+    ["an object whose toString throws", throwingToString()],
+    ["an empty string", ""],
+    ["null", null],
+    ["a boolean", true],
+  ])("refuses an executionProfileId that is %s before any interpolation", async (_label, value) => {
+    const record = { calls: 0 };
+    const result = await refusal(nativeRequest({ executionProfileId: value }, record));
+
+    expect(result.reason).toBe("execution-profile-unavailable");
+    expect(result.detail).toContain("executionProfileId");
+    expect(result.detail).not.toContain("hostile toString");
+    expect(record.calls).toBe(0);
+  });
+
+  it("still refuses an unknown but well-formed executionProfileId by name", async () => {
+    const result = await refusal(nativeRequest({ executionProfileId: "no-such-profile" }));
+
+    expect(result.reason).toBe("execution-profile-unavailable");
+    expect(result.detail).toContain("no execution profile no-such-profile");
+  });
+
+  it.each([
+    ["a value whose toString throws", { PATH: throwingToString() }],
+    ["a value with null toString and valueOf", { PATH: { toString: null, valueOf: null } }],
+    ["a number value", { PATH: 5 }],
+    ["a string", "PATH=/usr/bin"],
+    ["an array", ["PATH=/usr/bin"]],
+    ["null", null],
+  ])("refuses an env that is %s rather than coerce it", async (_label, env) => {
+    const record = { calls: 0 };
+    const result = await refusal(nativeRequest({ env }, record));
+
+    expect(result.reason).toBe("execution-profile-unavailable");
+    expect(result.detail).toContain("env");
+    expect(result.detail).not.toContain("hostile toString");
+    expect(result.capability?.detectorId).toBe("detector.aih-native");
+    expect(record.calls).toBe(0);
+  });
+
+  it("keeps accepting an env whose values are strings or undefined", async () => {
+    const settled = await settle(nativeRequest({ env: { PATH: "/usr/bin", HOME: undefined } }));
+
+    expect(settled.resolved).toBe(true);
+    if (!settled.resolved) return;
+    expect(settled.value.outcome).toBe("succeeded");
+  });
+
+  it("refuses an env Proxy whose ownKeys trap throws as an unreadable request", async () => {
+    const env = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("hostile ownKeys");
+        },
+      },
+    );
+    const result = await refusal(nativeRequest({ env }));
+
+    expect(result.reason).toBe("unknown-detector");
+    expect(result.detail).toContain("env");
+    expect(result.detail).toContain("hostile ownKeys");
+  });
+
+  it.each([
+    ["a string", "oci"],
+    ["a number", 5],
+    ["an array", ["layout"]],
+    ["null", null],
+  ])("refuses an ociCapture that is %s, even for a detector with an OCI profile", async (_label, ociCapture) => {
+    mockHost("linux", "x64");
+    const root = temporaryRoot("oci-shape");
+    writeFileSync(join(root, "SKILL.md"), "# Skill\n", "utf8");
+    const record = { calls: 0 };
+    const result = await refusal({
+      detectorId: "detector.cisco",
+      subject: { kind: "skill-directory", sourceRoot: root, selectedClosurePaths: ["SKILL.md"] },
+      prerequisiteProbe: presentProbe,
+      runner: forbiddenRunner(record),
+      ociCapture,
+    });
+
+    expect(result.reason).toBe("execution-profile-unavailable");
+    expect(result.detail).toContain("ociCapture");
+    expect(record.calls).toBe(0);
+  });
+
+  it("resolves when every ociCapture value throws on string coercion", async () => {
+    mockHost("linux", "x64");
+    const root = temporaryRoot("oci-skill");
+    writeFileSync(join(root, "SKILL.md"), "# Skill\n", "utf8");
+    const record = { calls: 0 };
+    const forbidden = forbiddenRunner(record);
+
+    const settled = await settle({
+      detectorId: "detector.cisco",
+      subject: { kind: "skill-directory", sourceRoot: root, selectedClosurePaths: ["SKILL.md"] },
+      prerequisiteProbe: presentProbe,
+      runner: forbidden,
+      ociCapture: {
+        layout: throwingToString(),
+        runtime: { toString: null, valueOf: null },
+        broker: throwingToString(),
+        annexPayloads: throwingToString(),
+        runner: async (argv: readonly string[]) => forbidden(argv, {} as never),
+      },
+    });
+
+    expect(settled.resolved).toBe(true);
+    if (!settled.resolved) return;
+    expect(["refused", "failed"]).toContain(settled.value.outcome);
+    expect(record.calls).toBe(0);
+  });
+
+  it("refuses a revoked Proxy request as an unreadable request", async () => {
+    const result = await refusal(revokedProxy());
+
+    expect(result.reason).toBe("unknown-detector");
+    expect(result.detail).toContain("could not be read");
+    expect(Object.keys(result).sort()).toEqual(["detail", "host", "outcome", "reason"]);
+  });
+
+  it.each([
+    "subject",
+    "executionProfileId",
+    "env",
+    "ociCapture",
+    "acceptedImageDigests",
+  ])("refuses a request whose %s is a revoked Proxy", async (field) => {
+    const result = await refusal(nativeRequest({ [field]: revokedProxy() }));
+
+    expect(result.reason).toBe("unknown-detector");
+    expect(result.detail).toContain(field);
+  });
+
+  it("refuses a Proxy request whose get trap throws", async () => {
+    const request = new Proxy(nativeRequest({}), {
+      get() {
+        throw new Error("hostile get");
+      },
+    });
+    const result = await refusal(request);
+
+    expect(result.reason).toBe("unknown-detector");
+    expect(result.detail).toContain("hostile get");
+  });
+
+  it("refuses a Proxy request whose every reflective trap throws", async () => {
+    const hostile = () => {
+      throw new Error("hostile trap");
+    };
+    const request = new Proxy(nativeRequest({}), {
+      get: hostile,
+      has: hostile,
+      ownKeys: hostile,
+      getOwnPropertyDescriptor: hostile,
+      getPrototypeOf: hostile,
+      defineProperty: hostile,
+      set: hostile,
+    });
+    const result = await refusal(request);
+
+    expect(result.reason).toBe("unknown-detector");
+  });
+
+  it("resolves for a Proxy request whose only throwing trap is ownKeys", async () => {
+    const request = new Proxy(nativeRequest({}), {
+      ownKeys() {
+        throw new Error("hostile ownKeys");
+      },
+    });
+    const settled = await settle(request);
+
+    expect(settled.resolved).toBe(true);
+  });
+
+  it("refuses a subject that a later field accessor revokes after it was read", async () => {
+    const { proxy, revoke } = Proxy.revocable(
+      { kind: "source-tree", sourceRoot: sourceFixture(), selectedClosurePaths: ["README.md"] },
+      {},
+    );
+    const request: Record<string, unknown> = { detectorId: "detector.aih-native", subject: proxy };
+    Object.defineProperty(request, "env", {
+      enumerable: true,
+      get() {
+        revoke();
+        return undefined;
+      },
+    });
+
+    const result = await refusal(request);
+
+    expect(result.reason).toBe("unknown-detector");
+  });
+});

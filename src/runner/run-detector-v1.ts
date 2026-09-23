@@ -452,6 +452,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Names a value's shape without coercing it, so no caller `toString` ever runs. */
+function valueKind(value: unknown): string {
+  if (value === null) return "null";
+  try {
+    if (Array.isArray(value)) return "an array";
+  } catch {
+    return "a revoked proxy";
+  }
+  return typeof value === "object" ? "an object" : `a ${typeof value}`;
+}
+
+/**
+ * Checks the snapshotted fields that select or configure the execution profile, before
+ * any of them is interpolated or handed on. Malformed values are refused, never coerced.
+ */
+function executionFieldRefusal(
+  capability: DetectorCapabilityV1,
+  input: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const named = input.executionProfileId;
+  if (named !== undefined && (typeof named !== "string" || named.length === 0))
+    return `executionProfileId must be a non-empty string naming an execution profile of ${capability.detectorId}, not ${
+      typeof named === "string" ? "an empty string" : valueKind(named)
+    }. Available profiles: ${capability.executionProfiles
+      .map((entry) => entry.id)
+      .join(", ")}; omit it to use ${capability.executionProfile.id}.`;
+  const env = input.env;
+  if (env !== undefined) {
+    if (!isRecord(env))
+      return `env must be an object mapping environment variable names to strings, not ${valueKind(env)}.`;
+    for (const [key, value] of Object.entries(env)) {
+      if (value !== undefined && typeof value !== "string")
+        return `env.${key} must be a string, not ${valueKind(value)}; Scan does not coerce environment values.`;
+    }
+  }
+  const ociCapture = input.ociCapture;
+  if (ociCapture !== undefined && !isRecord(ociCapture))
+    return `ociCapture must be an object holding layout, runtime, broker and annexPayloads, not ${valueKind(ociCapture)}.`;
+  return undefined;
+}
+
 type FieldSnapshot =
   | { readonly value: Record<string, unknown> }
   | { readonly field: string; readonly error: unknown };
@@ -546,6 +587,22 @@ function probeStates(
 
 /** Runs one detector, returning a refusal, a failure or a success. Never throws. */
 export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Result> {
+  try {
+    return await runReadableRequestV1(request);
+  } catch (error) {
+    // Every step after the request is read and before anything runs is guarded, and a
+    // run that started reports its own failures, so what reaches here is a request that
+    // could not even be inspected, such as a revoked Proxy: refused, never a rejection.
+    return refuse(
+      "unknown-detector",
+      `The run request could not be read: ${
+        thrownMessage(error) ?? "unknown failure"
+      }. Pass a plain data object naming a detector.`,
+    );
+  }
+}
+
+async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Result> {
   if (typeof request !== "object" || request === null || Array.isArray(request))
     return refuse("unknown-detector", "A run request must be an object naming a detector.");
   // Every caller field is read once, here, inside a guard. An accessor that throws makes
@@ -600,6 +657,9 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
       capability,
     );
 
+  const fieldRefusal = executionFieldRefusal(capability, top.value);
+  if (fieldRefusal !== undefined)
+    return refuse("execution-profile-unavailable", fieldRefusal, capability);
   const profileOrRefusal = selectProfile(capability, input);
   if ("refusal" in profileOrRefusal)
     return refuse("execution-profile-unavailable", profileOrRefusal.refusal, capability);
@@ -768,7 +828,9 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
   } catch (error) {
     return failed("availability", error);
   }
-  try {
+  // Every path below returns a result rather than throwing, so the snapshot removal after
+  // it always runs and a removal that fails is reported instead of rejecting.
+  const analyzed = await (async (): Promise<RunDetectorV1Result> => {
     let observed: Awaited<ReturnType<ReturnType<typeof createBaselineAnalyzerRunV1>>>;
     try {
       const run = createBaselineAnalyzerRunV1({
@@ -827,7 +889,14 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
     } catch (error) {
       return failed("coverage", error);
     }
-  } finally {
+  })();
+  try {
     rmSync(snapshotRoot, { recursive: true, force: true });
+  } catch (error) {
+    // The detector already ran, so this is never a refusal. A run that already failed
+    // keeps its own, earlier failure; one that succeeded must not claim success while
+    // leaving its private snapshot behind.
+    return analyzed.outcome === "succeeded" ? failed("cleanup", error) : analyzed;
   }
+  return analyzed;
 }
