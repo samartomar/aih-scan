@@ -161,17 +161,32 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 122,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 65, contains: "RunDetectorRefusalReasonV1" },
-  { path: "src/runner/run-detector-v1.ts", line: 81, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 67, contains: "RunDetectorRefusalReasonV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 83, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 400,
+    line: 548,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 159,
+    line: 175,
     contains: "export type RunDetectorProducerV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 151,
+    contains: "readonly acceptedImageDigests?: readonly string[]",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 119,
+    contains: "readonly image?: SkillspectorImageMatchV1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 423,
+    contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },
   {

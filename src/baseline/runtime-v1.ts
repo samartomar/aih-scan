@@ -410,6 +410,42 @@ async function syncUvEnvironment(
   );
 }
 
+/** The most caller-accepted SkillSpector image digests one run will consult. */
+export const SKILLSPECTOR_ACCEPTED_IMAGE_DIGESTS_MAX_V1 = 32;
+const imageDigestPattern = /^sha256:[0-9a-f]{64}$/u;
+
+/**
+ * Why a caller-supplied accepted-digest list cannot be used, or `undefined` when it can.
+ *
+ * The list only adds images a caller vouches for; it never replaces or relaxes Scan's
+ * own pinned digest, so a malformed list is refused rather than partly honoured.
+ */
+export function skillspectorAcceptedImageDigestsRefusalV1(value: unknown): string | undefined {
+  if (!Array.isArray(value))
+    return "acceptedImageDigests must be an array of sha256:<64 lowercase hex> image digests.";
+  if (value.length === 0)
+    return "acceptedImageDigests is empty, so it accepts nothing; omit it to use only Scan's pinned image.";
+  if (value.length > SKILLSPECTOR_ACCEPTED_IMAGE_DIGESTS_MAX_V1)
+    return `acceptedImageDigests names ${value.length} digests; at most ${SKILLSPECTOR_ACCEPTED_IMAGE_DIGESTS_MAX_V1} are consulted.`;
+  const seen = new Set<string>();
+  for (const [index, digest] of value.entries()) {
+    if (typeof digest !== "string" || !imageDigestPattern.test(digest))
+      return `acceptedImageDigests[${index}] is not a sha256:<64 lowercase hex> image digest.`;
+    if (seen.has(digest)) return `acceptedImageDigests[${index}] repeats ${digest}.`;
+    seen.add(digest);
+  }
+  return undefined;
+}
+
+/** Which image a SkillSpector run executed, and whose digest admitted it. */
+export type SkillspectorImageMatchV1 = Readonly<{
+  /** The digest the executed image matched: Scan's pinned digest or one the caller accepted. */
+  digest: string;
+  /** The exact image reference passed to `docker run`. */
+  reference: string;
+  acceptance: "scan-pinned" | "caller-accepted";
+}>;
+
 function parseVerifiedSkillspectorImage(stdout: string): string {
   let parsed: Record<string, unknown>;
   try {
@@ -429,13 +465,52 @@ function parseVerifiedSkillspectorImage(stdout: string): string {
   fail(`SkillSpector image digest does not match ${SKILLSPECTOR_IMAGE_DIGEST_V1}`);
 }
 
+/**
+ * The local image ID to run for one caller-accepted digest. The inspected image must
+ * carry that exact digest as its ID or as a repository digest; it is then run by its
+ * local image ID, which Docker can resolve only from the local store and never pulls.
+ */
+function verifiedAcceptedSkillspectorImage(stdout: string, digest: string): string {
+  let image: Record<string, unknown>;
+  try {
+    image = parseStrictJsonObjectV1(stdout, "SkillSpector image inspection");
+  } catch {
+    fail("SkillSpector image inspection JSON");
+  }
+  const id = image.Id;
+  const carries =
+    id === digest ||
+    (Array.isArray(image.RepoDigests) &&
+      image.RepoDigests.some((value) => typeof value === "string" && value.endsWith(`@${digest}`)));
+  if (!carries || typeof id !== "string" || !imageDigestPattern.test(id))
+    fail(
+      `SkillSpector image availability: the image found for ${digest} does not carry accepted digest ${digest}`,
+    );
+  return id;
+}
+
 async function skillspector(
   sourceRoot: string,
   runner: BaselineProcessRunnerV1,
   env: Readonly<Record<string, string>>,
+  acceptedImageDigests: readonly string[] | undefined,
 ) {
   const dockerConfig = mkdtempSync(join(tmpdir(), "aih-scan-docker-config-"));
   const dockerEnvironment = { ...env, DOCKER_CONFIG: dockerConfig };
+  const inspect = (reference: string) =>
+    runner(
+      [
+        BASELINE_DOCKER_EXECUTABLE_V1,
+        "--context",
+        "default",
+        "image",
+        "inspect",
+        reference,
+        "--format",
+        "{{json .}}",
+      ],
+      runnerOptions(dockerEnvironment, startupTimeoutMs),
+    );
   try {
     requireCleanResult(
       await runner(
@@ -444,20 +519,29 @@ async function skillspector(
       ),
       "Docker availability",
     );
-    let inspected = await runner(
-      [
-        BASELINE_DOCKER_EXECUTABLE_V1,
-        "--context",
-        "default",
-        "image",
-        "inspect",
-        SKILLSPECTOR_IMAGE_V1,
-        "--format",
-        "{{json .}}",
-      ],
-      runnerOptions(dockerEnvironment, startupTimeoutMs),
-    );
-    if (inspected.truncated || inspected.code !== 0) {
+    let inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
+    let accepted: SkillspectorImageMatchV1 | undefined;
+    if ((inspected.truncated || inspected.code !== 0) && acceptedImageDigests !== undefined) {
+      // Scan's pinned image is absent. Consult the caller's accepted digests in order and
+      // run the first one present; with a list supplied Scan acquires nothing at all.
+      for (const digest of acceptedImageDigests) {
+        const candidate = await inspect(digest);
+        if (candidate.truncated || candidate.code !== 0) continue;
+        accepted = Object.freeze({
+          digest,
+          reference: verifiedAcceptedSkillspectorImage(candidate.stdout, digest),
+          acceptance:
+            digest === SKILLSPECTOR_IMAGE_DIGEST_V1
+              ? ("scan-pinned" as const)
+              : ("caller-accepted" as const),
+        });
+        break;
+      }
+      if (accepted === undefined)
+        fail(
+          `SkillSpector image availability: no local image matches Scan's pinned digest ${SKILLSPECTOR_IMAGE_DIGEST_V1} or any of the ${acceptedImageDigests.length} caller-accepted digests, and Scan pulls nothing when acceptedImageDigests is supplied`,
+        );
+    } else if (inspected.truncated || inspected.code !== 0) {
       requireCleanResult(
         await runner(
           [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
@@ -482,7 +566,14 @@ async function skillspector(
         "SkillSpector image inspection",
       );
     }
-    const image = parseVerifiedSkillspectorImage(inspected.stdout);
+    const match: SkillspectorImageMatchV1 =
+      accepted ??
+      Object.freeze({
+        digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+        reference: parseVerifiedSkillspectorImage(inspected.stdout),
+        acceptance: "scan-pinned" as const,
+      });
+    const image = match.reference;
     if (
       sourceRoot.includes(",") ||
       [...sourceRoot].some((character) => {
@@ -548,7 +639,8 @@ async function skillspector(
     return {
       mediaType: "application/sarif+json" as const,
       bytes: Buffer.from(result.stdout, "utf8"),
-      analyzerVersion: `${SKILLSPECTOR_SOURCE_REVISION_V1}@${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
+      analyzerVersion: `${SKILLSPECTOR_SOURCE_REVISION_V1}@${match.digest}`,
+      image: match,
     };
   } finally {
     rmSync(dockerConfig, { recursive: true, force: true });
@@ -739,6 +831,8 @@ export type BaselineAnalyzerRunV1 = (input: {
   readonly mediaType: "application/sarif+json" | "application/vnd.aih.baseline-native+json";
   readonly bytes: Uint8Array;
   readonly analyzerVersion: string;
+  /** Present only for SkillSpector: the image that ran and whose digest admitted it. */
+  readonly image?: SkillspectorImageMatchV1;
 }>;
 
 /**
@@ -751,16 +845,29 @@ export function createBaselineAnalyzerRunV1(
   options: {
     readonly runner?: BaselineProcessRunnerV1;
     readonly env?: Readonly<NodeJS.ProcessEnv>;
+    /**
+     * Image digests the caller also accepts for SkillSpector, consulted in order only when
+     * Scan's pinned image is absent. Supplying it means Scan pulls nothing.
+     */
+    readonly skillspectorAcceptedImageDigests?: readonly string[];
   } = {},
 ): BaselineAnalyzerRunV1 {
   if (process.platform === "linux" && process.getuid?.() === 0)
     fail("analyzer execution refuses root identity");
   const runner = options.runner ?? processRunner;
   const env = scrubEnvironment(options.env ?? process.env);
+  let acceptedImageDigests: readonly string[] | undefined;
+  if (options.skillspectorAcceptedImageDigests !== undefined) {
+    const refusal = skillspectorAcceptedImageDigestsRefusalV1(
+      options.skillspectorAcceptedImageDigests,
+    );
+    if (refusal !== undefined) fail(refusal);
+    acceptedImageDigests = Object.freeze([...options.skillspectorAcceptedImageDigests]);
+  }
   return async ({ analyzer, sourceRoot }) => {
     const implementations: Record<BaselineAnalyzerV1, () => ReturnType<BaselineAnalyzerRunV1>> = {
       "aih-native": async () => native(sourceRoot),
-      skillspector: () => skillspector(sourceRoot, runner, env),
+      skillspector: () => skillspector(sourceRoot, runner, env, acceptedImageDigests),
       semgrep: () => semgrep(sourceRoot, runner, env),
       cisco: () => cisco(sourceRoot, runner, env),
     };

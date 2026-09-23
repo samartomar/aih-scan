@@ -110,6 +110,7 @@ export {
   type RunDetectorV1Result,
   runDetectorV1,
   type ScanCoverageV1,
+  type SkillspectorImageMatchV1,
 } from "./runner/run-detector-v1.js";
 export {
   parseScanResultRecordV1,

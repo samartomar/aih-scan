@@ -12,6 +12,8 @@ import {
   type BaselineProcessRunnerV1,
   boundedDiagnosticDetailV1,
   createBaselineAnalyzerRunV1,
+  type SkillspectorImageMatchV1,
+  skillspectorAcceptedImageDigestsRefusalV1,
 } from "../baseline/runtime-v1.js";
 import {
   type DetectorCapabilityV1,
@@ -99,6 +101,8 @@ export interface DetectorPrerequisiteStateV1 {
   readonly state: "present" | "missing" | "not-probed";
 }
 
+export type { SkillspectorImageMatchV1 };
+
 export interface BaselineAnalyzerObservationV1 {
   readonly protocol: "BaselineAnalyzerObservationV1";
   readonly analyzer: BaselineAnalyzerV1;
@@ -107,6 +111,12 @@ export interface BaselineAnalyzerObservationV1 {
   readonly annex: Readonly<{ path: string; sha256: string; byteLength: number }>;
   /** The exact canonical bytes the digest above was taken over. */
   readonly bytes: Buffer;
+  /**
+   * SkillSpector only: the image that ran and whose digest admitted it. With
+   * `acceptance: "caller-accepted"` Scan verified the image digest the caller named, not
+   * that image's provenance or source revision.
+   */
+  readonly image?: SkillspectorImageMatchV1;
 }
 
 export interface RunDetectorV1Request {
@@ -133,6 +143,12 @@ export interface RunDetectorV1Request {
   readonly prerequisiteProbe?: (
     prerequisite: DetectorPrerequisiteV1,
   ) => DetectorPrerequisiteStateV1["state"];
+  /**
+   * `docker-hardened-skillspector-v1` only: image digests (`sha256:` + 64 lowercase hex)
+   * the caller also accepts, consulted in this order and only when Scan's own pinned
+   * image is absent. It never relaxes the pinned check, and with it Scan pulls nothing.
+   */
+  readonly acceptedImageDigests?: readonly string[];
   /** Material only the OCI capture profile needs; its absence refuses that profile. */
   readonly ociCapture?: {
     readonly layout: unknown;
@@ -258,7 +274,8 @@ function refuse(
 function failureStage(message: string): RunDetectorFailureStageV1 {
   if (message.includes("environment acquisition") || message.includes("image acquisition"))
     return "acquisition";
-  if (message.includes("Docker availability")) return "availability";
+  if (message.includes("Docker availability") || message.includes("image availability"))
+    return "availability";
   if (message.includes("coverage")) return "coverage";
   if (message.includes("observation") || message.includes("emitted no SARIF")) return "output";
   return "execution";
@@ -377,8 +394,20 @@ function subjectRefusal(
   const topLevelSkill = seal.entries.some(
     (entry) => entry.kind === "file" && entry.path === "SKILL.md",
   );
-  if (!topLevelSkill)
+  if (!topLevelSkill) {
+    // A tree of several skills is not one skill root. Say so, and how to shard it,
+    // rather than only that the top-level SKILL.md is absent.
+    const nested = seal.selectedClosurePaths.filter((path) => path.endsWith("/SKILL.md"));
+    if (nested.length > 0) {
+      const directories = nested.map((path) => path.slice(0, -"/SKILL.md".length));
+      const named =
+        directories.length <= 3
+          ? directories.join(", ")
+          : `${directories.slice(0, 3).join(", ")} and ${directories.length - 3} more`;
+      return `${capability.detectorId} runs one skill root per request; this selection holds ${nested.length} SKILL.md file${nested.length === 1 ? "" : "s"} below the declared root and none at its top. Shard it: send one skill-directory request per directory that holds a SKILL.md, with that directory as sourceRoot and its own files, SKILL.md included, as selectedClosurePaths. Directories: ${named}.`;
+    }
     return `${capability.detectorId} needs a top-level SKILL.md in the declared source root. Scan does not create, rename, copy or discover one, so this subject is refused unchanged.`;
+  }
   if (!selected.has("SKILL.md"))
     return "The top-level SKILL.md is not one of the declared selected closure paths; declare it so the selection and the requirement agree.";
   return undefined;
@@ -392,37 +421,182 @@ function sameSeal(left: SourceSealV2, right: SourceSealV2): boolean {
   );
 }
 
+/** A thrown value's message, or `undefined`; reading it never throws. */
+function thrownMessage(error: unknown): string | undefined {
+  try {
+    if (error instanceof Error && typeof error.message === "string") return error.message;
+  } catch {
+    // A hostile message accessor is reported as an unknown failure.
+  }
+  return undefined;
+}
+
 function detail(error: unknown): string {
-  return boundedDiagnosticDetailV1(error instanceof Error ? error.message : "unknown failure");
+  return boundedDiagnosticDetailV1(thrownMessage(error) ?? "unknown failure");
+}
+
+const REQUEST_FIELDS = [
+  "detectorId",
+  "subject",
+  "executionProfileId",
+  "env",
+  "runner",
+  "prerequisiteProbe",
+  "ociCapture",
+  "acceptedImageDigests",
+] as const;
+const SUBJECT_FIELDS = ["kind", "sourceRoot", "selectedClosurePaths", "excludedPaths"] as const;
+const OCI_CAPTURE_FIELDS = ["layout", "runtime", "broker", "annexPayloads", "runner"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type FieldSnapshot =
+  | { readonly value: Record<string, unknown> }
+  | { readonly field: string; readonly error: unknown };
+
+/**
+ * Reads each named field exactly once into a new plain object, copying arrays, so no
+ * caller accessor runs again later outside a guard. Reports the first field that threw.
+ */
+function snapshotFields(
+  source: Record<string, unknown>,
+  fields: readonly string[],
+  prefix: string,
+): FieldSnapshot {
+  const value: Record<string, unknown> = {};
+  let field = "";
+  try {
+    for (field of fields) {
+      const read = source[field];
+      value[field] = Array.isArray(read) ? Array.from(read) : read;
+    }
+  } catch (error) {
+    return { field: `${prefix}${field}`, error };
+  }
+  return { value };
+}
+
+/** The request's own fields, plus a copy of the caller environment and OCI material. */
+function snapshotRequest(request: Record<string, unknown>): FieldSnapshot {
+  const top = snapshotFields(request, REQUEST_FIELDS, "");
+  if ("field" in top) return top;
+  const env = top.value.env;
+  if (isRecord(env)) {
+    try {
+      top.value.env = Object.freeze(Object.fromEntries(Object.entries(env)));
+    } catch (error) {
+      return { field: "env", error };
+    }
+  }
+  const ociCapture = top.value.ociCapture;
+  if (isRecord(ociCapture)) {
+    const material = snapshotFields(ociCapture, OCI_CAPTURE_FIELDS, "ociCapture.");
+    if ("field" in material) return material;
+    top.value.ociCapture = material.value;
+  }
+  return top;
+}
+
+/**
+ * Settles every prerequisite once. A caller probe that throws, is not callable or answers
+ * outside the three states stops probing: that prerequisite and every later one stay
+ * `not-probed`, so nothing is claimed, and the reason is returned for an availability failure.
+ */
+function probeStates(
+  capability: DetectorCapabilityV1,
+  probe: unknown,
+  env: Readonly<NodeJS.ProcessEnv>,
+): { readonly states: readonly DetectorPrerequisiteStateV1[]; readonly failure?: string } {
+  const states: DetectorPrerequisiteStateV1[] = [];
+  let failure: string | undefined;
+  for (const prerequisite of capability.prerequisites) {
+    let state: DetectorPrerequisiteStateV1["state"] = "not-probed";
+    if (failure === undefined && probe === undefined) state = probePrerequisite(prerequisite, env);
+    else if (failure === undefined) {
+      try {
+        const reported: unknown = (probe as (entry: DetectorPrerequisiteV1) => unknown)(
+          prerequisite,
+        );
+        if (reported === "present" || reported === "missing" || reported === "not-probed")
+          state = reported;
+        else
+          failure = `The caller-supplied prerequisiteProbe answered ${
+            typeof reported === "string" ? JSON.stringify(reported) : typeof reported
+          } for ${prerequisite.kind} ${prerequisite.id}; only present, missing or not-probed is a prerequisite state.`;
+      } catch (error) {
+        // The thrown text leads and the prerequisite closes, so both survive bounding.
+        failure = `The caller-supplied prerequisiteProbe threw: ${
+          thrownMessage(error) ?? "unknown failure"
+        } (while probing ${prerequisite.kind} ${prerequisite.id}).`;
+      }
+    }
+    states.push(
+      Object.freeze({
+        kind: prerequisite.kind,
+        id: prerequisite.id,
+        required: prerequisite.required,
+        state,
+      }),
+    );
+  }
+  return { states: Object.freeze(states), ...(failure === undefined ? {} : { failure }) };
 }
 
 /** Runs one detector, returning a refusal, a failure or a success. Never throws. */
 export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Result> {
   if (typeof request !== "object" || request === null || Array.isArray(request))
     return refuse("unknown-detector", "A run request must be an object naming a detector.");
-  const input = request as RunDetectorV1Request;
-  const capability = resolveDetectorCapabilityV1(input.detectorId);
+  // Every caller field is read once, here, inside a guard. An accessor that throws makes
+  // the request unreadable, refused like one that is not an object, never a rejection.
+  const top = snapshotRequest(request as Record<string, unknown>);
+  if ("field" in top)
+    return refuse(
+      "unknown-detector",
+      `The run request could not be read: reading ${top.field} threw: ${
+        thrownMessage(top.error) ?? "unknown failure"
+      }. Pass a plain data object naming a detector.`,
+    );
+  const detectorId = top.value.detectorId;
+  const capability = resolveDetectorCapabilityV1(detectorId);
   if (capability === undefined)
     return refuse(
       "unknown-detector",
-      `Scan owns no detector ${typeof input.detectorId === "string" ? input.detectorId : "of that shape"}. Known detectors: ${listDetectorCapabilitiesV1()
+      `Scan owns no detector ${typeof detectorId === "string" ? detectorId : "of that shape"}. Known detectors: ${listDetectorCapabilitiesV1()
         .map((entry) => entry.detectorId)
         .join(", ")}.`,
     );
 
-  const subject = input.subject;
-  if (typeof subject !== "object" || subject === null || Array.isArray(subject))
+  const declaredSubject = top.value.subject;
+  if (!isRecord(declaredSubject))
     return refuse(
       "subject-requirement-unmet",
       "A run request must carry a subject naming a kind, a source root and the selected closure paths.",
       capability,
     );
+  const subjectSnapshot = snapshotFields(declaredSubject, SUBJECT_FIELDS, "subject.");
+  if ("field" in subjectSnapshot)
+    return refuse(
+      "subject-requirement-unmet",
+      `The declared subject could not be read: reading ${subjectSnapshot.field} threw: ${
+        thrownMessage(subjectSnapshot.error) ?? "unknown failure"
+      }.`,
+      capability,
+    );
+  // From here on only the snapshot is read; the caller's objects are never touched again.
+  const input = { ...top.value, subject: subjectSnapshot.value } as unknown as RunDetectorV1Request;
+  const subject = input.subject;
   if (!capability.subjectKinds.includes(subject.kind))
     return refuse(
       "unsupported-subject-kind",
       `${capability.detectorId} accepts ${capability.subjectKinds.join(", ")}, not ${
         typeof subject.kind === "string" ? subject.kind : "that subject kind"
-      }.`,
+      }.${
+        capability.subjectKinds.length === 1 && capability.subjectKinds[0] === "skill-directory"
+          ? " Scan runs one skill root per request: shard a tree holding several skills into one skill-directory request per directory that holds a SKILL.md."
+          : ""
+      }`,
       capability,
     );
 
@@ -430,6 +604,17 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
   if ("refusal" in profileOrRefusal)
     return refuse("execution-profile-unavailable", profileOrRefusal.refusal, capability);
   const profile = profileOrRefusal;
+  if (input.acceptedImageDigests !== undefined) {
+    if (profile.id !== "docker-hardened-skillspector-v1")
+      return refuse(
+        "execution-profile-unavailable",
+        `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 profile; ${capability.detectorId} runs ${profile.id}, so remove it.`,
+        capability,
+      );
+    const digestRefusal = skillspectorAcceptedImageDigestsRefusalV1(input.acceptedImageDigests);
+    if (digestRefusal !== undefined)
+      return refuse("execution-profile-unavailable", digestRefusal, capability);
+  }
 
   const excludedPaths = subject.excludedPaths ?? [];
   if (!Array.isArray(excludedPaths))
@@ -478,26 +663,6 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
 
   const env = input.env ?? process.env;
   const probe = input.prerequisiteProbe;
-  const prerequisites: readonly DetectorPrerequisiteStateV1[] = Object.freeze(
-    capability.prerequisites.map((prerequisite) =>
-      Object.freeze({
-        kind: prerequisite.kind,
-        id: prerequisite.id,
-        required: prerequisite.required,
-        state: probe === undefined ? probePrerequisite(prerequisite, env) : probe(prerequisite),
-      }),
-    ),
-  );
-  const missing = capability.prerequisites.find(
-    (prerequisite, index) => prerequisite.required && prerequisites[index]?.state === "missing",
-  );
-  if (missing !== undefined)
-    return refuse(
-      "prerequisite-missing",
-      `${capability.detectorId} needs ${missing.kind} ${missing.id}, which is not present. ${missing.detail}`,
-      capability,
-    );
-
   const seams: RunDetectorSeamsV1 = Object.freeze({
     runner:
       (input.ociCapture?.runner ?? input.runner) === undefined
@@ -510,6 +675,8 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
     kind: profile.evidence === "ScanCandidateV2" ? "selected-closure" : "source-tree",
     excludedPaths,
   });
+  const probed = probeStates(capability, probe, env);
+  const prerequisites = probed.states;
   const failed = (stage: RunDetectorFailureStageV1, error: unknown): RunDetectorV1Result =>
     Object.freeze({
       outcome: "failed" as const,
@@ -521,6 +688,16 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
       producer: producer(),
       coverage,
     });
+  if (probed.failure !== undefined) return failed("availability", new TypeError(probed.failure));
+  const missing = capability.prerequisites.find(
+    (prerequisite, index) => prerequisite.required && prerequisites[index]?.state === "missing",
+  );
+  if (missing !== undefined)
+    return refuse(
+      "prerequisite-missing",
+      `${capability.detectorId} needs ${missing.kind} ${missing.id}, which is not present. ${missing.detail}`,
+      capability,
+    );
 
   if (profile.evidence === "ScanCandidateV2") {
     const material = input.ociCapture as NonNullable<RunDetectorV1Request["ociCapture"]>;
@@ -536,7 +713,7 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
         ...(material.runner === undefined ? {} : { runner: material.runner }),
       });
     } catch (error) {
-      return failed(failureStage(error instanceof Error ? error.message : ""), error);
+      return failed(failureStage(thrownMessage(error) ?? ""), error);
     }
     let after: SourceSealV2;
     try {
@@ -597,10 +774,13 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
       const run = createBaselineAnalyzerRunV1({
         ...(input.runner === undefined ? {} : { runner: input.runner }),
         ...(input.env === undefined ? {} : { env: input.env }),
+        ...(input.acceptedImageDigests === undefined
+          ? {}
+          : { skillspectorAcceptedImageDigests: input.acceptedImageDigests }),
       });
       observed = await run({ analyzer, sourceRoot: snapshotRoot });
     } catch (error) {
-      return failed(failureStage(error instanceof Error ? error.message : ""), error);
+      return failed(failureStage(thrownMessage(error) ?? ""), error);
     }
     let normalized: ReturnType<typeof normalizedObservation>;
     try {
@@ -635,6 +815,7 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
               byteLength: normalized.bytes.byteLength,
             }),
             bytes: normalized.bytes,
+            ...(observed.image === undefined ? {} : { image: observed.image }),
           }),
         }),
         findings: digestBoundAnalyzerFindingsV1(
