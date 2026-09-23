@@ -103,6 +103,7 @@ export {
   type BaselineAnalyzerObservationV1,
   type DetectorPrerequisiteStateV1,
   type RunDetectorFailureStageV1,
+  type RunDetectorProducerV1,
   type RunDetectorRefusalReasonV1,
   type RunDetectorSeamsV1,
   type RunDetectorV1Request,

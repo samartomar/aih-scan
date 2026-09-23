@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { rmSync, statSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -150,6 +150,17 @@ export type RunDetectorSeamsV1 = Readonly<{
   prerequisiteProbe: "scan-owned-default" | "caller-supplied";
 }>;
 
+/**
+ * The installed package whose code executed this run, read once from the manifest that
+ * ships beside it. Only a run that started carries it; a refusal executed nothing.
+ * `version` is `null` when that manifest cannot be read or does not name this package,
+ * rather than a guessed value.
+ */
+export type RunDetectorProducerV1 = Readonly<{
+  name: "@aihq/scan";
+  version: string | null;
+}>;
+
 export type RunDetectorV1Result =
   | Readonly<{
       outcome: "refused";
@@ -166,6 +177,7 @@ export type RunDetectorV1Result =
       executionProfile: DetectorExecutionProfileV1;
       prerequisites: readonly DetectorPrerequisiteStateV1[];
       seams: RunDetectorSeamsV1;
+      producer: RunDetectorProducerV1;
       coverage: ScanCoverageV1;
     }>
   | Readonly<{
@@ -175,6 +187,7 @@ export type RunDetectorV1Result =
       executionProfile: DetectorExecutionProfileV1;
       prerequisites: readonly DetectorPrerequisiteStateV1[];
       seams: RunDetectorSeamsV1;
+      producer: RunDetectorProducerV1;
       evidence:
         | Readonly<{
             kind: "baseline-analyzer-observation-v1";
@@ -185,6 +198,29 @@ export type RunDetectorV1Result =
       coverage: ScanCoverageV1;
       sourceSeal: Readonly<{ before: SourceSealV2; after: SourceSealV2 }>;
     }>;
+
+let producerRecord: RunDetectorProducerV1 | undefined;
+
+function producer(): RunDetectorProducerV1 {
+  if (producerRecord !== undefined) return producerRecord;
+  let version: string | null = null;
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+    if (
+      typeof manifest === "object" &&
+      manifest !== null &&
+      (manifest as { name?: unknown }).name === "@aihq/scan"
+    ) {
+      const declared = (manifest as { version?: unknown }).version;
+      if (typeof declared === "string" && declared.length > 0 && declared.length <= 256)
+        version = declared;
+    }
+  } catch {
+    version = null;
+  }
+  producerRecord = Object.freeze({ name: "@aihq/scan" as const, version });
+  return producerRecord;
+}
 
 function host(): { os: NodeJS.Platform; architecture: string } {
   return Object.freeze({ os: process.platform, architecture: process.arch });
@@ -482,6 +518,7 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
       executionProfile: profile,
       prerequisites,
       seams,
+      producer: producer(),
       coverage,
     });
 
@@ -532,6 +569,7 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
       executionProfile: profile,
       prerequisites,
       seams,
+      producer: producer(),
       evidence: Object.freeze({ kind: "scan-candidate-v2" as const, capture }),
       findings,
       coverage,
@@ -583,6 +621,7 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
         executionProfile: profile,
         prerequisites,
         seams,
+        producer: producer(),
         evidence: Object.freeze({
           kind: "baseline-analyzer-observation-v1" as const,
           observation: Object.freeze({

@@ -165,8 +165,13 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   { path: "src/runner/run-detector-v1.ts", line: 81, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 364,
+    line: 400,
     contains: "export async function runDetectorV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 159,
+    contains: "export type RunDetectorProducerV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },
   {

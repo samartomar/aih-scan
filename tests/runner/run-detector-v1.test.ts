@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -428,6 +436,60 @@ describe("runDetectorV1 in-process execution", () => {
     expect(result.failure.detail.length).toBeLessThanOrEqual(520);
     expect(result.coverage.kind).toBe("source-tree");
     expect(result.seams.prerequisiteProbe).toBe("caller-supplied");
+  });
+
+  it("names the package that executed it, beside the profile, analyzer version and annex digest", async () => {
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    ) as { name: string; version: string };
+    const sourceRoot = sourceFixture();
+
+    const result = await runDetectorV1({
+      detectorId: "detector.aih-native",
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: ["README.md"] },
+    });
+
+    if (result.outcome !== "succeeded") throw new Error(`expected success, got ${result.outcome}`);
+    if (result.evidence.kind !== "baseline-analyzer-observation-v1")
+      throw new Error("evidence kind");
+    // Everything a consumer needs to state that this package, on this host, executed it:
+    expect(result.producer).toEqual({ name: "@aihq/scan", version: manifest.version });
+    expect(Object.isFrozen(result.producer)).toBe(true);
+    expect(result.executionProfile.id).toBe("in-process-native-v1");
+    expect(result.evidence.observation.analyzerVersion).toBe(
+      resolveDetectorCapabilityV1("detector.aih-native")?.analyzerIdentity,
+    );
+    expect(result.evidence.observation.annex.sha256).toBe(
+      sha256(result.evidence.observation.bytes),
+    );
+    expect(result.seams).toEqual({
+      runner: "scan-owned-default",
+      prerequisiteProbe: "scan-owned-default",
+    });
+  });
+
+  it("names the package on a failure too, and on no refusal", async () => {
+    mockHost("linux", "x64");
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    ) as { version: string };
+
+    const failed = await runDetectorV1({
+      detectorId: "detector.semgrep",
+      subject: {
+        kind: "source-tree",
+        sourceRoot: sourceFixture(),
+        selectedClosurePaths: ["README.md"],
+      },
+      prerequisiteProbe: presentProbe,
+      runner: async () => ({ code: 1, stdout: "", stderr: "fixture failure", truncated: false }),
+    });
+    const refused = await runDetectorV1({ detectorId: "detector.not-owned-by-scan" });
+
+    if (failed.outcome !== "failed") throw new Error(`expected failure, got ${failed.outcome}`);
+    expect(failed.producer).toEqual({ name: "@aihq/scan", version: manifest.version });
+    // A refusal executed nothing, so it carries no producer and keeps its existing shape.
+    expect(Object.keys(refused).sort()).toEqual(["detail", "host", "outcome", "reason"]);
   });
 });
 
