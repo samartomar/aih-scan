@@ -139,6 +139,14 @@ const warm = result(spawnSync(uv, ["sync", "--project", semgrepProject, "--locke
 
 // 4. Core side
 const SEMGREP_RULE_MAP = { "semgrep.malicious-code": "trust.malicious-code", "semgrep.prompt-injection": "trust.prompt-injection" };
+// Semgrep prefixes a rule id with the path components of the config file it came from
+// (e.g. "aih.work.semgrep.prompt-injection" for /aih/work/rules.yml inside Scan's sandbox), so a
+// rule is matched by its exact id or by ".<id>" as a suffix, as Core's own mapping tolerates.
+function codeForRuleId(ruleId) {
+  if (typeof ruleId !== "string") return null;
+  for (const [id, code] of Object.entries(SEMGREP_RULE_MAP)) if (ruleId === id || ruleId.endsWith(`.${id}`)) return code;
+  return null;
+}
 const home = join(work, "home");
 mkdirSync(home, { recursive: true });
 const routeEnv = { AIH_WORKBENCH_DATA: join(work, "absent-workbench-data"), HOME: home, USERPROFILE: home };
@@ -206,7 +214,7 @@ function scanSide(root) {
     for (const run of log.runs ?? []) {
       for (const res of run.results ?? []) {
         const loc = res.locations?.[0]?.physicalLocation;
-        findings.push({ ruleId: res.ruleId ?? null, code: SEMGREP_RULE_MAP[res.ruleId] ?? null, uri: loc?.artifactLocation?.uri ?? null, startLine: loc?.region?.startLine ?? null, message: (res.message?.text ?? "").slice(0, 160) });
+        findings.push({ ruleId: res.ruleId ?? null, code: codeForRuleId(res.ruleId), uri: loc?.artifactLocation?.uri ?? null, startLine: loc?.region?.startLine ?? null, message: (res.message?.text ?? "").slice(0, 160) });
       }
     }
   }
