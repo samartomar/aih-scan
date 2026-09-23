@@ -286,21 +286,36 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
   const okay = (stdout: string) => ({ code: 0, stdout, stderr: "", truncated: false });
   const absent = { code: 1, stdout: "", stderr: "Error: No such image", truncated: false };
 
-  /** A fake `docker`: `images` maps an inspected reference to its `{{json .}}` output. */
+  const pullRefused = "Error response from daemon: network unreachable";
+
+  /**
+   * A fake `docker`: `images` maps an inspected reference to its `{{json .}}` output.
+   * `pull` decides Scan's pinned pull: it fails, rejects as a spawn error, or succeeds and
+   * makes the pinned image present.
+   */
   function dockerRunner(
     images: Readonly<Record<string, unknown>>,
     calls: string[][],
+    pull: "fails" | "rejects" | "succeeds" = "fails",
   ): BaselineProcessRunnerV1 {
+    const store: Record<string, unknown> = { ...images };
     return async (argv) => {
       calls.push([...argv]);
       if (argv[0] !== BASELINE_DOCKER_EXECUTABLE_V1) throw new Error(`unexpected ${argv[0]}`);
       if (argv.includes("version")) return okay("Docker version 28");
       if (argv.includes("inspect")) {
         const reference = argv[argv.indexOf("inspect") + 1] ?? "";
-        const image = images[reference];
+        const image = store[reference];
         return image === undefined ? absent : okay(JSON.stringify(image));
       }
-      if (argv.includes("pull")) throw new Error("no image may be pulled here");
+      if (argv.includes("pull")) {
+        if (argv.at(-1) !== SKILLSPECTOR_IMAGE_V1)
+          throw new Error(`only Scan's pinned image may be pulled: ${argv.join(" ")}`);
+        if (pull === "rejects") throw new Error("spawn /usr/bin/docker EAGAIN");
+        if (pull === "fails") return { code: 1, stdout: "", stderr: pullRefused, truncated: false };
+        store[SKILLSPECTOR_IMAGE_V1] = { Id: SKILLSPECTOR_IMAGE_DIGEST_V1, RepoDigests: [] };
+        return okay("pulled");
+      }
       if (argv.includes("run")) return okay(sarif);
       throw new Error(`unexpected argv: ${argv.join(" ")}`);
     };
@@ -322,6 +337,7 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
     calls
       .filter((argv) => argv.includes("inspect"))
       .map((argv) => argv[argv.indexOf("inspect") + 1]);
+  const pulls = (calls: readonly string[][]) => calls.filter((argv) => argv.includes("pull"));
 
   it("records Scan's pinned digest when the pinned image is present, and never consults the accepted list", async () => {
     mockHost("linux", "x64");
@@ -350,9 +366,42 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
       `${SKILLSPECTOR_SOURCE_REVISION_V1}@${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
     );
     expect(inspectedReferences(calls)).toEqual([SKILLSPECTOR_IMAGE_V1]);
+    expect(pulls(calls)).toEqual([]);
   });
 
-  it("runs the first present accepted image in the caller's order, by its local content address, and pulls nothing", async () => {
+  it("still acquires Scan's pinned image first when it is absent, and runs it without consulting the list", async () => {
+    mockHost("linux", "x64");
+    const calls: string[][] = [];
+
+    const result = await runDetectorV1(
+      skillspectorRequest({
+        acceptedImageDigests: [acceptedA],
+        runner: dockerRunner(
+          { [acceptedA]: { Id: acceptedA, RepoDigests: [] } },
+          calls,
+          "succeeds",
+        ),
+      }),
+    );
+
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome !== "succeeded") return;
+    if (result.evidence.kind !== "baseline-analyzer-observation-v1")
+      throw new Error("evidence kind");
+    expect(result.evidence.observation.image).toEqual({
+      digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+      reference: SKILLSPECTOR_IMAGE_DIGEST_V1,
+      acceptance: "scan-pinned",
+    });
+    expect(pulls(calls)).toEqual([
+      [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
+    ]);
+    // The pinned reference is inspected before and after the pull; the list never is.
+    expect(inspectedReferences(calls)).toEqual([SKILLSPECTOR_IMAGE_V1, SKILLSPECTOR_IMAGE_V1]);
+    expect(calls.find((argv) => argv.includes("run"))).not.toContain(acceptedA);
+  });
+
+  it("runs the first present accepted local image, by its content address, only after the pinned pull failed, and records why", async () => {
     mockHost("linux", "x64");
     const calls: string[][] = [];
 
@@ -371,19 +420,56 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
       digest: acceptedB,
       reference: acceptedB,
       acceptance: "caller-accepted",
+      pinnedPullFailure: pullRefused,
     });
     expect(result.evidence.observation.analyzerVersion).toBe(
       `${SKILLSPECTOR_SOURCE_REVISION_V1}@${acceptedB}`,
     );
-    // Scan's own pinned reference is always consulted first.
+    // Scan's own pinned image is inspected and pulled first; only then is the list consulted.
     expect(inspectedReferences(calls)).toEqual([SKILLSPECTOR_IMAGE_V1, acceptedA, acceptedB]);
-    expect(calls.some((argv) => argv.includes("pull"))).toBe(false);
+    expect(pulls(calls)).toEqual([
+      [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
+    ]);
+    const pullIndex = calls.findIndex((argv) => argv.includes("pull"));
+    const firstAcceptedInspect = calls.findIndex((argv) => argv.includes(acceptedA));
+    expect(pullIndex).toBeLessThan(firstAcceptedInspect);
     const run = calls.find((argv) => argv.includes("run"));
     expect(run).toContain(acceptedB);
     expect(run).not.toContain(SKILLSPECTOR_IMAGE_V1);
   });
 
-  it("matches an accepted repository digest but runs the inspected local image ID, so nothing can be pulled", async () => {
+  it("treats a pinned pull that could not even be spawned as a failed acquisition too", async () => {
+    mockHost("linux", "x64");
+    const calls: string[][] = [];
+
+    const result = await runDetectorV1(
+      skillspectorRequest({
+        acceptedImageDigests: [acceptedA],
+        runner: dockerRunner({ [acceptedA]: { Id: acceptedA, RepoDigests: [] } }, calls, "rejects"),
+      }),
+    );
+
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome !== "succeeded") return;
+    if (result.evidence.kind !== "baseline-analyzer-observation-v1")
+      throw new Error("evidence kind");
+    expect(result.evidence.observation.image?.acceptance).toBe("caller-accepted");
+    expect(result.evidence.observation.image?.pinnedPullFailure).toContain("EAGAIN");
+  });
+
+  it("keeps a failed pinned pull an acquisition failure when no accepted digests are named", async () => {
+    mockHost("linux", "x64");
+    const calls: string[][] = [];
+
+    const result = await runDetectorV1(skillspectorRequest({ runner: dockerRunner({}, calls) }));
+
+    expect(result.outcome).toBe("failed");
+    if (result.outcome !== "failed") return;
+    expect(result.failure.stage).toBe("acquisition");
+    expect(result.failure.detail).toContain(pullRefused);
+  });
+
+  it("matches an accepted repository digest but runs the inspected local image ID, so nothing more can be pulled", async () => {
     mockHost("linux", "x64");
     const calls: string[][] = [];
     const localId = `sha256:${"c".repeat(64)}`;
@@ -411,11 +497,12 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
       digest: acceptedA,
       reference: localId,
       acceptance: "caller-accepted",
+      pinnedPullFailure: pullRefused,
     });
     expect(calls.find((argv) => argv.includes("run"))).toContain(localId);
   });
 
-  it("fails at availability, pulling nothing, when no present image matches any accepted digest", async () => {
+  it("fails at availability when the pinned pull failed and no local image matches any accepted digest", async () => {
     mockHost("linux", "x64");
     const calls: string[][] = [];
 
@@ -432,8 +519,9 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
     expect(result.failure.detail).toContain("SkillSpector image availability");
     expect(result.failure.detail).toContain(SKILLSPECTOR_IMAGE_DIGEST_V1);
     expect(result.failure.detail).toContain("2 caller-accepted digests");
-    expect(result.failure.detail).toContain("pulls nothing");
-    expect(calls.some((argv) => argv.includes("pull") || argv.includes("run"))).toBe(false);
+    expect(result.failure.detail).toContain(pullRefused);
+    expect(pulls(calls)).toHaveLength(1);
+    expect(calls.some((argv) => argv.includes("run"))).toBe(false);
   });
 
   it("never lets an accepted digest excuse a pinned reference that resolves to another image", async () => {

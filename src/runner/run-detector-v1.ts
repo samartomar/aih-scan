@@ -145,8 +145,8 @@ export interface RunDetectorV1Request {
   ) => DetectorPrerequisiteStateV1["state"];
   /**
    * `docker-hardened-skillspector-v1` only: image digests (`sha256:` + 64 lowercase hex)
-   * the caller also accepts, consulted in this order and only when Scan's own pinned
-   * image is absent. It never relaxes the pinned check, and with it Scan pulls nothing.
+   * the caller also accepts, consulted in order against local images only after Scan's own
+   * pinned pull has failed. It never replaces Scan's acquisition nor relaxes its check.
    */
   readonly acceptedImageDigests?: readonly string[];
   /** Material only the OCI capture profile needs; its absence refuses that profile. */

@@ -443,7 +443,14 @@ export type SkillspectorImageMatchV1 = Readonly<{
   digest: string;
   /** The exact image reference passed to `docker run`. */
   reference: string;
+  /**
+   * `scan-pinned`: Scan's pinned image, present or acquired by Scan's own pull.
+   * `caller-accepted`: that pull was attempted and failed, so a local image carrying one
+   * of the caller's accepted digests ran instead.
+   */
   acceptance: "scan-pinned" | "caller-accepted";
+  /** Only with `caller-accepted`: why Scan's own pinned pull did not yield its image. */
+  pinnedPullFailure?: string;
 }>;
 
 function parseVerifiedSkillspectorImage(stdout: string): string {
@@ -519,52 +526,64 @@ async function skillspector(
       ),
       "Docker availability",
     );
+    // (a) Scan's pinned image present: run it. (b) Absent: attempt Scan's own pinned pull,
+    // exactly as when no list is supplied. (c) Only if the pinned image is still absent
+    // after that attempt are the caller's accepted digests consulted, in order, against
+    // local images alone; the first present runs by image ID and nothing more is pulled.
+    // (d) None present: the run fails at availability.
     let inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
     let accepted: SkillspectorImageMatchV1 | undefined;
-    if ((inspected.truncated || inspected.code !== 0) && acceptedImageDigests !== undefined) {
-      // Scan's pinned image is absent. Consult the caller's accepted digests in order and
-      // run the first one present; with a list supplied Scan acquires nothing at all.
-      for (const digest of acceptedImageDigests) {
-        const candidate = await inspect(digest);
-        if (candidate.truncated || candidate.code !== 0) continue;
-        accepted = Object.freeze({
-          digest,
-          reference: verifiedAcceptedSkillspectorImage(candidate.stdout, digest),
-          acceptance:
-            digest === SKILLSPECTOR_IMAGE_DIGEST_V1
-              ? ("scan-pinned" as const)
-              : ("caller-accepted" as const),
-        });
-        break;
-      }
-      if (accepted === undefined)
-        fail(
-          `SkillSpector image availability: no local image matches Scan's pinned digest ${SKILLSPECTOR_IMAGE_DIGEST_V1} or any of the ${acceptedImageDigests.length} caller-accepted digests, and Scan pulls nothing when acceptedImageDigests is supplied`,
-        );
-    } else if (inspected.truncated || inspected.code !== 0) {
-      requireCleanResult(
-        await runner(
+    if (inspected.truncated || inspected.code !== 0) {
+      const pull = () =>
+        runner(
           [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
           runnerOptions(dockerEnvironment, scanTimeoutMs),
-        ),
-        "SkillSpector image acquisition",
-      );
-      inspected = requireCleanResult(
-        await runner(
-          [
-            BASELINE_DOCKER_EXECUTABLE_V1,
-            "--context",
-            "default",
-            "image",
-            "inspect",
-            SKILLSPECTOR_IMAGE_V1,
-            "--format",
-            "{{json .}}",
-          ],
-          runnerOptions(dockerEnvironment, startupTimeoutMs),
-        ),
-        "SkillSpector image inspection",
-      );
+        );
+      if (acceptedImageDigests === undefined) {
+        requireCleanResult(await pull(), "SkillSpector image acquisition");
+        inspected = requireCleanResult(
+          await inspect(SKILLSPECTOR_IMAGE_V1),
+          "SkillSpector image inspection",
+        );
+      } else {
+        let pinnedPullFailure: string | undefined;
+        try {
+          const pulled = await pull();
+          if (pulled.truncated || pulled.code !== 0)
+            pinnedPullFailure =
+              boundedDiagnosticDetailV1(pulled.stderr || pulled.stdout) ||
+              `exit ${pulled.code}${pulled.truncated ? " with truncated output" : ""}`;
+        } catch (error) {
+          pinnedPullFailure =
+            boundedDiagnosticDetailV1(error instanceof Error ? error.message : "") ||
+            "the pull could not be run";
+        }
+        if (pinnedPullFailure === undefined) {
+          inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
+          if (inspected.truncated || inspected.code !== 0)
+            pinnedPullFailure = `the pull succeeded but the pinned image is still absent: ${
+              boundedDiagnosticDetailV1(inspected.stderr || inspected.stdout) ||
+              `exit ${inspected.code}`
+            }`;
+        }
+        if (pinnedPullFailure !== undefined) {
+          for (const digest of acceptedImageDigests) {
+            const candidate = await inspect(digest);
+            if (candidate.truncated || candidate.code !== 0) continue;
+            accepted = Object.freeze({
+              digest,
+              reference: verifiedAcceptedSkillspectorImage(candidate.stdout, digest),
+              acceptance: "caller-accepted" as const,
+              pinnedPullFailure,
+            });
+            break;
+          }
+          if (accepted === undefined)
+            fail(
+              `SkillSpector image availability: Scan's pinned image ${SKILLSPECTOR_IMAGE_DIGEST_V1} could not be acquired and no local image matches any of the ${acceptedImageDigests.length} caller-accepted digests; pinned pull failed: ${pinnedPullFailure}`,
+            );
+        }
+      }
     }
     const match: SkillspectorImageMatchV1 =
       accepted ??
@@ -846,8 +865,8 @@ export function createBaselineAnalyzerRunV1(
     readonly runner?: BaselineProcessRunnerV1;
     readonly env?: Readonly<NodeJS.ProcessEnv>;
     /**
-     * Image digests the caller also accepts for SkillSpector, consulted in order only when
-     * Scan's pinned image is absent. Supplying it means Scan pulls nothing.
+     * Image digests the caller also accepts for SkillSpector, consulted in order against
+     * local images only when Scan's own pinned pull has failed. They are never pulled.
      */
     readonly skillspectorAcceptedImageDigests?: readonly string[];
   } = {},
