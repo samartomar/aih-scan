@@ -1,0 +1,131 @@
+name: Installed Semgrep parity (Linux)
+
+# Evidence lane for WO-CROSS-REPO-CLEANUP Step 2 / deletion-ledger row B2b: Core's legacy
+# Semgrep execution versus Scan's `detector.semgrep` through the INSTALLED public
+# `runDetectorV1`, on identical fixtures, in a disposable consumer that installs only the
+# two packed tarballs. The CI smoke in ci.yml imports a private runtime module and is not
+# this proof. A green run here is evidence for ONE detector on ONE host class; it approves
+# no delegation, deletion, publication or promotion.
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: ai-harness git ref (full commit SHA) packed as the Core under test
+        required: false
+        default: 75e75f1dfd9cde6fa67422d7bbfa7e556134a81c
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/installed-semgrep-parity.yml
+      - tools/installed-semgrep-parity.mjs
+      - src/baseline/**
+      - src/runner/**
+      - src/capability/**
+      - tools/baseline-analyzers/semgrep/**
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CORE_REF: ${{ inputs.core_ref || '75e75f1dfd9cde6fa67422d7bbfa7e556134a81c' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: samartomar/ai-harness
+          ref: ${{ env.CORE_REF }}
+          path: .core-under-test
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      # Core's Semgrep project pins Python 3.12 (uv --python 3.12 --no-python-downloads);
+      # Scan's sandbox profile pins Python 3.13 under /usr/local. Both interpreters are needed.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - name: Prepare Scan's sandbox prerequisites (same steps as ci.yml)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
+          apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          test -r "$apparmor_profile"
+          sudo apparmor_parser --replace "$apparmor_profile"
+          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
+          case "$python_prefix" in
+            /usr|/usr/*)
+              echo "setup-python prefix unexpectedly visible through the sandbox /usr bind: $python_prefix" >&2
+              exit 1
+              ;;
+          esac
+          sudo cp -a "${python_prefix}/." /usr/local/
+          sudo install -m 0644 \
+            "${python_prefix}/lib/libpython3.13.so.1.0" \
+            /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
+          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
+          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
+      - name: Pack Scan from this checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          mkdir -p "$RUNNER_TEMP/packed"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
+          ls -l "$RUNNER_TEMP/packed"
+      - name: Pack Core from the pinned ref
+        shell: bash
+        working-directory: .core-under-test
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          npm ci --ignore-scripts
+          npm run build
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
+          ls -l "$RUNNER_TEMP/packed"
+      - name: Remove the Core checkout (only the packed tarball is used from here on)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$GITHUB_WORKSPACE/.core-under-test"
+          rm -rf -- "$GITHUB_WORKSPACE/.core-under-test"
+      - name: Installed Semgrep parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_tgz="$(ls "$RUNNER_TEMP"/packed/aihq-core-*.tgz)"
+          scan_tgz="$(ls "$RUNNER_TEMP"/packed/aihq-scan-*.tgz)"
+          sha256sum "$core_tgz" "$scan_tgz"
+          set +e
+          node tools/installed-semgrep-parity.mjs \
+            --core-tgz "$core_tgz" --scan-tgz "$scan_tgz" \
+            --work "$RUNNER_TEMP/parity" --out "$RUNNER_TEMP/parity-report.json" \
+            --uv /usr/local/bin/uv --python 3.12
+          status=$?
+          set -e
+          {
+            echo '## Installed Semgrep parity (Linux amd64)'
+            echo
+            echo "Core ref: \`$CORE_REF\`; exit status: $status"
+            echo
+            echo '```json'
+            node -e 'const r=require(process.argv[1]); console.log(JSON.stringify({inputs:r.inputs,checks:r.checks,passed:r.passed,positive:{coreKeys:r.positive.coreKeys,scanKeys:r.positive.scanKeys,scanSummary:r.positive.scan.summary},clean:{coreKeys:r.clean.coreKeys,scanKeys:r.clean.scanKeys},empty:r.empty.scan.summary,meaning:r.meaning},null,2))' "$RUNNER_TEMP/parity-report.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/parity-report.json"
+          exit "$status"
