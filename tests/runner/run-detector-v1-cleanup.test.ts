@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,12 +12,17 @@ import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
  */
 
 const failSnapshotRemoval = vi.hoisted(() => ({ on: false }));
+// The snapshot paths whose removal this test intercepted: only THOSE are cleaned up afterwards,
+// never other snapshots that concurrent work may be holding in the shared temporary directory.
+const interceptedSnapshots = vi.hoisted(() => [] as string[]);
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const rmSyncMocked: typeof actual.rmSync = (path, options) => {
-    if (failSnapshotRemoval.on && String(path).includes("aih-scan-baseline-source-"))
+    if (failSnapshotRemoval.on && String(path).includes("aih-scan-baseline-source-")) {
+      interceptedSnapshots.push(String(path));
       throw new Error("EBUSY: snapshot directory is held open");
+    }
     actual.rmSync(path, options);
   };
   return { ...actual, rmSync: rmSyncMocked, default: { ...actual, rmSync: rmSyncMocked } };
@@ -40,15 +45,9 @@ function sourceFixture(): string {
   return root;
 }
 
-function snapshotDirectories(): Set<string> {
-  return new Set(
-    readdirSync(tmpdir()).filter((name) => name.startsWith("aih-scan-baseline-source-")),
-  );
-}
 
 describe("runDetectorV1 snapshot cleanup", () => {
   it("resolves to a cleanup failure, not a rejection or a refusal, when the snapshot cannot be removed", async () => {
-    const before = snapshotDirectories();
     failSnapshotRemoval.on = true;
 
     const settled = await runDetectorV1({
@@ -63,8 +62,8 @@ describe("runDetectorV1 snapshot cleanup", () => {
       (error: unknown) => ({ resolved: false as const, error }),
     );
     failSnapshotRemoval.on = false;
-    for (const name of snapshotDirectories())
-      if (!before.has(name)) temporaryDirectories.push(join(tmpdir(), name));
+    expect(interceptedSnapshots.length).toBeGreaterThan(0);
+    temporaryDirectories.push(...interceptedSnapshots.splice(0));
 
     expect(settled.resolved).toBe(true);
     if (!settled.resolved) return;
