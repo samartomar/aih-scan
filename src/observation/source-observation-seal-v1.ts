@@ -4,7 +4,6 @@ import {
   constants,
   fstatSync,
   lstatSync,
-  opendirSync,
   openSync,
   readSync,
   realpathSync,
@@ -18,6 +17,7 @@ import {
   codeUnitCompare,
   deepFreezeStrictJsonV1,
 } from "../contract/strict-json-v1.js";
+import { readSourceEntryNamesV1 } from "./source-entry-name-v1.js";
 
 /**
  * The source seal a `runDetectorV1` observation run takes before and after the analyzer
@@ -119,18 +119,12 @@ function readStable(path: string, expected: Stats, maxFileBytes: number, budget:
   }
 }
 
-function sortedNames(directory: string, remaining: number): string[] {
-  const handle = opendirSync(directory);
-  try {
-    const names: string[] = [];
-    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
-      if (names.length >= remaining) fail("source entry bound");
-      names.push(entry.name);
-    }
-    return names.sort(codeUnitCompare);
-  } finally {
-    handle.closeSync();
-  }
+/** S2h: a name the source-relative form cannot carry is refused before the seal exists. */
+function sortedNames(directory: string, parent: string, remaining: number): string[] {
+  return readSourceEntryNamesV1(directory, parent, {
+    maximum: remaining,
+    onBound: () => fail("source entry bound"),
+  }).sort(codeUnitCompare);
 }
 
 export type SealSourceObservationInputV1 = Readonly<{
@@ -168,7 +162,11 @@ export function sealSourceObservationV1(
 
   const visit = (directory: string): void => {
     const before = lstatSync(directory);
-    for (const name of sortedNames(directory, maxEntries - budget.entries)) {
+    for (const name of sortedNames(
+      directory,
+      posix(root, directory),
+      maxEntries - budget.entries,
+    )) {
       const absolute = resolve(directory, name);
       const path = posix(root, absolute);
       assertSafeRelativePosixPathV1(path, "source entry path");

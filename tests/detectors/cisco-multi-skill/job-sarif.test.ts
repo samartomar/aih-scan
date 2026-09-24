@@ -63,7 +63,10 @@ function runner(perJob: (name: string) => unknown, delays?: Record<string, numbe
     const name = target.split("/").at(-1) ?? "";
     await new Promise((resolve) => setTimeout(resolve, delays?.[name] ?? 0));
     const body = perJob(name);
-    writeFileSync(output, typeof body === "string" ? body : JSON.stringify(body), "utf8");
+    writeFileSync(
+      output,
+      typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
+    );
     return { code: 0, stdout: "", stderr: "" };
   };
   return run;
@@ -203,6 +206,79 @@ describe.each(BOTH)("Cisco job SARIF completion evidence (%s)", (_label, execute
     const outcome = await execute(runner(() => sarif([cleanRun([result("SKILL.md")])])));
     expect(outcome.kind).toBe("completed");
   });
+
+  // S2h (review of S2g): JSON.parse kept the last of two keys, so a failed invocation and a
+  // forged completion key could both be hidden behind a later duplicate.
+  const clean = JSON.stringify({ tool: DRIVER, results: [] });
+  it("fails a job whose invocation repeats executionSuccessful (reviewer reproduction)", async () => {
+    await failsWith(
+      `{"version":"2.1.0","runs":[${clean.slice(0, -1)},"invocations":[{"executionSuccessful":false,"executionSuccessful":true}]}]}`,
+      "output",
+      /duplicate JSON object key/,
+    );
+  });
+
+  it("fails a job whose invocation repeats properties to erase a forgery (reviewer reproduction)", async () => {
+    await failsWith(
+      `{"version":"2.1.0","runs":[${clean.slice(0, -1)},"invocations":[{"executionSuccessful":true,"properties":{"aihScanCompletionV1":{}},"properties":{}}]}]}`,
+      "output",
+      /duplicate JSON object key/,
+    );
+  });
+
+  // The shard attaches completion evidence itself; the source-tree scan leaves it to
+  // runDetectorV1, which uses the same attachScanCompletionV1.
+  it.runIf(_label === "shard")(
+    "fails a job whose invocation carries properties: null (reviewer reproduction)",
+    async () => {
+      await failsWith(
+        sarif([
+          {
+            tool: DRIVER,
+            results: [],
+            invocations: [{ executionSuccessful: true, properties: null }],
+          },
+        ]),
+        "output",
+        /properties that are not an object/,
+      );
+    },
+  );
+
+  it("fails a job whose SARIF repeats a key anywhere, or is not one strict JSON text", async () => {
+    const body = JSON.stringify(sarif([cleanRun()]));
+    await failsWith(`{"version":"2.1.0",${body.slice(1)}`, "output", /duplicate JSON object key/);
+    await failsWith(
+      body.replace('"results":[]', '"results":[],"results":[]'),
+      "output",
+      /duplicate/,
+    );
+    await failsWith(`${String.fromCharCode(0xfeff)}${body}`, "output", /invalid JSON/);
+    await failsWith(`${body}{}`, "output", /invalid JSON/);
+    await failsWith(`${body} trailing`, "output", /invalid JSON/);
+    // An invalid byte inside a string would have been repaired to U+FFFD and accepted.
+    const [head, tail] = body.split('"skill-scanner"');
+    await failsWith(
+      Buffer.concat([
+        Buffer.from(`${head}"skill-scanner`),
+        Buffer.from([0xff]),
+        Buffer.from(`"${tail}`),
+      ]),
+      "output",
+      /UTF-8/,
+    );
+  });
+
+  // S2i (review of S2h): a lossy number fails in every spelling, not only as a bare integer.
+  it("fails a job whose SARIF holds a number no double carries, however it is spelled", async () => {
+    const located = (line: string) =>
+      JSON.stringify(sarif([cleanRun([result("SKILL.md")])])).replace(
+        '"physicalLocation":{',
+        `"physicalLocation":{"region":{"startLine":${line}},`,
+      );
+    for (const line of ["9007199254740993", "9007199254740993e0", "9007199254740993.0", "-0"])
+      await failsWith(located(line), "output", /invalid JSON/);
+  });
 });
 
 describe.each(BOTH)("Cisco job uriBaseId resolution (%s)", (_label, execute) => {
@@ -305,5 +381,72 @@ describe.each(BOTH)("Cisco job uriBaseId resolution (%s)", (_label, execute) => 
       uri: "skills/alpha/SKILL.md",
       uriBaseId: "%SRCROOT%",
     });
+  });
+});
+
+// S2i (review of S2h): a result's `analysisTarget` is an artifact location. It is
+// normalized exactly like every other one (base resolution, job prefix, index kept for
+// the shard's resolution through the normalized run artifacts) before anything binds it.
+describe.each(BOTH)("Cisco job analysisTarget normalization (%s)", (label, execute) => {
+  const outcomeOf = (analysisTarget: unknown, run: Record<string, unknown> = {}) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([{ ...cleanRun([{ ...result("SKILL.md"), analysisTarget }]), ...run }])
+          : sarif([cleanRun()]),
+      ),
+    );
+  const targetOf = async (analysisTarget: unknown, run: Record<string, unknown> = {}) => {
+    const outcome = await outcomeOf(analysisTarget, run);
+    if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
+    const text =
+      "outputs" in outcome
+        ? Buffer.from(outcome.outputs[0]?.sarif ?? new Uint8Array()).toString("utf8")
+        : outcome.sarifText;
+    const log = JSON.parse(text) as { runs: { results: { analysisTarget?: unknown }[] }[] };
+    return log.runs[0]?.results[0]?.analysisTarget;
+  };
+  const rootBase = () => ({ ROOT: { uri: `${pathToFileURL(root).href}/` } });
+
+  it("prefixes a job-relative analysis target with the job directory (reviewer case)", async () => {
+    expect(await targetOf({ uri: "SKILL.md" })).toEqual({ uri: "skills/alpha/SKILL.md" });
+  });
+
+  it("relates a root-based analysis target to the root, not the job", async () => {
+    expect(
+      await targetOf(
+        { uri: "skills/alpha/SKILL.md", uriBaseId: "ROOT" },
+        { originalUriBaseIds: rootBase() },
+      ),
+    ).toEqual({ uri: "skills/alpha/SKILL.md" });
+  });
+
+  it("reads a root-relative spelling as job-relative (reviewer case)", async () => {
+    const outcome = await outcomeOf({ uri: "skills/alpha/SKILL.md" });
+    if (label === "shard") {
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+        /skills\/alpha\/skills\/alpha\/SKILL\.md/,
+      );
+    } else
+      expect(await targetOf({ uri: "skills/alpha/SKILL.md" })).toEqual({
+        uri: "skills/alpha/skills/alpha/SKILL.md",
+      });
+  });
+
+  it("fails an analysis target whose base is undeclared or outside the root", async () => {
+    for (const [analysisTarget, run] of [
+      [{ uri: "SKILL.md", uriBaseId: "NOPE" }, {}],
+      [{ index: 0, uriBaseId: "NOPE" }, {}],
+      [
+        { uri: "SKILL.md", uriBaseId: "OUT" },
+        { originalUriBaseIds: { OUT: { uri: "file:///outside/" } } },
+      ],
+      [{ uri: "../beta/SKILL.md" }, {}],
+    ] as const) {
+      const outcome = await outcomeOf(analysisTarget, run);
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/detector SARIF location/);
+    }
   });
 });

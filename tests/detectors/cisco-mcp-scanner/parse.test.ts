@@ -41,6 +41,7 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
       version: "2.1.0",
       runs: [
         {
+          tool: { driver: { name: "mcp-scanner", version: "4.8.4" } },
           results: [
             {
               ruleId: "tool-poisoning",
@@ -119,7 +120,10 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
       submitted([".mcp.json:local", ".mcp.json"]),
     );
 
-    expect(sarif).toEqual({ version: "2.1.0", runs: [{ results: [] }] });
+    expect(sarif).toEqual({
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.4" } }, results: [] }],
+    });
   });
 
   // S2f deviation from Core: Core named a positive total without threat names after its
@@ -215,6 +219,48 @@ describe("parseCiscoMcpScannerSarifV1 fail-closed rules (parity: Core ~4333 and 
     expect(() =>
       parseCiscoMcpScannerSarifV1("not json {", submitted([".mcp.json:local", ".mcp.json"])),
     ).toThrow("mcp-scanner did not emit parseable JSON");
+  });
+
+  it("parses stdout with the one strict JSON parser (S2h)", () => {
+    const clean = JSON.stringify([
+      {
+        status: "completed",
+        is_safe: true,
+        findings: {
+          yara_analyzer: {
+            severity: "SAFE",
+            threat_names: [],
+            threat_summary: "No threats detected",
+            total_findings: 0,
+          },
+        },
+        tool_name: ".mcp.json:local",
+        tool_description: "local fixture",
+        item_type: "tool",
+      },
+    ]);
+    const tools = () => submitted([".mcp.json:local", ".mcp.json"]);
+    expect(parseCiscoMcpScannerSarifV1(clean, tools()).runs[0]?.results).toEqual([]);
+    expect(() =>
+      parseCiscoMcpScannerSarifV1(
+        clean.replace('"is_safe":true', '"is_safe":false,"is_safe":true'),
+        tools(),
+      ),
+    ).toThrow("duplicate JSON object key");
+    for (const raw of [
+      `${String.fromCharCode(0xfeff)}${clean}`,
+      `${clean}[]`,
+      `${clean} x`,
+      clean.replace('"total_findings":0', '"total_findings":9007199254740993'),
+      clean.replace('"total_findings":0', '"total_findings":1e999'),
+      clean.replace(
+        '"tool_description":"local fixture"',
+        `"tool_description":"a${String.fromCharCode(1)}"`,
+      ),
+    ])
+      expect(() => parseCiscoMcpScannerSarifV1(raw, tools()), raw).toThrow(
+        "mcp-scanner did not emit parseable JSON",
+      );
   });
 
   it("rejects a non-array JSON root", () => {
@@ -473,7 +519,10 @@ describe("parseCiscoMcpScannerSarifV1 validates every summary before a zero tota
         },
         true,
       )(),
-    ).toEqual({ version: "2.1.0", runs: [{ results: [] }] });
+    ).toEqual({
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.4" } }, results: [] }],
+    });
     expect(
       parse({ severity: "HIGH", threat_names: ["PROMPT INJECTION"], total_findings: 3 }, false)()
         .runs[0]?.results,

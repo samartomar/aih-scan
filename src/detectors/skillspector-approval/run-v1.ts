@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
+import { deepFreezeStrictJsonV1, parseStrictJsonV1 } from "../../contract/strict-json-v1.js";
 import { assertSarifCompletedV1, SarifCompletionErrorV1 } from "../sarif-completion-v1.js";
 import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 import {
@@ -378,9 +378,10 @@ export async function runSkillspectorScanV1(
       scan.stderr.trim() || `detector exit ${exitLabel} emitted no SARIF`,
     );
   }
+  // S2h: the one strict parser; a repeated key or any other JSON.parse leniency is refused.
   let parsed: unknown;
   try {
-    parsed = JSON.parse(scan.stdout);
+    parsed = parseStrictJsonV1(scan.stdout, "SkillSpector SARIF", { requireNfc: false });
   } catch {
     parsed = undefined;
   }
@@ -421,7 +422,9 @@ export interface SkillspectorSarifLogV1 {
  */
 export function parseSkillspectorSarifLogV1(raw: string): SkillspectorSarifLogV1 | undefined {
   try {
-    const parsed = JSON.parse(raw) as { runs?: unknown };
+    const parsed = parseStrictJsonV1(raw, "SkillSpector SARIF", { requireNfc: false }) as {
+      runs?: unknown;
+    };
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
     if (!Array.isArray(parsed.runs)) return undefined;
     try {

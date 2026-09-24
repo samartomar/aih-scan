@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { isRegisteredHostExecutableV1 } from "./host-executable.js";
+import { processOutputV1 } from "./process-output.js";
 import { runUnderWindowsJobV1 } from "./windows-job-supervisor.js";
 
 const terminationGraceMs = 1_000;
@@ -50,6 +51,11 @@ export type ProcessRunnerResult = Readonly<{
   code: number;
   stdout: string;
   stderr: string;
+  /**
+   * S2h: present only when stdout was not well-formed UTF-8, so `stdout` holds a lossy
+   * decode. A consumer that reads stdout as analyzer output must refuse it.
+   */
+  stdoutMalformedUtf8?: true;
   truncated: boolean;
   /** Present only when the runner ended the tree itself. */
   termination?: ProcessTerminationV1;
@@ -126,8 +132,7 @@ export function spawnBoundedV1(
       settle({
         result: {
           code: truncated ? 1 : (code ?? 1),
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
+          ...processOutputV1(stdout, stderr),
           truncated,
           ...(termination === undefined ? {} : { termination }),
         },

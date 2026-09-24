@@ -1,12 +1,7 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Node as JsonNode, type ParseError, parse, parseTree } from "jsonc-parser";
-import {
-  assertStrictJsonValueV1,
-  assertWellFormedNfcV1,
-  deepFreezeStrictJsonV1,
-} from "../../contract/strict-json-v1.js";
+import { deepFreezeStrictJsonV1, parseStrictJsonV1 } from "../../contract/strict-json-v1.js";
 import {
   MAX_MCP_CONFIG_PATHS_V1,
   mcpConfigPathsProblemV1,
@@ -285,52 +280,38 @@ export interface CiscoMcpScannerSarifResultV1 {
   ];
 }
 
+/** S2h (D16): SARIF 2.1.0 requires `tool.driver` on every run Scan builds. */
+const CISCO_MCP_SCANNER_TOOL_V1 = {
+  driver: { name: "mcp-scanner", version: CISCO_MCP_SCANNER_VERSION_V1 },
+} as const;
+
 export interface CiscoMcpScannerSarifV1 {
   readonly version: "2.1.0";
-  readonly runs: readonly [Readonly<{ results: readonly CiscoMcpScannerSarifResultV1[] }>];
-}
-
-function duplicateKeys(node: JsonNode): void {
-  if (node.type === "object") {
-    const keys = new Set<string>();
-    for (const property of node.children ?? []) {
-      const key = property.children?.[0]?.value;
-      if (typeof key === "string") {
-        if (keys.has(key)) fail(`duplicate JSON object key: ${key}`);
-        keys.add(key);
-      }
-      const child = property.children?.[1];
-      if (child !== undefined) duplicateKeys(child);
-    }
-  } else if (node.type === "array") for (const child of node.children ?? []) duplicateKeys(child);
+  readonly runs: readonly [
+    Readonly<{
+      tool: typeof CISCO_MCP_SCANNER_TOOL_V1;
+      results: readonly CiscoMcpScannerSarifResultV1[];
+    }>,
+  ];
 }
 
 function parseScannerJson(text: string): unknown[] {
   if (Buffer.byteLength(text, "utf8") > MAX_STDOUT_BYTES)
     fail("mcp-scanner emitted output beyond the bounded size");
+  // S2h: the one strict parser (a repeated key at any depth, a BOM, trailing data and every
+  // other leniency of JSON.parse are refused).
+  let parsed: unknown;
   try {
-    assertWellFormedNfcV1(text, "mcp-scanner JSON text");
-  } catch {
-    fail("mcp-scanner did not emit parseable JSON");
+    parsed = parseStrictJsonV1(text, "mcp-scanner JSON");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    fail(
+      message.includes("duplicate JSON object key")
+        ? message
+        : "mcp-scanner did not emit parseable JSON",
+    );
   }
-  const options = { allowTrailingComma: false, disallowComments: true } as const;
-  const errors: ParseError[] = [];
-  const tree = parseTree(text, errors, options);
-  if (errors.length > 0 || tree === undefined || tree.type !== "array") {
-    if (tree !== undefined && errors.length === 0 && tree.type !== "array")
-      fail("mcp-scanner JSON did not include a result array");
-    fail("mcp-scanner did not emit parseable JSON");
-  }
-  duplicateKeys(tree);
-  const parseErrors: ParseError[] = [];
-  const parsed: unknown = parse(text, parseErrors, options);
-  if (parseErrors.length > 0 || !Array.isArray(parsed))
-    fail("mcp-scanner did not emit parseable JSON");
-  try {
-    assertStrictJsonValueV1(parsed, "mcp-scanner JSON");
-  } catch {
-    fail("mcp-scanner did not emit parseable JSON");
-  }
+  if (!Array.isArray(parsed)) fail("mcp-scanner JSON did not include a result array");
   return parsed;
 }
 
@@ -459,7 +440,10 @@ export function parseCiscoMcpScannerSarifV1(
       fail("mcp-scanner marked a result unsafe without reporting a finding");
   }
 
-  return deepFreezeStrictJsonV1({ version: "2.1.0" as const, runs: [{ results }] });
+  return deepFreezeStrictJsonV1({
+    version: "2.1.0" as const,
+    runs: [{ tool: CISCO_MCP_SCANNER_TOOL_V1, results }],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +453,8 @@ export function parseCiscoMcpScannerSarifV1(
 /** Result of one spawned process, supplied by the runtime's runner. */
 export interface CiscoMcpScannerRunResultV1 {
   readonly stdout: string;
+  /** S2h: stdout was not well-formed UTF-8, so `stdout` is a lossy decode; it is refused. */
+  readonly stdoutMalformedUtf8?: true;
   readonly stderr: string;
   /** Process exit code; `null` when terminated by a signal. */
   readonly exitCode: number | null;
@@ -548,6 +534,12 @@ export async function runCiscoMcpScannerPlanV1(
   }
   if (result.stdout.trim().length === 0)
     return { status: "failed", kind: "empty-output", detail: "mcp-scanner emitted no JSON" };
+  if (result.stdoutMalformedUtf8 === true)
+    return {
+      status: "failed",
+      kind: "invalid-output",
+      detail: "mcp-scanner stdout is not well-formed UTF-8",
+    };
   try {
     return {
       status: "completed",

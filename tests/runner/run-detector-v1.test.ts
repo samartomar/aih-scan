@@ -395,6 +395,22 @@ describe("runDetectorV1 in-process execution", () => {
     expect(result.coverage.complete).toBe(false);
   });
 
+  it("reports a worktree-style top-level .git file as uncovered, as the snapshot leaves it out (S2h)", async () => {
+    const sourceRoot = sourceFixture();
+    writeFileSync(join(sourceRoot, ".git"), "gitdir: ../x\n", "utf8");
+
+    const result = await runDetectorV1({
+      detectorId: "detector.aih-native",
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: ["README.md"] },
+    });
+
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome !== "succeeded") return;
+    expect(result.coverage.coveredPaths).toEqual(["README.md", "rules/base.md"]);
+    expect(result.coverage.uncoveredPaths).toEqual([".git"]);
+    expect(result.coverage.complete).toBe(false);
+  });
+
   it("preserves the caller's exact selection whatever order it is declared in", async () => {
     const sourceRoot = sourceFixture();
     const ordered = await runDetectorV1({

@@ -81,6 +81,27 @@ describe("dockerRunner", () => {
     child.emit("close", 0);
   });
 
+  it("flags stdout that is not well-formed UTF-8 instead of handing back a silent repair (S2h)", async () => {
+    for (const [bytes, flagged] of [
+      [Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]), true],
+      [Buffer.from([0x22, 0xed, 0xa0, 0x80, 0x22]), true],
+      [Buffer.from('{"é":1}', "utf8"), false],
+    ] as const) {
+      const child = new FakeChild();
+      spawnMock.mockReturnValue(child);
+      const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], {
+        ...options,
+        timeoutMs: 10_000,
+      });
+      child.stdout.write(bytes);
+      await new Promise((resolve) => setImmediate(resolve));
+      child.emit("close", 0);
+      const result = (await completed) as { stdoutMalformedUtf8?: true };
+      expect(result.stdoutMalformedUtf8 === true).toBe(flagged);
+      if (!flagged) expect(result).not.toHaveProperty("stdoutMalformedUtf8");
+    }
+  });
+
   it("settles with a truncated result when timeout termination cannot be requested", async () => {
     vi.useFakeTimers();
     const child = new FakeChild();

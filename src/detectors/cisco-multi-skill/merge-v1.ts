@@ -1,6 +1,10 @@
 import { relative } from "node:path";
 import { rewriteSarifRunLocationsV1 } from "../../baseline/sarif-source-relative-v1.js";
-import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
+import {
+  decodeStrictUtf8V1,
+  deepFreezeStrictJsonV1,
+  parseStrictJsonObjectV1,
+} from "../../contract/strict-json-v1.js";
 import { assertSarifCompletedV1, SarifCompletionErrorV1 } from "../sarif-completion-v1.js";
 import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 
@@ -82,17 +86,31 @@ const INVALID_SARIF = "detector did not emit valid SARIF";
 /**
  * The completion evidence one skill-scanner job must carry (S2e, the owner principle; the
  * shared {@link assertSarifCompletedV1}): the analyzer's own SARIF proves the job ran to
- * completion, or the job fails. An unparseable or oversized file is an `output` failure
- * with Core's "did not emit valid SARIF".
+ * completion, or the job fails. An oversized file, bytes that are not well-formed UTF-8, or a
+ * text that is not one strict JSON value ({@link parseStrictJsonObjectV1}: a repeated key at
+ * any depth, a BOM or trailing data among others, S2h) is an `output` failure with Core's
+ * "did not emit valid SARIF" and the reason. Names need not be NFC here, as the job's sealed
+ * inventory does not require it.
  */
-function validatedCiscoJobSarifV1(raw: string): Record<string, unknown> & { runs: unknown[] } {
-  if (Buffer.byteLength(raw, "utf8") > MAX_CISCO_SARIF_BYTES_V1)
+function validatedCiscoJobSarifV1(
+  bytes: Uint8Array,
+): Record<string, unknown> & { runs: unknown[] } {
+  if (bytes.byteLength > MAX_CISCO_SARIF_BYTES_V1)
     throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
+    parsed = parseStrictJsonObjectV1(
+      decodeStrictUtf8V1(bytes, "detector SARIF"),
+      "detector SARIF",
+      {
+        requireNfc: false,
+      },
+    );
+  } catch (error) {
+    throw new CiscoJobSarifProblemV1(
+      "output",
+      `${INVALID_SARIF}: ${error instanceof Error ? error.message : "JSON"}`,
+    );
   }
   try {
     assertSarifCompletedV1(parsed);
@@ -150,13 +168,13 @@ export function prefixSafeCiscoUriV1(prefix: string, raw: unknown, directory = f
  * source-tree scan and the shard both take each job's SARIF through here.
  */
 export function ciscoJobSarifV1(
-  sarifText: string,
+  sarifBytes: Uint8Array,
   root: string,
   skillRoot: string,
 ): CiscoJobSarifV1 {
   let parsed: Record<string, unknown> & { runs: unknown[] };
   try {
-    parsed = validatedCiscoJobSarifV1(sarifText);
+    parsed = validatedCiscoJobSarifV1(sarifBytes);
   } catch (error) {
     if (error instanceof CiscoJobSarifProblemV1)
       return Object.freeze({ ok: false as const, stage: error.stage, detail: error.message });

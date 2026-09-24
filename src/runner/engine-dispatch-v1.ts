@@ -328,6 +328,7 @@ export async function runEngineDetectorV1(input: EngineRunInputV1): Promise<Engi
           const result = await run(argv, options);
           return {
             stdout: result.stdout,
+            ...(result.stdoutMalformedUtf8 === true ? { stdoutMalformedUtf8: true as const } : {}),
             stderr: result.stderr,
             exitCode: result.code,
             ...(result.spawnError === true ? { spawnError: true } : {}),

@@ -161,10 +161,10 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 172,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 145, contains: "RunDetectorRefusalReasonV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 146, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/observation/source-observation-seal-v1.ts",
-    line: 144,
+    line: 138,
     contains: "export function sealSourceObservationV1",
   },
   {
@@ -174,7 +174,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 241,
+    line: 242,
     contains: "readonly detectorOptions?: DetectorOptionsV1",
   },
   {
@@ -184,12 +184,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1371,
+    line: 1372,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1330,
+    line: 1331,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
@@ -204,70 +204,70 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 168,
+    line: 169,
     contains: "export type RunDetectorFailureCauseV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 170, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 171, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 787,
+    line: 788,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 290,
+    line: 291,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 266,
+    line: 267,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 206,
+    line: 207,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 208,
+    line: 209,
     contains: "readonly hostRuntime?: HostProcessRuntimeV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 243, contains: "readonly signal?: AbortSignal" },
-  { path: "src/runner/run-detector-v1.ts", line: 248, contains: "readonly timeoutMs?: number" },
+  { path: "src/runner/run-detector-v1.ts", line: 244, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 249, contains: "readonly timeoutMs?: number" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 339,
+    line: 340,
     contains: "      sourceSeal:",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 52,
+    line: 54,
     contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 729,
+    line: 740,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 218,
+    line: 220,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 307,
+    line: 312,
     contains: "export function sourceRelativeSarifV1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 454,
+    line: 459,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {
     path: "src/cli/windows-job-supervisor.ts",
-    line: 559,
+    line: 560,
     contains: "export function runUnderWindowsJobV1",
   },
   {
@@ -287,7 +287,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/detectors/completion-evidence-v1.ts",
-    line: 178,
+    line: 183,
     contains: "export function attachScanCompletionV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },

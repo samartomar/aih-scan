@@ -241,9 +241,9 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         detail: boundedCiscoDetailV1(reason),
       });
     }
-    let raw: string;
+    let raw: Buffer;
     try {
-      raw = readFileSync(output, "utf8");
+      raw = readFileSync(output);
     } catch {
       return Object.freeze({
         kind: "failed" as const,

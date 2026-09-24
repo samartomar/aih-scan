@@ -451,7 +451,9 @@ describe("run outcomes", () => {
     expect(outcome.kind).toBe("completed");
     if (outcome.kind !== "completed") return;
     expect(outcome.sarif.runs[0]?.results).toEqual([]);
-    expect(outcome.sarifText).toBe('{"version":"2.1.0","runs":[{"results":[]}]}');
+    expect(outcome.sarifText).toBe(
+      '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"snyk-agent-scan","version":"0.6.4"}},"results":[]}]}',
+    );
   });
 
   // Ported from Core tests/trust/scan.test.ts ~3894-3916; C2a §5.3 stages it `output`.
@@ -627,6 +629,42 @@ describe("parser report shapes and finding projection", () => {
     expect(() => parseSnykAgentScanSarifV1("42", root)).toThrow(
       "snyk-agent-scan JSON did not include a findings array",
     );
+  });
+
+  it("rejects anything but one strict JSON text: trailing members, a BOM, repeated keys (S2h)", () => {
+    const report = JSON.stringify({ issues: [{ id: "R1", title: "Found", file: "a.md" }] });
+    expect(parseSnykAgentScanSarifV1(report, root).runs[0]?.results).toHaveLength(1);
+    for (const raw of [
+      // The former {"report":…} wrapper read this as a sibling key, not trailing data.
+      `${report},"extra":1`,
+      `${report} ,"issues":[]`,
+      `${report}{}`,
+      `${String.fromCharCode(0xfeff)}${report}`,
+      report.replace('"issues":', '"issues":[],"issues":'),
+      report.replace('"id":"R1"', '"id":"R1","id":"R2"'),
+      `{"issues":[{"line":12345678901234567890}]}`,
+    ])
+      expect(() => parseSnykAgentScanSarifV1(raw, root), raw).toThrow(
+        /did not emit parseable JSON|invalid snyk-agent-scan JSON/,
+      );
+  });
+
+  it("fails stdout that was not well-formed UTF-8 at the output stage (S2h)", async () => {
+    const report = JSON.stringify({ issues: [{ id: "R1", title: "Found", file: "a.md" }] });
+    const { run } = fakeRunner((argv) => {
+      if (argv.includes("help")) return { code: 0, stdout: "snyk-agent-scan help\n", stderr: "" };
+      if (argv.includes("scan"))
+        return { code: 1, stdout: report, stdoutMalformedUtf8: true, stderr: "" };
+      return undefined;
+    });
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+    });
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/not well-formed UTF-8/);
   });
 
   it("rejects unparseable output with Core's message", () => {

@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/strict-json-v1.js";
+import { deepFreezeStrictJsonV1, parseStrictJsonV1 } from "../../contract/strict-json-v1.js";
 
 /**
  * The `snyk-agent-scan` detector engine (detector id `detector.snyk-agent-scan`), ported
@@ -75,6 +75,8 @@ export type SnykAgentScanPlatformV1 = "windows" | "darwin" | "linux";
 
 export interface SnykAgentScanProcessResultV1 {
   readonly stdout: string;
+  /** S2h: stdout was not well-formed UTF-8, so `stdout` is a lossy decode; it is refused. */
+  readonly stdoutMalformedUtf8?: true;
   readonly stderr: string;
   readonly code: number | null;
   readonly spawnError?: boolean;
@@ -105,9 +107,19 @@ export interface SnykAgentScanSarifResultV1 {
   ];
 }
 
+/** S2h (D16): SARIF 2.1.0 requires `tool.driver` on every run Scan builds. */
+const SNYK_AGENT_SCAN_TOOL_V1 = {
+  driver: { name: "snyk-agent-scan", version: SNYK_AGENT_SCAN_VERSION },
+} as const;
+
 export interface SnykAgentScanSarifV1 {
   readonly version: "2.1.0";
-  readonly runs: readonly [Readonly<{ results: readonly SnykAgentScanSarifResultV1[] }>];
+  readonly runs: readonly [
+    Readonly<{
+      tool: typeof SNYK_AGENT_SCAN_TOOL_V1;
+      results: readonly SnykAgentScanSarifResultV1[];
+    }>,
+  ];
 }
 
 /** C2a §5.3 failure stages: `execution` for spawn/exit shortfalls, `output` for stdout ones. */
@@ -878,9 +890,9 @@ function parseReportJson(raw: string): unknown {
   if (Buffer.byteLength(raw, "utf8") > MAX_OUTPUT_BYTES)
     throw new TypeError("snyk-agent-scan output exceeds the bounded size");
   try {
-    // The wrapper object lets the strict contract parser validate every root shape,
-    // including the top-level finding array, with duplicate keys rejected.
-    return parseStrictJsonObjectV1(`{"report":${raw}}`, "snyk-agent-scan").report;
+    // S2h: the one strict parser reads any root shape directly. The former `{"report":…}`
+    // wrapper let text after the report become a sibling key instead of trailing data.
+    return parseStrictJsonV1(raw, "snyk-agent-scan");
   } catch {
     throw new TypeError("snyk-agent-scan did not emit parseable JSON");
   }
@@ -897,7 +909,7 @@ export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentS
   if (isRecord(parsed) && Object.hasOwn(parsed, "scan_path_responses"))
     return deepFreezeStrictJsonV1({
       version: "2.1.0" as const,
-      runs: [{ results: scanResponseResults(parsed, tree) }],
+      runs: [{ tool: SNYK_AGENT_SCAN_TOOL_V1, results: scanResponseResults(parsed, tree) }],
     });
   const findings = snykFindingArray(parsed, tree);
   if (findings.length > MAX_FINDINGS)
@@ -918,7 +930,7 @@ export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentS
   });
   return deepFreezeStrictJsonV1({
     version: "2.1.0" as const,
-    runs: [{ results }],
+    runs: [{ tool: SNYK_AGENT_SCAN_TOOL_V1, results }],
   });
 }
 
@@ -992,7 +1004,10 @@ function redactSarif(sarif: SnykAgentScanSarifV1, token: string | undefined): Sn
       ],
     };
   });
-  return deepFreezeStrictJsonV1({ version: "2.1.0" as const, runs: [{ results }] });
+  return deepFreezeStrictJsonV1({
+    version: "2.1.0" as const,
+    runs: [{ tool: SNYK_AGENT_SCAN_TOOL_V1, results }],
+  });
 }
 
 /**
@@ -1065,6 +1080,12 @@ async function executeSnykAgentScanPlanV1(
       kind: "failed" as const,
       stage: "execution" as const,
       detail: processDetail("snyk-agent-scan exited outside {0, 1}", scan),
+    });
+  if (scan.stdoutMalformedUtf8 === true)
+    return Object.freeze({
+      kind: "failed" as const,
+      stage: "output" as const,
+      detail: processDetail("snyk-agent-scan stdout is not well-formed UTF-8", scan),
     });
   let sarif: SnykAgentScanSarifV1;
   try {

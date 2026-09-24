@@ -98,8 +98,12 @@ export function scanCompletionEvidenceV1(input: {
   });
 }
 
-/** Whether a root-relative path lies in the top-level `.git`, which a snapshot leaves out. */
-const inGitDirectory = (path: string) => path === ".git" || path.startsWith(".git/");
+/**
+ * Whether a root-relative path is the top-level `.git` or lies under it, which a snapshot
+ * leaves out whatever its kind (a worktree's `.git` is a file).
+ */
+export const inGitDirectoryV1 = (path: string): boolean =>
+  path === ".git" || path.startsWith(".git/");
 
 /**
  * The files an engine received, from the before-run seal's `file` and `file-link` entries
@@ -134,7 +138,7 @@ export function scanCompletionSubjectFilesV1(input: {
       break;
     case "cisco":
     case "snyk-agent-scan":
-      files = all.filter((file) => !inGitDirectory(file.path));
+      files = all.filter((file) => !inGitDirectoryV1(file.path));
       break;
     case "cisco-source-tree": {
       // C2a §3.1: a job is the directory of every selected SKILL.md, the root included.
@@ -147,7 +151,8 @@ export function scanCompletionSubjectFilesV1(input: {
       );
       files = all.filter(
         (file) =>
-          !inGitDirectory(file.path) && jobs.some((job) => job === "" || file.path.startsWith(job)),
+          !inGitDirectoryV1(file.path) &&
+          jobs.some((job) => job === "" || file.path.startsWith(job)),
       );
       break;
     }
@@ -212,7 +217,8 @@ export function attachScanCompletionV1(
     const first: unknown = invocations[0];
     if (!isRecord(first) || first.executionSuccessful !== true)
       return fail(`SARIF run ${index} does not report a successful first invocation`);
-    const properties = first.properties ?? {};
+    // S2h: only an absent `properties` is created; a present non-object (null included) fails.
+    const properties = first.properties === undefined ? {} : first.properties;
     if (!isRecord(properties))
       return fail(`SARIF run ${index} has invocation properties that are not an object`);
     first.properties = { ...properties, [SCAN_COMPLETION_PROPERTY_V1]: evidence };
