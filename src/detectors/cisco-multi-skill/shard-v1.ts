@@ -3,6 +3,7 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { bindCiscoSarifToSealedFilesV1 } from "../../baseline/cisco-sealed-case-binding-v1.js";
 import {
+  sarifArtifactLocationTargetV1,
   sarifDetachedArtifactLocationsV1,
   sarifResultArtifactLocationsV1,
 } from "../../baseline/sarif-source-relative-v1.js";
@@ -165,38 +166,6 @@ function locationArtifactV1(location: unknown): unknown {
 }
 
 /**
- * S2h (review of S2g): the file one `artifactLocation` names, or why it names none. A `uri`
- * names itself. An `index` must be a non-negative safe integer naming an object of
- * `run.artifacts` whose `location.uri` is a string (and whose own `location.index`, if present,
- * is that index); the artifact's URI is then the file. A `uri` given beside an `index` must
- * equal the artifact's URI. A location with neither names no file.
- */
-function artifactTargetV1(
-  artifactLocation: unknown,
-  artifacts: unknown,
-): Readonly<{ uri: string } | { problem: string }> {
-  if (!isRecordV1(artifactLocation)) return { problem: "an artifact location is not an object" };
-  const { uri, index } = artifactLocation;
-  if (uri !== undefined && typeof uri !== "string")
-    return { problem: "an artifact location URI is not a string" };
-  if (index === undefined)
-    return typeof uri === "string" ? { uri } : { problem: "an artifact location names no file" };
-  if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)
-    return { problem: `artifact index ${JSON.stringify(index)} is malformed` };
-  const artifact: unknown = Array.isArray(artifacts) ? artifacts[index] : undefined;
-  const location = isRecordV1(artifact) ? artifact.location : undefined;
-  if (!isRecordV1(location) || typeof location.uri !== "string")
-    return { problem: `artifact index ${index} resolves to no run artifact URI` };
-  if (location.index !== undefined && location.index !== index)
-    return { problem: `artifact index ${index} resolves to an artifact that names another index` };
-  if (uri !== undefined && uri !== location.uri)
-    return {
-      problem: `URI ${JSON.stringify(uri)} and artifact index ${index} (${JSON.stringify(location.uri)}) disagree`,
-    };
-  return { uri: location.uri };
-}
-
-/**
  * S2g (review of U1d): the tree hashes prove a job's input did not change, not that its
  * results name files it analyzed. Every result of the job's normalized SARIF must carry at
  * least one location, and every one of its `locations` must name, by `uri`, a file of the
@@ -205,7 +174,7 @@ function artifactTargetV1(
  * S2h (review of S2g): every other artifact location of a result (related locations, code
  * flows, stacks, attachments, fixes, the analysis target, anywhere but a property bag), and
  * every one under the run's `threadFlowLocations` and `graphs` a result may reference, must
- * name such a file too. Each is resolved by {@link artifactTargetV1}, so a file named by
+ * name such a file too. Each is resolved by `sarifArtifactLocationTargetV1` (U1g: the one rule of every path), so a file named by
  * `artifactLocation.index` is bound exactly like one named by `uri`. Returns why a result is
  * unbound, or `undefined` when all are bound.
  * S2i (review of S2h): the analysis target is bound after the job's SARIF normalization
@@ -217,7 +186,7 @@ function unboundShardResultV1(
   sealedFiles: ReadonlySet<string>,
 ): string | undefined {
   const unbound = (where: string, artifactLocation: unknown, artifacts: unknown) => {
-    const target = artifactTargetV1(artifactLocation, artifacts);
+    const target = sarifArtifactLocationTargetV1(artifactLocation, artifacts);
     if ("problem" in target) return `${where}: ${target.problem}`;
     return sealedFiles.has(target.uri)
       ? undefined

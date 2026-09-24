@@ -486,3 +486,42 @@ describe.each(BOTH)("Cisco job property bags (%s)", (_label, execute) => {
     expect(alpha?.results[0]?.properties).toEqual(bag());
   });
 });
+
+// U1g (review of S2i, P1): the source-tree scan resolves artifact indices exactly as the
+// shard does, through the one shared rule of the job normalization.
+describe.each(BOTH)("Cisco job artifact indices (%s)", (_label, execute) => {
+  const outcomeOf = (analysisTarget: unknown, artifacts: unknown[]) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([{ ...cleanRun([{ ...result("SKILL.md"), analysisTarget }]), artifacts }])
+          : sarif([cleanRun()]),
+      ),
+    );
+
+  it("fails a URI and an index that name different files (reviewer case)", async () => {
+    const outcome = await outcomeOf({ uri: "SKILL.md", index: 0 }, [
+      { location: { uri: "guide.md" } },
+    ]);
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/disagree/);
+  });
+
+  it("fails a missing or malformed index", async () => {
+    for (const analysisTarget of [{ index: 0 }, { index: -1 }, { uri: "SKILL.md", index: 2 }]) {
+      const outcome = await outcomeOf(analysisTarget, []);
+      expect(outcome, JSON.stringify(analysisTarget)).toMatchObject({
+        kind: "failed",
+        stage: "output",
+      });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/artifact index/);
+    }
+  });
+
+  it("keeps an index that names the same job file as its URI", async () => {
+    const outcome = await outcomeOf({ uri: "SKILL.md", index: 0 }, [
+      { location: { uri: "SKILL.md" } },
+    ]);
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});

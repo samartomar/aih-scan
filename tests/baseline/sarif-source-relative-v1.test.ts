@@ -801,3 +801,140 @@ describe("property bags and analysisTarget outside its schema position (U1g)", (
     expect(normalized.runs[0]?.results[0]?.properties).toEqual(bag());
   });
 });
+
+// U1g (review of S2i, P1): an `artifactLocation.index` names `run.artifacts[index]`. Every
+// normalizer (host runs, Cisco jobs, Cisco scan-all, the shard) resolves it by one rule after
+// the run is normalized: the index must be a non-negative integer naming an artifact whose
+// location has a URI (and names no other index), and a URI beside it must name that file.
+describe("artifact indices resolve by one rule on every path (U1g)", () => {
+  const indexed = (analysisTarget: unknown, artifacts: unknown[] = []) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "x" } },
+        artifacts,
+        results: [{ ...result("/scan/SKILL.md"), analysisTarget }],
+      },
+    ],
+  });
+  const artifact = (uri: string, extra: Record<string, unknown> = {}) => ({
+    location: { uri, ...extra },
+  });
+
+  it("accepts an index, alone or beside the same URI, that names a run artifact", () => {
+    for (const analysisTarget of [{ index: 0 }, { uri: "/scan/SKILL.md", index: 0 }]) {
+      const normalized = sourceRelativeSarifV1(
+        indexed(analysisTarget, [artifact("/scan/SKILL.md", { index: 0 })]),
+        ["/scan"],
+      ).document as { runs: { results: { analysisTarget: unknown }[] }[] };
+      expect(normalized.runs[0]?.results[0]?.analysisTarget).toEqual(
+        "uri" in analysisTarget ? { uri: "SKILL.md", index: 0 } : { index: 0 },
+      );
+    }
+  });
+
+  it("refuses a URI and an index that name different files (reviewer case)", () => {
+    expect(() =>
+      sourceRelativeSarifV1(indexed({ uri: "SKILL.md", index: 0 }, [artifact("/scan/other.md")]), [
+        "/scan",
+      ]),
+    ).toThrow(/disagree/);
+  });
+
+  it("refuses a missing, out-of-range, malformed or self-contradicting index", () => {
+    for (const [analysisTarget, artifacts] of [
+      [{ index: 0 }, []],
+      [{ index: 1 }, [artifact("/scan/SKILL.md")]],
+      [{ index: -1 }, [artifact("/scan/SKILL.md")]],
+      [{ index: 0.5 }, [artifact("/scan/SKILL.md")]],
+      [{ index: "0" }, [artifact("/scan/SKILL.md")]],
+      [{ index: 0 }, [{ location: { index: 0 } }]],
+      [{ index: 0 }, [artifact("/scan/SKILL.md", { index: 1 })]],
+    ] as const)
+      expect(
+        () => sourceRelativeSarifV1(indexed(analysisTarget, [...artifacts]), ["/scan"]),
+        JSON.stringify(analysisTarget),
+      ).toThrow(/artifact index/);
+  });
+
+  it("resolves an index on related locations and code flows too", () => {
+    const document = sarif({
+      ...result("/scan/SKILL.md"),
+      relatedLocations: [{ physicalLocation: { artifactLocation: { index: 3 } } }],
+    });
+    expect(() => sourceRelativeSarifV1(document, ["/scan"])).toThrow(/artifact index 3/);
+    const flows = sarif({
+      ...result("/scan/SKILL.md"),
+      codeFlows: [
+        {
+          threadFlows: [
+            {
+              locations: [
+                {
+                  location: {
+                    physicalLocation: { artifactLocation: { uri: "/scan/a.md", index: 0 } },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    (flows.runs[0] as Record<string, unknown>).artifacts = [artifact("/scan/b.md")];
+    expect(() => sourceRelativeSarifV1(flows, ["/scan"])).toThrow(/disagree/);
+  });
+
+  it("refuses a Cisco scan-all index that disagrees with the skill-relative URI, or is missing", () => {
+    const scanAll = (analysisTarget: unknown, artifacts: unknown[]) => ({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "skill-scanner" } },
+          originalUriBaseIds: { ROOT: { uri: "file:///scan/" } },
+          artifacts,
+          results: [
+            {
+              ruleId: "R",
+              message: { text: "R" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "SKILL.md" },
+                    region: { startLine: 1 },
+                  },
+                },
+              ],
+              analysisTarget,
+            },
+          ],
+        },
+      ],
+    });
+    const report = {
+      results: [
+        {
+          skill_path: "/scan/skills/a",
+          findings: [{ rule_id: "R", file_path: "SKILL.md", line_number: 1 }],
+        },
+      ],
+    };
+    const beta = { location: { uri: "skills/b/SKILL.md", uriBaseId: "ROOT" } };
+    const alpha = { location: { uri: "skills/a/SKILL.md", uriBaseId: "ROOT" } };
+    expect(() =>
+      ciscoSourceRelativeSarifV1(scanAll({ uri: "SKILL.md", index: 0 }, [beta]), report, ["/scan"]),
+    ).toThrow(/disagree/);
+    expect(() =>
+      ciscoSourceRelativeSarifV1(scanAll({ index: 1 }, [alpha]), report, ["/scan"]),
+    ).toThrow(/artifact index 1/);
+    const normalized = ciscoSourceRelativeSarifV1(
+      scanAll({ uri: "SKILL.md", index: 0 }, [alpha]),
+      report,
+      ["/scan"],
+    ).document as { runs: { results: { analysisTarget: unknown }[] }[] };
+    expect(normalized.runs[0]?.results[0]?.analysisTarget).toEqual({
+      uri: "skills/a/SKILL.md",
+      index: 0,
+    });
+  });
+});

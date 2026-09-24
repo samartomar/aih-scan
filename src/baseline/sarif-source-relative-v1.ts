@@ -291,6 +291,63 @@ function baseResolver(declared: Json | undefined): (id: string) => Base {
   return (id) => resolve(id, []);
 }
 
+/**
+ * U1g (review of S2i, P1; S2h for the shard): the file one `artifactLocation` names, or why
+ * it names none. A `uri` names itself. An `index` must be a non-negative safe integer naming
+ * an object of `run.artifacts` whose `location.uri` is a string (and whose own
+ * `location.index`, if present, is that index); the artifact's URI is then the file. A `uri`
+ * given beside an `index` must equal the artifact's URI. A location with neither names no
+ * file. Every path resolves indices through this one rule, after its run is normalized, so
+ * both URIs are compared in their normalized, source-relative form.
+ */
+export function sarifArtifactLocationTargetV1(
+  artifactLocation: unknown,
+  artifacts: unknown,
+): Readonly<{ uri: string } | { problem: string }> {
+  if (!isRecord(artifactLocation)) return { problem: "an artifact location is not an object" };
+  const { uri, index } = artifactLocation;
+  if (uri !== undefined && typeof uri !== "string")
+    return { problem: "an artifact location URI is not a string" };
+  if (index === undefined)
+    return typeof uri === "string" ? { uri } : { problem: "an artifact location names no file" };
+  if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)
+    return { problem: `artifact index ${JSON.stringify(index)} is malformed` };
+  const artifact: unknown = Array.isArray(artifacts) ? artifacts[index] : undefined;
+  const location = isRecord(artifact) ? artifact.location : undefined;
+  if (!isRecord(location) || typeof location.uri !== "string")
+    return { problem: `artifact index ${index} resolves to no run artifact URI` };
+  if (location.index !== undefined && location.index !== index)
+    return { problem: `artifact index ${index} resolves to an artifact that names another index` };
+  if (uri !== undefined && uri !== location.uri)
+    return {
+      problem: `URI ${JSON.stringify(uri)} and artifact index ${index} (${JSON.stringify(location.uri)}) disagree`,
+    };
+  return { uri: location.uri };
+}
+
+/**
+ * U1g (review of S2i, P1): every `index` of an already normalized scope resolves by
+ * {@link sarifArtifactLocationTargetV1} against the run's own `artifacts`; outside a run no
+ * index can resolve. A run artifact's own location may name only its own index. Throws
+ * `TypeError` (stage `output` for every caller).
+ */
+function assertArtifactIndices(scope: Json, kind: LocationScope): void {
+  const artifacts = kind === "run" && isRecord(scope) ? scope.artifacts : undefined;
+  const own = new Map<object, number>();
+  if (Array.isArray(artifacts))
+    artifacts.forEach((artifact, index) => {
+      if (isRecord(artifact) && isRecord(artifact.location)) own.set(artifact.location, index);
+    });
+  for (const { location } of artifactLocations(scope, kind)) {
+    if (location.index === undefined) continue;
+    const position = own.get(location);
+    if (position !== undefined && location.index !== position)
+      fail(`run artifact ${position} names artifact index ${JSON.stringify(location.index)}`);
+    const target = sarifArtifactLocationTargetV1(location, artifacts);
+    if ("problem" in target) fail(target.problem);
+  }
+}
+
 type Normalization = { rewritten: number; removedBaseUris: number };
 
 function normalizeScope(
@@ -320,6 +377,7 @@ function normalizeScope(
     // %SRCROOT% names; a reference to any other (removed) base is obsolete.
     if (baseId !== undefined && baseId !== SOURCE_ROOT_BASE_ID) delete location.uriBaseId;
   }
+  assertArtifactIndices(scope, run ? "run" : "detached");
 }
 
 function normalize(
@@ -415,6 +473,7 @@ export function rewriteSarifRunLocationsV1(
     if (baseId !== undefined && baseId !== SOURCE_ROOT_BASE_ID) delete location.uriBaseId;
   }
   delete run.originalUriBaseIds;
+  assertArtifactIndices(run as Json, "run");
 }
 
 type CiscoFinding = Readonly<{ skill: string; ruleId: string; file: string; line: number | null }>;
