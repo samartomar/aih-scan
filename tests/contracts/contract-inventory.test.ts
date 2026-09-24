@@ -218,6 +218,11 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "export function readBoundedAnalyzerOutputV1",
   },
   {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 1050,
+    contains: "export function ciscoFallbackPairingV1",
+  },
+  {
     path: "src/baseline/cisco-analyzer-failures-v1.ts",
     line: 106,
     contains: "export function assertCiscoAnalyzersCompleteV1",
