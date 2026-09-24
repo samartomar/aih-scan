@@ -41,6 +41,11 @@ export const SKILLSPECTOR_IMAGE_V1 =
 export const SKILLSPECTOR_SOURCE_REVISION_V1 = "2d198ab910add401cad658d1087e7c7ba24fd640";
 export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
   "sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
+/**
+ * The local tag Core documents for its SkillSpector image (docs/security/skillspector.md).
+ * `docker-host-local-skillspector-v1` inspects only this tag and never pulls.
+ */
+export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 = "skillspector:aih-2d198ab910ad";
 export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.14";
 export const SEMGREP_VERSION_V1 = "1.173.0";
 /** The interpreter the Linux namespace profile binds; the host profile discovers its own. */
@@ -109,7 +114,7 @@ export type BaselineExecutionProfileIdV1 =
   | "linux-namespace-uv-v1"
   | "host-process-uv-v1"
   | "docker-hardened-skillspector-v1"
-  | "docker-host-skillspector-v1";
+  | "docker-host-local-skillspector-v1";
 
 /**
  * Why an analyzer run failed, when the reason is not the analyzer's own error:
@@ -143,7 +148,7 @@ export type HostProcessRuntimeV1 = Readonly<{
   containment: "posix-process-group" | "windows-job-object";
 }>;
 
-/** What a `docker-host-skillspector-v1` run resolved on this host. */
+/** What a `docker-host-local-skillspector-v1` run resolved on this host. */
 export type HostDockerRuntimeV1 = Readonly<{
   docker: Readonly<{ path: string; foundIn: HostExecutableV1["foundIn"] }>;
   context: Readonly<{ name: string; endpoint: string }>;
@@ -257,7 +262,7 @@ export const HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1: Readonly<Record<HostOsV1, r
   });
 
 /**
- * The whole environment of every `docker-host-skillspector-v1` Docker client call after the
+ * The whole environment of every `docker-host-local-skillspector-v1` Docker client call after the
  * current context is read, per OS. `<run Docker client directory>` is private, empty and
  * removed after the run; `<current context endpoint>` is the context's local endpoint.
  */
@@ -724,9 +729,11 @@ export type SkillspectorImageMatchV1 = Readonly<{
   /** The exact image reference passed to `docker run`. */
   reference: string;
   /**
-   * `scan-pinned`: Scan's pinned image, present or acquired by Scan's own pull.
-   * `caller-accepted`: that pull was attempted and failed, so a local image carrying one
-   * of the caller's accepted digests ran instead.
+   * `scan-pinned`: Scan's pinned image, present or acquired by Scan's own pull, or (local
+   * profile) the local tag's image carrying the pinned digest.
+   * `caller-accepted`: an image carrying one of the caller's accepted digests ran instead,
+   * because Scan's own pinned pull failed or (local profile) because the local tag's image
+   * carries that digest rather than the pinned one.
    */
   acceptance: "scan-pinned" | "caller-accepted";
   /** Only with `caller-accepted`: why Scan's own pinned pull did not yield its image. */
@@ -776,6 +783,48 @@ function verifiedAcceptedSkillspectorImage(stdout: string, digest: string): stri
   return id;
 }
 
+/**
+ * `docker-host-local-skillspector-v1` (Core's legacy rule): the image behind the local tag
+ * is admitted when its `Id` is the pinned digest or a caller-accepted one, and then runs by
+ * that bare digest; otherwise when a `RepoDigests` entry is, as a whole value or by its `@`
+ * suffix, and then runs by that full entry. Anything else fails; nothing is pulled.
+ */
+function verifiedLocalSkillspectorImage(
+  stdout: string,
+  acceptedImageDigests: readonly string[] | undefined,
+): SkillspectorImageMatchV1 {
+  const allowed = [SKILLSPECTOR_IMAGE_DIGEST_V1, ...(acceptedImageDigests ?? [])];
+  const admitted = (digest: string, reference: string): SkillspectorImageMatchV1 =>
+    Object.freeze({
+      digest,
+      reference,
+      acceptance:
+        digest === SKILLSPECTOR_IMAGE_DIGEST_V1
+          ? ("scan-pinned" as const)
+          : ("caller-accepted" as const),
+    });
+  let image: Record<string, unknown>;
+  try {
+    image = parseStrictJsonObjectV1(stdout, "SkillSpector image inspection");
+  } catch {
+    fail("SkillSpector image availability: the local image inspection JSON could not be read");
+  }
+  const id = image.Id;
+  if (typeof id === "string" && allowed.includes(id)) return admitted(id, id);
+  if (Array.isArray(image.RepoDigests)) {
+    for (const entry of image.RepoDigests) {
+      if (typeof entry !== "string") continue;
+      if (allowed.includes(entry)) return admitted(entry, entry);
+      const at = entry.lastIndexOf("@");
+      if (at > 0 && allowed.includes(entry.slice(at + 1)))
+        return admitted(entry.slice(at + 1), entry);
+    }
+  }
+  fail(
+    `SkillSpector image availability: the local image ${SKILLSPECTOR_LOCAL_IMAGE_TAG_V1} carries neither the pinned digest ${SKILLSPECTOR_IMAGE_DIGEST_V1} nor a caller-accepted digest; docker-host-local-skillspector-v1 never pulls, so build or load the approved image under that tag`,
+  );
+}
+
 /** How one SkillSpector profile reaches Docker. */
 type DockerClient = Readonly<{
   /** The argv prefix: the Docker executable and any global flags. */
@@ -785,7 +834,7 @@ type DockerClient = Readonly<{
 }>;
 
 /**
- * `docker-host-skillspector-v1`: Docker from the declared PATH (or a well-known Docker
+ * `docker-host-local-skillspector-v1`: Docker from the declared PATH (or a well-known Docker
  * Desktop directory), talking to the endpoint of the host's current Docker context. The
  * context is read once with the caller's own Docker client configuration; every later call
  * runs with a private, empty DOCKER_CONFIG and that endpoint as DOCKER_HOST, so no caller
@@ -846,7 +895,7 @@ async function hostDockerClient(
     fail("Docker availability: the current context names no local npipe:// or unix:// endpoint");
   if (tls !== undefined && tls !== null && Object.keys(tls).length > 0)
     fail(
-      `Docker availability: context ${name} uses TLS material, which docker-host-skillspector-v1 does not carry into its private client configuration`,
+      `Docker availability: context ${name} uses TLS material, which docker-host-local-skillspector-v1 does not carry into its private client configuration`,
     );
   return Object.freeze({
     prefix: Object.freeze([docker.path]),
@@ -893,74 +942,92 @@ async function skillspector(
       await docker(["version"], startupTimeoutMs, "Docker availability"),
       "Docker availability",
     );
-    // (a) Scan's pinned image present: run it. (b) Absent: attempt Scan's own pinned pull,
-    // exactly as when no list is supplied. (c) Only if the pinned image is still absent
-    // after that attempt are the caller's accepted digests consulted, in order, against
-    // local images alone; the first present runs by image ID and nothing more is pulled.
-    // (d) None present: the run fails at availability.
-    let inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
-    if (inspected.termination !== undefined)
-      requireCleanResult(inspected, "SkillSpector image inspection");
-    let accepted: SkillspectorImageMatchV1 | undefined;
-    if (inspected.truncated || inspected.code !== 0) {
-      const pull = () =>
-        docker(["pull", SKILLSPECTOR_IMAGE_V1], scanTimeoutMs, "SkillSpector image acquisition");
-      if (acceptedImageDigests === undefined) {
-        requireCleanResult(await pull(), "SkillSpector image acquisition");
-        inspected = requireCleanResult(
-          await inspect(SKILLSPECTOR_IMAGE_V1),
-          "SkillSpector image inspection",
+    // Local profile: inspect only the documented local tag and admit it by digest; the
+    // image is never pulled.
+    const localImage = async (): Promise<SkillspectorImageMatchV1> => {
+      const local = await inspect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1);
+      if (local.termination !== undefined)
+        requireCleanResult(local, "SkillSpector image inspection");
+      if (local.truncated || local.code !== 0)
+        fail(
+          `SkillSpector image availability: the local image ${SKILLSPECTOR_LOCAL_IMAGE_TAG_V1} is absent or cannot be inspected (${
+            boundedDiagnosticDetailV1(local.stderr || local.stdout) || `exit ${local.code}`
+          }); docker-host-local-skillspector-v1 never pulls, so build or load the image carrying ${SKILLSPECTOR_IMAGE_DIGEST_V1} under that tag`,
         );
-      } else {
-        let pinnedPullFailure: string | undefined;
-        try {
-          const pulled = await pull();
-          if (pulled.termination === "abort" || pulled.termination === "timeout")
-            requireCleanResult(pulled, "SkillSpector image acquisition");
-          if (pulled.truncated || pulled.code !== 0)
+      return verifiedLocalSkillspectorImage(local.stdout, acceptedImageDigests);
+    };
+    const pinnedImage = async (): Promise<SkillspectorImageMatchV1> => {
+      // (a) Scan's pinned image present: run it. (b) Absent: attempt Scan's own pinned pull,
+      // exactly as when no list is supplied. (c) Only if the pinned image is still absent
+      // after that attempt are the caller's accepted digests consulted, in order, against
+      // local images alone; the first present runs by image ID and nothing more is pulled.
+      // (d) None present: the run fails at availability.
+      let inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
+      if (inspected.termination !== undefined)
+        requireCleanResult(inspected, "SkillSpector image inspection");
+      let accepted: SkillspectorImageMatchV1 | undefined;
+      if (inspected.truncated || inspected.code !== 0) {
+        const pull = () =>
+          docker(["pull", SKILLSPECTOR_IMAGE_V1], scanTimeoutMs, "SkillSpector image acquisition");
+        if (acceptedImageDigests === undefined) {
+          requireCleanResult(await pull(), "SkillSpector image acquisition");
+          inspected = requireCleanResult(
+            await inspect(SKILLSPECTOR_IMAGE_V1),
+            "SkillSpector image inspection",
+          );
+        } else {
+          let pinnedPullFailure: string | undefined;
+          try {
+            const pulled = await pull();
+            if (pulled.termination === "abort" || pulled.termination === "timeout")
+              requireCleanResult(pulled, "SkillSpector image acquisition");
+            if (pulled.truncated || pulled.code !== 0)
+              pinnedPullFailure =
+                boundedDiagnosticDetailV1(pulled.stderr || pulled.stdout) ||
+                `exit ${pulled.code}${pulled.truncated ? " with truncated output" : ""}`;
+          } catch (error) {
+            if (error instanceof AnalyzerRunFailureV1) throw error;
             pinnedPullFailure =
-              boundedDiagnosticDetailV1(pulled.stderr || pulled.stdout) ||
-              `exit ${pulled.code}${pulled.truncated ? " with truncated output" : ""}`;
-        } catch (error) {
-          if (error instanceof AnalyzerRunFailureV1) throw error;
-          pinnedPullFailure =
-            boundedDiagnosticDetailV1(error instanceof Error ? error.message : "") ||
-            "the pull could not be run";
-        }
-        if (pinnedPullFailure === undefined) {
-          inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
-          if (inspected.truncated || inspected.code !== 0)
-            pinnedPullFailure = `the pull succeeded but the pinned image is still absent: ${
-              boundedDiagnosticDetailV1(inspected.stderr || inspected.stdout) ||
-              `exit ${inspected.code}`
-            }`;
-        }
-        if (pinnedPullFailure !== undefined) {
-          for (const digest of acceptedImageDigests) {
-            const candidate = await inspect(digest);
-            if (candidate.truncated || candidate.code !== 0) continue;
-            accepted = Object.freeze({
-              digest,
-              reference: verifiedAcceptedSkillspectorImage(candidate.stdout, digest),
-              acceptance: "caller-accepted" as const,
-              pinnedPullFailure,
-            });
-            break;
+              boundedDiagnosticDetailV1(error instanceof Error ? error.message : "") ||
+              "the pull could not be run";
           }
-          if (accepted === undefined)
-            fail(
-              `SkillSpector image availability: Scan's pinned image ${SKILLSPECTOR_IMAGE_DIGEST_V1} could not be acquired and no local image matches any of the ${acceptedImageDigests.length} caller-accepted digests; pinned pull failed: ${pinnedPullFailure}`,
-            );
+          if (pinnedPullFailure === undefined) {
+            inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
+            if (inspected.truncated || inspected.code !== 0)
+              pinnedPullFailure = `the pull succeeded but the pinned image is still absent: ${
+                boundedDiagnosticDetailV1(inspected.stderr || inspected.stdout) ||
+                `exit ${inspected.code}`
+              }`;
+          }
+          if (pinnedPullFailure !== undefined) {
+            for (const digest of acceptedImageDigests) {
+              const candidate = await inspect(digest);
+              if (candidate.truncated || candidate.code !== 0) continue;
+              accepted = Object.freeze({
+                digest,
+                reference: verifiedAcceptedSkillspectorImage(candidate.stdout, digest),
+                acceptance: "caller-accepted" as const,
+                pinnedPullFailure,
+              });
+              break;
+            }
+            if (accepted === undefined)
+              fail(
+                `SkillSpector image availability: Scan's pinned image ${SKILLSPECTOR_IMAGE_DIGEST_V1} could not be acquired and no local image matches any of the ${acceptedImageDigests.length} caller-accepted digests; pinned pull failed: ${pinnedPullFailure}`,
+              );
+          }
         }
       }
-    }
-    const match: SkillspectorImageMatchV1 =
-      accepted ??
-      Object.freeze({
-        digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
-        reference: parseVerifiedSkillspectorImage(inspected.stdout),
-        acceptance: "scan-pinned" as const,
-      });
+      return (
+        accepted ??
+        Object.freeze({
+          digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+          reference: parseVerifiedSkillspectorImage(inspected.stdout),
+          acceptance: "scan-pinned" as const,
+        })
+      );
+    };
+    const match = host ? await localImage() : await pinnedImage();
     const image = match.reference;
     if (
       sourceRoot.includes(",") ||
@@ -973,6 +1040,7 @@ async function skillspector(
     const containerName = `aih-scan-baseline-${randomUUID()}`;
     const argv = [
       "run",
+      ...(host ? ["--pull", "never"] : []),
       "--rm",
       "--name",
       containerName,
@@ -1646,7 +1714,7 @@ export type BaselineAnalyzerRunV1 = (input: {
   readonly image?: SkillspectorImageMatchV1;
   /** Present only for `host-process-uv-v1`: the uv, Python and cache the run resolved. */
   readonly hostRuntime?: HostProcessRuntimeV1;
-  /** Present only for `docker-host-skillspector-v1`: the Docker client and context used. */
+  /** Present only for `docker-host-local-skillspector-v1`: the Docker client and context used. */
   readonly hostDocker?: HostDockerRuntimeV1;
 }>;
 
@@ -1657,7 +1725,7 @@ const PROFILE_ANALYZERS: Readonly<
   "linux-namespace-uv-v1": ["semgrep", "cisco"],
   "host-process-uv-v1": ["semgrep", "cisco"],
   "docker-hardened-skillspector-v1": ["skillspector"],
-  "docker-host-skillspector-v1": ["skillspector"],
+  "docker-host-local-skillspector-v1": ["skillspector"],
 });
 
 /**
@@ -1728,7 +1796,7 @@ export function createBaselineAnalyzerRunV1(
           callerEnv,
           acceptedImageDigests,
           control,
-          profile === "docker-host-skillspector-v1",
+          profile === "docker-host-local-skillspector-v1",
         ),
       semgrep: () =>
         host

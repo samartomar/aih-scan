@@ -14,8 +14,11 @@ import {
   SEMGREP_VERSION_V1,
   SKILLSPECTOR_IMAGE_DIGEST_V1,
   SKILLSPECTOR_IMAGE_V1,
+  SKILLSPECTOR_LOCAL_IMAGE_TAG_V1,
 } from "../../src/baseline/runtime-v1.js";
 import {
+  IN_PROCESS_BINDING_GATE_PROFILE_V1,
+  IN_PROCESS_TRUST_LINT_PROFILE_V1,
   listDetectorCapabilitiesV1,
   listDetectorExecutionProfileDocumentsV1,
   resolveDetectorCapabilityV1,
@@ -170,9 +173,11 @@ describe("DetectorCapabilityV1", () => {
     const documents = listDetectorExecutionProfileDocumentsV1();
     expect(documents.map((entry) => entry.id).sort()).toEqual([
       "docker-hardened-skillspector-v1",
-      "docker-host-skillspector-v1",
+      "docker-host-local-skillspector-v1",
       "host-process-uv-v1",
+      "in-process-binding-gate-v1",
       "in-process-native-v1",
+      "in-process-trust-lint-v1",
       "linux-namespace-uv-v1",
       "oci-hardened-cisco-v1",
     ]);
@@ -180,10 +185,27 @@ describe("DetectorCapabilityV1", () => {
     expect(inProcess?.executables).toEqual([]);
     expect(inProcess?.containment).toEqual([]);
     expect(inProcess?.notes.join(" ")).toContain("spawns nothing");
+    for (const id of ["in-process-trust-lint-v1", "in-process-binding-gate-v1"]) {
+      const document = resolveDetectorExecutionProfileDocumentV1(id);
+      expect(document, id).toMatchObject({
+        isolation: "none",
+        network: "none",
+        backend: "in-process",
+        executables: [],
+        image: null,
+        containment: [],
+        acquisition: [],
+        mounts: [],
+      });
+      expect(document?.notes.join(" "), id).toContain("spawns nothing");
+    }
     // The host profiles fix every spawn's whole environment per OS; the others keep their
     // unchanged allow-list-scrub rule.
     for (const document of documents) {
-      if (document.id === "host-process-uv-v1" || document.id === "docker-host-skillspector-v1") {
+      if (
+        document.id === "host-process-uv-v1" ||
+        document.id === "docker-host-local-skillspector-v1"
+      ) {
         expect(document.environment.policy, document.id).toBe("fixed-values-by-os");
         continue;
       }
@@ -276,29 +298,39 @@ describe("DetectorCapabilityV1", () => {
     );
   });
 
-  it("publishes docker-host-skillspector-v1 for SkillSpector only, with the hardened container flags", () => {
+  it("publishes docker-host-local-skillspector-v1 for SkillSpector only: never pulls, hardened container flags", () => {
     const skillspector = resolveDetectorCapabilityV1("detector.skillspector");
     expect(skillspector?.executionProfile.id).toBe("docker-hardened-skillspector-v1");
     expect(skillspector?.executionProfiles.map((entry) => entry.id)).toEqual([
       "docker-hardened-skillspector-v1",
-      "docker-host-skillspector-v1",
+      "docker-host-local-skillspector-v1",
     ]);
-    const hostDocker = resolveDetectorExecutionProfileDocumentV1("docker-host-skillspector-v1");
+    expect(
+      resolveDetectorExecutionProfileDocumentV1("docker-host-skillspector-v1"),
+    ).toBeUndefined();
+    const hostDocker = resolveDetectorExecutionProfileDocumentV1(
+      "docker-host-local-skillspector-v1",
+    );
     const hardened = resolveDetectorExecutionProfileDocumentV1("docker-hardened-skillspector-v1");
-    expect(hostDocker?.containment).toEqual(hardened?.containment);
-    expect(hostDocker?.image).toBe(SKILLSPECTOR_IMAGE_V1);
-    expect(hostDocker?.acquisition).toEqual(["pull", SKILLSPECTOR_IMAGE_V1]);
+    expect(hostDocker?.containment).toEqual(["--pull", "never", ...(hardened?.containment ?? [])]);
+    expect(hostDocker?.image).toBe(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1);
+    expect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1).toBe("skillspector:aih-2d198ab910ad");
+    expect(hostDocker?.network).toBe("none");
+    expect(hostDocker?.acquisition).toEqual([]);
+    expect(hostDocker?.notes.join(" ")).toMatch(/never pulls/);
+    expect(hostDocker?.notes.join(" ")).toMatch(/RepoDigests/);
+    expect(hostDocker?.notes.join(" ")).toMatch(/acceptedImageDigests/);
     if (hostDocker?.environment.policy !== "fixed-values-by-os") throw new Error("policy");
     expect(hostDocker.environment.values).toEqual(HOST_DOCKER_ENVIRONMENT_V1);
     expect(hostDocker.environment.callerVariables).toEqual(HOST_DOCKER_CONTEXT_VARIABLES_V1);
     expect(hostDocker.notes.join(" ")).toMatch(/removed by name with docker rm --force --volumes/);
     expect(hostDocker.notes.join(" ")).toMatch(/current Docker context/);
     const profile = skillspector?.executionProfiles.find(
-      (entry) => entry.id === "docker-host-skillspector-v1",
+      (entry) => entry.id === "docker-host-local-skillspector-v1",
     );
     expect(profile?.prerequisites.map((entry) => `${entry.kind}:${entry.id}`)).toEqual([
       "host-executable:docker",
-      `container-image:${SKILLSPECTOR_IMAGE_V1}`,
+      `container-image:${SKILLSPECTOR_LOCAL_IMAGE_TAG_V1}`,
     ]);
     expect(profile?.supportedPlatforms).toEqual([
       { os: "darwin", architecture: "amd64" },
@@ -313,7 +345,7 @@ describe("DetectorCapabilityV1", () => {
       "linux-namespace-uv-v1",
       "host-process-uv-v1",
       "docker-hardened-skillspector-v1",
-      "docker-host-skillspector-v1",
+      "docker-host-local-skillspector-v1",
     ])
       expect(resolveDetectorExecutionProfileDocumentV1(id)?.notes.join(" "), id).toMatch(
         /artifact URI is rewritten relative to the declared source root/,
@@ -329,8 +361,20 @@ describe("DetectorCapabilityV1", () => {
       "detector.aih-native": "refused",
       "detector.cisco": "refused",
       "detector.semgrep": "completes",
-      "detector.skillspector": "refused",
+      "detector.skillspector": "completes",
     });
+  });
+
+  it("exports the in-process trust-lint and binding-gate profiles for every platform, with no prerequisite", () => {
+    for (const [profile, id] of [
+      [IN_PROCESS_TRUST_LINT_PROFILE_V1, "in-process-trust-lint-v1"],
+      [IN_PROCESS_BINDING_GATE_PROFILE_V1, "in-process-binding-gate-v1"],
+    ] as const) {
+      expect(profile.id).toBe(id);
+      expect(profile).toMatchObject({ isolation: "none", network: "none", prerequisites: [] });
+      expect(profile.supportedPlatforms).toHaveLength(6);
+      expect(Object.isFrozen(profile)).toBe(true);
+    }
   });
 
   it("gates platforms and prerequisites per profile, and the default restates the capability", () => {

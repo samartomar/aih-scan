@@ -10,6 +10,7 @@ import {
   HOST_PROCESS_UV_PYTHON_REQUEST_V1,
   SEMGREP_VERSION_V1,
   SKILLSPECTOR_IMAGE_V1,
+  SKILLSPECTOR_LOCAL_IMAGE_TAG_V1,
   SKILLSPECTOR_SOURCE_REVISION_V1,
 } from "../baseline/runtime-v1.js";
 import {
@@ -34,9 +35,9 @@ import {
  *
  * - `supportedPlatforms` restates the platform gates the execution code already
  *   applies. Scan's hardened detector profiles are Linux `amd64` only. The host profiles
- *   (`host-process-uv-v1`, `docker-host-skillspector-v1`) run on Linux, macOS and
- *   Windows where their exact-pinned inputs exist, and the in-process `aih-native`
- *   analyzer runs anywhere; none of those is isolated beyond what it declares.
+ *   (`host-process-uv-v1`, `docker-host-local-skillspector-v1`) run on Linux, macOS and
+ *   Windows where their exact-pinned inputs exist, and the in-process profiles run
+ *   anywhere; none of those is isolated beyond what it declares.
  * - Every execution profile carries its own `supportedPlatforms` and `prerequisites`,
  *   and the runner gates on the selected profile's; a capability's own fields restate
  *   its default profile's. A host profile is never a default: it runs only when named,
@@ -238,6 +239,44 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
   },
   {
     protocol: "DetectorExecutionProfileDocumentV1",
+    id: "in-process-trust-lint-v1",
+    isolation: "none",
+    network: "none",
+    backend: "in-process",
+    executables: [],
+    image: null,
+    containment: [],
+    acquisition: [],
+    mounts: [],
+    environment: { policy: "allow-list-scrub", allowed: BASELINE_ENVIRONMENT_ALLOW_LIST_V1 },
+    notes: [
+      "detector.aih-trust-lint reads the sealed source tree inside this Node process and spawns nothing.",
+      "Isolation is 'none' because there is no second process to isolate, not because a sandbox was skipped.",
+      "It reads no environment variable and makes no network request; detectorOptions carries the caller's internal scopes and MCP config paths.",
+      "Its gates allow every operating system and architecture Scan knows.",
+    ],
+  },
+  {
+    protocol: "DetectorExecutionProfileDocumentV1",
+    id: "in-process-binding-gate-v1",
+    isolation: "none",
+    network: "none",
+    backend: "in-process",
+    executables: [],
+    image: null,
+    containment: [],
+    acquisition: [],
+    mounts: [],
+    environment: { policy: "allow-list-scrub", allowed: BASELINE_ENVIRONMENT_ALLOW_LIST_V1 },
+    notes: [
+      "detector.aih-binding-gate runs the binding scan gate's fast-tier inspectors over the sealed source tree inside this Node process and spawns nothing.",
+      "Isolation is 'none' because there is no second process to isolate, not because a sandbox was skipped.",
+      "It reads no environment variable and makes no network request.",
+      "Its gates allow every operating system and architecture Scan knows.",
+    ],
+  },
+  {
+    protocol: "DetectorExecutionProfileDocumentV1",
     id: "linux-namespace-uv-v1",
     isolation: "linux-namespace",
     network: "acquisition-only",
@@ -377,7 +416,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
   },
   {
     protocol: "DetectorExecutionProfileDocumentV1",
-    id: "docker-host-skillspector-v1",
+    id: "docker-host-local-skillspector-v1",
     isolation: "container",
     network: "none",
     backend: "oci-container",
@@ -385,8 +424,10 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "docker: the first docker (docker.exe on Windows) on the declared PATH, else in a well-known Docker Desktop directory; spawned and recorded by real path",
       "Windows supervisor: %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe, never resolved through PATH",
     ],
-    image: SKILLSPECTOR_IMAGE_V1,
+    image: SKILLSPECTOR_LOCAL_IMAGE_TAG_V1,
     containment: [
+      "--pull",
+      "never",
       "--rm",
       "--network",
       "none",
@@ -408,7 +449,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "--tmpfs",
       "/tmp:rw,noexec,nosuid,size=64m",
     ],
-    acquisition: ["pull", SKILLSPECTOR_IMAGE_V1],
+    acquisition: [],
     mounts: ["type=bind,src=<sealed analyzer snapshot>,dst=/scan,readonly"],
     environment: {
       policy: "fixed-values-by-os",
@@ -417,9 +458,10 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     },
     notes: [
       "Used only when a caller names it; the Linux default stays docker-hardened-skillspector-v1.",
+      `This profile never pulls: it inspects only the local tag ${SKILLSPECTOR_LOCAL_IMAGE_TAG_V1} and runs with --pull never, so no stage reaches a registry.`,
+      "The local tag's image is admitted when its Id is Scan's pinned digest or one of the request's acceptedImageDigests, and then runs by that bare digest; otherwise when one of its RepoDigests entries is (whole value or its @ suffix), and then runs by that full entry. Anything else fails at availability naming the pinned digest.",
       "The host's current Docker context is read once (docker context inspect) with only the caller variables listed in callerVariables; every later Docker call uses that context's local npipe:// or unix:// endpoint as DOCKER_HOST and a private, empty DOCKER_CONFIG, so no credential helper or plugin reaches the run. A context carrying TLS material is refused.",
       "The Docker client runs under the same process-tree containment as host-process-uv-v1: a POSIX process group, or a Windows Job Object.",
-      "The image is pinned by digest and the inspected image ID must equal that digest, or a caller-accepted digest, before any scan.",
       "When the scan's Docker client is ended on a timeout, an abort or a failure, the container is removed by name with docker rm --force --volumes, because ending the client does not stop the container.",
       "The image is linux/amd64; arm64 hosts depend on the Docker engine's amd64 emulation.",
       `${SARIF_NORMALIZATION_NOTE} The /scan mount prefix is removed.`,
@@ -653,10 +695,10 @@ const SKILLSPECTOR_HOST_GATES: ProfileGates = {
     HOST_DOCKER_PREREQUISITE,
     {
       kind: "container-image",
-      id: SKILLSPECTOR_IMAGE_V1,
+      id: SKILLSPECTOR_LOCAL_IMAGE_TAG_V1,
       required: true,
       detail:
-        "Scan pulls this exact digest-addressed image when it is absent; whether it is present cannot be determined without Docker.",
+        "Build or load the approved SkillSpector image under this local tag; this profile never pulls, and whether the tag is present and carries an allowed digest cannot be determined without Docker.",
     },
   ],
 };
@@ -676,6 +718,20 @@ const SKILLSPECTOR_GATES: ProfileGates = {
 
 const OBSERVATION = "BaselineAnalyzerObservationV1" as const;
 const NATIVE_PROFILE = profile("in-process-native-v1", OBSERVATION, NATIVE_GATES);
+/**
+ * The in-process profiles for the native trust lint and the binding scan gate's inspectors.
+ * They run everywhere and need nothing; the detectors that use them register them.
+ */
+export const IN_PROCESS_TRUST_LINT_PROFILE_V1: DetectorExecutionProfileV1 = profile(
+  "in-process-trust-lint-v1",
+  OBSERVATION,
+  NATIVE_GATES,
+);
+export const IN_PROCESS_BINDING_GATE_PROFILE_V1: DetectorExecutionProfileV1 = profile(
+  "in-process-binding-gate-v1",
+  OBSERVATION,
+  NATIVE_GATES,
+);
 const CISCO_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, CISCO_GATES);
 const CISCO_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, CISCO_HOST_GATES);
 const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_OCI_GATES);
@@ -687,7 +743,7 @@ const SKILLSPECTOR_PROFILE = profile(
   SKILLSPECTOR_GATES,
 );
 const SKILLSPECTOR_HOST_PROFILE = profile(
-  "docker-host-skillspector-v1",
+  "docker-host-local-skillspector-v1",
   OBSERVATION,
   SKILLSPECTOR_HOST_GATES,
 );
@@ -776,11 +832,11 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       executionProfiles: [SKILLSPECTOR_PROFILE, SKILLSPECTOR_HOST_PROFILE],
       subjectKinds: ["source-tree"],
       subjectRequirements: [
-        "The declared source root must hold at least one file.",
+        "A source root with no entries at all is accepted only with an empty selection; SkillSpector then runs over an empty snapshot and reports its own SARIF.",
         "The source root path must be representable as a Docker bind mount, so it may hold no comma or control character.",
         "The analyzer is given the whole tree, a top-level .git and dependency or build directories included, as Core's own run is.",
       ],
-      emptySource: "refused",
+      emptySource: "completes",
       outputs: ["sarif-2.1.0"],
       contracts: {
         capabilityVersion: 1,

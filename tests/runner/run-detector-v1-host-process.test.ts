@@ -381,7 +381,6 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
 
   it.each([
     ["detector.aih-native", "source-tree"],
-    ["detector.skillspector", "source-tree"],
   ] as const)("refuses an empty source root for %s, which does not complete on one", async (detectorId, kind) => {
     const empty = temporary("empty");
     const record = { calls: 0 };

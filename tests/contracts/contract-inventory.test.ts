@@ -153,12 +153,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 121,
+    line: 122,
     contains: "export interface DetectorExecutionProfileDocumentV1",
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 157,
+    line: 158,
     contains: "export interface DetectorCapabilityV1",
   },
   { path: "src/runner/run-detector-v1.ts", line: 104, contains: "RunDetectorRefusalReasonV1" },
@@ -180,17 +180,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   { path: "src/runner/run-detector-v1.ts", line: 129, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 758,
+    line: 759,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 248,
+    line: 249,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 224,
+    line: 225,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
@@ -207,17 +207,22 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   { path: "src/runner/run-detector-v1.ts", line: 207, contains: "readonly timeoutMs?: number" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 297,
+    line: 298,
     contains: "sourceSeal: Readonly<{ before: SourceSealV2; after: SourceSealV2 }> | null",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 703,
+    line: 48,
+    contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 708,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 210,
+    line: 215,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {

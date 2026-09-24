@@ -165,7 +165,7 @@ export interface BaselineAnalyzerObservationV1 {
   readonly image?: SkillspectorImageMatchV1;
   /** `host-process-uv-v1` only: the uv, Python, uv cache and containment the run used. */
   readonly hostRuntime?: HostProcessRuntimeV1;
-  /** `docker-host-skillspector-v1` only: the Docker client and context the run used. */
+  /** `docker-host-local-skillspector-v1` only: the Docker client and context the run used. */
   readonly hostDocker?: HostDockerRuntimeV1;
 }
 
@@ -216,10 +216,11 @@ export interface RunDetectorV1Request {
     prerequisite: DetectorPrerequisiteV1,
   ) => DetectorPrerequisiteStateV1["state"];
   /**
-   * `docker-hardened-skillspector-v1` and `docker-host-skillspector-v1` only: image digests
-   * (`sha256:` + 64 lowercase hex) the caller also accepts, consulted in order against local
-   * images only after Scan's own pinned pull has failed. It never replaces Scan's
-   * acquisition nor relaxes its check.
+   * SkillSpector only: image digests (`sha256:` + 64 lowercase hex) the caller also accepts.
+   * `docker-hardened-skillspector-v1` consults them, in order and against local images only,
+   * after Scan's own pinned pull has failed; it never replaces that acquisition nor relaxes
+   * its check. `docker-host-local-skillspector-v1` admits the local tag's image when it
+   * carries the pinned digest or one of these.
    */
   readonly acceptedImageDigests?: readonly string[];
   /** Material only the OCI capture profile needs; its absence refuses that profile. */
@@ -351,7 +352,7 @@ function platformRefusal(
   const reason =
     profile.id === "host-process-uv-v1"
       ? "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 lacks cryptography 50.0.0, Windows arm64 lacks Semgrep), and Scan never builds analyzer dependencies from source."
-      : profile.id === "docker-host-skillspector-v1"
+      : profile.id === "docker-host-local-skillspector-v1"
         ? "Its Docker engine must run the linux/amd64 SkillSpector image, natively or emulated."
         : profile.id === "in-process-native-v1"
           ? "The in-process analyzer knows only these operating systems and architectures."
@@ -844,11 +845,11 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   if (input.acceptedImageDigests !== undefined) {
     if (
       profile.id !== "docker-hardened-skillspector-v1" &&
-      profile.id !== "docker-host-skillspector-v1"
+      profile.id !== "docker-host-local-skillspector-v1"
     )
       return refuse(
         "execution-profile-unavailable",
-        `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 and docker-host-skillspector-v1 profiles; ${capability.detectorId} runs ${profile.id}, so remove it.`,
+        `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 and docker-host-local-skillspector-v1 profiles; ${capability.detectorId} runs ${profile.id}, so remove it.`,
         capability,
       );
     const digestRefusal = skillspectorAcceptedImageDigestsRefusalV1(input.acceptedImageDigests);
