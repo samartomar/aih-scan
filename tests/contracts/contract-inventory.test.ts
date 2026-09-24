@@ -93,13 +93,28 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 76,
+    line: 88,
     contains: 'protocol: z.literal("BaselineVetRequestV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 113,
+    line: 125,
     contains: 'protocol: z.literal("BaselineVetReceiptV1")',
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 839,
+    contains: "attachScanCompletionV1(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 904,
+    contains: "function carriesBaselineCompletion(",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 2099,
+    contains: "export const BASELINE_BATCH_EXECUTION_PROFILES_V1",
   },
   {
     path: "src/core/organization-evidence-envelope-v1.ts",
@@ -362,7 +377,7 @@ const BOUNDS: readonly Readonly<{
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 40,
+    line: 52,
     contains: "maxAnnexBytes = 16 * 1024 * 1024",
     phrase: "16 MiB per annex",
   },
