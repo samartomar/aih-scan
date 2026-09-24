@@ -162,7 +162,7 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function verifyDownloadedFiles(directory) {
+export function verifyDownloadedFiles(directory) {
   const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
     left.name.localeCompare(right.name),
   );
@@ -187,7 +187,7 @@ function verifyDownloadedFiles(directory) {
   }
 }
 
-function assertDiscoveryLocator(discoveryPath, repository, tag) {
+export function assertDiscoveryLocator(discoveryPath, repository, tag) {
   let bytes;
   try {
     bytes = readFileSync(discoveryPath);
