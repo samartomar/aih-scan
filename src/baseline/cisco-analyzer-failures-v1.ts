@@ -87,6 +87,11 @@ export type CiscoSkillAnalyzersV1 = Readonly<{
   fallbackFindings: number;
   /** Their SARIF counterparts with that rule, located in the same skill. */
   fallbackCounterparts: number;
+  /**
+   * U1j: why a fallback finding has no counterpart, when the caller can say more than
+   * "no SARIF counterpart" (the job and OCI identity pairing).
+   */
+  fallbackDetail?: string;
 }>;
 
 /** A source-relative skill directory as a failure names it. */
@@ -110,8 +115,11 @@ export function assertCiscoAnalyzersCompleteV1(skills: readonly CiscoSkillAnalyz
     else if (loaders > 1) reason = "more than one skill_loader failure";
     else if (skill.fallbackFindings === 0)
       reason = `no ${CISCO_SKILL_LOAD_FALLBACK_RULE_V1} finding in that skill`;
-    else if (skill.fallbackCounterparts === 0)
-      reason = `its ${CISCO_SKILL_LOAD_FALLBACK_RULE_V1} finding has no SARIF counterpart in that skill`;
+    // U1j: every fallback finding needs its own counterpart, not just one of them.
+    else if (skill.fallbackCounterparts < skill.fallbackFindings)
+      reason =
+        skill.fallbackDetail ??
+        `its ${CISCO_SKILL_LOAD_FALLBACK_RULE_V1} finding has no SARIF counterpart in that skill`;
     if (reason === undefined) continue;
     const named = skill.failed.map((entry) => `${entry.analyzer} (${entry.error})`).join(", ");
     parts.push(`${named} ${skill.label}${reason === "" ? "" : `: ${reason}`}`);
@@ -159,33 +167,4 @@ export function ciscoSingleSkillReportV1(
     if (!isPlainObject(finding) || typeof finding.rule_id !== "string")
       malformed(`finding of ${label}`);
   return report;
-}
-
-/**
- * D30 for a single-skill report ({@link ciscoSingleSkillReportV1}): its top-level
- * `analyzers_failed` belongs to the one skill it scanned, `skill` (source-relative). Every
- * SARIF result of that scan lies in the skill (the job and capture containment rules), so
- * `sarifRuleIds` lists the rule of each.
- */
-export function assertCiscoSingleSkillAnalyzersCompleteV1(
-  report: Record<string, unknown>,
-  sarifRuleIds: readonly unknown[],
-  skill: string,
-): void {
-  const label = `in ${ciscoSkillLabelV1(skill)}`;
-  const failed = ciscoFailedAnalyzersV1(report.analyzers_failed, "the top level");
-  const findings = Array.isArray(report.findings) ? report.findings : [];
-  assertCiscoAnalyzersCompleteV1([
-    {
-      label,
-      failed,
-      fallbackFindings: findings.filter(
-        (finding) =>
-          isPlainObject(finding) && finding.rule_id === CISCO_SKILL_LOAD_FALLBACK_RULE_V1,
-      ).length,
-      fallbackCounterparts: sarifRuleIds.filter(
-        (ruleId) => ruleId === CISCO_SKILL_LOAD_FALLBACK_RULE_V1,
-      ).length,
-    },
-  ]);
 }

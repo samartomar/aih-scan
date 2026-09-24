@@ -105,7 +105,11 @@ function sourceFixture(name = "aih-scan-oci-broker-source-") {
   return root;
 }
 
-function sarif(path = "SKILL.md", ruleId = "PROMPT_INJECTION_IGNORE_INSTRUCTIONS"): string {
+function sarif(
+  path = "SKILL.md",
+  ruleId = "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
+  fingerprint = "fixture-prompt",
+): string {
   return JSON.stringify({
     $schema:
       "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -136,7 +140,7 @@ function sarif(path = "SKILL.md", ruleId = "PROMPT_INJECTION_IGNORE_INSTRUCTIONS
             level: "error",
             message: { text: "Pattern detected." },
             properties: { category: "prompt-injection", severity: "high" },
-            fingerprints: { primaryLocationLineHash: "fixture-prompt" },
+            fingerprints: { primaryLocationLineHash: fingerprint },
             locations: [
               {
                 physicalLocation: {
@@ -174,7 +178,10 @@ function scanReportFor(mode: string): string | undefined {
     });
   if (mode === "json-behavioral")
     return report({ analyzers_failed: [{ analyzer: "behavioral", error: "Timeout" }] });
-  if (mode === "json-fallback")
+  // U1j: two JSON fallback findings with one identity, against one SARIF counterpart.
+  if (mode === "json-fallback-duplicate")
+    return report({ analyzers_failed: LOADER, findings: [...fallbackFinding, ...fallbackFinding] });
+  if (mode === "json-fallback" || mode === "json-fallback-unrelated")
     return report({ analyzers_failed: LOADER, findings: fallbackFinding });
   if (mode === "json-loader-unmatched") return report({ analyzers_failed: LOADER });
   return report();
@@ -197,6 +204,8 @@ type RunnerMode =
   | "image-mismatch"
   | "json-behavioral"
   | "json-fallback"
+  | "json-fallback-duplicate"
+  | "json-fallback-unrelated"
   | "json-loader-unmatched"
   | "json-malformed"
   | "json-missing"
@@ -298,8 +307,12 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
         symlinkSync(join(output, "alternate.sarif"), join(output, "result.sarif"));
       } else if (mode === "output-fifo") {
         execFileSync("mkfifo", [join(output, "result.sarif")]);
-      } else if (mode === "json-fallback")
-        writeFileSync(join(output, "result.sarif"), sarif("SKILL.md", FALLBACK));
+      } else if (mode === "json-fallback" || mode === "json-fallback-duplicate")
+        // Real Cisco 2.1.0 gives the fallback the identity (FALLBACK, FALLBACK) on both sides.
+        writeFileSync(join(output, "result.sarif"), sarif("SKILL.md", FALLBACK, FALLBACK));
+      // U1j: a SARIF fallback result with another identity is no counterpart.
+      else if (mode === "json-fallback-unrelated")
+        writeFileSync(join(output, "result.sarif"), sarif("SKILL.md", FALLBACK, "unrelated"));
       else if (mode !== "missing") writeFileSync(join(output, "result.sarif"), sarif());
       if (mode === "output-extra") writeFileSync(join(output, "stale.sarif"), sarif());
       // D30: the single-skill JSON report `scan` writes beside the SARIF.
@@ -1081,6 +1094,13 @@ describe("Cisco OCI broker V1", () => {
         "json-loader-unmatched",
         /skill_loader \(SkillLoadError:X\) in the root skill: no SKILL_LOAD_FALLBACK_USED finding in that skill$/,
       ],
+      // U1j (review of U1i, P2): the counterpart is paired by identity, kept through the
+      // projection; a rule-name match or a shared SARIF result is not one.
+      [
+        "json-fallback-unrelated",
+        /in the root skill: its SKILL_LOAD_FALLBACK_USED finding \(SKILL_LOAD_FALLBACK_USED, SKILL_LOAD_FALLBACK_USED\) has no SARIF counterpart in that skill$/,
+      ],
+      ["json-fallback-duplicate", /is not unique across the paired reports \(JSON 2, SARIF 1\)$/],
     ] as const) {
       const fake = runner(layoutFixture(), mode);
       const error = await executeCiscoOciBrokerV1(

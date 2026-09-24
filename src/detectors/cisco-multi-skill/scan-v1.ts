@@ -2,11 +2,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import {
-  assertCiscoSingleSkillAnalyzersCompleteV1,
   CiscoAnalyzerFailureV1,
   ciscoSingleSkillReportV1,
 } from "../../baseline/cisco-analyzer-failures-v1.js";
-import { assertCiscoSingleSkillReportSkillV1 } from "../../baseline/cisco-report-skills-v1.js";
+import {
+  assertCiscoSingleSkillAnalyzersCompleteV1,
+  assertCiscoSingleSkillReportSkillV1,
+  ciscoSarifResultIdentitiesV1,
+} from "../../baseline/cisco-report-skills-v1.js";
 import {
   ciscoJobDirectoryProblemTextV1,
   resolveContainedCiscoJobDirectoryV1,
@@ -303,7 +306,8 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
       });
       assertCiscoSingleSkillAnalyzersCompleteV1(
         report,
-        (sarif.log.runs ?? []).flatMap((run) => (run.results ?? []).map((result) => result.ruleId)),
+        // U1j: the job log keeps each result's D28 identity for the fallback pairing.
+        ciscoSarifResultIdentitiesV1(sarif.log),
         skill,
       );
     } catch (error) {

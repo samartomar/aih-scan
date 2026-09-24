@@ -199,7 +199,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/cisco-analyzer-failures-v1.ts",
-    line: 101,
+    line: 106,
     contains: "export function assertCiscoAnalyzersCompleteV1",
   },
   {

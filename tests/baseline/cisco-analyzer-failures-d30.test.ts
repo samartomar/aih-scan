@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  assertCiscoSingleSkillAnalyzersCompleteV1,
   CiscoAnalyzerFailureV1,
   ciscoSingleSkillReportV1,
 } from "../../src/baseline/cisco-analyzer-failures-v1.js";
+import {
+  assertCiscoSingleSkillAnalyzersCompleteV1,
+  type CiscoSarifResultIdentityV1,
+} from "../../src/baseline/cisco-report-skills-v1.js";
 import {
   assertCiscoScanAllAnalyzersCompleteV1,
   ciscoSourceRelativeSarifV1,
@@ -248,6 +251,13 @@ describe("Cisco single-skill scan report (D30, source-tree, shard and OCI jobs)"
     ...extra,
   });
   const failed = { analyzers_failed: [{ analyzer: "skill_loader", error: "SkillLoadError:X" }] };
+  // U1j: SARIF results of the job, each with the fallback identity and located in the skill.
+  const ids = (...rules: string[]): CiscoSarifResultIdentityV1[] =>
+    rules.map((ruleId) => ({
+      ruleId,
+      fingerprint: "SKILL_LOAD_FALLBACK_USED",
+      uri: "skills/alpha/SKILL.md",
+    }));
 
   it("reads the single-skill shape strictly and fails output otherwise", () => {
     expect(ciscoSingleSkillReportV1(bytes(scanReport()), "job skills/alpha")).toMatchObject({
@@ -276,7 +286,7 @@ describe("Cisco single-skill scan report (D30, source-tree, shard and OCI jobs)"
         failureOf(() =>
           assertCiscoSingleSkillAnalyzersCompleteV1(
             report,
-            ["SKILL_LOAD_FALLBACK_USED"],
+            ids("SKILL_LOAD_FALLBACK_USED"),
             "skills/alpha",
           ),
         ),
@@ -284,17 +294,17 @@ describe("Cisco single-skill scan report (D30, source-tree, shard and OCI jobs)"
   });
 
   it("fails coverage without the fallback finding, without its SARIF counterpart, or for another analyzer", () => {
-    const cases: [Record<string, unknown>, string[], RegExp][] = [
+    const cases: [Record<string, unknown>, CiscoSarifResultIdentityV1[], RegExp][] = [
       [
         { ...scanReport(failed), findings: [] },
-        ["SKILL_LOAD_FALLBACK_USED"],
+        ids("SKILL_LOAD_FALLBACK_USED"),
         /no SKILL_LOAD_FALLBACK_USED finding in that skill/,
       ],
       [scanReport(failed), [], /no SARIF counterpart in that skill/],
-      [scanReport(failed), ["OTHER"], /no SARIF counterpart in that skill/],
+      [scanReport(failed), ids("OTHER"), /no SARIF counterpart in that skill/],
       [
         scanReport({ analyzers_failed: [{ analyzer: "behavioral", error: "Timeout" }] }),
-        ["SKILL_LOAD_FALLBACK_USED"],
+        ids("SKILL_LOAD_FALLBACK_USED"),
         /^.*Cisco reported failed analyzers: behavioral \(Timeout\) in skills\/alpha$/,
       ],
     ];
@@ -310,7 +320,7 @@ describe("Cisco single-skill scan report (D30, source-tree, shard and OCI jobs)"
       failureOf(() =>
         assertCiscoSingleSkillAnalyzersCompleteV1(
           scanReport({ analyzers_failed: [{ analyzer: "skill_loader" }] }),
-          ["SKILL_LOAD_FALLBACK_USED"],
+          ids("SKILL_LOAD_FALLBACK_USED"),
           "skills/alpha",
         ),
       ),

@@ -220,6 +220,29 @@ function project(
 }
 
 export function parseCiscoSarifV1(text: string, context?: unknown): CiscoSarifV1 {
+  return parseCiscoSarifWithIdentitiesV1(text, context).sarif;
+}
+
+/**
+ * One projected result's D28 pairing identity (U1j): its rule, the reporter's
+ * `fingerprints.primaryLocationLineHash` (which the projection drops) and its first projected
+ * location's source-relative URI.
+ */
+export type CiscoSarifResultIdentityProjectionV1 = Readonly<{
+  ruleId: string;
+  fingerprint: string;
+  uri: string;
+}>;
+
+/**
+ * {@link parseCiscoSarifV1}, plus, for each projected result in order, the identity the
+ * reporter gave it before the projection dropped its fingerprint (U1j: the OCI capture pairs
+ * its SKILL_LOAD_FALLBACK_USED finding by that identity).
+ */
+export function parseCiscoSarifWithIdentitiesV1(
+  text: string,
+  context?: unknown,
+): Readonly<{ sarif: CiscoSarifV1; identities: readonly CiscoSarifResultIdentityProjectionV1[] }> {
   if (Buffer.byteLength(text, "utf8") > MAX_SARIF_BYTES) fail("SARIF exceeds bounded size");
   const raw = parseStrictJsonObjectV1(text, "Cisco SARIF");
   const parsed = reporterSchema.safeParse(raw);
@@ -228,7 +251,14 @@ export function parseCiscoSarifV1(text: string, context?: unknown): CiscoSarifV1
   if (!projected.success) fail(projected.error.issues[0]?.message ?? "projection");
   const value = deepFreezeStrictJsonV1(structuredClone(projected.data)) as CiscoSarifV1;
   brand.set(value as object, canonicalStrictJsonBytesV1(value));
-  return value;
+  // The projection maps the reporter's one run's results one to one, in order.
+  const reported = parsed.data.runs[0]?.results ?? [];
+  const identities = (value.runs[0]?.results ?? []).map((result, index) => ({
+    ruleId: result.ruleId,
+    fingerprint: reported[index]?.fingerprints.primaryLocationLineHash ?? fail("identity"),
+    uri: result.locations[0]?.physicalLocation.artifactLocation.uri ?? fail("identity"),
+  }));
+  return Object.freeze({ sarif: value, identities: Object.freeze(identities) });
 }
 
 export function canonicalCiscoSarifV1Bytes(value: unknown): Buffer {

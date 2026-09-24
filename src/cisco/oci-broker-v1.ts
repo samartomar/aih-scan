@@ -11,11 +11,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { ciscoSingleSkillReportV1 } from "../baseline/cisco-analyzer-failures-v1.js";
 import {
   assertCiscoSingleSkillAnalyzersCompleteV1,
-  ciscoSingleSkillReportV1,
-} from "../baseline/cisco-analyzer-failures-v1.js";
-import { assertCiscoSingleSkillReportSkillV1 } from "../baseline/cisco-report-skills-v1.js";
+  assertCiscoSingleSkillReportSkillV1,
+} from "../baseline/cisco-report-skills-v1.js";
 import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../cli/process-runner.js";
 import {
   assertSafeRelativePosixPathV1,
@@ -28,7 +28,7 @@ import {
 } from "../observation/native-observation-v1.js";
 import { createCiscoFactsOnlyV1 } from "./facts-only-v1.js";
 import { type CiscoOciLayoutV1, isCiscoOciLayoutV1 } from "./oci-layout-v1.js";
-import { parseCiscoSarifV1 } from "./sarif-v1.js";
+import { parseCiscoSarifWithIdentitiesV1 } from "./sarif-v1.js";
 
 const MAX_STDIO_BYTES = 64 * 1024;
 const MAX_SARIF_BYTES = 16 * 1024 * 1024;
@@ -464,9 +464,13 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     if (run.truncated) fail("scanner run truncated");
     if (run.code !== 0) fail(`scanner run nonzero code ${run.code}`);
     const { sarif: rawSarif, json: rawReport } = output(outputRoot);
-    const parsedSarif = parseCiscoSarifV1(rawSarif.toString("utf8"), {
-      sourceRoot: input.sourceRoot,
-    });
+    // U1j: each result's D28 identity is kept from before the projection drops it.
+    const { sarif: parsedSarif, identities } = parseCiscoSarifWithIdentitiesV1(
+      rawSarif.toString("utf8"),
+      {
+        sourceRoot: input.sourceRoot,
+      },
+    );
     for (const result of parsedSarif.runs[0]?.results ?? [])
       for (const location of result.locations)
         if (!Object.hasOwn(selectedFiles, location.physicalLocation.artifactLocation.uri))
@@ -482,11 +486,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
       skill: "",
       platform: "linux",
     });
-    assertCiscoSingleSkillAnalyzersCompleteV1(
-      report,
-      (parsedSarif.runs[0]?.results ?? []).map((result) => result.ruleId),
-      "",
-    );
+    assertCiscoSingleSkillAnalyzersCompleteV1(report, identities, "");
     const after = sealNativeObservationSourceV1(sourceInput);
     if (!sameSeal(before, after)) fail("source drift during run");
     const facts = createCiscoFactsOnlyV1({

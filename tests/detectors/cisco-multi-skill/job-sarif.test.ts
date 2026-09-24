@@ -707,7 +707,18 @@ describe.each(
   BOTH,
 )("Cisco job analyzers_failed decides completion (%s, D30)", (_label, execute) => {
   const FALLBACK = "SKILL_LOAD_FALLBACK_USED";
-  const fallbackSarif = () => sarif([cleanRun([{ ...result("SKILL.md"), ruleId: FALLBACK }])]);
+  // Real Cisco 2.1.0 gives its fallback finding the identity (SKILL_LOAD_FALLBACK_USED,
+  // SKILL_LOAD_FALLBACK_USED) on both sides (U1j pairs by it).
+  const fallbackSarif = (fingerprint: string = FALLBACK) =>
+    sarif([
+      cleanRun([
+        {
+          ...result("SKILL.md"),
+          ruleId: FALLBACK,
+          fingerprints: { primaryLocationLineHash: fingerprint },
+        },
+      ]),
+    ]);
   const loader = { analyzers_failed: [{ analyzer: "skill_loader", error: "SkillLoadError:X" }] };
   const fallbackFinding = {
     findings: [{ id: FALLBACK, rule_id: FALLBACK, file_path: "SKILL.md", line_number: null }],
@@ -773,6 +784,20 @@ describe.each(
           ...fallbackFinding,
         },
         /more than one skill_loader failure/,
+      ],
+      // U1j (review of U1i, P2): a rule-name match is not a counterpart.
+      [
+        fallbackSarif("B"),
+        {
+          ...loader,
+          findings: [{ id: "A", rule_id: FALLBACK, file_path: "SKILL.md", line_number: null }],
+        },
+        /its SKILL_LOAD_FALLBACK_USED finding \(SKILL_LOAD_FALLBACK_USED, A\) has no SARIF counterpart in that skill$/,
+      ],
+      [
+        fallbackSarif(),
+        { ...loader, findings: [...fallbackFinding.findings, ...fallbackFinding.findings] },
+        /is not unique across the paired reports \(JSON 2, SARIF 1\)$/,
       ],
     ] as const) {
       const outcome = await outcomeOf(alphaSarif, (target) => scanReport(target, extra));
