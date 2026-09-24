@@ -45,11 +45,12 @@ describe("readDetectorOptionsV1", () => {
     }
   });
 
-  it("refuses cisco concurrency, valid or not, because no profile applies it yet", () => {
+  it("reads a whole-number cisco concurrency from 1 to 64 and refuses anything else", () => {
     for (const valid of [1, 4, 64])
-      expect(refusal("detector.cisco", { concurrency: valid }), String(valid)).toMatch(
-        /concurrency is not applied by this profile/,
-      );
+      expect(readDetectorOptionsV1("detector.cisco", { concurrency: valid }, selection)).toEqual({
+        ok: true,
+        options: { concurrency: valid },
+      });
     expect(readDetectorOptionsV1("detector.cisco", undefined, selection)).toEqual({
       ok: true,
       options: undefined,
@@ -196,7 +197,7 @@ describe("runDetectorV1 detectorOptions boundary", () => {
     expect(result.detail).toMatch(/detector\.semgrep takes no detectorOptions/);
   });
 
-  it("refuses Cisco concurrency, out of range or not, since no Cisco profile applies it", async () => {
+  it("refuses Cisco concurrency out of range, and in range wherever no job concurrency applies", async () => {
     const root = sourceFixture();
     const bad = await runDetectorV1({
       detectorId: "detector.cisco",
@@ -211,7 +212,7 @@ describe("runDetectorV1 detectorOptions boundary", () => {
     });
     expect(good.outcome === "refused" && good.reason).toBe("detector-options-invalid");
     expect(good.outcome === "refused" && good.detail).toMatch(
-      /concurrency is not applied by this profile/,
+      /applied only to a detector\.cisco source-tree subject under host-process-uv-v1/,
     );
     for (const executionProfileId of ["linux-namespace-uv-v1", "host-process-uv-v1"]) {
       const named = await runDetectorV1({

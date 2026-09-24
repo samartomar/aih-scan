@@ -161,7 +161,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 172,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 121, contains: "RunDetectorRefusalReasonV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 123, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/observation/source-observation-seal-v1.ts",
     line: 144,
@@ -174,7 +174,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 217,
+    line: 219,
     contains: "readonly detectorOptions?: DetectorOptionsV1",
   },
   {
@@ -184,50 +184,50 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1292,
+    line: 1293,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1251,
+    line: 1252,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 144,
+    line: 146,
     contains: "export type RunDetectorFailureCauseV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 146, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 148, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 763,
+    line: 765,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 266,
+    line: 268,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 242,
+    line: 244,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 182,
+    line: 184,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 184,
+    line: 186,
     contains: "readonly hostRuntime?: HostProcessRuntimeV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 219, contains: "readonly signal?: AbortSignal" },
-  { path: "src/runner/run-detector-v1.ts", line: 224, contains: "readonly timeoutMs?: number" },
+  { path: "src/runner/run-detector-v1.ts", line: 221, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 226, contains: "readonly timeoutMs?: number" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 315,
+    line: 317,
     contains: "      sourceSeal:",
   },
   {
@@ -237,12 +237,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 708,
+    line: 710,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 215,
+    line: 217,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {

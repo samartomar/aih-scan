@@ -50,15 +50,17 @@ import {
 } from "../observation/source-observation-seal-v1.js";
 import { type SourceSealV2, sealSourceV2 } from "../observation/source-seal-v2.js";
 import {
+  concurrencyRefusalV1,
   type DetectorOptionsV1,
   detectorOptionsSealRefusalV1,
   readDetectorOptionsV1,
 } from "./detector-options-v1.js";
 import {
-  ENGINE_ANALYZER_BY_DETECTOR_V1,
   ENGINE_MAX_RESULTS_V1,
   type EngineAnalyzerV1,
   engineEnvironmentsV1,
+  engineForV1,
+  engineObservationAnalyzerV1,
   enginePreflightRefusalV1,
   engineRunsInProcessV1,
   runEngineDetectorV1,
@@ -856,12 +858,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       `detector.cisco accepts a source-tree subject only under host-process-uv-v1, which runs one skill-scanner job per directory holding a selected SKILL.md; ${profile.id} runs one skill root per request. Name host-process-uv-v1, or shard the tree into one skill-directory request per directory that holds a SKILL.md.`,
       capability,
     );
-  if (capability.detectorId === "detector.cisco" && subject.kind === "source-tree")
-    return refuse(
-      "execution-profile-unavailable",
-      "detector.cisco source-tree runs under host-process-uv-v1 are not wired in this build.",
-      capability,
-    );
+  const concurrencyRefusal = concurrencyRefusalV1(detectorOptions, subject.kind, profile.id);
+  if (concurrencyRefusal !== undefined)
+    return refuse("detector-options-invalid", concurrencyRefusal, capability);
   if (input.acceptedImageDigests !== undefined) {
     if (
       profile.id !== "docker-hardened-skillspector-v1" &&
@@ -943,7 +942,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   const environments = engineEnvironmentsV1(capability.detectorId, input.env);
   const env = environments.host;
   const probe = input.prerequisiteProbe;
-  const engineAnalyzer = ENGINE_ANALYZER_BY_DETECTOR_V1[capability.detectorId];
+  const engineAnalyzer = engineForV1(capability.detectorId, subject.kind);
   if (engineAnalyzer !== undefined) {
     const preflight = enginePreflightRefusalV1(engineAnalyzer, {
       sourceRoot: subject.sourceRoot,
@@ -1060,7 +1059,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   }
 
   const analyzer: BaselineAnalyzerV1 | EngineAnalyzerV1 | undefined =
-    engineAnalyzer ?? ANALYZER_BY_DETECTOR[capability.detectorId];
+    engineAnalyzer === undefined
+      ? ANALYZER_BY_DETECTOR[capability.detectorId]
+      : engineObservationAnalyzerV1(engineAnalyzer);
   if (analyzer === undefined)
     return refuse(
       "execution-profile-unavailable",

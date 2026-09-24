@@ -136,12 +136,9 @@ export function readDetectorOptionsV1(
           typeof value === "number" ? String(value) : kind(value)
         }.`,
       };
-    // Every Cisco profile runs one skill per request with the analyzer's own scheduling, so a
-    // valid concurrency would change nothing. It is refused until a profile applies it.
-    return {
-      ok: false,
-      detail: `concurrency is not applied by this profile: no ${detectorId} execution profile in this package runs skills concurrently, so the option would have no effect. Remove it.`,
-    };
+    // Applied only to a source-tree subject under host-process-uv-v1; the runner refuses it
+    // anywhere else (`concurrencyRefusalV1`), where it would change nothing.
+    options.concurrency = value;
   }
   if (rule.keys.includes("internalScopes")) {
     const refusal = trustLintInternalScopesProblemV1(read.internalScopes);
@@ -155,6 +152,21 @@ export function readDetectorOptionsV1(
     options.mcpConfigPaths = read.mcpConfigPaths;
   }
   return { ok: true, options: Object.freeze(options) as DetectorOptionsV1 };
+}
+
+/**
+ * `concurrency` bounds the per-directory jobs of a `detector.cisco` source-tree subject
+ * under host-process-uv-v1 (C2a §3.3). Every other request runs one scan, so the option would
+ * have no effect there and is refused rather than silently ignored.
+ */
+export function concurrencyRefusalV1(
+  options: DetectorOptionsV1 | undefined,
+  subjectKind: string,
+  profileId: string,
+): string | undefined {
+  if (options === undefined || !("concurrency" in options)) return undefined;
+  if (subjectKind === "source-tree" && profileId === "host-process-uv-v1") return undefined;
+  return `concurrency is applied only to a detector.cisco source-tree subject under host-process-uv-v1, which runs one skill-scanner job per directory holding a selected SKILL.md; this ${subjectKind} request under ${profileId} runs one scan, so the option would have no effect. Remove it.`;
 }
 
 /**

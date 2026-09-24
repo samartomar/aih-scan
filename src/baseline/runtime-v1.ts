@@ -78,6 +78,8 @@ const ciscoProject = join(analyzerRoot, "cisco-skill-scanner");
  * helper out. The namespace and OCI profiles keep `cisco-skill-scanner`, unchanged.
  */
 const ciscoHostProject = join(analyzerRoot, "cisco-skill-scanner-host");
+/** The bundled host-profile Cisco project (its lock is host-process-uv-v1's analyzerLock). */
+export const CISCO_SKILL_SCANNER_HOST_PROJECT_V1 = ciscoHostProject;
 const semgrepProject = join(analyzerRoot, "semgrep");
 const semgrepRules = [
   "rules:",
