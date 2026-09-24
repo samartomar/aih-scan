@@ -697,7 +697,14 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
       );
       return root;
     };
-    const normcaseRunner = (python: string, lowercaseRoot: boolean, file = "skill.md") =>
+    // Off win32 Cisco does not normcase, so by default the skill directory keeps its real case
+    // there and only the reported file name is lowercased (U1j: the skill inventory is exact).
+    const normcaseRunner = (
+      python: string,
+      lowercaseRoot: boolean,
+      file = "skill.md",
+      nested = lowercaseRoot ? ["skills", "nested"] : ["Skills", "Nested"],
+    ) =>
       hostRunner([], python, async (argv) => {
         const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
         const reportedRoot = lowercaseRoot ? snapshot.toLowerCase() : snapshot;
@@ -706,7 +713,7 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
           results: [
             { skill_path: reportedRoot, findings: [] },
             {
-              skill_path: join(reportedRoot, "skills", "nested"),
+              skill_path: join(reportedRoot, ...nested),
               findings: [
                 { rule_id: "YARA_prompt_injection_generic", file_path: file, line_number: 5 },
               ],
@@ -810,7 +817,9 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
       expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
       if (outcome.outcome !== "failed") return;
       expect(outcome.failure.detail).toMatch(
-        /skills\/nested\/missing\.md\W+which is not a sealed file of the subject/,
+        windows
+          ? /skills\/nested\/missing\.md\W+which is not a sealed file of the subject/
+          : /Skills\/Nested\/missing\.md\W+which is not a sealed file of the subject/,
       );
     });
 
@@ -924,9 +933,29 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
       expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
       if (outcome.outcome !== "failed") return;
       expect(outcome.failure.detail).toMatch(
-        /skills\/nested\/skill\.md\W+which is not a sealed file of the subject/,
+        /Skills\/Nested\/skill\.md\W+which is not a sealed file of the subject/,
       );
     });
+
+    // U1j: off win32 a skill directory reported in another case is not the skill Scan asked
+    // for, so the report misses that skill and lists one that was not expected.
+    it.skipIf(windows)(
+      "fails at coverage off win32 when a skill directory is reported in another case",
+      async () => {
+        const host = hostFixture();
+        const outcome = await cisco(
+          mixedCaseSkill(),
+          host.env,
+          normcaseRunner(host.python, false, "SKILL.md", ["skills", "nested"]),
+        );
+
+        expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "coverage" } });
+        if (outcome.outcome !== "failed") return;
+        expect(outcome.failure.detail).toMatch(
+          /Cisco skill coverage mismatch: .*missing Skills\/Nested.*not expected skills\/nested/,
+        );
+      },
+    );
   });
 
   it("gives Semgrep the whole tree, .git, dependency and build directories included, as Core does", async () => {
