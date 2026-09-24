@@ -126,6 +126,10 @@ describe("cisco parity (linux-x64 transcripts, C2a §3)", () => {
       const scans = transcript.calls.filter((call) => call.argv.includes("scan"));
       const version = transcript.calls.find((call) => call.argv.includes("--version"));
       const project = projectOf(version?.argv ?? []);
+      // The transcripts were recorded at the pin Core shipped then (2.0.14); the
+      // replay gates on that recorded version, not on this branch's pin.
+      const recordedVersion = /^skill-scanner (\S+)\n?$/.exec(version?.stdout ?? "")?.[1];
+      if (recordedVersion === undefined) throw new Error("transcript has no version answer");
       const seen: string[] = [];
       const run = async (
         argv: readonly string[],
@@ -169,6 +173,7 @@ describe("cisco parity (linux-x64 transcripts, C2a §3)", () => {
         selectedClosurePaths: coreSelectionV1(tree),
         detectorOptions: { concurrency: 1 },
         analyzerProject: project,
+        expectedVersion: recordedVersion,
       });
 
       if (golden.outcome === "completed") {

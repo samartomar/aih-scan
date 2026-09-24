@@ -40,7 +40,7 @@ export type CiscoMultiSkillRunnerV1 = (
 ) => Promise<CiscoMultiSkillRunResultV1>;
 
 /** The pinned analyzer version the locked uv project provides. */
-export const CISCO_MULTI_SKILL_SCANNER_VERSION_V1 = "2.0.14";
+export const CISCO_MULTI_SKILL_SCANNER_VERSION_V1 = "2.1.0";
 const UV_SCANNER_PYTHON_V1 = "3.12";
 /** Core runs both the version probe and each per-skill scan under one bound. */
 export const CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1 = 120_000;

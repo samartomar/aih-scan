@@ -69,7 +69,7 @@ function isCiscoSkillScannerArgv(argv: readonly string[]): boolean {
 function ciscoRunner(sarif: unknown, onScan?: FakeHandler): CiscoMultiSkillRunnerV1 {
   return fakeRunner((argv, opts) => {
     if (!isCiscoSkillScannerArgv(argv)) return { code: 127, stderr: "not found", spawnError: true };
-    if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.0.14\n" };
+    if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n" };
     if (argv.includes("scan")) {
       onScan?.(argv, opts);
       const out = argv[argv.indexOf("--output-sarif") + 1];
@@ -118,7 +118,7 @@ async function runTree(request: {
   const outcome = await runCiscoSourceTreeScanV1({
     run: async (argv, opts) =>
       argv.includes("--version")
-        ? { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" }
+        ? { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" }
         : request.run(argv, opts),
     platform: request.platform,
     env: request.env,
@@ -656,7 +656,7 @@ describe("ciscoScanFailureReasonV1", () => {
 describe("probeCiscoSkillScannerV1", () => {
   it("accepts the pinned version", async () => {
     const run = fakeRunner((argv) =>
-      argv.includes("--version") ? { code: 0, stdout: "skill-scanner 2.0.14\n" } : undefined,
+      argv.includes("--version") ? { code: 0, stdout: "skill-scanner 2.1.0\n" } : undefined,
     );
 
     await expect(probeCiscoSkillScannerV1({ run, platform: "linux", env: {} })).resolves.toEqual({
@@ -707,7 +707,7 @@ describe("probeCiscoSkillScannerV1", () => {
     ).resolves.toEqual({
       kind: "unavailable",
       stage: "availability",
-      detail: 'skill-scanner version "skill-scanner 9.9.9" does not match 2.0.14',
+      detail: 'skill-scanner version "skill-scanner 9.9.9" does not match 2.1.0',
     });
   });
 });
@@ -874,10 +874,33 @@ describe("runCiscoSourceTreeScanV1", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "availability",
-      detail: 'skill-scanner version "skill-scanner 9.9.9" does not match 2.0.14',
+      detail: 'skill-scanner version "skill-scanner 9.9.9" does not match 2.1.0',
     });
     expect(seenArgv.length).toBeGreaterThan(0);
     expect(seenArgv.every((argv) => argv.includes("--version"))).toBe(true);
+  });
+
+  it("gates on an explicit expectedVersion instead of the pinned one when given", async () => {
+    skill("skills/clean", "# Clean\n");
+    const run = fakeRunner((argv) => {
+      if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n" };
+      return { code: 0, stdout: "" };
+    });
+    const request = {
+      run,
+      platform: "linux" as const,
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+    };
+
+    await expect(
+      runCiscoSourceTreeScanV1({ ...request, expectedVersion: "2.0.14" }),
+    ).resolves.toEqual({
+      kind: "failed",
+      stage: "availability",
+      detail: 'skill-scanner version "skill-scanner 2.1.0" does not match 2.0.14',
+    });
   });
 
   it("fails at the acquisition stage when the analyzer environment cannot run", async () => {
@@ -910,7 +933,7 @@ describe("runCiscoSourceTreeScanV1", () => {
     ]);
     const run: CiscoMultiSkillRunnerV1 = async (argv) => {
       if (argv.includes("--version")) {
-        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+        return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
       }
       const target = argv[argv.indexOf("scan") + 1] ?? "";
       const output = argv[argv.indexOf("--output-sarif") + 1];
@@ -956,7 +979,7 @@ describe("runCiscoSourceTreeScanV1", () => {
     let maxActive = 0;
     const run: CiscoMultiSkillRunnerV1 = async (argv) => {
       if (argv.includes("--version")) {
-        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+        return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
       }
       const output = argv[argv.indexOf("--output-sarif") + 1];
       if (output === undefined) return { code: 1, stdout: "", stderr: "missing SARIF path" };
@@ -997,7 +1020,7 @@ describe("runCiscoSourceTreeScanV1", () => {
     let active = 0;
     const run: CiscoMultiSkillRunnerV1 = async (argv) => {
       if (argv.includes("--version")) {
-        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+        return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
       }
       const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
       const output = argv[argv.indexOf("--output-sarif") + 1];
@@ -1041,7 +1064,7 @@ describe("runCiscoSourceTreeScanV1", () => {
   it("fails at the output stage when a job emits no parseable SARIF", async () => {
     skill("skills/clean", "# Clean\n");
     const run = fakeRunner((argv) => {
-      if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.0.14\n" };
+      if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n" };
       if (argv.includes("scan")) {
         const out = argv[argv.indexOf("--output-sarif") + 1];
         if (out === undefined) return { code: 1, stderr: "missing --output-sarif" };
@@ -1070,7 +1093,7 @@ describe("runCiscoSourceTreeScanV1", () => {
     skill("skills/clean", "# Clean\n");
     const run = fakeRunner((argv) =>
       argv.includes("--version")
-        ? { code: 0, stdout: "skill-scanner 2.0.14\n" }
+        ? { code: 0, stdout: "skill-scanner 2.1.0\n" }
         : { code: 0, stdout: "done\n" },
     );
 
@@ -1138,7 +1161,7 @@ describe("runCiscoSourceTreeScanV1", () => {
     const noisy = `boom\n${"x".repeat(4000)}`;
     const run = fakeRunner((argv) =>
       argv.includes("--version")
-        ? { code: 0, stdout: "skill-scanner 2.0.14\n" }
+        ? { code: 0, stdout: "skill-scanner 2.1.0\n" }
         : { code: 2, stdout: "", stderr: noisy },
     );
 

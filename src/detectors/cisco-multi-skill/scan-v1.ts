@@ -288,6 +288,13 @@ export interface CiscoSourceTreeScanRequestV1 {
   /** Strictly validated per C2a §3.3; absent selects the default concurrency. */
   readonly detectorOptions?: unknown;
   readonly analyzerProject?: string;
+  /**
+   * The version the gate requires; defaults to the pinned
+   * {@link CISCO_MULTI_SKILL_SCANNER_VERSION_V1}. Only for a caller that runs a
+   * project locked at another version (e.g. replaying evidence recorded at an
+   * earlier pin); never widens the gate to more than one version.
+   */
+  readonly expectedVersion?: string;
 }
 
 /** Typed outcome of a `source-tree` Cisco scan (C2a §3.5). */
@@ -365,6 +372,7 @@ export async function runCiscoSourceTreeScanV1(
     platform: request.platform,
     env: request.env,
     ...(request.analyzerProject === undefined ? {} : { analyzerProject: request.analyzerProject }),
+    ...(request.expectedVersion === undefined ? {} : { expectedVersion: request.expectedVersion }),
   });
   if (probe.kind !== "available") return failedSourceTreeScanV1(probe.stage, probe.detail);
   const scanJob = async (job: CiscoSourceTreeJobV1): Promise<CiscoSarifRunV1[]> => {

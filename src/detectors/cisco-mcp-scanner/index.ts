@@ -15,7 +15,7 @@ import {
 
 /**
  * Scan detector engine `detector.cisco-mcp-scanner`: the Cisco AI Defense
- * `mcp-scanner` (uv-pinned 4.8.2) run over the MCP tool manifest derived from a
+ * `mcp-scanner` (uv-pinned 4.8.4) run over the MCP tool manifest derived from a
  * subject tree's MCP config files.
  *
  * Ported from Core (`src/trust/detectors.ts` and `src/trust/scan.ts`) with
@@ -51,7 +51,7 @@ import {
  */
 
 export const CISCO_MCP_SCANNER_DETECTOR_ID_V1 = "detector.cisco-mcp-scanner";
-export const CISCO_MCP_SCANNER_VERSION_V1 = "4.8.2";
+export const CISCO_MCP_SCANNER_VERSION_V1 = "4.8.4";
 export const CISCO_MCP_SCANNER_ANALYZER_V1 = `mcp-scanner@uv:${CISCO_MCP_SCANNER_VERSION_V1}`;
 export const CISCO_MCP_SCANNER_PYTHON_V1 = "3.12";
 export const CISCO_MCP_SCANNER_TIMEOUT_MS_V1 = 120_000;

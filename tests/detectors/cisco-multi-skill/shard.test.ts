@@ -61,7 +61,7 @@ function scanningRunner(hooks?: {
   let scanCount = 0;
   return async (argv) => {
     if (argv.includes("--version")) {
-      return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+      return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
     }
     const scanIndex = argv.indexOf("scan");
     const outputIndex = argv.indexOf("--output-sarif");
@@ -175,7 +175,7 @@ describe("runCiscoShardV1", () => {
       sourceRoot: root,
       jobs: overrides?.jobs ?? shardRequestJobs(root),
       expected: overrides?.expected ?? {
-        analyzerVersion: "2.0.14",
+        analyzerVersion: "2.1.0",
         lockSha256: bundledLockSha256(),
       },
       concurrency: overrides?.concurrency ?? 2,
@@ -201,7 +201,7 @@ describe("runCiscoShardV1", () => {
 
     expect(outcome.kind).toBe("completed");
     if (outcome.kind !== "completed") return;
-    expect(outcome.analyzer).toEqual({ version: "2.0.14", lockSha256: bundledLockSha256() });
+    expect(outcome.analyzer).toEqual({ version: "2.1.0", lockSha256: bundledLockSha256() });
     expect(outcome.sourceSeal.before).toBe(outcome.sourceSeal.after);
     expect(outcome.sourceSeal.before).toMatch(/^[0-9a-f]{64}$/);
     expect(outcome.outputs.map((output) => output.path)).toEqual(["skills/alpha", "skills/beta"]);
@@ -236,16 +236,16 @@ describe("runCiscoShardV1", () => {
 
     const accepted = await runCiscoShardV1(
       shardRequest(root, {
-        expected: { analyzerVersion: "2.0.14+uvlock.deadbeef", lockSha256: bundledLockSha256() },
+        expected: { analyzerVersion: "2.1.0+uvlock.deadbeef", lockSha256: bundledLockSha256() },
       }),
     );
     expect(accepted.kind).toBe("completed");
-    if (accepted.kind === "completed") expect(accepted.analyzer.version).toBe("2.0.14");
+    if (accepted.kind === "completed") expect(accepted.analyzer.version).toBe("2.1.0");
 
     const seenArgv: string[][] = [];
     const mismatchedRun: CiscoMultiSkillRunnerV1 = async (argv) => {
       seenArgv.push([...argv]);
-      return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+      return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
     };
     const rejected = await runCiscoShardV1(
       shardRequest(root, {
@@ -256,7 +256,7 @@ describe("runCiscoShardV1", () => {
     expect(rejected).toEqual({
       kind: "failed",
       stage: "availability",
-      detail: 'skill-scanner version "skill-scanner 2.0.14" does not match 9.9.9',
+      detail: 'skill-scanner version "skill-scanner 2.1.0" does not match 9.9.9',
     });
     expect(seenArgv.length).toBeGreaterThan(0);
     expect(seenArgv.every((argv) => argv.includes("--version"))).toBe(true);
@@ -274,7 +274,7 @@ describe("runCiscoShardV1", () => {
     const outcome = await runCiscoShardV1(
       shardRequest(root, {
         run,
-        expected: { analyzerVersion: "2.0.14", lockSha256: "0".repeat(64) },
+        expected: { analyzerVersion: "2.1.0", lockSha256: "0".repeat(64) },
       }),
     );
 
@@ -468,7 +468,7 @@ describe("runCiscoShardV1", () => {
 
     const badLock = await runCiscoShardV1(
       shardRequest(root, {
-        expected: { analyzerVersion: "2.0.14", lockSha256: "ZZZ" },
+        expected: { analyzerVersion: "2.1.0", lockSha256: "ZZZ" },
       }),
     );
     expect(badLock).toMatchObject({ kind: "refused", reason: "shard-request-invalid" });
@@ -565,7 +565,7 @@ describe("runCiscoShardV1", () => {
     skill(root, join("skills", "beta"), "# beta\n");
     const run: CiscoMultiSkillRunnerV1 = async (argv) => {
       if (argv.includes("--version")) {
-        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+        return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
       }
       const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
       const output = argv[argv.indexOf("--output-sarif") + 1];
