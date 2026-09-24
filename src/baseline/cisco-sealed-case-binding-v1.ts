@@ -1,6 +1,6 @@
 import { assertSafeRelativePosixPathV1 } from "../contract/strict-json-v1.js";
 import {
-  sarifArtifactLocationTargetV1,
+  sarifArtifactLocationFilesV1,
   sarifDetachedArtifactLocationsV1,
   sarifResultArtifactLocationsV1,
   sarifResultSharedArtifactLocationsV1,
@@ -117,7 +117,7 @@ function locationArtifactV1(location: unknown): unknown {
  * (exact, case-sensitive, root-relative); every other artifact location of the result (S2h:
  * related locations, code flows, stacks, fixes, the analysis target; never a property bag)
  * and of the run's shared `threadFlowLocations` and `graphs` must name such a file too, by
- * `uri` or by `index` (`sarifArtifactLocationTargetV1`). U1h: each result's references to
+ * `uri` or by `index` (`sarifArtifactLocationFilesV1`, with the index's parentIndex ancestry, U1i). U1h: each result's references to
  * those shared objects are resolved for that result (`sarifResultSharedArtifactLocationsV1`),
  * and a malformed, out-of-range or ambiguous one is refused. `owner` names the file set in the
  * reason: "job" for a shard job, "subject" for a `runDetectorV1` run. Returns why a result
@@ -128,12 +128,15 @@ export function unboundCiscoSarifResultV1(
   sealedFiles: ReadonlySet<string>,
   owner: "job" | "subject",
 ): string | undefined {
+  // U1i (review of U1h, P1): an artifact named by index is bound with its whole parentIndex
+  // ancestry (`sarifArtifactLocationFilesV1`); every ancestor must be a sealed file too.
   const unbound = (where: string, artifactLocation: unknown, artifacts: unknown) => {
-    const target = sarifArtifactLocationTargetV1(artifactLocation, artifacts);
-    if ("problem" in target) return `${where}: ${target.problem}`;
-    return sealedFiles.has(target.uri)
+    const files = sarifArtifactLocationFilesV1(artifactLocation, artifacts);
+    if ("problem" in files) return `${where}: ${files.problem}`;
+    const outside = files.uris.find((uri) => !sealedFiles.has(uri));
+    return outside === undefined
       ? undefined
-      : `${where} names ${JSON.stringify(target.uri)}, which is not a sealed file of the ${owner}`;
+      : `${where} names ${JSON.stringify(outside)}, which is not a sealed file of the ${owner}`;
   };
   let index = 0;
   for (const run of log.runs ?? []) {

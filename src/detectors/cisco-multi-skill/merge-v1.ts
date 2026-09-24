@@ -169,8 +169,9 @@ export function prefixSafeCiscoUriV1(prefix: string, raw: unknown, directory = f
  * under the analyzer's own `%SRCROOT%` (the job directory) is prefixed with the job's
  * source-relative directory ({@link prefixSafeCiscoUriV1}, C2a §3.4). Obsolete base
  * references and `originalUriBaseIds` are removed. U1h: every file a result names, directly
- * or through a shared reference (`sarifResultFilesV1`), must lie in the job's skill
- * directory, or the job fails at `output`. The returned log is deeply frozen. The
+ * or through a shared reference (`sarifResultFilesV1`), and (U1i) every parentIndex ancestor
+ * of an artifact it names by index, must lie in the job's skill directory, or the job fails
+ * at `output`. The returned log is deeply frozen. The
  * source-tree scan and the shard both take each job's SARIF through here.
  */
 export function ciscoJobSarifV1(

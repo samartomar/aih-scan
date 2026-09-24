@@ -611,3 +611,68 @@ describe.each(
     expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
   });
 });
+
+// U1i (review of U1h, P1): an artifact a job's result references by index lies inside its
+// parent (`run.artifacts[i].parentIndex`) and so on up; every artifact of that ancestry must
+// lie in the job's skill directory, and a malformed, out-of-range or cyclic parent fails at
+// output, on the source-tree scan and the shard alike.
+describe.each(
+  BOTH,
+)("Cisco job artifact ancestry resolves per result (%s, U1i)", (_label, execute) => {
+  const rootBase = () => ({ ROOT: { uri: `${pathToFileURL(root).href}/` } });
+  const artifact = (uri: string, parentIndex?: unknown) => ({
+    location: { uri, uriBaseId: "ROOT" },
+    ...(parentIndex === undefined ? {} : { parentIndex }),
+  });
+  const outcomeOf = (artifacts: unknown[]) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([
+              {
+                ...cleanRun([
+                  {
+                    ...result("SKILL.md"),
+                    relatedLocations: [{ physicalLocation: { artifactLocation: { index: 0 } } }],
+                  },
+                ]),
+                originalUriBaseIds: rootBase(),
+                artifacts,
+              },
+            ])
+          : sarif([cleanRun()]),
+      ),
+    );
+
+  it("fails a parent in a sibling skill (reviewer case)", async () => {
+    const outcome = await outcomeOf([
+      artifact("skills/alpha/SKILL.md", 1),
+      artifact("skills/beta/SKILL.md"),
+    ]);
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+      /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
+    );
+  });
+
+  it("fails a cyclic, out-of-range or malformed parent", async () => {
+    for (const [artifacts, reason] of [
+      [[artifact("skills/alpha/SKILL.md", 0)], /parentIndex 0 forms a cycle/],
+      [[artifact("skills/alpha/SKILL.md", 3)], /parentIndex 3 resolves to no run artifact URI/],
+      [[artifact("skills/alpha/SKILL.md", "1")], /parentIndex \\?"1\\?" is malformed/],
+    ] as const) {
+      const outcome = await outcomeOf([...artifacts]);
+      expect(outcome, JSON.stringify(artifacts)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  it("keeps a parent chain inside the job's skill", async () => {
+    writeFileSync(join(root, "skills", "alpha", "bundle.zip"), "zip\n");
+    const outcome = await outcomeOf([
+      artifact("skills/alpha/SKILL.md", 1),
+      artifact("skills/alpha/bundle.zip"),
+    ]);
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});

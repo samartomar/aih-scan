@@ -173,3 +173,60 @@ describe("unboundCiscoSarifResultV1 shared references (U1h)", () => {
       expect(unboundCiscoSarifResultV1(log(fields, shared), sealed, "subject")).toMatch(reason);
   });
 });
+
+// U1i (review of U1h, P1): an artifact a result references by index is bound together with its
+// whole parentIndex ancestry; every ancestor must be a sealed file, and a malformed,
+// out-of-range or cyclic parent is refused.
+describe("unboundCiscoSarifResultV1 artifact ancestry (U1i)", () => {
+  const log = (artifacts: unknown[]) => ({
+    runs: [
+      {
+        artifacts,
+        results: [
+          {
+            locations: [
+              { physicalLocation: { artifactLocation: { uri: "skills/a/SKILL.md", index: 0 } } },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const artifact = (uri: string, parentIndex?: unknown) => ({
+    location: { uri },
+    ...(parentIndex === undefined ? {} : { parentIndex }),
+  });
+  const sealed = new Set(["skills/a/SKILL.md", "skills/a/bundle.zip"]);
+
+  it("binds a parent chain of sealed files", () => {
+    expect(
+      unboundCiscoSarifResultV1(
+        log([artifact("skills/a/SKILL.md", 1), artifact("skills/a/bundle.zip")]),
+        sealed,
+        "job",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses an ancestor that is not a sealed file (reviewer case)", () => {
+    expect(
+      unboundCiscoSarifResultV1(
+        log([artifact("skills/a/SKILL.md", 1), artifact("skills/b/archive.zip")]),
+        sealed,
+        "job",
+      ),
+    ).toMatch(/SARIF result 0 .*"skills\/b\/archive\.zip", which is not a sealed file of the job/);
+  });
+
+  it("refuses a cyclic, out-of-range or malformed parent", () => {
+    for (const [artifacts, reason] of [
+      [
+        [artifact("skills/a/SKILL.md", 1), artifact("skills/a/bundle.zip", 0)],
+        /SARIF result 0: run artifact 1 parentIndex 0 forms a cycle/,
+      ],
+      [[artifact("skills/a/SKILL.md", 2)], /run artifact 0 parentIndex 2 resolves to no/],
+      [[artifact("skills/a/SKILL.md", -1)], /run artifact 0 parentIndex -1 is malformed/],
+    ] as const)
+      expect(unboundCiscoSarifResultV1(log([...artifacts]), sealed, "job")).toMatch(reason);
+  });
+});

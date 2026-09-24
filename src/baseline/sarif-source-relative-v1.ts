@@ -325,6 +325,60 @@ export function sarifArtifactLocationTargetV1(
   return { uri: location.uri };
 }
 
+/**
+ * U1i (review of U1h, P1): the URIs of every ancestor of run artifact `index`, nearest first.
+ * An artifact lies inside its `parentIndex` artifact, and that one inside its own, so a
+ * location that names an artifact also reaches every ancestor. Each `parentIndex` must be a
+ * non-negative safe integer naming an object of `run.artifacts` whose `location.uri` is a
+ * string (and whose own `location.index`, if present, is that index); a chain that returns
+ * to an artifact already on it is a cycle. Anything else is the problem returned.
+ */
+function artifactAncestry(
+  index: number,
+  artifacts: unknown,
+): Readonly<{ uris: string[] } | { problem: string }> {
+  const list: readonly unknown[] = Array.isArray(artifacts) ? artifacts : [];
+  const seen = new Set<number>([index]);
+  const uris: string[] = [];
+  let current = index;
+  for (;;) {
+    const entry = list[current];
+    const parent = isRecord(entry) ? entry.parentIndex : undefined;
+    if (parent === undefined) return { uris };
+    const at = `run artifact ${current} parentIndex`;
+    if (typeof parent !== "number" || !Number.isSafeInteger(parent) || parent < 0)
+      return { problem: `${at} ${JSON.stringify(parent)} is malformed` };
+    if (seen.has(parent)) return { problem: `${at} ${parent} forms a cycle` };
+    const owner = list[parent];
+    const location = isRecord(owner) ? owner.location : undefined;
+    if (!isRecord(location) || typeof location.uri !== "string")
+      return { problem: `${at} ${parent} resolves to no run artifact URI` };
+    if (location.index !== undefined && location.index !== parent)
+      return { problem: `${at} ${parent} resolves to an artifact that names another index` };
+    seen.add(parent);
+    uris.push(location.uri);
+    current = parent;
+  }
+}
+
+/**
+ * U1i (review of U1h, P1): every file one `artifactLocation` reaches: the file it names
+ * ({@link sarifArtifactLocationTargetV1}) and, when it names a run artifact by `index`, every
+ * ancestor of that artifact ({@link artifactAncestry}). Per-result containment and the
+ * sealed-file binding apply to each of them.
+ */
+export function sarifArtifactLocationFilesV1(
+  artifactLocation: unknown,
+  artifacts: unknown,
+): Readonly<{ uris: string[] } | { problem: string }> {
+  const target = sarifArtifactLocationTargetV1(artifactLocation, artifacts);
+  if ("problem" in target) return target;
+  const index = isRecord(artifactLocation) ? artifactLocation.index : undefined;
+  if (typeof index !== "number") return { uris: [target.uri] };
+  const ancestry = artifactAncestry(index, artifacts);
+  return "problem" in ancestry ? ancestry : { uris: [target.uri, ...ancestry.uris] };
+}
+
 /** The object `owner[key][index]` a reference names; anything else throws `TypeError`. */
 function referencedEntry(
   owner: Json,
@@ -406,25 +460,28 @@ export function sarifPathInsideDirectoryV1(directory: string, path: string): boo
  * U1h: the source-relative file every artifact location one result of a normalized run
  * reaches names: its own ({@link sarifResultArtifactLocationsV1}) and those of the shared
  * objects it references ({@link sarifResultSharedArtifactLocationsV1}), each resolved by
- * {@link sarifArtifactLocationTargetV1}. Throws `TypeError` on anything unresolved.
+ * {@link sarifArtifactLocationFilesV1}, with the ancestry of every artifact it names by index
+ * (U1i). Throws `TypeError` on anything unresolved.
  */
 export function sarifResultFilesV1(result: unknown, run: unknown): string[] {
   const artifacts = isRecord(run) ? run.artifacts : undefined;
   return [
     ...sarifResultArtifactLocationsV1(result),
     ...sarifResultSharedArtifactLocationsV1(result, run),
-  ].map((location) => {
-    const target = sarifArtifactLocationTargetV1(location, artifacts);
-    if ("problem" in target) fail(target.problem);
-    return target.uri;
+  ].flatMap((location) => {
+    const files = sarifArtifactLocationFilesV1(location, artifacts);
+    if ("problem" in files) fail(files.problem);
+    return files.uris;
   });
 }
 
 /**
  * U1g (review of S2i, P1): every `index` of an already normalized scope resolves by
  * {@link sarifArtifactLocationTargetV1} against the run's own `artifacts`; outside a run no
- * index can resolve. A run artifact's own location may name only its own index. Throws
- * `TypeError` (stage `output` for every caller).
+ * index can resolve. A run artifact's own location may name only its own index, and U1i:
+ * every run artifact's `parentIndex` chain must resolve, without a cycle
+ * ({@link artifactAncestry}), whether or not a result references it. Throws `TypeError`
+ * (stage `output` for every caller).
  */
 function assertArtifactIndices(scope: Json, kind: LocationScope): void {
   const artifacts = kind === "run" && isRecord(scope) ? scope.artifacts : undefined;
@@ -432,6 +489,8 @@ function assertArtifactIndices(scope: Json, kind: LocationScope): void {
   if (Array.isArray(artifacts))
     artifacts.forEach((artifact, index) => {
       if (isRecord(artifact) && isRecord(artifact.location)) own.set(artifact.location, index);
+      const ancestry = artifactAncestry(index, artifacts);
+      if ("problem" in ancestry) fail(ancestry.problem);
     });
   for (const { location } of artifactLocations(scope, kind)) {
     if (location.index === undefined) continue;

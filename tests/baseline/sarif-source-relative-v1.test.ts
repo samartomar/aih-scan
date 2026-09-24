@@ -1188,3 +1188,119 @@ describe("Cisco scan-all shared references resolve per result (U1h)", () => {
       expect(() => scan(fields, run), JSON.stringify(fields)).toThrow(reason);
   });
 });
+
+// U1i (review of U1h, P1): an artifact a result references by index is located inside its
+// parent (`run.artifacts[i].parentIndex`), and that parent inside its own. A result therefore
+// also reaches every artifact of that ancestry; each must lie in the reporting skill, and a
+// malformed, out-of-range or cyclic parentIndex fails at output.
+describe("Cisco scan-all artifact ancestry resolves per result (U1i)", () => {
+  const report = {
+    results: [
+      {
+        skill_path: "/scan/skills/alpha",
+        findings: [{ rule_id: "R", file_path: "SKILL.md", line_number: 1 }],
+      },
+      { skill_path: "/scan/skills/beta", findings: [] },
+    ],
+  };
+  const artifact = (uri: string, parentIndex?: unknown) => ({
+    location: { uri, uriBaseId: "ROOT" },
+    ...(parentIndex === undefined ? {} : { parentIndex }),
+  });
+  const log = (artifacts: unknown[], primaryIndex = false) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "skill-scanner" } },
+        originalUriBaseIds: { ROOT: { uri: "file:///scan/" } },
+        artifacts,
+        results: [
+          {
+            ruleId: "R",
+            message: { text: "R" },
+            locations: [
+              {
+                physicalLocation: {
+                  artifactLocation: { uri: "SKILL.md", ...(primaryIndex ? { index: 0 } : {}) },
+                  region: { startLine: 1 },
+                },
+              },
+            ],
+            ...(primaryIndex
+              ? {}
+              : { relatedLocations: [{ physicalLocation: { artifactLocation: { index: 0 } } }] }),
+          },
+        ],
+      },
+    ],
+  });
+  const scan = (artifacts: unknown[], primaryIndex = false) =>
+    ciscoSourceRelativeSarifV1(log(artifacts, primaryIndex), report, ["/scan"]);
+
+  it("refuses a parent in a sibling skill (reviewer case)", () => {
+    for (const primaryIndex of [true, false])
+      expect(() =>
+        scan(
+          [artifact("skills/alpha/SKILL.md", 1), artifact("skills/beta/archive.zip")],
+          primaryIndex,
+        ),
+      ).toThrow(/skills\/beta\/archive\.zip.*not in the reporting skill skills\/alpha/);
+    // A grandparent in the sibling skill escapes no better.
+    expect(() =>
+      scan([
+        artifact("skills/alpha/SKILL.md", 1),
+        artifact("skills/alpha/bundle.zip", 2),
+        artifact("skills/beta/outer.zip"),
+      ]),
+    ).toThrow(/skills\/beta\/outer\.zip.*not in the reporting skill skills\/alpha/);
+  });
+
+  it("keeps a parent chain inside the reporting skill", () => {
+    const normalized = scan([
+      artifact("skills/alpha/SKILL.md", 1),
+      artifact("skills/alpha/bundle.zip", 2),
+      artifact("skills/alpha/outer.zip"),
+    ]);
+    const run = (normalized.document.runs as Record<string, unknown>[])[0] as {
+      artifacts: { location: unknown; parentIndex?: number }[];
+    };
+    expect(run.artifacts.map((entry) => [entry.location, entry.parentIndex])).toEqual([
+      [{ uri: "skills/alpha/SKILL.md" }, 1],
+      [{ uri: "skills/alpha/bundle.zip" }, 2],
+      [{ uri: "skills/alpha/outer.zip" }, undefined],
+    ]);
+  });
+
+  it("refuses a cyclic, out-of-range or malformed parentIndex", () => {
+    const cases: [unknown[], RegExp][] = [
+      [[artifact("skills/alpha/SKILL.md", 0)], /run artifact 0 parentIndex 0 forms a cycle/],
+      [
+        [artifact("skills/alpha/SKILL.md", 1), artifact("skills/alpha/a.zip", 0)],
+        /parentIndex 0 forms a cycle/,
+      ],
+      [
+        [artifact("skills/alpha/SKILL.md", 5)],
+        /run artifact 0 parentIndex 5 resolves to no run artifact URI/,
+      ],
+      [
+        [artifact("skills/alpha/SKILL.md", 1), { parentIndex: 0 }],
+        /run artifact 0 parentIndex 1 resolves to no run artifact URI/,
+      ],
+      [[artifact("skills/alpha/SKILL.md", -1)], /run artifact 0 parentIndex -1 is malformed/],
+      [[artifact("skills/alpha/SKILL.md", "1")], /run artifact 0 parentIndex "1" is malformed/],
+      [[artifact("skills/alpha/SKILL.md", 0.5)], /run artifact 0 parentIndex 0.5 is malformed/],
+    ];
+    for (const [artifacts, reason] of cases)
+      expect(() => scan(artifacts), JSON.stringify(artifacts)).toThrow(reason);
+  });
+
+  it("refuses a malformed chain even among artifacts no result references", () => {
+    expect(() =>
+      scan([
+        artifact("skills/alpha/SKILL.md"),
+        artifact("skills/alpha/a.md", 2),
+        artifact("skills/alpha/b.md", 1),
+      ]),
+    ).toThrow(/parentIndex 1 forms a cycle|parentIndex 2 forms a cycle/);
+  });
+});
