@@ -9,15 +9,21 @@
 //   node tools/emit-consumer-handoff.mjs
 //     --release-root <dir holding exactly SHA256SUMS, discovery.json, inspection.json, publication.json>
 //     --release <gh release view <tag> -R <repository> --json assets,isDraft,tagName,targetCommitish,url>
-//     --attestation <gh attestation verify <release-root>/publication.json -R <repository>
-//                    --signer-workflow <repository>/.github/workflows/baseline-publication.yml
-//                    --source-ref refs/heads/main --source-digest <publisher-commit>
-//                    --deny-self-hosted-runners --format json>
+//     --attestation-bundle <the Sigstore bundle of the publication's build-provenance attestation:
+//                           one bundle as JSON, or one JSON line (gh attestation download)>
 //     --run <gh run view <run id> -R <repository>
 //            --json attempt,conclusion,databaseId,event,headBranch,headSha,status,url,workflowName>
 //     --mapping <reviewed ScannerConsumerMappingV1 file>
 //     --repository <owner/name> --publisher-commit <40-hex>
 //     --output <new directory>
+//
+// The tool verifies the attestation itself: it stages the exact publication.json bytes it
+// verified and the supplied bundle in a private directory and runs `gh attestation verify`
+// against them with every constraint pinned (repository samartomar/aih-scan, the exact
+// signer workflow identity at refs/heads/main, the OIDC issuer, the SLSA provenance predicate,
+// source ref, source and signer digest = the publisher commit, GitHub-hosted runners only),
+// then checks the verifier's JSON with exact field sets. A supplied verification result is
+// never trusted, and a missing, malformed or mismatched bundle refuses.
 //
 // Output (a new directory; the consumer requires the handoff beside publication.json):
 //   <output>/publication.json          exact released bytes
@@ -29,12 +35,15 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyBaselineVetAttestationV1 } from "../dist/baseline/attestation-v1.js";
@@ -67,6 +76,39 @@ const WORKFLOW_PATH = ".github/workflows/baseline-publication.yml";
 const SOURCE_REF = "refs/heads/main";
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const PROVENANCE_PREDICATE = "https://slsa.dev/provenance/v1";
+// The one repository whose baseline publications this tool projects.
+const PUBLICATION_REPOSITORY = "samartomar/aih-scan";
+const SIGSTORE_BUNDLE_MEDIA_TYPE = "application/vnd.dev.sigstore.bundle.v0.3+json";
+const VERIFICATION_RESULT_MEDIA_TYPE =
+  "application/vnd.dev.sigstore.verificationresult+json;version=0.1";
+const IN_TOTO_STATEMENT = "https://in-toto.io/Statement/v1";
+// Exactly what gh attestation verify --format json prints for a GitHub Actions provenance
+// certificate; a field gh adds or drops fails closed until it is reviewed here.
+const CERTIFICATE_KEYS = [
+  "buildConfigDigest",
+  "buildConfigURI",
+  "buildSignerDigest",
+  "buildSignerURI",
+  "buildTrigger",
+  "certificateIssuer",
+  "githubWorkflowName",
+  "githubWorkflowRef",
+  "githubWorkflowRepository",
+  "githubWorkflowSHA",
+  "githubWorkflowTrigger",
+  "issuer",
+  "runInvocationURI",
+  "runnerEnvironment",
+  "sourceRepositoryDigest",
+  "sourceRepositoryIdentifier",
+  "sourceRepositoryOwnerIdentifier",
+  "sourceRepositoryOwnerURI",
+  "sourceRepositoryRef",
+  "sourceRepositoryURI",
+  "sourceRepositoryVisibilityAtSigning",
+  "subjectAlternativeName",
+];
+const VERIFIER_LIMIT = 16 * 1024 * 1024;
 const RELEASE_FILES = ["SHA256SUMS", "discovery.json", "inspection.json", "publication.json"];
 const FILE_LIMITS = {
   "SHA256SUMS": 1024,
@@ -289,13 +331,107 @@ function releaseMetadata(bytes, repository, publisherCommit, tag, files) {
   return { tag, url: release.url, targetCommitish: publisherCommit, isDraft: false, assets };
 }
 
-function attestationFacts(bytes, repository, publisherCommit, publicationSha256, claims) {
+/** One Sigstore bundle: a JSON object, or a JSON-lines file holding exactly one bundle. */
+function attestationBundle(bytes) {
+  const lines = utf8(bytes, "attestation bundle").replace(/\r?\n$/u, "").split(/\r?\n/u);
+  if (lines.length !== 1) fail("attestation bundle must hold exactly one bundle");
+  const bundle = exactKeys(
+    strictJson(Buffer.from(lines[0], "utf8"), "attestation bundle"),
+    ["dsseEnvelope", "mediaType", "verificationMaterial"],
+    "attestation bundle",
+  );
+  equal(bundle.mediaType, SIGSTORE_BUNDLE_MEDIA_TYPE, "attestation bundle mediaType");
+  exactKeys(bundle.dsseEnvelope, ["payload", "payloadType", "signatures"], "attestation bundle dsseEnvelope");
+  record(bundle.verificationMaterial, "attestation bundle verificationMaterial");
+  return { bundle, bytes: Buffer.from(`${lines[0]}\n`, "utf8") };
+}
+
+function defaultRunGh(args, cwd) {
+  const result = spawnSync("gh", args, {
+    cwd,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 120_000,
+    maxBuffer: VERIFIER_LIMIT,
+  });
+  if (result.error) fail("attestation verifier gh is unavailable");
+  return { status: result.status, stdout: typeof result.stdout === "string" ? result.stdout : "" };
+}
+
+/**
+ * Verify the bundle against the exact publication bytes with gh's Sigstore verifier and
+ * every constraint pinned, the way Core's own baseline-evidence intake does; return gh's
+ * verification JSON.
+ */
+function verifiedAttestationOutput(publicationBytes, bundleBytes, publisherCommit, runGh) {
+  const staging = mkdtempSync(join(tmpdir(), "aih-scan-attestation-"));
+  try {
+    const subject = join(staging, "publication.json");
+    const bundle = join(staging, "attestation.jsonl");
+    writeFileSync(subject, publicationBytes, { flag: "wx", mode: 0o600 });
+    writeFileSync(bundle, bundleBytes, { flag: "wx", mode: 0o600 });
+    const result = runGh(
+      [
+        "attestation",
+        "verify",
+        subject,
+        "--bundle",
+        bundle,
+        "--format",
+        "json",
+        "--repo",
+        PUBLICATION_REPOSITORY,
+        "--predicate-type",
+        PROVENANCE_PREDICATE,
+        "--cert-identity",
+        `https://github.com/${PUBLICATION_REPOSITORY}/${WORKFLOW_PATH}@${SOURCE_REF}`,
+        "--cert-oidc-issuer",
+        OIDC_ISSUER,
+        "--source-ref",
+        SOURCE_REF,
+        "--source-digest",
+        publisherCommit,
+        "--signer-digest",
+        publisherCommit,
+        "--deny-self-hosted-runners",
+      ],
+      staging,
+    );
+    if (result.status !== 0) fail("attestation verification failed");
+    if (typeof result.stdout !== "string" || Buffer.byteLength(result.stdout) > VERIFIER_LIMIT)
+      fail("attestation verification output");
+    return Buffer.from(result.stdout, "utf8");
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+function attestationFacts(bytes, bundle, repository, publisherCommit, publicationSha256, claims) {
   const results = strictJson(bytes, "attestation");
   if (!Array.isArray(results) || results.length !== 1) fail("attestation result count");
   const result = exactKeys(results[0], ["attestation", "verificationResult"], "attestation result");
-  const verification = record(result.verificationResult, "attestation verificationResult");
-  const statement = record(verification.statement, "attestation statement");
+  const attestation = exactKeys(
+    result.attestation,
+    ["bundle", "bundle_url", "initiator"],
+    "attestation record",
+  );
+  // gh must report on the bundle this tool handed it, byte-for-byte in canonical form.
+  if (!canonical(record(attestation.bundle, "attestation record bundle")).equals(canonical(bundle)))
+    fail("attestation bundle is not the verified bundle");
+  const verification = exactKeys(
+    result.verificationResult,
+    ["mediaType", "signature", "statement", "verifiedIdentity", "verifiedTimestamps"],
+    "attestation verificationResult",
+  );
+  equal(verification.mediaType, VERIFICATION_RESULT_MEDIA_TYPE, "attestation verificationResult mediaType");
+  const statement = exactKeys(
+    verification.statement,
+    ["_type", "predicate", "predicateType", "subject"],
+    "attestation statement",
+  );
+  equal(statement._type, IN_TOTO_STATEMENT, "attestation statement _type");
   equal(statement.predicateType, PROVENANCE_PREDICATE, "attestation predicateType");
+  record(statement.predicate, "attestation predicate");
   // One publish job attests every batch publication of its run (subject-path
   // publications/*/publication.json), so the subject list names each exactly once.
   if (
@@ -314,15 +450,19 @@ function attestationFacts(bytes, repository, publisherCommit, publicationSha256,
   if (new Set(subjects).size !== subjects.length) fail("attestation subject repeated");
   if (!subjects.includes(publicationSha256))
     fail("attestation subject does not cover the released publication.json");
-  const certificate = record(
-    record(verification.signature, "attestation signature").certificate,
+  const certificate = exactKeys(
+    exactKeys(verification.signature, ["certificate"], "attestation signature").certificate,
+    CERTIFICATE_KEYS,
     "attestation certificate",
   );
   const workflowUri = `https://github.com/${repository}/${WORKFLOW_PATH}@${SOURCE_REF}`;
   const expected = {
     issuer: OIDC_ISSUER,
+    subjectAlternativeName: workflowUri,
     buildSignerURI: workflowUri,
     buildSignerDigest: publisherCommit,
+    buildConfigURI: workflowUri,
+    buildConfigDigest: publisherCommit,
     sourceRepositoryURI: `https://github.com/${repository}`,
     sourceRepositoryDigest: publisherCommit,
     sourceRepositoryRef: SOURCE_REF,
@@ -333,6 +473,19 @@ function attestationFacts(bytes, repository, publisherCommit, publicationSha256,
   };
   for (const [key, value] of Object.entries(expected))
     equal(certificate[key], value, `attestation ${key}`);
+  const identity = exactKeys(
+    verification.verifiedIdentity,
+    ["issuer", "runnerEnvironment", "subjectAlternativeName"],
+    "attestation verifiedIdentity",
+  );
+  equal(
+    exactKeys(identity.subjectAlternativeName, ["subjectAlternativeName"], "attestation verifiedIdentity SAN")
+      .subjectAlternativeName,
+    workflowUri,
+    "attestation verifiedIdentity subjectAlternativeName",
+  );
+  exactKeys(identity.issuer, ["issuer", "regexp"], "attestation verifiedIdentity issuer");
+  equal(identity.runnerEnvironment, "github-hosted", "attestation verifiedIdentity runnerEnvironment");
   const invocation = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/actions\/runs\/([1-9]\d{0,19})\/attempts\/([1-9]\d{0,3})$/u.exec(
     text(certificate.runInvocationURI, "attestation runInvocationURI"),
   );
@@ -617,10 +770,11 @@ function scanPackage() {
   };
 }
 
-export function emitConsumerHandoffV1(options) {
+export function emitConsumerHandoffV1(options, { runGh = defaultRunGh } = {}) {
   const repository = options.repository;
   const publisherCommit = options.publisherCommit;
   if (typeof repository !== "string" || !REPOSITORY.test(repository)) fail("repository");
+  if (repository !== PUBLICATION_REPOSITORY) fail(`repository must be ${PUBLICATION_REPOSITORY}`);
   if (typeof publisherCommit !== "string" || !HEX_40.test(publisherCommit)) fail("publisher commit");
   const output = resolve(text(options.output, "output", 4096));
   if (lstatSync(output, { throwIfNoEntry: false }) !== undefined) fail("output already exists");
@@ -641,8 +795,12 @@ export function emitConsumerHandoffV1(options) {
     tag,
     files,
   );
+  const bundle = attestationBundle(
+    readRegularFile(resolve(options.attestationBundle), "attestation bundle", INPUT_LIMIT),
+  );
   const attested = attestationFacts(
-    readRegularFile(resolve(options.attestation), "attestation", INPUT_LIMIT),
+    verifiedAttestationOutput(files["publication.json"], bundle.bytes, publisherCommit, runGh),
+    bundle.bundle,
     repository,
     publisherCommit,
     publicationSha256,
@@ -831,7 +989,7 @@ export function emitConsumerHandoffV1(options) {
 const ARGUMENTS = {
   "release-root": "releaseRoot",
   release: "release",
-  attestation: "attestation",
+  "attestation-bundle": "attestationBundle",
   run: "run",
   mapping: "mapping",
   repository: "repository",

@@ -33,6 +33,11 @@ import {
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { ed25519KeyIdV2 } from "../../src/observation/scan-attestation-v2.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import {
+  type ConsumerHandoffGhRunner,
+  emitConsumerHandoffV1,
+  parseArguments,
+} from "../../tools/emit-consumer-handoff.mjs";
 
 // The consumer contract lives in Catalog's tools/generate-source-assessment-rows.mjs.
 // These are its exact closed key sets; the producer must emit nothing more or less.
@@ -349,11 +354,20 @@ async function fixture() {
     url: `https://github.com/${repository}/releases/tag/${tag}`,
   });
   const publicationSha256 = sha256(files["publication.json"] as Buffer);
+  const bundle = {
+    mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+    verificationMaterial: { certificate: { rawBytes: "AA==" }, tlogEntries: [] },
+    dsseEnvelope: { payload: "e30=", payloadType: "application/vnd.in-toto+json", signatures: [] },
+  };
   const attestation = (subjectSha256 = publicationSha256) => [
     {
-      attestation: { bundle: {}, bundle_url: "https://example.invalid/bundle", initiator: "user" },
+      attestation: {
+        bundle: structuredClone(bundle),
+        bundle_url: "https://example.invalid/bundle",
+        initiator: "user",
+      },
       verificationResult: {
-        mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+        mediaType: "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
         signature: {
           certificate: {
             certificateIssuer: "CN=sigstore-intermediate,O=sigstore.dev",
@@ -387,7 +401,13 @@ async function fixture() {
             timestamp: "2026-09-14T12:03:59-05:00",
           },
         ],
-        verifiedIdentity: { runnerEnvironment: "github-hosted" },
+        verifiedIdentity: {
+          subjectAlternativeName: {
+            subjectAlternativeName: `https://github.com/${repository}/${workflowPath}@refs/heads/main`,
+          },
+          issuer: { issuer: "", regexp: ".*" },
+          runnerEnvironment: "github-hosted",
+        },
         statement: {
           _type: "https://in-toto.io/Statement/v1",
           subject: [{ name: "publication.json", digest: { sha256: subjectSha256 } }],
@@ -429,12 +449,27 @@ async function fixture() {
   mkdirSync(inputs);
   const paths = {
     release: join(inputs, "release.json"),
-    attestation: join(inputs, "attestation.json"),
+    attestationBundle: join(inputs, "attestation.jsonl"),
     run: join(inputs, "run.json"),
     mapping: join(inputs, "mapping.json"),
   };
   writeJson(paths.release, releaseMetadata());
-  writeJson(paths.attestation, attestation());
+  writeFileSync(paths.attestationBundle, `${JSON.stringify(bundle)}\n`);
+  // What the fake gh prints (and its exit status); each test may replace it.
+  const verifier: {
+    status: number;
+    output: unknown;
+    calls: { args: string[]; subject: Buffer; bundle: Buffer }[];
+  } = { status: 0, output: attestation(), calls: [] };
+  const runGh: ConsumerHandoffGhRunner = (argv) => {
+    const args = [...argv];
+    verifier.calls.push({
+      args,
+      subject: readFileSync(args[2] as string),
+      bundle: readFileSync(args[4] as string),
+    });
+    return { status: verifier.status, stdout: JSON.stringify(verifier.output) };
+  };
   writeJson(paths.run, run);
   writeJson(paths.mapping, mapping);
   const output = join(root, "handoff");
@@ -442,7 +477,7 @@ async function fixture() {
     const values: Record<string, string> = {
       "release-root": releaseRoot,
       release: paths.release,
-      attestation: paths.attestation,
+      "attestation-bundle": paths.attestationBundle,
       run: paths.run,
       mapping: paths.mapping,
       repository,
@@ -452,8 +487,22 @@ async function fixture() {
     };
     return Object.entries(values).flatMap(([key, value]) => [`--${key}`, value]);
   };
-  const emit = (argv: string[] = args()) =>
-    spawnSync(process.execPath, [tool, ...argv], { cwd: root, encoding: "utf8" });
+  // In process, with gh replaced by the fake verifier above.
+  const emit = (argv: string[] = args()) => {
+    try {
+      const result = emitConsumerHandoffV1(parseArguments(argv), { runGh });
+      return { status: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
+    } catch (error) {
+      return {
+        status: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+  // The real CLI, for argument handling and the gh-unavailable path.
+  const spawnTool = (argv: string[] = args(), env: NodeJS.ProcessEnv = process.env) =>
+    spawnSync(process.execPath, [tool, ...argv], { cwd: root, encoding: "utf8", env });
   return {
     root,
     source,
@@ -466,10 +515,13 @@ async function fixture() {
     run,
     mapping,
     attestation,
+    bundle,
+    verifier,
     releaseMetadata,
     writeSums,
     args,
     emit,
+    spawnTool,
   };
 }
 
@@ -777,7 +829,7 @@ describe("emit-consumer-handoff", () => {
       ...(statement.subject as Json[]),
       { name: "publication.json", digest: { sha256: "2".repeat(64) } },
     ];
-    writeJson(current.paths.attestation, value);
+    current.verifier.output = value;
     const result = current.emit();
     expect(result.status, result.stderr).toBe(0);
     const attestation = readJson(join(current.output, "consumer-handoff.json")).attestation as Json;
@@ -793,13 +845,207 @@ describe("emit-consumer-handoff", () => {
       const value = current.attestation();
       const result = value[0]?.verificationResult as unknown as Json;
       mutate((result.signature as Json).certificate as Json, result);
-      writeJson(current.paths.attestation, value);
+      current.verifier.output = value;
       expectRejected(current, current.emit(), reason);
     });
 
+  it("verifies the bundle itself with gh and every constraint pinned, on the exact bytes", async () => {
+    const current = await fixture();
+    const result = current.emit();
+    expect(result.status, result.stderr).toBe(0);
+    expect(current.verifier.calls).toHaveLength(1);
+    const [call] = current.verifier.calls;
+    const args = call?.args ?? [];
+    expect(args).toEqual([
+      "attestation",
+      "verify",
+      args[2],
+      "--bundle",
+      args[4],
+      "--format",
+      "json",
+      "--repo",
+      "samartomar/aih-scan",
+      "--predicate-type",
+      "https://slsa.dev/provenance/v1",
+      "--cert-identity",
+      `https://github.com/samartomar/aih-scan/${workflowPath}@refs/heads/main`,
+      "--cert-oidc-issuer",
+      "https://token.actions.githubusercontent.com",
+      "--source-ref",
+      "refs/heads/main",
+      "--source-digest",
+      publisherCommit,
+      "--signer-digest",
+      publisherCommit,
+      "--deny-self-hosted-runners",
+    ]);
+    expect(call?.subject).toEqual(readFileSync(join(current.releaseRoot, "publication.json")));
+    expect(call?.bundle.toString("utf8")).toBe(`${JSON.stringify(current.bundle)}\n`);
+    // The staging directory is private and removed afterwards.
+    expect(existsSync(args[2] as string)).toBe(false);
+  });
+
+  it("rejects a fabricated verification result: gh must verify the supplied bundle", async () => {
+    const current = await fixture();
+    current.verifier.status = 1;
+    expectRejected(current, current.emit(), /attestation verification failed/);
+    // A verification-result file in place of a bundle is not accepted either.
+    const fabricated = join(current.root, "fabricated.json");
+    writeJson(fabricated, [{ attestation: null, verificationResult: {} }]);
+    current.verifier.status = 0;
+    expectRejected(
+      current,
+      current.emit(current.args({ "attestation-bundle": fabricated })),
+      /attestation bundle/,
+    );
+    expectRejected(
+      current,
+      current.emit([
+        ...current.args().slice(0, 4),
+        "--attestation",
+        fabricated,
+        ...current.args().slice(6),
+      ]),
+      /arguments/,
+    );
+  });
+
+  it("rejects a verifier report about another bundle", async () => {
+    const current = await fixture();
+    const value = current.attestation();
+    ((value[0]?.attestation as unknown as Json).bundle as Json).mediaType = "other";
+    current.verifier.output = value;
+    expectRejected(current, current.emit(), /attestation bundle is not the verified bundle/);
+    current.verifier.output = [{ ...current.attestation()[0], attestation: null }];
+    expectRejected(current, current.emit(), /attestation record/);
+  });
+
+  it.each([
+    [
+      "a missing bundle file",
+      (current: Fixture) => rmSync(current.paths.attestationBundle),
+      /attestation bundle file missing/,
+    ],
+    [
+      "two bundles in one JSON-lines file",
+      (current: Fixture) =>
+        writeFileSync(
+          current.paths.attestationBundle,
+          `${JSON.stringify(current.bundle)}\n${JSON.stringify(current.bundle)}\n`,
+        ),
+      /exactly one bundle/,
+    ],
+    [
+      "another bundle media type",
+      (current: Fixture) =>
+        writeJson(current.paths.attestationBundle, {
+          ...current.bundle,
+          mediaType: "application/json",
+        }),
+      /attestation bundle mediaType/,
+    ],
+    [
+      "an extra bundle field",
+      (current: Fixture) =>
+        writeJson(current.paths.attestationBundle, { ...current.bundle, extra: 1 }),
+      /attestation bundle fields/,
+    ],
+  ] as const)("rejects %s before running the verifier", async (_label, mutate, reason) => {
+    const current = await fixture();
+    mutate(current);
+    expectRejected(current, current.emit(), reason);
+    expect(current.verifier.calls).toHaveLength(0);
+  });
+
+  it.each([
+    [
+      "verificationResult",
+      (result: Json) => Object.assign(result, { extra: 1 }),
+      /attestation verificationResult fields/,
+    ],
+    [
+      "certificate",
+      (result: Json) => Object.assign((result.signature as Json).certificate as Json, { extra: 1 }),
+      /attestation certificate fields/,
+    ],
+    [
+      "signature",
+      (result: Json) => Object.assign(result.signature as Json, { extra: 1 }),
+      /attestation signature fields/,
+    ],
+    [
+      "statement",
+      (result: Json) => Object.assign(result.statement as Json, { extra: 1 }),
+      /attestation statement fields/,
+    ],
+    [
+      "verifiedIdentity",
+      (result: Json) => Object.assign(result.verifiedIdentity as Json, { extra: 1 }),
+      /attestation verifiedIdentity fields/,
+    ],
+    [
+      "media type",
+      (result: Json) =>
+        Object.assign(result, { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json" }),
+      /verificationResult mediaType/,
+    ],
+    [
+      "statement type",
+      (result: Json) => Object.assign(result.statement as Json, { _type: "x" }),
+      /statement _type/,
+    ],
+    [
+      "verified identity",
+      (result: Json) =>
+        Object.assign(result.verifiedIdentity as Json, {
+          subjectAlternativeName: {
+            subjectAlternativeName:
+              "https://github.com/x/y/.github/workflows/z.yml@refs/heads/main",
+          },
+        }),
+      /verifiedIdentity subjectAlternativeName/,
+    ],
+    [
+      "build config digest",
+      (result: Json) =>
+        Object.assign((result.signature as Json).certificate as Json, {
+          buildConfigDigest: "f".repeat(40),
+        }),
+      /attestation buildConfigDigest/,
+    ],
+  ] as const)("rejects a verifier report with an unexpected %s", async (_label, mutate, reason) => {
+    const current = await fixture();
+    const value = current.attestation();
+    mutate(value[0]?.verificationResult as unknown as Json);
+    current.verifier.output = value;
+    expectRejected(current, current.emit(), reason);
+  });
+
+  it("projects only the pinned Scan publication repository", async () => {
+    const current = await fixture();
+    expectRejected(
+      current,
+      current.emit(current.args({ repository: "someone/aih-scan" })),
+      /repository must be samartomar\/aih-scan/,
+    );
+    expect(current.verifier.calls).toHaveLength(0);
+  });
+
+  it("fails closed when gh is not available to verify the bundle", async () => {
+    const current = await fixture();
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
+    );
+    const result = current.spawnTool(current.args(), { ...env, PATH: "" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/attestation verifier gh is unavailable/);
+    expect(existsSync(current.output)).toBe(false);
+  });
+
   it("rejects more than one attestation result", async () => {
     const current = await fixture();
-    writeJson(current.paths.attestation, [...current.attestation(), ...current.attestation()]);
+    current.verifier.output = [...current.attestation(), ...current.attestation()];
     expectRejected(current, current.emit(), /attestation result count/);
   });
 
@@ -876,6 +1122,9 @@ describe("emit-consumer-handoff", () => {
     expect(readdirSync(current.output)).toEqual([]);
     rmSync(current.output, { recursive: true });
     expectRejected(current, current.emit([...current.args(), "--extra", "x"]), /arguments/);
+    const cli = current.spawnTool([...current.args(), "--extra", "x"]);
+    expect(cli.status).toBe(1);
+    expect(cli.stderr).toMatch(/arguments/);
     expectRejected(current, current.emit(current.args().slice(2)), /arguments/);
   });
 });
