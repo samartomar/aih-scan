@@ -373,9 +373,56 @@ function namesTreePath(raw: unknown, tree: string, exact = false): boolean {
   return rel === "" || (!isAbsolute(rel) && !toPosix(rel).split("/").includes(".."));
 }
 
-function serverNamesTree(server: Record<string, unknown>, tree: string): boolean {
+/** A validated server's config: a SkillServer carries a `path`, never a `command` or `url`. */
+function isSkillServer(server: Record<string, unknown>): boolean {
   const nested = server.server as Record<string, unknown>;
-  return [server.config_path, nested.path].some((value) => namesTreePath(value, tree));
+  return nested.command === undefined && nested.url === undefined;
+}
+
+/**
+ * What a validated server analyzed: a SkillServer's `server.path` (the skill directory or
+ * file), otherwise the MCP config file it came from (`config_path`). The skills directory in a
+ * SkillServer's `config_path` is the container, never the subject of its analysis.
+ */
+function serverSubjectPath(server: Record<string, unknown>): unknown {
+  return isSkillServer(server)
+    ? (server.server as Record<string, unknown>).path
+    : server.config_path;
+}
+
+/** An existing path whose realpath is the tree's parent directory (the tree itself excluded). */
+function namesTreeParent(raw: unknown, tree: string): boolean {
+  if (typeof raw !== "string" || !isAbsolute(raw)) return false;
+  const base = existingRealpath(tree);
+  const target = existingRealpath(raw);
+  return base !== undefined && target !== undefined && target !== base && target === dirname(base);
+}
+
+/**
+ * S2g: an entry is bound to the submitted subject only as snyk-agent-scan 0.5.17 writes it for
+ * `scan <tree>` (`pipelines.py` `client_to_inspect_from_path`), with every path existing and
+ * resolved by realpath:
+ * - an empty discovery (`servers: []`): the key is the tree itself;
+ * - otherwise the key is the tree or a path inside it, and every server's subject path
+ *   ({@link serverSubjectPath}) is the tree or a path inside it;
+ * - or 0.5.17's root-SKILL.md form: the key is the tree's parent and every server is a
+ *   SkillServer whose path is the tree itself.
+ * An existing key never vouches for a server path that is missing or names something else.
+ */
+function entryBoundToTree(
+  scanPath: string,
+  servers: readonly Record<string, unknown>[],
+  tree: string,
+): boolean {
+  if (servers.length === 0) return namesTreePath(scanPath, tree, true);
+  if (namesTreePath(scanPath, tree))
+    return servers.every((server) => namesTreePath(serverSubjectPath(server), tree));
+  return (
+    namesTreeParent(scanPath, tree) &&
+    servers.every(
+      (server) => isSkillServer(server) && namesTreePath(serverSubjectPath(server), tree, true),
+    )
+  );
 }
 
 const isOptionalString = (value: unknown): boolean =>
@@ -473,11 +520,9 @@ function validatedFinding(value: unknown): Record<string, unknown> {
  * validated against the 0.5.17 models, never skipped: a failure ScanError anywhere or an
  * X-code issue is an analyzer error. Only records that prove analysis count: an entry with
  * `servers: null` or a non-failure ScanError note, or any server without a ServerSignature
- * or with a note, means part of the report was not analyzed. The root is proven analyzed by
- * an existing path, resolved by realpath: an entry key or an analyzed server's path naming
- * the root or a path inside it (a root holding SKILL.md is reported under its parent, with
- * the root as the skill's path), or the root's own entry reporting that discovery found
- * nothing (`servers: []`).
+ * or with a note, means part of the report was not analyzed. S2g: every entry must also be
+ * bound to the submitted subject ({@link entryBoundToTree}); one unbound entry or server
+ * fails the whole report, whatever the other entries prove.
  */
 function scanPathFindings(
   report: Record<string, unknown>,
@@ -505,20 +550,19 @@ function scanPathFindings(
       if (FAILURE_CODE.test(code.trim()) || carriesFailure(issue))
         throw new TypeError(ANALYZER_ERROR);
     }
-    const analyzed = servers !== undefined && error === "none" && !entityCounts.includes(undefined);
+    const analyzed =
+      servers !== undefined &&
+      error === "none" &&
+      !entityCounts.includes(undefined) &&
+      entryBoundToTree(scanPath, servers as Record<string, unknown>[], tree);
     const issues = entry.issues as Record<string, unknown>[];
-    return { scanPath, entry, issues, servers: servers ?? [], entityCounts, analyzed };
+    return { scanPath, entry, issues, entityCounts, analyzed };
   });
   if (!entries.every((item) => item.analyzed))
     throw noAnalysis(entries.reduce((count, item) => count + item.issues.length, 0));
 
   const findings: Record<string, unknown>[] = [];
-  let namesRoot = false;
-  for (const { scanPath, entry, issues, servers, entityCounts } of entries) {
-    if (servers.length === 0 ? namesTreePath(scanPath, tree, true) : namesTreePath(scanPath, tree))
-      namesRoot = true;
-    if ((servers as Record<string, unknown>[]).some((server) => serverNamesTree(server, tree)))
-      namesRoot = true;
+  for (const { scanPath, entry, issues, entityCounts } of entries) {
     for (const issue of issues) {
       const extra = issue.extra_data;
       if (
@@ -529,7 +573,6 @@ function scanPathFindings(
       findings.push({ ...issue, path: snykScanPathIssueUri(scanPath, entry, issue) });
     }
   }
-  if (!namesRoot) throw noAnalysis(findings.length);
   return findings;
 }
 

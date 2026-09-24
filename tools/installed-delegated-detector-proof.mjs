@@ -525,10 +525,14 @@ if (detectors.includes("snyk")) {
       unsigned: mocked("server recorded but never inspected", analyzed({ servers: [skill({ signature: null })] })),
       missingPath: mocked("keys and server paths that do not exist", { "@ROOT@/ghost": { client: null, path: "@ROOT@/ghost", servers: [skill({ server: { path: "@ROOT@/ghost/skill", type: "skill" } })], issues: [], labels: [], error: null } }),
       failureCode: mocked("X-code issue", analyzed({ issues: [{ code: "X007", message: "agent-scan failure" }] })),
+      // S2g: every entry and server is bound to the subject; an existing root key never vouches
+      // for a missing server path, and an unrelated empty entry fails beside a valid root entry.
+      ghostServer: mocked("root entry whose signed server path does not exist", analyzed({ servers: [skill({ server: { path: "@ROOT@/ghost-skill", type: "skill" } })] })),
+      unrelatedEntry: mocked("unrelated empty entry beside the root entry", { ...analyzed({}), "@ROOT@/..": { client: null, path: "@ROOT@/..", servers: [], issues: [], labels: [], error: null } }),
     };
     for (const [key, record] of Object.entries(mock)) cases[`snykMock${key[0].toUpperCase()}${key.slice(1)}`] = record;
     check("snyk mocked clean report that names the scanned root succeeds with zero findings", mock.clean.outcome === "succeeded" && mock.clean.findings.length === 0 && noSurvivors(mock.clean), brief(mock.clean));
-    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "malformedServer", "entryNote", "unsigned", "missingPath"]) {
+    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "malformedServer", "entryNote", "unsigned", "missingPath", "ghostServer", "unrelatedEntry"]) {
       const record = mock[key];
       check(`snyk mocked ${key} fails closed at the output stage, never a clean result`, record.outcome === "failed" && record.failure?.stage === "output" && /snyk-agent-scan/.test(record.failure?.detail ?? "") && noSurvivors(record), brief(record));
     }
