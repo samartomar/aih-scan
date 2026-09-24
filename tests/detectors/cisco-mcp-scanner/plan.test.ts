@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildMcpToolsManifestV1,
   CISCO_MCP_SCANNER_ANALYZER_V1,
   CISCO_MCP_SCANNER_DETECTOR_ID_V1,
   CISCO_MCP_SCANNER_PROJECT_V1,
+  type CiscoMcpToolsManifestV1,
   ciscoMcpScannerArgvV1,
   ciscoMcpScannerHelpArgvV1,
-  discoverMcpConfigFilesV1,
-  planCiscoMcpScannerV1,
+  deriveCiscoMcpToolsV1,
+  planCiscoMcpScannerRequestV1,
   scrubCiscoMcpScannerEnvV1,
   serializeMcpToolsManifestV1,
 } from "../../../src/detectors/cisco-mcp-scanner/index.js";
@@ -106,59 +106,14 @@ describe("scrubCiscoMcpScannerEnvV1 (parity: Core scrubFetchEnv)", () => {
   });
 });
 
-describe("discoverMcpConfigFilesV1 (parity: Core tests/trust/scan.test.ts ~4056)", () => {
-  it("scopes mcp-scanner coverage to incoming MCP config files", () => {
-    const root = fixture();
-    write(root, "skills/clean/SKILL.md", "# Clean\n");
+/** Derives the manifest from Core-declared paths, failing the test on a refusal. */
+function derived(root: string, mcpConfigPaths: readonly string[]): CiscoMcpToolsManifestV1 {
+  const outcome = deriveCiscoMcpToolsV1(root, mcpConfigPaths);
+  if (outcome.status !== "derived") throw new Error(outcome.refusal.detail);
+  return outcome.manifest;
+}
 
-    expect(discoverMcpConfigFilesV1(root)).toEqual([]);
-    expect(
-      planCiscoMcpScannerV1({ root, platform: "linux", env: {}, inputPath: join(root, "in.json") }),
-    ).toEqual({ status: "no-config" });
-
-    write(
-      root,
-      ".mcp.json",
-      JSON.stringify({
-        mcpServers: {
-          local: { command: "node", args: ["server.js"], description: "local fixture" },
-        },
-      }),
-    );
-
-    expect(discoverMcpConfigFilesV1(root).map((entry) => entry.relativePath)).toEqual([
-      ".mcp.json",
-    ]);
-    const planned = planCiscoMcpScannerV1({
-      root,
-      platform: "linux",
-      env: {},
-      inputPath: join(root, "in.json"),
-    });
-    expect(planned.status).toBe("planned");
-  });
-
-  it("discovers every incoming config name at the root and at SKILL.md directories", () => {
-    const root = fixture();
-    write(root, "skills/clean/SKILL.md", "# Clean\n");
-    write(root, "skills/clean/mcp.json", JSON.stringify({ mcpServers: {} }));
-    write(root, ".cursor/mcp.json", JSON.stringify({}));
-    write(root, "node_modules/ignored/.mcp.json", JSON.stringify({}));
-    write(root, "dist/ignored/mcp.json", JSON.stringify({}));
-
-    expect(discoverMcpConfigFilesV1(root).map((entry) => entry.relativePath)).toEqual([
-      ".cursor/mcp.json",
-      "skills/clean/mcp.json",
-    ]);
-  });
-
-  it("refuses a subject root that is not an existing directory", () => {
-    const root = fixture();
-    expect(() => discoverMcpConfigFilesV1(join(root, "missing"))).toThrow(TypeError);
-  });
-});
-
-describe("buildMcpToolsManifestV1 (parity: Core detectors.ts mcpStaticTools)", () => {
+describe("deriveCiscoMcpToolsV1 (parity: Core detectors.ts mcpStaticTools)", () => {
   it("includes the ECC MCP catalog in the MCP-specific scan surface", () => {
     const root = fixture();
     write(
@@ -175,7 +130,7 @@ describe("buildMcpToolsManifestV1 (parity: Core detectors.ts mcpStaticTools)", (
       }),
     );
 
-    const manifest = buildMcpToolsManifestV1(root);
+    const manifest = derived(root, ["mcp-configs/mcp-servers.json"]);
 
     expect(manifest.tools).toEqual([
       {
@@ -204,7 +159,7 @@ describe("buildMcpToolsManifestV1 (parity: Core detectors.ts mcpStaticTools)", (
       }),
     );
 
-    const manifest = buildMcpToolsManifestV1(root);
+    const manifest = derived(root, [".mcp.json"]);
 
     expect(manifest.tools.map((tool) => tool.name)).toEqual([
       ".mcp.json:delta",
@@ -224,17 +179,14 @@ describe("buildMcpToolsManifestV1 (parity: Core detectors.ts mcpStaticTools)", (
       JSON.stringify({ mcpServers: { long: { description: "x".repeat(500) } } }),
     );
 
-    const manifest = buildMcpToolsManifestV1(root);
-    expect(manifest.tools[0]?.description).toBe("x".repeat(400));
+    expect(derived(root, [".mcp.json"]).tools[0]?.description).toBe("x".repeat(400));
   });
 
   it("contributes one placeholder tool for a malformed config file", () => {
     const root = fixture();
     write(root, ".mcp.json", "{ not json");
 
-    const manifest = buildMcpToolsManifestV1(root);
-
-    expect(manifest.tools).toEqual([
+    expect(derived(root, [".mcp.json"]).tools).toEqual([
       {
         name: ".mcp.json:malformed",
         description: "Malformed MCP config declared in .mcp.json",
@@ -243,35 +195,31 @@ describe("buildMcpToolsManifestV1 (parity: Core detectors.ts mcpStaticTools)", (
     ]);
   });
 
-  it("fails closed when the tree yields no scannable tools", () => {
+  it("refuses a declared set that yields no scannable tools", () => {
     const root = fixture();
     write(root, ".mcp.json", JSON.stringify({}));
 
-    expect(() => buildMcpToolsManifestV1(root)).toThrow(
-      "mcp-scanner received an MCP config with no scannable tools",
-    );
-    const planned = planCiscoMcpScannerV1({
-      root,
-      platform: "linux",
-      env: {},
-      inputPath: join(root, "in.json"),
-    });
-    expect(planned).toEqual({
-      status: "failed",
-      kind: "no-scannable-tools",
-      detail: "mcp-scanner received an MCP config with no scannable tools",
+    expect(deriveCiscoMcpToolsV1(root, [".mcp.json"])).toEqual({
+      status: "refused",
+      refusal: {
+        reason: "subject-requirement-unmet",
+        detail: "mcp-scanner received an MCP config with no scannable tools",
+      },
     });
   });
 
-  it("fails closed on a derived duplicate tool name", () => {
+  it("refuses a derived duplicate tool name", () => {
     const root = fixture();
     write(root, ".mcp.json", JSON.stringify({ mcpServers: { local: {} }, servers: { local: {} } }));
 
-    expect(() => buildMcpToolsManifestV1(root)).toThrow("derived duplicate MCP tool name:");
+    const outcome = deriveCiscoMcpToolsV1(root, [".mcp.json"]);
+    expect(outcome.status).toBe("refused");
+    if (outcome.status === "refused")
+      expect(outcome.refusal.detail).toBe("derived duplicate MCP tool name: .mcp.json:local");
   });
 });
 
-describe("planCiscoMcpScannerV1", () => {
+describe("planCiscoMcpScannerRequestV1", () => {
   it("produces a frozen plan carrying identity, argv, scrubbed env and manifest bytes", () => {
     const root = fixture();
     write(
@@ -281,8 +229,10 @@ describe("planCiscoMcpScannerV1", () => {
     );
     const inputPath = join(root, "work", "tools.json");
 
-    const outcome = planCiscoMcpScannerV1({
+    const outcome = planCiscoMcpScannerRequestV1({
       root,
+      selectedClosurePaths: [".mcp.json"],
+      detectorOptions: { mcpConfigPaths: [".mcp.json"] },
       platform: "linux",
       env: { PATH: "bin", GITHUB_TOKEN: "ghp_fixture_not_a_secret" },
       inputPath,

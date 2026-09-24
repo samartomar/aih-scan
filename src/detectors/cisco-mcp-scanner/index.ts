@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Node as JsonNode, type ParseError, parse, parseTree } from "jsonc-parser";
 import {
@@ -14,12 +14,30 @@ import {
  * subject tree's MCP config files.
  *
  * Ported from Core (`src/trust/detectors.ts` and `src/trust/scan.ts`) with
- * identical behaviour: the same config discovery surface, the same derived tool
- * names and manifest bytes, the same argv, the same environment scrub, the same
- * strict JSON-to-SARIF conversion with the same failure messages, and the same
- * fail-closed rules (exactly one completed result per submitted tool, required
- * YARA analyzer coverage, integer totals, one SARIF result per threat pointing
- * at the config file on line 1).
+ * identical behaviour: the same derived tool names and manifest bytes, the same
+ * argv, the same environment scrub, the same strict JSON-to-SARIF conversion
+ * with the same failure messages, and the same fail-closed rules (exactly one
+ * completed result per submitted tool, required YARA analyzer coverage, integer
+ * totals, one SARIF result per threat pointing at the config file on line 1).
+ *
+ * C2a §4 interface (what Core consumes):
+ *
+ * - §4.1: Core declares the MCP config files as
+ *   `detectorOptions: { mcpConfigPaths: string[] }`; applicability is Core's
+ *   decision (Core sends no request when the list is empty), but the engine
+ *   still validates. {@link planCiscoMcpScannerRequestV1} validates the options
+ *   exactly as C2a §2.1 (unique source-relative POSIX paths from Core's
+ *   config-name set, order significant, a nonexistent path refused, a
+ *   directory or symlink accepted) and returns a typed refusal
+ *   (`detector-options-invalid`) instead of throwing.
+ * - §4.2: {@link deriveCiscoMcpToolsV1} derives tools from the declared paths
+ *   in declared order, verbatim from Core's `mcpStaticTools`: a read/parse
+ *   failure contributes one `<path>:malformed` placeholder tool, non-object
+ *   maps and documents are ignored, and zero tools or a duplicate derived name
+ *   are typed refusals (`subject-requirement-unmet`) before anything spawns.
+ * - §4.3: argv `mcp-scanner --raw --analyzers yara static --tools <file>`,
+ *   120 000 ms, exit 0 with non-empty stdout, strict output parsing and SARIF
+ *   conversion unchanged from the phase-A port.
  *
  * The engine never spawns a process: execution goes through the injected
  * {@link CiscoMcpScannerRunnerV1} seam. Grading, posture, policy and evidence
@@ -56,19 +74,8 @@ export const MCP_CONFIG_FILE_NAMES_V1: readonly string[] = Object.freeze([
   "mcp.json",
 ]);
 
-/** Directory names never descended into while discovering config files (Core's trust skip dirs). */
-export const MCP_CONFIG_SKIP_DIRS_V1: ReadonlySet<string> = new Set([
-  ".git",
-  ".hg",
-  ".svn",
-  ".aih",
-  "coverage",
-  "dist",
-  "node_modules",
-  "vendor",
-]);
-
-const MAX_CONFIG_FILES = 1024;
+/** C2a §2.1: at most this many caller-declared MCP config paths per request. */
+export const MCP_DECLARED_CONFIG_PATHS_MAX_V1 = 1024;
 const MAX_TOOLS = 4096;
 const MAX_STDOUT_BYTES = 16 * 1024 * 1024;
 const MAX_THREATS_PER_ANALYZER = 4096;
@@ -84,73 +91,8 @@ function fail(message: string): never {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-function toPosix(path: string): string {
-  return path.replace(/\\/g, "/");
-}
-
 // ---------------------------------------------------------------------------
-// Discovery: which MCP config files of a subject tree build the tools manifest
-// ---------------------------------------------------------------------------
-
-export interface CiscoMcpConfigFileV1 {
-  /** Subject-root-relative POSIX path, for example `.mcp.json`. */
-  readonly relativePath: string;
-  readonly absolutePath: string;
-}
-
-function skillDirs(root: string): string[] {
-  const dirs: string[] = [];
-  const visit = (absolutePath: string): void => {
-    const stats = lstatSync(absolutePath);
-    if (stats.isSymbolicLink()) return;
-    if (!stats.isDirectory()) return;
-    if (absolutePath !== root && MCP_CONFIG_SKIP_DIRS_V1.has(basename(absolutePath))) return;
-    for (const entry of readdirSync(absolutePath).sort()) {
-      const child = join(absolutePath, entry);
-      if (entry === "SKILL.md" && statSync(child).isFile()) dirs.push(absolutePath);
-      visit(child);
-    }
-  };
-  visit(root);
-  return dirs;
-}
-
-/**
- * The MCP config files Core would submit for this subject tree: the fixed
- * config file names at the root and at every directory holding a `SKILL.md`
- * (skip dirs excluded), deduplicated, in Core's discovery order. An empty
- * result means the scanner does not run for this subject.
- */
-export function discoverMcpConfigFilesV1(root: string): readonly CiscoMcpConfigFileV1[] {
-  const absoluteRoot = resolve(root);
-  const rootStats = statSync(absoluteRoot, { throwIfNoEntry: false });
-  if (rootStats === undefined || !rootStats.isDirectory())
-    throw new TypeError("Cisco mcp-scanner subject root must be an existing directory");
-  const roots = [
-    absoluteRoot,
-    ...skillDirs(absoluteRoot).sort((left, right) =>
-      toPosix(relative(absoluteRoot, left)).localeCompare(toPosix(relative(absoluteRoot, right))),
-    ),
-  ];
-  const seen = new Set<string>();
-  const files: CiscoMcpConfigFileV1[] = [];
-  for (const dir of new Set(roots)) {
-    for (const name of MCP_CONFIG_FILE_NAMES_V1) {
-      const absolutePath = join(dir, ...name.split("/"));
-      if (!existsSync(absolutePath) || seen.has(absolutePath)) continue;
-      seen.add(absolutePath);
-      files.push({
-        relativePath: toPosix(relative(absoluteRoot, absolutePath)),
-        absolutePath,
-      });
-      if (files.length > MAX_CONFIG_FILES) fail("mcp-scanner config file count exceeds bound");
-    }
-  }
-  return Object.freeze(files);
-}
-
-// ---------------------------------------------------------------------------
-// Tools manifest: the scanner input derived from the discovered config files
+// Tools manifest: the scanner input derived from the declared config files
 // ---------------------------------------------------------------------------
 
 export interface CiscoMcpScannerToolV1 {
@@ -189,47 +131,6 @@ function toolsFromConfig(rel: string, parsed: unknown): CiscoMcpScannerToolV1[] 
         inputSchema: { type: "object" as const, properties: {} },
       })),
   );
-}
-
-/**
- * Derive the tools manifest from a subject's discovered MCP config files.
- * A config file that does not parse contributes exactly one placeholder tool,
- * matching Core. Fails closed when the tree yields no scannable tools or when
- * two derived tools collide on a name.
- */
-export function buildMcpToolsManifestV1(root: string): CiscoMcpToolsManifestV1 {
-  const absoluteRoot = resolve(root);
-  const tools: CiscoMcpScannerToolV1[] = [];
-  const sourceUriByToolName = new Map<string, string>();
-  for (const config of discoverMcpConfigFilesV1(absoluteRoot)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(config.absolutePath, "utf8"));
-    } catch {
-      parsed = undefined;
-    }
-    const derived =
-      parsed === undefined
-        ? [
-            {
-              name: safeToolName(`${config.relativePath}:malformed`),
-              description: `Malformed MCP config declared in ${config.relativePath}`,
-              inputSchema: { type: "object" as const, properties: {} },
-            },
-          ]
-        : toolsFromConfig(config.relativePath, parsed);
-    for (const tool of derived) {
-      if (sourceUriByToolName.has(tool.name)) fail(`derived duplicate MCP tool name: ${tool.name}`);
-      sourceUriByToolName.set(tool.name, config.relativePath);
-      tools.push(tool);
-      if (tools.length > MAX_TOOLS) fail("derived MCP tool count exceeds bound");
-    }
-  }
-  if (tools.length === 0) fail("mcp-scanner received an MCP config with no scannable tools");
-  return deepFreezeStrictJsonV1({
-    tools: structuredClone(tools),
-    sourceUriByToolName: new Map(sourceUriByToolName),
-  });
 }
 
 /** The exact bytes Core writes to the `--tools` input file. */
@@ -570,66 +471,32 @@ export interface CiscoMcpScannerPlanV1 {
   readonly sourceUriByToolName: ReadonlyMap<string, string>;
 }
 
-export type CiscoMcpScannerFailureKindV1 =
-  | "no-scannable-tools"
-  | "invalid-manifest"
-  | "runner-failed"
-  | "empty-output"
-  | "invalid-output";
-
-export type CiscoMcpScannerPlanOutcomeV1 =
-  | Readonly<{ status: "planned"; plan: CiscoMcpScannerPlanV1 }>
-  /** No MCP config files: Core does not run the scanner for this subject at all. */
-  | Readonly<{ status: "no-config" }>
-  | Readonly<{ status: "failed"; kind: CiscoMcpScannerFailureKindV1; detail: string }>;
+export type CiscoMcpScannerFailureKindV1 = "runner-failed" | "empty-output" | "invalid-output";
 
 export type CiscoMcpScannerRunOutcomeV1 =
   | Readonly<{ status: "completed"; sarif: CiscoMcpScannerSarifV1 }>
   | Readonly<{ status: "failed"; kind: CiscoMcpScannerFailureKindV1; detail: string }>;
 
-/**
- * Plan one scanner run for a subject tree: discover config files, derive the
- * tools manifest, and produce argv/env. The runtime writes `plan.inputBytes` to
- * `plan.inputPath` and then spawns `plan.argv` through its own runner.
- */
-export function planCiscoMcpScannerV1(
+function planFromManifestV1(
   request: Readonly<{
-    root: string;
     platform: CiscoMcpScannerPlatformV1;
     env: Readonly<Record<string, string | undefined>>;
     inputPath: string;
     timeoutMs?: number;
   }>,
-): CiscoMcpScannerPlanOutcomeV1 {
-  if (discoverMcpConfigFilesV1(request.root).length === 0) return { status: "no-config" };
-  let manifest: CiscoMcpToolsManifestV1;
-  try {
-    manifest = buildMcpToolsManifestV1(request.root);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return {
-      status: "failed",
-      kind:
-        detail === "mcp-scanner received an MCP config with no scannable tools"
-          ? "no-scannable-tools"
-          : "invalid-manifest",
-      detail,
-    };
-  }
-  return {
-    status: "planned",
-    plan: deepFreezeStrictJsonV1({
-      detectorId: CISCO_MCP_SCANNER_DETECTOR_ID_V1,
-      analyzerIdentity: CISCO_MCP_SCANNER_ANALYZER_V1,
-      argv: ciscoMcpScannerArgvV1(request.platform, request.inputPath),
-      env: scrubCiscoMcpScannerEnvV1(request.env),
-      timeoutMs: request.timeoutMs ?? CISCO_MCP_SCANNER_TIMEOUT_MS_V1,
-      inputPath: request.inputPath,
-      inputBytes: serializeMcpToolsManifestV1(manifest),
-      toolCount: manifest.tools.length,
-      sourceUriByToolName: new Map(manifest.sourceUriByToolName),
-    }),
-  };
+  manifest: CiscoMcpToolsManifestV1,
+): CiscoMcpScannerPlanV1 {
+  return deepFreezeStrictJsonV1({
+    detectorId: CISCO_MCP_SCANNER_DETECTOR_ID_V1,
+    analyzerIdentity: CISCO_MCP_SCANNER_ANALYZER_V1,
+    argv: ciscoMcpScannerArgvV1(request.platform, request.inputPath),
+    env: scrubCiscoMcpScannerEnvV1(request.env),
+    timeoutMs: request.timeoutMs ?? CISCO_MCP_SCANNER_TIMEOUT_MS_V1,
+    inputPath: request.inputPath,
+    inputBytes: serializeMcpToolsManifestV1(manifest),
+    toolCount: manifest.tools.length,
+    sourceUriByToolName: new Map(manifest.sourceUriByToolName),
+  });
 }
 
 /**
@@ -666,4 +533,219 @@ export async function runCiscoMcpScannerPlanV1(
       detail: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// C2a §4: Core-declared config paths (options validation and tool derivation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a `detector.cisco-mcp-scanner` request was refused before anything
+ * spawned. The B2 wiring maps `detector-options-invalid` and
+ * `subject-requirement-unmet` to Core's refusal reasons of the same names.
+ */
+export type CiscoMcpScannerRefusalReasonV1 =
+  | "detector-options-invalid"
+  | "subject-requirement-unmet";
+
+export interface CiscoMcpScannerRefusalV1 {
+  readonly reason: CiscoMcpScannerRefusalReasonV1;
+  /** One actionable sentence. */
+  readonly detail: string;
+}
+
+/** C2a §2.1 artifact-URI rule: a source-relative POSIX path, nothing else. */
+function isSourceRelativePosixPathV1(path: string): boolean {
+  if (path.length === 0 || path.includes("\\")) return false;
+  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) return false;
+  return !path
+    .split("/")
+    .some((segment) => segment.length === 0 || segment === "." || segment === "..");
+}
+
+/** Directories holding a `SKILL.md` in Core's declared selection (`""` is the root). */
+function selectedSkillDirsV1(selectedClosurePaths: readonly string[]): ReadonlySet<string> {
+  const dirs = new Set<string>();
+  for (const path of selectedClosurePaths) {
+    const slash = path.lastIndexOf("/");
+    if ((slash < 0 ? path : path.slice(slash + 1)) !== "SKILL.md") continue;
+    dirs.add(slash < 0 ? "" : path.slice(0, slash));
+  }
+  return dirs;
+}
+
+/**
+ * Whether `path` is one of Core's incoming MCP config names at the root or
+ * under a directory holding a selected `SKILL.md` (C2a §2.1). Multi-segment
+ * names (`.cursor/mcp.json`) match as a whole, never as a bare `mcp.json`
+ * suffix.
+ */
+function isCoreMcpConfigPathV1(path: string, skillDirs: ReadonlySet<string>): boolean {
+  for (const name of MCP_CONFIG_FILE_NAMES_V1) {
+    if (path === name) return true;
+    if (path.endsWith(`/${name}`)) {
+      const dir = path.slice(0, path.length - name.length - 1);
+      if (skillDirs.has(dir)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * C2a §4.1 options validation, exactly as §2.1: `detectorOptions` must be a
+ * plain object with exactly the key `mcpConfigPaths`, holding 0-1024 unique
+ * source-relative POSIX paths from Core's config-name set that exist in the
+ * sealed tree (a directory or symlink is accepted; only a missing path is
+ * refused). Order is significant and is preserved verbatim. Never throws.
+ */
+export function validateCiscoMcpScannerDetectorOptionsV1(
+  detectorOptions: unknown,
+  request: Readonly<{ root: string; selectedClosurePaths: readonly string[] }>,
+):
+  | Readonly<{ ok: true; mcpConfigPaths: readonly string[] }>
+  | Readonly<{ ok: false; refusal: CiscoMcpScannerRefusalV1 }> {
+  const invalid = (detail: string) =>
+    Object.freeze({
+      ok: false as const,
+      refusal: Object.freeze({ reason: "detector-options-invalid" as const, detail }),
+    });
+  if (!isRecord(detectorOptions))
+    return invalid("detectorOptions must be an object with exactly the key mcpConfigPaths.");
+  const keys = Object.keys(detectorOptions);
+  if (keys.length !== 1 || keys[0] !== "mcpConfigPaths")
+    return invalid(
+      `detectorOptions must have exactly the key mcpConfigPaths; got ${JSON.stringify(keys)}.`,
+    );
+  const value: unknown = detectorOptions.mcpConfigPaths;
+  if (!Array.isArray(value))
+    return invalid(
+      "detectorOptions.mcpConfigPaths must be an array of source-relative POSIX paths.",
+    );
+  if (value.length > MCP_DECLARED_CONFIG_PATHS_MAX_V1)
+    return invalid(
+      `detectorOptions.mcpConfigPaths names ${value.length} paths; at most ${MCP_DECLARED_CONFIG_PATHS_MAX_V1} are accepted.`,
+    );
+  const skillDirs = selectedSkillDirsV1(request.selectedClosurePaths);
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !isSourceRelativePosixPathV1(entry))
+      return invalid(
+        `detectorOptions.mcpConfigPaths[${index}] is not a source-relative POSIX path: ${JSON.stringify(entry)}.`,
+      );
+    if (seen.has(entry))
+      return invalid(`detectorOptions.mcpConfigPaths[${index}] repeats ${JSON.stringify(entry)}.`);
+    seen.add(entry);
+    if (!isCoreMcpConfigPathV1(entry, skillDirs))
+      return invalid(
+        `detectorOptions.mcpConfigPaths[${index}] is not one of Core's incoming MCP config names at the root or under a selected SKILL.md directory: ${JSON.stringify(entry)}.`,
+      );
+    const stats = lstatSync(join(request.root, ...entry.split("/")), { throwIfNoEntry: false });
+    if (stats === undefined)
+      return invalid(
+        `detectorOptions.mcpConfigPaths[${index}] does not exist in the sealed tree: ${JSON.stringify(entry)}.`,
+      );
+    paths.push(entry);
+  }
+  return Object.freeze({ ok: true as const, mcpConfigPaths: Object.freeze(paths) });
+}
+
+export type CiscoMcpToolsDerivationV1 =
+  | Readonly<{ status: "derived"; manifest: CiscoMcpToolsManifestV1 }>
+  | Readonly<{ status: "refused"; refusal: CiscoMcpScannerRefusalV1 }>;
+
+/**
+ * C2a §4.2 tool derivation over Core-declared config paths, in declared order,
+ * verbatim from Core's `mcpStaticTools`: a read or `JSON.parse` failure yields
+ * one `<path>:malformed` placeholder tool, non-object maps and non-object
+ * documents contribute nothing, and servers sort by name with `localeCompare`.
+ * Zero derived tools or a duplicate derived name is a typed refusal
+ * (`subject-requirement-unmet`) with Core's exact detail, before anything
+ * spawns. Never throws.
+ */
+export function deriveCiscoMcpToolsV1(
+  root: string,
+  mcpConfigPaths: readonly string[],
+): CiscoMcpToolsDerivationV1 {
+  const refused = (detail: string): CiscoMcpToolsDerivationV1 =>
+    Object.freeze({
+      status: "refused" as const,
+      refusal: Object.freeze({ reason: "subject-requirement-unmet" as const, detail }),
+    });
+  const tools: CiscoMcpScannerToolV1[] = [];
+  const sourceUriByToolName = new Map<string, string>();
+  for (const rel of mcpConfigPaths) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(join(root, ...rel.split("/")), "utf8"));
+    } catch {
+      parsed = undefined;
+    }
+    const derived =
+      parsed === undefined
+        ? [
+            {
+              name: safeToolName(`${rel}:malformed`),
+              description: `Malformed MCP config declared in ${rel}`,
+              inputSchema: { type: "object" as const, properties: {} },
+            },
+          ]
+        : toolsFromConfig(rel, parsed);
+    for (const tool of derived) {
+      if (sourceUriByToolName.has(tool.name))
+        return refused(`derived duplicate MCP tool name: ${tool.name}`);
+      sourceUriByToolName.set(tool.name, rel);
+      tools.push(tool);
+      if (tools.length > MAX_TOOLS) return refused("derived MCP tool count exceeds bound");
+    }
+  }
+  if (tools.length === 0)
+    return refused("mcp-scanner received an MCP config with no scannable tools");
+  return Object.freeze({
+    status: "derived" as const,
+    manifest: deepFreezeStrictJsonV1({
+      tools: structuredClone(tools),
+      sourceUriByToolName: new Map(sourceUriByToolName),
+    }),
+  });
+}
+
+/** The C2a §4 request as Core sends it (subject and options plus planning fields). */
+export interface CiscoMcpScannerRequestV1 {
+  /** `subject.sourceRoot`: the absolute realpath of the scanned root. */
+  readonly root: string;
+  /** `subject.selectedClosurePaths`: Core's trust inventory (may be empty). */
+  readonly selectedClosurePaths: readonly string[];
+  /** `detectorOptions`: required, exactly `{ mcpConfigPaths: string[] }` (§4.1). */
+  readonly detectorOptions: unknown;
+  readonly platform: CiscoMcpScannerPlatformV1;
+  /** Host environment; scrubbed to the safe-key allow list before the spawn. */
+  readonly env: Readonly<Record<string, string | undefined>>;
+  /** Private path the runtime writes the tools manifest bytes to. */
+  readonly inputPath: string;
+  readonly timeoutMs?: number;
+}
+
+export type CiscoMcpScannerRequestOutcomeV1 =
+  | Readonly<{ status: "planned"; plan: CiscoMcpScannerPlanV1 }>
+  | Readonly<{ status: "refused"; refusal: CiscoMcpScannerRefusalV1 }>;
+
+/**
+ * The C2a §4 flow: validate the declared options (§4.1), derive the tools
+ * manifest from exactly the declared paths (§4.2), then plan the §4.3 argv.
+ * Every shortfall is a typed refusal; this function never throws on bad input.
+ */
+export function planCiscoMcpScannerRequestV1(
+  request: CiscoMcpScannerRequestV1,
+): CiscoMcpScannerRequestOutcomeV1 {
+  const options = validateCiscoMcpScannerDetectorOptionsV1(request.detectorOptions, request);
+  if (!options.ok) return Object.freeze({ status: "refused" as const, refusal: options.refusal });
+  const derived = deriveCiscoMcpToolsV1(request.root, options.mcpConfigPaths);
+  if (derived.status === "refused")
+    return Object.freeze({ status: "refused" as const, refusal: derived.refusal });
+  return Object.freeze({
+    status: "planned" as const,
+    plan: planFromManifestV1(request, derived.manifest),
+  });
 }

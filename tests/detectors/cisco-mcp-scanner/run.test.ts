@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,7 +6,8 @@ import {
   type CiscoMcpScannerPlanV1,
   type CiscoMcpScannerRunOutcomeV1,
   type CiscoMcpScannerRunResultV1,
-  planCiscoMcpScannerV1,
+  MCP_CONFIG_FILE_NAMES_V1,
+  planCiscoMcpScannerRequestV1,
   runCiscoMcpScannerPlanV1,
 } from "../../../src/detectors/cisco-mcp-scanner/index.js";
 
@@ -47,8 +48,14 @@ function plannedRun(
   report: unknown,
   result?: Partial<CiscoMcpScannerRunResultV1>,
 ): { outcome: Promise<CiscoMcpScannerRunOutcomeV1>; seen: Seen[] } {
-  const planned = planCiscoMcpScannerV1({
+  // Core declares the config paths (C2a §4.1); here: the root-level config names present.
+  const mcpConfigPaths = MCP_CONFIG_FILE_NAMES_V1.filter((name) =>
+    existsSync(join(root, ...name.split("/"))),
+  );
+  const planned = planCiscoMcpScannerRequestV1({
     root,
+    selectedClosurePaths: [],
+    detectorOptions: { mcpConfigPaths },
     platform: "linux",
     env,
     inputPath: join(root, "work", "tools.json"),
