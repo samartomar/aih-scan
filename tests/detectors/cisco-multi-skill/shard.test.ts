@@ -79,9 +79,9 @@ function scanningRunner(hooks?: {
         version: "2.1.0",
         runs: [
           {
-            ...(hooks?.invocations === undefined
-              ? {}
-              : { invocations: hooks.invocations(scanCount) }),
+            tool: { driver: { name: "skill-scanner", version: "1.0.0" } },
+            // Real skill-scanner reports its invocation; a job's SARIF must prove completion (S2e).
+            invocations: hooks?.invocations?.(scanCount) ?? [{ executionSuccessful: true }],
             results: [
               {
                 ruleId: "fixture",

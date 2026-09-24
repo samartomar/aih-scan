@@ -8,9 +8,8 @@ import {
 import {
   type CiscoSarifLogV1,
   type CiscoSarifRunV1,
+  ciscoJobSarifV1,
   mergedCiscoSarifTextV1,
-  parseCiscoSarifLogV1,
-  prefixCiscoSarifUrisV1,
 } from "./merge-v1.js";
 import {
   CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1,
@@ -200,8 +199,10 @@ export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
 /**
  * Core's `scanCiscoSkillDirectory`, typed: the same argv, cwd, timeout and
  * exit-0 requirement, but failures are returned, not thrown. A
- * process failure is stage `execution`; a SARIF file that is missing or does
- * not parse is stage `output`. The private temporary directory is always
+ * process failure is stage `execution`; a SARIF file that is missing, does
+ * not parse or does not prove completion is stage `output`, and one whose
+ * invocation reports the analyzer's own failure is stage `execution`
+ * ({@link ciscoJobSarifV1}). The private temporary directory is always
  * removed.
  */
 export async function scanCiscoSkillDirectoryOutcomeV1(
@@ -250,17 +251,14 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         detail: "detector did not emit valid SARIF",
       });
     }
-    if (parseCiscoSarifLogV1(raw) === undefined) {
+    const sarif = ciscoJobSarifV1(raw, request.root, request.skillDir);
+    if (!sarif.ok)
       return Object.freeze({
         kind: "failed" as const,
-        stage: "output" as const,
-        detail: "detector did not emit valid SARIF",
+        stage: sarif.stage,
+        detail: boundedCiscoDetailV1(sarif.detail),
       });
-    }
-    return Object.freeze({
-      kind: "completed" as const,
-      log: prefixCiscoSarifUrisV1(raw, request.root, request.skillDir),
-    });
+    return Object.freeze({ kind: "completed" as const, log: sarif.log });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

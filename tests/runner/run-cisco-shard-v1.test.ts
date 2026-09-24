@@ -89,6 +89,7 @@ const jobSarif = (skill: string) =>
     runs: [
       {
         tool: { driver: { name: "skill-scanner" } },
+        invocations: [{ executionSuccessful: true }],
         results: [
           {
             ruleId: `cisco.rule-${skill}`,

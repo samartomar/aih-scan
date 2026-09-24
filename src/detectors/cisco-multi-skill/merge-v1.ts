@@ -14,6 +14,10 @@ import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
  * volatile invocation timestamps are removed, so merged output is projection-
  * and time-independent. Rule mapping, grading and verdicts stay with the
  * caller (Core keeps them).
+ *
+ * Unlike Core's `parseSarifLog`, which required only a `runs` array, a job's
+ * SARIF must prove the job completed (S2e): version 2.1.0, at least one run,
+ * each with a tool driver, a results array and successful invocations.
  */
 
 export interface CiscoSarifArtifactLocationV1 {
@@ -59,21 +63,95 @@ export const MAX_CISCO_SARIF_BYTES_V1 = 16 * 1024 * 1024;
  */
 export const CISCO_SARIF_FALLBACK_URI_V1 = "cisco.sarif";
 
-/**
- * Output gate for one skill scan's SARIF file, mirroring Core's
- * `parseSarifLog`: parseable JSON whose root holds a `runs` array, or
- * `undefined`. Deeper validation is deliberately not done here.
- */
-export function parseCiscoSarifLogV1(
-  raw: string,
-): (CiscoSarifLogV1 & { runs: CiscoSarifRunV1[] }) | undefined {
-  if (Buffer.byteLength(raw, "utf8") > MAX_CISCO_SARIF_BYTES_V1) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as CiscoSarifLogV1;
-    return Array.isArray(parsed.runs) ? { ...parsed, runs: parsed.runs } : undefined;
-  } catch {
-    return undefined;
+function isRecordV1(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Where a job's SARIF fell short: the analyzer's own failure report, or unusable output. */
+export type CiscoJobSarifFailureStageV1 = "execution" | "output";
+
+/** A job's SARIF once validated and normalized, or why it is not evidence (C2a §3.5). */
+export type CiscoJobSarifV1 = Readonly<
+  | { ok: true; log: CiscoSarifLogV1 }
+  | { ok: false; stage: CiscoJobSarifFailureStageV1; detail: string }
+>;
+
+class CiscoJobSarifProblemV1 extends Error {
+  readonly stage: CiscoJobSarifFailureStageV1;
+  constructor(stage: CiscoJobSarifFailureStageV1, detail: string) {
+    super(detail);
+    this.stage = stage;
   }
+}
+
+const INVALID_SARIF = "detector did not emit valid SARIF";
+
+function sarifProblem(stage: CiscoJobSarifFailureStageV1, detail: string): never {
+  throw new CiscoJobSarifProblemV1(stage, `detector SARIF ${detail}`);
+}
+
+/** An invocation's notification list holding an `error`-level (or malformed) entry. */
+function hasErrorNotification(value: unknown, where: string): boolean {
+  if (value === undefined) return false;
+  if (!Array.isArray(value)) sarifProblem("output", `${where} notifications are malformed`);
+  return value.some((entry) => !isRecordV1(entry) || entry.level === "error");
+}
+
+/**
+ * The completion evidence one skill-scanner job must carry (S2e, the owner principle): the
+ * analyzer's own SARIF proves the job ran to completion, or the job fails. Real
+ * skill-scanner 2.0.14 output is `version` "2.1.0" with runs that each name a tool driver,
+ * hold a `results` array and report their invocations with `executionSuccessful: true`.
+ * An unparseable or oversized file, another version, no runs, a run without a driver or a
+ * results array, a malformed result and a run without invocations are `output` failures;
+ * an invocation that is not `executionSuccessful: true`, or that carries an `error`-level
+ * tool execution or configuration notification, is the analyzer's own `execution` failure.
+ */
+function validatedCiscoJobSarifV1(raw: string): Record<string, unknown> & { runs: unknown[] } {
+  if (Buffer.byteLength(raw, "utf8") > MAX_CISCO_SARIF_BYTES_V1)
+    throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
+  }
+  if (!isRecordV1(parsed)) throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
+  if (parsed.version !== "2.1.0") sarifProblem("output", "is not version 2.1.0");
+  const runs = parsed.runs;
+  if (!Array.isArray(runs) || runs.length === 0) sarifProblem("output", "holds no runs");
+  runs.forEach((run: unknown, index) => {
+    const where = `run ${index}`;
+    if (!isRecordV1(run)) sarifProblem("output", `${where} is malformed`);
+    const driver = isRecordV1(run.tool) ? run.tool.driver : undefined;
+    if (!isRecordV1(driver) || typeof driver.name !== "string" || driver.name.length === 0)
+      sarifProblem("output", `${where} names no tool driver`);
+    const results = run.results;
+    if (!Array.isArray(results)) sarifProblem("output", `${where} holds no results array`);
+    results.forEach((result: unknown, resultIndex) => {
+      if (
+        !isRecordV1(result) ||
+        (result.locations !== undefined && !Array.isArray(result.locations))
+      )
+        sarifProblem("output", `${where} result ${resultIndex} is malformed`);
+    });
+    const invocations = run.invocations;
+    if (!Array.isArray(invocations) || invocations.length === 0)
+      sarifProblem("output", `${where} reports no invocation`);
+    for (const invocation of invocations) {
+      if (!isRecordV1(invocation) || invocation.executionSuccessful !== true)
+        sarifProblem(
+          "execution",
+          `${where} reports an invocation that did not complete successfully`,
+        );
+      if (
+        hasErrorNotification(invocation.toolExecutionNotifications, where) ||
+        hasErrorNotification(invocation.toolConfigurationNotifications, where)
+      )
+        sarifProblem("execution", `${where} reports an error notification`);
+    }
+  });
+  return parsed as Record<string, unknown> & { runs: unknown[] };
 }
 
 function toPosixV1(path: string): string {
@@ -103,22 +181,28 @@ export function prefixSafeCiscoUriV1(prefix: string, raw: unknown): unknown {
 }
 
 /**
- * Parses one skill scan's SARIF and returns it with every artifact URI
- * prefixed by the skill's source-relative directory and every invocation's
- * `startTimeUtc`/`endTimeUtc` removed. Unparseable output throws Core's exact
- * failure text. The returned log is deeply frozen.
+ * One job's SARIF as evidence: validated for completion ({@link validatedCiscoJobSarifV1}),
+ * every invocation's `startTimeUtc`/`endTimeUtc` removed, and every result artifact URI
+ * prefixed by the job's source-relative directory. The returned log is deeply frozen. The
+ * source-tree scan and the shard both take each job's SARIF through here.
  */
-export function prefixCiscoSarifUrisV1(
+export function ciscoJobSarifV1(
   sarifText: string,
   root: string,
   skillRoot: string,
-): CiscoSarifLogV1 {
-  const parsed = parseCiscoSarifLogV1(sarifText);
-  if (parsed === undefined) throw new Error("detector did not emit valid SARIF");
+): CiscoJobSarifV1 {
+  let parsed: Record<string, unknown> & { runs: unknown[] };
+  try {
+    parsed = validatedCiscoJobSarifV1(sarifText);
+  } catch (error) {
+    if (error instanceof CiscoJobSarifProblemV1)
+      return Object.freeze({ ok: false as const, stage: error.stage, detail: error.message });
+    throw error;
+  }
   const prefix = toPosixV1(relative(root, skillRoot));
-  return deepFreezeStrictJsonV1({
+  const log: CiscoSarifLogV1 = deepFreezeStrictJsonV1({
     ...parsed,
-    runs: parsed.runs.map((run) => ({
+    runs: (parsed.runs as CiscoSarifRunV1[]).map((run) => ({
       ...run,
       invocations: run.invocations?.map((invocation) => {
         const {
@@ -149,6 +233,7 @@ export function prefixCiscoSarifUrisV1(
       })),
     })),
   });
+  return Object.freeze({ ok: true as const, log });
 }
 
 /**
