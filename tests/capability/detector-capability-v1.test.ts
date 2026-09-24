@@ -59,10 +59,14 @@ describe("DetectorCapabilityV1", () => {
     const capabilities = listDetectorCapabilitiesV1();
 
     expect(capabilities.map((entry) => entry.detectorId)).toEqual([
+      "detector.aih-binding-gate",
       "detector.aih-native",
+      "detector.aih-trust-lint",
       "detector.cisco",
+      "detector.cisco-mcp-scanner",
       "detector.semgrep",
       "detector.skillspector",
+      "detector.snyk-agent-scan",
     ]);
     expect(listDetectorCapabilitiesV1()).toBe(capabilities);
     for (const capability of capabilities) {
@@ -95,15 +99,22 @@ describe("DetectorCapabilityV1", () => {
     expect(resolveDetectorCapabilityV1(42)).toBeUndefined();
   });
 
-  it("states honestly that only the in-process analyzer runs off Linux amd64", () => {
+  it("states honestly that only in-process analyzers and host-only detectors default off Linux amd64", () => {
     for (const capability of listDetectorCapabilitiesV1()) {
       const platforms = capability.supportedPlatforms.map(
         (entry) => `${entry.os}/${entry.architecture}`,
       );
-      if (capability.detectorId === "detector.aih-native") {
+      if (capability.backend === "in-process") {
         expect(platforms).toContain("windows/amd64");
         expect(capability.executionProfile.isolation).toBe("none");
         expect(capability.prerequisites).toEqual([]);
+      } else if (capability.backend === "host-process-uv") {
+        // The host profile is these detectors' only profile; it still runs only when named.
+        expect(capability.executionProfiles.map((entry) => entry.id)).toEqual([
+          "host-process-uv-v1",
+        ]);
+        expect(capability.executionProfile.isolation).toBe("none");
+        expect(capability.prerequisites.length).toBeGreaterThan(0);
       } else {
         expect(platforms).toEqual(["linux/amd64"]);
         expect(capability.prerequisites.length).toBeGreaterThan(0);
@@ -279,7 +290,12 @@ describe("DetectorCapabilityV1", () => {
           entry.executionProfiles.some((profile) => profile.id === "host-process-uv-v1"),
         )
         .map((entry) => entry.detectorId),
-    ).toEqual(["detector.cisco", "detector.semgrep"]);
+    ).toEqual([
+      "detector.cisco",
+      "detector.cisco-mcp-scanner",
+      "detector.semgrep",
+      "detector.snyk-agent-scan",
+    ]);
   });
 
   it("publishes the exact per-OS environment the host runtime applies, and the caller variables it reads", () => {
@@ -366,10 +382,14 @@ describe("DetectorCapabilityV1", () => {
         listDetectorCapabilitiesV1().map((entry) => [entry.detectorId, entry.emptySource]),
       ),
     ).toEqual({
+      "detector.aih-binding-gate": "completes",
       "detector.aih-native": "refused",
+      "detector.aih-trust-lint": "completes",
       "detector.cisco": "refused",
+      "detector.cisco-mcp-scanner": "refused",
       "detector.semgrep": "completes",
       "detector.skillspector": "completes",
+      "detector.snyk-agent-scan": "completes",
     });
   });
 

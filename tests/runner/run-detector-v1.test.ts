@@ -110,7 +110,7 @@ describe("runDetectorV1 refusals", () => {
           selectedClosurePaths: ["SKILL.md"],
         },
       }),
-      /accepts skill-directory, not npm-package-tree/,
+      /accepts skill-directory, source-tree, not npm-package-tree/,
     ],
     [
       "execution-profile-unavailable",

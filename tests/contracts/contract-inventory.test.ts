@@ -153,12 +153,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 122,
+    line: 136,
     contains: "export interface DetectorExecutionProfileDocumentV1",
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 158,
+    line: 172,
     contains: "export interface DetectorCapabilityV1",
   },
   { path: "src/runner/run-detector-v1.ts", line: 108, contains: "RunDetectorRefusalReasonV1" },
@@ -184,12 +184,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1191,
+    line: 1207,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1150,
+    line: 1166,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {

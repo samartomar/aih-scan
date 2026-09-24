@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
   BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
@@ -27,6 +31,8 @@ import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
 } from "../core/core-contract-lock-v2.js";
+import { CISCO_MCP_SCANNER_VERSION_V1 } from "../detectors/cisco-mcp-scanner/index.js";
+import { SNYK_AGENT_SCAN_VERSION } from "../detectors/snyk-agent-scan/index.js";
 
 /**
  * What Scan can honestly execute, stated as data instead of as code a caller must write.
@@ -48,8 +54,11 @@ import {
  *   `executionProfileSha256` a registration or candidate carries: that digest is taken
  *   over the OCI build inputs of one capture, not over any readable document.
  * - `analyzerIdentity` is `null` wherever Scan does not mint one. Only the in-process
- *   analyzer has a Scan-owned identity; for the vendor analyzers the identity is
+ *   analyzers have a Scan-owned identity; for the vendor analyzers the identity is
  *   supplied by whoever registers the detector.
+ * - Every uv-backed profile publishes `analyzerLock`: the package-relative path of the
+ *   bundled uv.lock it installs and the sha256 of that file as shipped, read when this
+ *   module loads. A missing lock is an incomplete install and fails the load.
  * - A capability grants no qualification, approval, installation or adoption
  *   authority, and nothing in this module executes anything.
  */
@@ -111,6 +120,11 @@ export interface DetectorExecutionProfileV1 {
   readonly supportedPlatforms: readonly DetectorPlatformV1[];
   /** Exactly what the runner probes, and requires, when this profile is selected. */
   readonly prerequisites: readonly DetectorPrerequisiteV1[];
+  /**
+   * The bundled uv lock this profile installs for this detector, by package-relative path,
+   * with the sha256 of its bytes as shipped; absent where the profile installs no lock.
+   */
+  readonly analyzerLock?: Readonly<{ path: string; sha256: string }>;
 }
 
 /**
@@ -190,15 +204,21 @@ export interface DetectorCapabilityV1 {
 
 const LINUX_AMD64: readonly DetectorPlatformV1[] = [{ os: "linux", architecture: "amd64" }];
 /**
- * Where the exact-pinned, build-free uv installs exist: every Semgrep and Cisco dependency
- * publishes a binary wheel for these hosts. macOS amd64 has none for cryptography 50.0.0
- * (and Cisco's onnxruntime 1.27.0), and Windows arm64 none for Semgrep itself.
+ * Where the exact-pinned, build-free uv installs exist: every Semgrep, Cisco and
+ * snyk-agent-scan dependency publishes a binary wheel for these hosts. macOS amd64 has none
+ * for cryptography 50.0.0 (and Cisco's onnxruntime 1.27.0), and Windows arm64 none for
+ * Semgrep itself or for snyk-agent-scan's cryptography 50.0.0.
  */
 const HOST_UV_PLATFORMS: readonly DetectorPlatformV1[] = [
   { os: "darwin", architecture: "arm64" },
   { os: "linux", architecture: "amd64" },
   { os: "linux", architecture: "arm64" },
   { os: "windows", architecture: "amd64" },
+];
+/** litellm 1.93.0, in the cisco-mcp-scanner lock, publishes manylinux wheels only. */
+const MCP_SCANNER_PLATFORMS: readonly DetectorPlatformV1[] = [
+  { os: "linux", architecture: "amd64" },
+  { os: "linux", architecture: "arm64" },
 ];
 /** Hosts whose Docker engine runs the linux/amd64 SkillSpector image, natively or emulated. */
 const HOST_DOCKER_PLATFORMS: readonly DetectorPlatformV1[] = [
@@ -209,6 +229,10 @@ const HOST_DOCKER_PLATFORMS: readonly DetectorPlatformV1[] = [
 ];
 const SARIF_NORMALIZATION_NOTE =
   "Every SARIF artifact URI is rewritten relative to the declared source root, with forward slashes, before the annex digest is taken; a URI outside that root fails the run.";
+const IN_PROCESS_CONTROL_NOTE =
+  "The analysis is synchronous and cannot be preempted: the cancellation signal and the time budget are checked before the analysis starts and again before its result is accepted, and a result that arrives after either has fired is discarded and the run reports cancelled or timed-out.";
+const IN_PROCESS_SEAL_NOTE =
+  "It reads the declared source root directly, without a snapshot; the source seal is taken before and after the analysis, and any change between the two fails the run.";
 const EVERY_PLATFORM: readonly DetectorPlatformV1[] = [
   { os: "darwin", architecture: "amd64" },
   { os: "darwin", architecture: "arm64" },
@@ -234,7 +258,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     notes: [
       "Scan hashes the sealed analyzer snapshot inside this Node process and spawns nothing.",
       "Isolation is 'none' because there is no second process to isolate, not because a sandbox was skipped.",
-      "This is the only profile that runs on a host other than Linux amd64.",
+      "Its gates allow every operating system and architecture Scan knows.",
     ],
   },
   {
@@ -250,9 +274,11 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     mounts: [],
     environment: { policy: "allow-list-scrub", allowed: BASELINE_ENVIRONMENT_ALLOW_LIST_V1 },
     notes: [
-      "detector.aih-trust-lint reads the sealed source tree inside this Node process and spawns nothing.",
+      "detector.aih-trust-lint runs the native trust lint over the selected closure inside this Node process and spawns nothing.",
       "Isolation is 'none' because there is no second process to isolate, not because a sandbox was skipped.",
       "It reads no environment variable and makes no network request; detectorOptions carries the caller's internal scopes and MCP config paths.",
+      IN_PROCESS_SEAL_NOTE,
+      IN_PROCESS_CONTROL_NOTE,
       "Its gates allow every operating system and architecture Scan knows.",
     ],
   },
@@ -269,9 +295,11 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     mounts: [],
     environment: { policy: "allow-list-scrub", allowed: BASELINE_ENVIRONMENT_ALLOW_LIST_V1 },
     notes: [
-      "detector.aih-binding-gate runs the binding scan gate's fast-tier inspectors over the sealed source tree inside this Node process and spawns nothing.",
+      "detector.aih-binding-gate runs the binding scan gate's fast-tier inspectors over the selected closure inside this Node process and spawns nothing.",
       "Isolation is 'none' because there is no second process to isolate, not because a sandbox was skipped.",
-      "It reads no environment variable and makes no network request.",
+      "It reads no environment variable and makes no network request; it accepts no detectorOptions other than an empty object.",
+      IN_PROCESS_SEAL_NOTE,
+      IN_PROCESS_CONTROL_NOTE,
       "Its gates allow every operating system and architecture Scan knows.",
     ],
   },
@@ -368,10 +396,15 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       `uv discovers a CPython ${HOST_PROCESS_UV_PYTHON_REQUEST_V1} (uv python find ${HOST_PROCESS_UV_PYTHON_REQUEST_V1} --no-python-downloads --no-project --no-config --resolve-links), and only that discovery reads the caller variables listed in callerVariables; every analyzer spawn gets only the fixed per-OS values.`,
       "The observation records the resolved uv path and version, the discovered interpreter path and version, the uv cache key and the containment used.",
       `The run's private temporary directory must be at most ${HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1} characters, because Semgrep's core fails once it passes 79; a longer host temporary directory fails the run at availability.`,
-      "Semgrep and Cisco publish exact-pinned binary wheels for Linux (glibc 2.34 or later) amd64 and arm64, macOS arm64 (macOS 14 or later for Cisco) and Windows amd64. macOS amd64 (cryptography 50.0.0) and Windows arm64 (Semgrep) have none, and Scan never builds analyzer dependencies from source, so those hosts are not supported.",
-      "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest.",
+      "Semgrep, Cisco and snyk-agent-scan publish exact-pinned binary wheels for Linux (glibc 2.34 or later) amd64 and arm64, macOS arm64 (macOS 14 or later for Cisco) and Windows amd64. macOS amd64 (cryptography 50.0.0) and Windows arm64 (Semgrep, and cryptography 50.0.0 for snyk-agent-scan) have none, and Scan never builds analyzer dependencies from source, so those hosts are not supported.",
+      "detector.cisco-mcp-scanner runs on Linux amd64 and arm64 only: its lock pins litellm 1.93.0, which publishes manylinux wheels alone, so macOS and Windows would need a source build Scan never performs.",
+      "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest. Each profile's analyzerLock names the lock it installs.",
+      "A detector.cisco source-tree subject runs one skill-scanner scan job per directory holding a selected SKILL.md, over that directory of the private snapshot, at most detectorOptions.concurrency (1 through 64, default 4) at a time; the jobs' SARIF is merged in job order.",
+      "detector.cisco-mcp-scanner runs mcp-scanner --raw --analyzers yara static over the tool list Scan derives from the declared MCP config paths; neither analyzer calls a model or a remote service.",
+      "Network, detector.snyk-agent-scan: snyk-agent-scan contacts Snyk's service during the scan stage to analyze what it finds, so for it the scan stage is not offline even though uv runs with --offline.",
+      "SNYK_TOKEN reaches only the scan invocation, taken from the request env and nowhere else; the acquisition and the help check get only the fixed per-OS values, and no diagnostic carries the token or the analyzer's own output.",
       `${SARIF_NORMALIZATION_NOTE} The private snapshot root is removed, and Cisco's per-skill URIs are mapped through its JSON report.`,
-      "An empty source root completes for detector.semgrep: Semgrep runs over an empty snapshot and reports its own empty SARIF.",
+      "An empty source root completes for detector.semgrep and detector.snyk-agent-scan: each runs over an empty snapshot and reports its own empty result.",
       "Residual limit on linux and darwin: a descendant that deliberately leaves the session (setsid) and also clears its environment and moves its working directory out of the run carries nothing that ties it to the run, so neither the process group nor the residual sweep can find it and it may outlive the run. This profile does not contain a hostile analyzer; linux-namespace-uv-v1 is the containment option on Linux.",
     ],
   },
@@ -526,10 +559,26 @@ function profileDocument(id: string): DetectorExecutionProfileDocumentV1 {
 
 type ProfileGates = Pick<DetectorExecutionProfileV1, "supportedPlatforms" | "prerequisites">;
 
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The shipped lock's identity; a lock that cannot be read is an incomplete install. */
+function analyzerLock(path: string): Readonly<{ path: string; sha256: string }> {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(join(packageRoot, ...path.split("/")));
+  } catch {
+    throw new TypeError(
+      `invalid DetectorCapabilityV1: bundled analyzer lock ${path} is unreadable`,
+    );
+  }
+  return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
 function profile(
   id: string,
   evidence: DetectorExecutionProfileV1["evidence"],
   gates: ProfileGates,
+  lock?: string,
 ): DetectorExecutionProfileV1 {
   const document = profileDocument(id);
   return deepFreezeStrictJsonV1({
@@ -540,6 +589,7 @@ function profile(
     evidence,
     supportedPlatforms: gates.supportedPlatforms,
     prerequisites: gates.prerequisites,
+    ...(lock === undefined ? {} : { analyzerLock: analyzerLock(lock) }),
   });
 }
 
@@ -631,6 +681,27 @@ const SEMGREP_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
   detail:
     "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
 };
+const MCP_SCANNER_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "bundled-asset",
+  id: "tools/baseline-analyzers/cisco-mcp-scanner/uv.lock",
+  required: true,
+  detail:
+    "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
+};
+const SNYK_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "bundled-asset",
+  id: "tools/baseline-analyzers/snyk-agent-scan/uv.lock",
+  required: true,
+  detail:
+    "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
+};
+const SNYK_TOKEN_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "environment-variable",
+  id: "SNYK_TOKEN",
+  required: true,
+  detail:
+    "Pass SNYK_TOKEN in the request env; Scan reads it from nowhere else, gives it only to the scan invocation and never records its value.",
+};
 
 const NATIVE_GATES: ProfileGates = { supportedPlatforms: EVERY_PLATFORM, prerequisites: [] };
 const CISCO_GATES: ProfileGates = {
@@ -691,6 +762,25 @@ const CISCO_HOST_GATES: ProfileGates = {
     ACQUISITION_NETWORK_PREREQUISITE,
   ],
 };
+const MCP_SCANNER_HOST_GATES: ProfileGates = {
+  supportedPlatforms: MCP_SCANNER_PLATFORMS,
+  prerequisites: [
+    HOST_UV_PREREQUISITE,
+    HOST_PYTHON_PREREQUISITE,
+    MCP_SCANNER_LOCK_PREREQUISITE,
+    ACQUISITION_NETWORK_PREREQUISITE,
+  ],
+};
+const SNYK_HOST_GATES: ProfileGates = {
+  supportedPlatforms: HOST_UV_PLATFORMS,
+  prerequisites: [
+    HOST_UV_PREREQUISITE,
+    HOST_PYTHON_PREREQUISITE,
+    SNYK_LOCK_PREREQUISITE,
+    ACQUISITION_NETWORK_PREREQUISITE,
+    SNYK_TOKEN_PREREQUISITE,
+  ],
+};
 const SKILLSPECTOR_HOST_GATES: ProfileGates = {
   supportedPlatforms: HOST_DOCKER_PLATFORMS,
   prerequisites: [
@@ -734,11 +824,43 @@ export const IN_PROCESS_BINDING_GATE_PROFILE_V1: DetectorExecutionProfileV1 = pr
   OBSERVATION,
   NATIVE_GATES,
 );
-const CISCO_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, CISCO_GATES);
-const CISCO_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, CISCO_HOST_GATES);
+const CISCO_NAMESPACE_PROFILE = profile(
+  "linux-namespace-uv-v1",
+  OBSERVATION,
+  CISCO_GATES,
+  CISCO_LOCK_PREREQUISITE.id,
+);
+const CISCO_HOST_PROFILE = profile(
+  "host-process-uv-v1",
+  OBSERVATION,
+  CISCO_HOST_GATES,
+  CISCO_HOST_LOCK_PREREQUISITE.id,
+);
 const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_OCI_GATES);
-const SEMGREP_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, SEMGREP_GATES);
-const SEMGREP_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, SEMGREP_HOST_GATES);
+const SEMGREP_NAMESPACE_PROFILE = profile(
+  "linux-namespace-uv-v1",
+  OBSERVATION,
+  SEMGREP_GATES,
+  SEMGREP_LOCK_PREREQUISITE.id,
+);
+const SEMGREP_HOST_PROFILE = profile(
+  "host-process-uv-v1",
+  OBSERVATION,
+  SEMGREP_HOST_GATES,
+  SEMGREP_LOCK_PREREQUISITE.id,
+);
+const MCP_SCANNER_HOST_PROFILE = profile(
+  "host-process-uv-v1",
+  OBSERVATION,
+  MCP_SCANNER_HOST_GATES,
+  MCP_SCANNER_LOCK_PREREQUISITE.id,
+);
+const SNYK_HOST_PROFILE = profile(
+  "host-process-uv-v1",
+  OBSERVATION,
+  SNYK_HOST_GATES,
+  SNYK_LOCK_PREREQUISITE.id,
+);
 const SKILLSPECTOR_PROFILE = profile(
   "docker-hardened-skillspector-v1",
   OBSERVATION,
@@ -782,13 +904,36 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       backend: "linux-namespace-uv",
       executionProfile: CISCO_NAMESPACE_PROFILE,
       executionProfiles: [CISCO_NAMESPACE_PROFILE, CISCO_HOST_PROFILE, CISCO_OCI_PROFILE],
-      subjectKinds: ["skill-directory"],
+      subjectKinds: ["skill-directory", "source-tree"],
       subjectRequirements: [
-        "The declared source root must hold a top-level SKILL.md, and that SKILL.md must be one of the declared selected closure paths.",
-        "Scan never creates, renames, copies or discovers a SKILL.md to satisfy this requirement.",
-        "The scan must cover every SKILL.md the sealed snapshot holds and may skip none.",
+        "A skill-directory subject: the declared source root must hold a top-level SKILL.md, and that SKILL.md must be one of the declared selected closure paths; the scan must cover every SKILL.md the sealed snapshot holds and may skip none.",
+        "A source-tree subject runs one skill-scanner job per directory holding a selected SKILL.md, in Core's order, and only under host-process-uv-v1; a selection with no SKILL.md is refused, and detectorOptions.concurrency bounds how many jobs run at once.",
+        "Scan never creates, renames, copies or discovers a SKILL.md to satisfy either requirement.",
         "The oci-hardened-cisco-v1 profile additionally needs a caller-supplied immutable OCI layout, runtime registration, broker identity and annex payloads.",
         "A top-level .git directory is not given to the analyzer, so its files are reported as uncovered.",
+      ],
+      emptySource: "refused",
+      outputs: ["sarif-2.1.0"],
+      contracts: {
+        capabilityVersion: 1,
+        candidateProtocol: "BaselineAnalyzerObservationV1",
+        findingsProtocol: "ScanFindingsV1",
+        coreContractCommit: AI_HARNESS_STRICT_V2_COMMIT,
+        decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+      },
+    }),
+    capability({
+      detectorId: "detector.cisco-mcp-scanner",
+      analyzerIdentity: null,
+      analyzerVersion: CISCO_MCP_SCANNER_VERSION_V1,
+      backend: "host-process-uv",
+      executionProfile: MCP_SCANNER_HOST_PROFILE,
+      executionProfiles: [MCP_SCANNER_HOST_PROFILE],
+      subjectKinds: ["source-tree"],
+      subjectRequirements: [
+        "detectorOptions.mcpConfigPaths names the MCP config files to read, each a selected regular file, in Core's order; the tool list is derived from them before anything runs.",
+        "A selection with no MCP config path, or config files declaring no tool, is refused before anything runs.",
+        "The host profile is this detector's only profile, and it runs only when the request names it.",
       ],
       emptySource: "refused",
       outputs: ["sarif-2.1.0"],
@@ -837,6 +982,75 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
         "A source root with no entries at all is accepted only with an empty selection; SkillSpector then runs over an empty snapshot and reports its own SARIF.",
         "The source root path must be representable as a Docker bind mount, so it may hold no comma or control character.",
         "The analyzer is given the whole tree, a top-level .git and dependency or build directories included, as Core's own run is.",
+      ],
+      emptySource: "completes",
+      outputs: ["sarif-2.1.0"],
+      contracts: {
+        capabilityVersion: 1,
+        candidateProtocol: "BaselineAnalyzerObservationV1",
+        findingsProtocol: "ScanFindingsV1",
+        coreContractCommit: AI_HARNESS_STRICT_V2_COMMIT,
+        decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+      },
+    }),
+    capability({
+      detectorId: "detector.snyk-agent-scan",
+      analyzerIdentity: null,
+      analyzerVersion: SNYK_AGENT_SCAN_VERSION,
+      backend: "host-process-uv",
+      executionProfile: SNYK_HOST_PROFILE,
+      executionProfiles: [SNYK_HOST_PROFILE],
+      subjectKinds: ["source-tree"],
+      subjectRequirements: [
+        "The request env must carry SNYK_TOKEN, and nothing else; without it the run is refused prerequisite-missing before anything runs.",
+        "A source root with no entries at all is accepted only with an empty selection; snyk-agent-scan then runs over an empty snapshot and reports what it reports.",
+        "The host profile is this detector's only profile, and it runs only when the request names it.",
+      ],
+      emptySource: "completes",
+      outputs: ["sarif-2.1.0"],
+      contracts: {
+        capabilityVersion: 1,
+        candidateProtocol: "BaselineAnalyzerObservationV1",
+        findingsProtocol: "ScanFindingsV1",
+        coreContractCommit: AI_HARNESS_STRICT_V2_COMMIT,
+        decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+      },
+    }),
+    capability({
+      detectorId: "detector.aih-trust-lint",
+      analyzerIdentity: "aih-trust-lint@1.0.0",
+      analyzerVersion: "1.0.0",
+      backend: "in-process",
+      executionProfile: IN_PROCESS_TRUST_LINT_PROFILE_V1,
+      executionProfiles: [IN_PROCESS_TRUST_LINT_PROFILE_V1],
+      subjectKinds: ["source-tree"],
+      subjectRequirements: [
+        "Every declared selected closure path must exist as a regular file under the declared source root.",
+        "detectorOptions may carry internalScopes and mcpConfigPaths, validated as Core validates them; any other key is refused.",
+        "An empty selection completes with an empty SARIF run.",
+      ],
+      emptySource: "completes",
+      outputs: ["sarif-2.1.0"],
+      contracts: {
+        capabilityVersion: 1,
+        candidateProtocol: "BaselineAnalyzerObservationV1",
+        findingsProtocol: "ScanFindingsV1",
+        coreContractCommit: AI_HARNESS_STRICT_V2_COMMIT,
+        decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+      },
+    }),
+    capability({
+      detectorId: "detector.aih-binding-gate",
+      analyzerIdentity: "aih-binding-gate@1.0.0",
+      analyzerVersion: "1.0.0",
+      backend: "in-process",
+      executionProfile: IN_PROCESS_BINDING_GATE_PROFILE_V1,
+      executionProfiles: [IN_PROCESS_BINDING_GATE_PROFILE_V1],
+      subjectKinds: ["source-tree"],
+      subjectRequirements: [
+        "The selected closure is Core's binding inventory: every file outside .git, in Core's order, each a regular file under the declared source root.",
+        "detectorOptions is absent or an empty object.",
+        "An empty selection completes with an empty SARIF run.",
       ],
       emptySource: "completes",
       outputs: ["sarif-2.1.0"],

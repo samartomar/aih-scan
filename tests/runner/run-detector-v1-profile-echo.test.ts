@@ -30,16 +30,33 @@ const cases = listDetectorCapabilitiesV1().flatMap((capability) =>
     .map((profile) => [capability.detectorId, profile.id, capability.subjectKinds[0]] as const),
 );
 
+const UNDISPATCHED = new Set([
+  "detector.aih-binding-gate",
+  "detector.aih-trust-lint",
+  "detector.cisco-mcp-scanner",
+  "detector.snyk-agent-scan",
+]);
+
+/** Detectors that need detectorOptions get the smallest valid ones. */
+const OPTIONS: Readonly<Record<string, unknown>> = {
+  "detector.aih-trust-lint": { internalScopes: [], mcpConfigPaths: [] },
+  "detector.cisco-mcp-scanner": { mcpConfigPaths: [] },
+};
+
 describe("runDetectorV1 execution profile echo", () => {
   it("covers every observation profile Scan publishes", () => {
     expect(cases.map(([detector, profile]) => `${detector}@${profile}`)).toEqual([
+      "detector.aih-binding-gate@in-process-binding-gate-v1",
       "detector.aih-native@in-process-native-v1",
+      "detector.aih-trust-lint@in-process-trust-lint-v1",
       "detector.cisco@linux-namespace-uv-v1",
       "detector.cisco@host-process-uv-v1",
+      "detector.cisco-mcp-scanner@host-process-uv-v1",
       "detector.semgrep@linux-namespace-uv-v1",
       "detector.semgrep@host-process-uv-v1",
       "detector.skillspector@docker-hardened-skillspector-v1",
       "detector.skillspector@docker-host-local-skillspector-v1",
+      "detector.snyk-agent-scan@host-process-uv-v1",
     ]);
   });
 
@@ -52,11 +69,21 @@ describe("runDetectorV1 execution profile echo", () => {
       detectorId,
       executionProfileId: profileId,
       subject: { kind, sourceRoot: skillRoot(), selectedClosurePaths: ["SKILL.md"] },
+      ...(OPTIONS[detectorId] === undefined ? {} : { detectorOptions: OPTIONS[detectorId] }),
       prerequisiteProbe: () => "present",
       runner: async () => {
         throw new Error("analyzer unavailable in this test");
       },
     });
+    if (UNDISPATCHED.has(detectorId)) {
+      // Registered ahead of the runner dispatch that lands next; refused, never run.
+      expect(outcome).toMatchObject({
+        outcome: "refused",
+        reason: "execution-profile-unavailable",
+        detail: `${detectorId} has no analyzer backend in this package.`,
+      });
+      return;
+    }
     expect(["succeeded", "failed"]).toContain(outcome.outcome);
     if (outcome.outcome === "refused") return;
     expect(outcome.executionProfile.id).toBe(profileId);

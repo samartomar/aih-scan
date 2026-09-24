@@ -822,6 +822,22 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   if ("refusal" in profileOrRefusal)
     return refuse("execution-profile-unavailable", profileOrRefusal.refusal, capability);
   const profile = profileOrRefusal;
+  if (
+    capability.detectorId === "detector.cisco" &&
+    subject.kind === "source-tree" &&
+    profile.id !== "host-process-uv-v1"
+  )
+    return refuse(
+      "unsupported-subject-kind",
+      `detector.cisco accepts a source-tree subject only under host-process-uv-v1, which runs one skill-scanner job per directory holding a selected SKILL.md; ${profile.id} runs one skill root per request. Name host-process-uv-v1, or shard the tree into one skill-directory request per directory that holds a SKILL.md.`,
+      capability,
+    );
+  if (capability.detectorId === "detector.cisco" && subject.kind === "source-tree")
+    return refuse(
+      "execution-profile-unavailable",
+      "detector.cisco source-tree runs under host-process-uv-v1 are not wired in this build.",
+      capability,
+    );
   if (input.acceptedImageDigests !== undefined) {
     if (
       profile.id !== "docker-hardened-skillspector-v1" &&

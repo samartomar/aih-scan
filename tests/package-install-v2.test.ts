@@ -665,16 +665,24 @@ describe("published V2 package installation", () => {
     // The packed package must be able to run a detector, not merely name one.
     expect(consumer.detectorExecution).toEqual({
       detectorIds: [
+        "detector.aih-binding-gate",
         "detector.aih-native",
+        "detector.aih-trust-lint",
         "detector.cisco",
+        "detector.cisco-mcp-scanner",
         "detector.semgrep",
         "detector.skillspector",
+        "detector.snyk-agent-scan",
       ],
       profileDocumentIds: [
+        "in-process-binding-gate-v1",
         "in-process-native-v1",
+        "in-process-trust-lint-v1",
         "linux-namespace-uv-v1",
+        "host-process-uv-v1",
         "linux-namespace-uv-v1",
         "docker-hardened-skillspector-v1",
+        "host-process-uv-v1",
       ],
       profileDigestsMatchDocuments: true,
       refusal: { outcome: "refused", reason: "unknown-detector" },
