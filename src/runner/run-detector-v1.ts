@@ -1195,8 +1195,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
                     : [],
                 ),
               ),
-              // Engine SARIF may name no file (a whole-tree finding, a fallback URI).
-              ...(engineAnalyzer === undefined
+              // Engine SARIF may name no file (a whole-tree finding, a fallback URI). Cisco's
+              // source-tree jobs are skill-scanner SARIF and stay bound like its directory run.
+              ...(engineAnalyzer === undefined || engineAnalyzer === "cisco-source-tree"
                 ? {}
                 : { unboundLocations: "unavailable" as const, maxResults: ENGINE_MAX_RESULTS_V1 }),
             })

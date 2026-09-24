@@ -74,7 +74,7 @@ function hostEnv() {
 }
 
 const ok = (stdout: string) => ({ code: 0, stdout, stderr: "", truncated: false });
-const jobSarif = (skill: string) =>
+const jobSarif = (skill: string, uri = "SKILL.md") =>
   JSON.stringify({
     version: "2.1.0",
     runs: [
@@ -89,7 +89,7 @@ const jobSarif = (skill: string) =>
             locations: [
               {
                 physicalLocation: {
-                  artifactLocation: { uri: "SKILL.md" },
+                  artifactLocation: { uri },
                   region: { startLine: 1 },
                 },
               },
@@ -108,6 +108,7 @@ function ciscoHost(
   scans: Scan[],
   observed: { inFlight: number; peak: number },
   fail: (skill: string) => string | undefined = () => undefined,
+  uri = "SKILL.md",
 ): BaselineProcessRunnerV1 {
   return async (argv, options) => {
     if (argv[1] === "--version") return ok("uv 0.12.13 (0123456 2026-09-01 x86_64)");
@@ -124,7 +125,7 @@ function ciscoHost(
     observed.inFlight -= 1;
     const reason = fail(skill);
     if (reason !== undefined) return { code: 1, stdout: "", stderr: reason, truncated: false };
-    writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", jobSarif(skill));
+    writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", jobSarif(skill, uri));
     return ok("");
   };
 }
@@ -212,6 +213,22 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
       join(import.meta.dirname, "..", "..", ...(lock?.path.split("/") ?? [])),
     );
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(lock?.sha256);
+  });
+
+  it("fails at output when a job's result names a file that is not sealed", async () => {
+    // Cisco 2.1.0 on Windows names SKILL.md as "skill.md" (its path check returns
+    // os.path.normcase of the resolved path). Only the SKILL.md spelling is sealed; the
+    // result is not reported with an unavailable location, as an engine finding may be.
+    const host = hostEnv();
+    const outcome = await runDetectorV1(
+      request(skillsTree(), host.env, {
+        runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, "skill.md"),
+      }),
+    );
+
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome !== "failed") return;
+    expect(outcome.failure.detail).toContain("skills/a/skill.md, which is not a sealed source file");
   });
 
   it("reports the lowest-index failing job and no partial SARIF", async () => {
