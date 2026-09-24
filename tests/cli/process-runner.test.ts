@@ -195,6 +195,40 @@ describe("processRunner process-group containment", () => {
     expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
     expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
   });
+
+  it("refuses Windows process-group execution before spawning anything", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    spawnMock.mockClear();
+
+    expect(() =>
+      processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], { ...options, killProcessGroup: true }),
+    ).toThrow("process-group execution requires a Linux analyzer host");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("fails a run whose process group survives bounded polling, without claiming cleanup", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const child = new FakeChild();
+    spawnMock.mockReturnValue(child);
+    // The group never exits, whatever it is sent.
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+      ...options,
+      timeoutMs: 60_000,
+      killProcessGroup: true,
+    });
+    child.emit("close", 0);
+    await expect(
+      Promise.race([completed.then(() => "settled"), Promise.resolve("pending")]),
+    ).resolves.toBe("pending");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(completed).resolves.toMatchObject({ code: 1, truncated: true });
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    expect(kill.mock.calls.filter(([, signal]) => signal === 0).length).toBeGreaterThan(1);
+  });
 });
 
 describe("aih-scan bin", () => {

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
+  BASELINE_PYTHON_EXECUTABLE_V1,
   type BaselineProcessRunnerV1,
   CISCO_SKILL_SCANNER_VERSION_V1,
   createBaselineAnalyzerRunV1,
@@ -16,6 +18,10 @@ import {
   resolveDetectorCapabilityV1,
   resolveDetectorExecutionProfileDocumentV1,
 } from "../../src/capability/detector-capability-v1.js";
+import {
+  BASELINE_BWRAP_EXECUTABLE_V1,
+  BASELINE_UV_EXECUTABLE_V1,
+} from "../../src/cli/process-runner.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
@@ -158,6 +164,7 @@ describe("DetectorCapabilityV1", () => {
     const documents = listDetectorExecutionProfileDocumentsV1();
     expect(documents.map((entry) => entry.id).sort()).toEqual([
       "docker-hardened-skillspector-v1",
+      "host-process-uv-v1",
       "in-process-native-v1",
       "linux-namespace-uv-v1",
       "oci-hardened-cisco-v1",
@@ -166,7 +173,114 @@ describe("DetectorCapabilityV1", () => {
     expect(inProcess?.executables).toEqual([]);
     expect(inProcess?.containment).toEqual([]);
     expect(inProcess?.notes.join(" ")).toContain("spawns nothing");
-    for (const document of documents)
-      expect(document.environment.allowed).toContain("XDG_CACHE_HOME");
+    // Every profile except the host profile keeps its unchanged allow-list-scrub rule.
+    for (const document of documents) {
+      if (document.id === "host-process-uv-v1") continue;
+      expect(document.environment, document.id).toEqual({
+        policy: "allow-list-scrub",
+        allowed: BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
+      });
+    }
+  });
+
+  it("publishes host-process-uv-v1 as an explicit, truthfully unisolated Semgrep profile", () => {
+    const semgrep = resolveDetectorCapabilityV1("detector.semgrep");
+    expect(semgrep?.backend).toBe("linux-namespace-uv");
+    expect(semgrep?.executionProfile.id).toBe("linux-namespace-uv-v1");
+    expect(semgrep?.executionProfiles.map((entry) => entry.id)).toEqual([
+      "linux-namespace-uv-v1",
+      "host-process-uv-v1",
+    ]);
+    const host = semgrep?.executionProfiles.find((entry) => entry.id === "host-process-uv-v1");
+    expect(host).toMatchObject({
+      isolation: "none",
+      network: "unenforced",
+      evidence: "BaselineAnalyzerObservationV1",
+    });
+
+    const document = resolveDetectorExecutionProfileDocumentV1("host-process-uv-v1");
+    const namespace = resolveDetectorExecutionProfileDocumentV1("linux-namespace-uv-v1");
+    expect(document).toMatchObject({
+      backend: "host-process-uv",
+      isolation: "none",
+      network: "unenforced",
+      image: null,
+    });
+    expect(document?.executables).toEqual([BASELINE_UV_EXECUTABLE_V1]);
+    expect(document?.acquisition).toEqual(namespace?.acquisition);
+    for (const flag of namespace?.containment ?? [])
+      expect(document?.containment, flag).not.toContain(flag);
+    expect(document?.notes.join(" ")).toMatch(/not enforced/i);
+    expect(document?.notes.join(" ")).toMatch(/Windows/);
+    // Process-group cleanup is bounded, not guaranteed: a surviving group fails the spawn.
+    expect(document?.notes.join(" ")).not.toMatch(/gone before it settles/i);
+    expect(document?.notes.join(" ")).toMatch(/not guaranteed/i);
+
+    expect(
+      listDetectorCapabilitiesV1()
+        .filter((entry) =>
+          entry.executionProfiles.some((profile) => profile.id === "host-process-uv-v1"),
+        )
+        .map((entry) => entry.detectorId),
+    ).toEqual(["detector.semgrep"]);
+  });
+
+  it("gates platforms and prerequisites per profile, and the default restates the capability", () => {
+    for (const capability of listDetectorCapabilitiesV1()) {
+      expect(capability.executionProfile.supportedPlatforms).toEqual(capability.supportedPlatforms);
+      expect(capability.executionProfile.prerequisites).toEqual(capability.prerequisites);
+      for (const profile of capability.executionProfiles)
+        expect(profile.supportedPlatforms.length, profile.id).toBeGreaterThan(0);
+    }
+    const host = resolveDetectorCapabilityV1("detector.semgrep")?.executionProfiles.find(
+      (entry) => entry.id === "host-process-uv-v1",
+    );
+    // Windows has no fail-closed process-tree containment yet and macOS has no hosted proof.
+    expect(host?.supportedPlatforms).toEqual([{ os: "linux", architecture: "amd64" }]);
+    const ids = host?.prerequisites.map((entry) => entry.id) ?? [];
+    expect(ids).toContain(BASELINE_UV_EXECUTABLE_V1);
+    expect(ids).toContain("tools/baseline-analyzers/semgrep/uv.lock");
+    expect(ids).not.toContain(BASELINE_BWRAP_EXECUTABLE_V1);
+    // uv runs with --no-python-downloads, so the pinned interpreter must already exist.
+    expect(ids).toContain(BASELINE_PYTHON_EXECUTABLE_V1);
+    // The default namespace profile's prerequisites are unchanged.
+    expect(
+      resolveDetectorCapabilityV1("detector.semgrep")?.executionProfile.prerequisites.map(
+        (entry) => entry.id,
+      ),
+    ).toEqual([
+      BASELINE_BWRAP_EXECUTABLE_V1,
+      BASELINE_UV_EXECUTABLE_V1,
+      "tools/baseline-analyzers/semgrep/uv.lock",
+      "https://pypi.org/simple",
+    ]);
+  });
+
+  it("keeps every profile document's field set, so no existing profile digest drifts", () => {
+    for (const document of listDetectorExecutionProfileDocumentsV1())
+      expect(Object.keys(document).sort(), document.id).toEqual([
+        "acquisition",
+        "backend",
+        "containment",
+        "environment",
+        "executables",
+        "id",
+        "image",
+        "isolation",
+        "mounts",
+        "network",
+        "notes",
+        "protocol",
+      ]);
+    const namespace = resolveDetectorExecutionProfileDocumentV1("linux-namespace-uv-v1");
+    expect(namespace).toMatchObject({
+      isolation: "linux-namespace",
+      network: "acquisition-only",
+      backend: "linux-namespace-uv",
+    });
+    expect(namespace?.executables).toEqual([
+      BASELINE_BWRAP_EXECUTABLE_V1,
+      BASELINE_UV_EXECUTABLE_V1,
+    ]);
   });
 });

@@ -39,6 +39,17 @@ export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.14";
 export const SEMGREP_VERSION_V1 = "1.173.0";
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
+/**
+ * The fixed part of every `host-process-uv-v1` spawn's environment. Each spawn also gets
+ * run-private HOME, TMPDIR, UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT, and nothing else.
+ */
+export const BASELINE_HOST_FIXED_ENVIRONMENT_V1: Readonly<Record<string, string>> = Object.freeze({
+  PATH: "/usr/local/bin:/usr/bin:/bin",
+  LANG: "C.UTF-8",
+  UV_NO_ENV_FILE: "1",
+  PYTHONSAFEPATH: "1",
+  PYTHONPATH: baselinePythonPathV1,
+});
 
 const maxOutputBytes = 16 * 1024 * 1024;
 const maxStderrBytes = 64 * 1024;
@@ -223,12 +234,12 @@ function lockIdentity(version: string, project: string): string {
   return `${version}+uvlock.${createHash("sha256").update(bytes).digest("hex").slice(0, 12)}`;
 }
 
-function uvSyncArgv(): string[] {
+function uvSyncArgv(project: string): string[] {
   return [
     BASELINE_UV_EXECUTABLE_V1,
     "sync",
     "--project",
-    "/aih/project",
+    project,
     "--locked",
     "--no-dev",
     "--no-install-project",
@@ -405,7 +416,7 @@ async function syncUvEnvironment(
       ...input,
       network: true,
       workingDirectory: "/aih/project",
-    })(uvSyncArgv(), runnerOptions(env, scanTimeoutMs)),
+    })(uvSyncArgv("/aih/project"), runnerOptions(env, scanTimeoutMs)),
     "analyzer environment acquisition",
   );
 }
@@ -666,10 +677,97 @@ async function skillspector(
   }
 }
 
+/**
+ * `host-process-uv-v1`: uv and Semgrep run as ordinary host processes, each leading a
+ * process group that Scan kills on timeout. Nothing is isolated and the network is not
+ * enforced. Only Linux has the process-group containment this relies on, so any other
+ * host fails closed here as well as at the runner's platform gate.
+ */
+async function hostProcessSemgrep(
+  runner: BaselineProcessRunnerV1,
+  input: {
+    readonly temporary: string;
+    readonly sourceRoot: string;
+    readonly config: string;
+    readonly workDirectory: string;
+    readonly cacheDirectory: string;
+    readonly venvDirectory: string;
+  },
+) {
+  if (process.platform !== "linux")
+    fail("host-process-uv-v1 needs a Linux host; process-tree containment is unproven elsewhere");
+  const homeDirectory = join(input.temporary, "home");
+  const temporaryDirectory = join(input.temporary, "tmp");
+  mkdirSync(homeDirectory, { mode: 0o700 });
+  mkdirSync(temporaryDirectory, { mode: 0o700 });
+  // Every spawn sees only these run-private values, as the namespace profile's --clearenv does.
+  const env: Readonly<Record<string, string>> = {
+    ...BASELINE_HOST_FIXED_ENVIRONMENT_V1,
+    HOME: homeDirectory,
+    TMPDIR: temporaryDirectory,
+    UV_CACHE_DIR: input.cacheDirectory,
+    UV_PROJECT_ENVIRONMENT: input.venvDirectory,
+  };
+  // Scan's own work directory, never the untrusted snapshot, is every spawn's cwd.
+  const cwd = input.workDirectory;
+  requireCleanResult(
+    await runner(uvSyncArgv(semgrepProject), runnerOptions(env, scanTimeoutMs, cwd)),
+    "analyzer environment acquisition",
+  );
+  const uvRunSemgrep = (argv: readonly string[]): string[] => [
+    BASELINE_UV_EXECUTABLE_V1,
+    "run",
+    "--project",
+    semgrepProject,
+    "--no-sync",
+    "--offline",
+    "--no-config",
+    "--no-python-downloads",
+    "--no-progress",
+    "--color",
+    "never",
+    "--",
+    join(input.venvDirectory, "bin", "semgrep"),
+    ...argv,
+  ];
+  const version = requireCleanResult(
+    await runner(uvRunSemgrep(["--version"]), runnerOptions(env, startupTimeoutMs, cwd)),
+    "Semgrep version",
+  ).stdout.trim();
+  if (version !== SEMGREP_VERSION_V1)
+    fail(`Semgrep version ${version} is not ${SEMGREP_VERSION_V1}`);
+  const result = requireCleanResult(
+    await runner(
+      uvRunSemgrep([
+        "scan",
+        "--config",
+        input.config,
+        "--sarif",
+        "--metrics=off",
+        "--disable-version-check",
+        "--x-ignore-semgrepignore-files",
+        "--no-git-ignore",
+        "--scan-unknown-extensions",
+        "--",
+        input.sourceRoot,
+      ]),
+      runnerOptions(env, scanTimeoutMs, cwd),
+    ),
+    "Semgrep scan",
+  );
+  if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
+  return {
+    mediaType: "application/sarif+json" as const,
+    bytes: Buffer.from(result.stdout, "utf8"),
+    analyzerVersion: lockIdentity(SEMGREP_VERSION_V1, semgrepProject),
+  };
+}
+
 async function semgrep(
   sourceRoot: string,
   runner: BaselineProcessRunnerV1,
   env: Readonly<Record<string, string>>,
+  hostProcess: boolean,
 ) {
   const temporary = mkdtempSync(join(tmpdir(), "aih-scan-semgrep-"));
   try {
@@ -681,6 +779,15 @@ async function semgrep(
     mkdirSync(venvDirectory, { mode: 0o700 });
     const config = join(workDirectory, "rules.yml");
     writeFileSync(config, semgrepRules, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    if (hostProcess)
+      return await hostProcessSemgrep(runner, {
+        temporary,
+        sourceRoot,
+        config,
+        workDirectory,
+        cacheDirectory,
+        venvDirectory,
+      });
     const sandboxState = {
       project: semgrepProject,
       workDirectory,
@@ -869,6 +976,11 @@ export function createBaselineAnalyzerRunV1(
      * local images only when Scan's own pinned pull has failed. They are never pulled.
      */
     readonly skillspectorAcceptedImageDigests?: readonly string[];
+    /**
+     * Semgrep only. `host-process-uv-v1` runs uv and Semgrep directly on a Linux host with
+     * no isolation and no network enforcement; it is used only when a caller names it.
+     */
+    readonly semgrepExecutionProfile?: "linux-namespace-uv-v1" | "host-process-uv-v1";
   } = {},
 ): BaselineAnalyzerRunV1 {
   if (process.platform === "linux" && process.getuid?.() === 0)
@@ -883,11 +995,16 @@ export function createBaselineAnalyzerRunV1(
     if (refusal !== undefined) fail(refusal);
     acceptedImageDigests = Object.freeze([...options.skillspectorAcceptedImageDigests]);
   }
+  const semgrepProfile = options.semgrepExecutionProfile ?? "linux-namespace-uv-v1";
+  if (semgrepProfile !== "linux-namespace-uv-v1" && semgrepProfile !== "host-process-uv-v1")
+    fail("unknown Semgrep execution profile");
+  const hostProcess = semgrepProfile === "host-process-uv-v1";
   return async ({ analyzer, sourceRoot }) => {
+    if (hostProcess && analyzer !== "semgrep") fail("host-process-uv-v1 runs only Semgrep");
     const implementations: Record<BaselineAnalyzerV1, () => ReturnType<BaselineAnalyzerRunV1>> = {
       "aih-native": async () => native(sourceRoot),
       skillspector: () => skillspector(sourceRoot, runner, env, acceptedImageDigests),
-      semgrep: () => semgrep(sourceRoot, runner, env),
+      semgrep: () => semgrep(sourceRoot, runner, env, hostProcess),
       cisco: () => cisco(sourceRoot, runner, env),
     };
     return implementations[analyzer]();

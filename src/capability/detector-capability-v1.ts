@@ -1,6 +1,8 @@
 import {
   BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
+  BASELINE_HOST_FIXED_ENVIRONMENT_V1,
   BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
+  BASELINE_PYTHON_EXECUTABLE_V1,
   CISCO_SKILL_SCANNER_VERSION_V1,
   SEMGREP_VERSION_V1,
   SKILLSPECTOR_IMAGE_V1,
@@ -30,6 +32,11 @@ import {
  *   applies. Scan's hardened detector profiles are Linux `amd64` only; only the
  *   in-process `aih-native` analyzer runs anywhere else, and it is not isolated
  *   because it spawns nothing.
+ * - Every execution profile carries its own `supportedPlatforms` and `prerequisites`,
+ *   and the runner gates on the selected profile's; a capability's own fields restate
+ *   its default profile's. `host-process-uv-v1` is never a default: it runs only when
+ *   named, reports `isolation: "none"` and `network: "unenforced"`, and stays Linux-only
+ *   until Windows process-tree containment and a hosted macOS proof exist.
  * - `executionProfile.sha256` is the digest of the readable profile document this
  *   module publishes, so "which profile ran" is answerable from the package rather
  *   than from an opaque number. It is deliberately NOT the author-supplied
@@ -82,11 +89,16 @@ export interface DetectorExecutionProfileV1 {
   /** Stable and readable, for example `linux-namespace-uv-v1`. */
   readonly id: string;
   readonly isolation: "container" | "linux-namespace" | "none";
-  readonly network: "none" | "acquisition-only";
+  /** `unenforced`: Scan applies no network restriction at any stage of the run. */
+  readonly network: "none" | "acquisition-only" | "unenforced";
   /** Digest of this module's readable profile document for `id`. */
   readonly sha256: string;
   /** The evidence protocol a run under this profile produces. */
   readonly evidence: "BaselineAnalyzerObservationV1" | "ScanCandidateV2";
+  /** Hosts this profile runs on; any other host is refused before a probe or spawn. */
+  readonly supportedPlatforms: readonly DetectorPlatformV1[];
+  /** Exactly what the runner probes, and requires, when this profile is selected. */
+  readonly prerequisites: readonly DetectorPrerequisiteV1[];
 }
 
 /**
@@ -99,7 +111,7 @@ export interface DetectorExecutionProfileDocumentV1 {
   readonly protocol: "DetectorExecutionProfileDocumentV1";
   readonly id: string;
   readonly isolation: "container" | "linux-namespace" | "none";
-  readonly network: "none" | "acquisition-only";
+  readonly network: "none" | "acquisition-only" | "unenforced";
   readonly backend: DetectorBackendKindV1;
   /** Absolute executables the profile is allowed to spawn; empty when it spawns nothing. */
   readonly executables: readonly string[];
@@ -111,10 +123,19 @@ export interface DetectorExecutionProfileDocumentV1 {
   readonly acquisition: readonly string[];
   /** Mount declarations the profile always applies, with run-specific paths elided. */
   readonly mounts: readonly string[];
-  readonly environment: Readonly<{
-    policy: "allow-list-scrub";
-    allowed: readonly string[];
-  }>;
+  /**
+   * `allow-list-scrub`: the caller environment reduced to `allowed`. `fixed-values`: the
+   * spawn's whole environment is exactly `values`; a `<…>` value is a run-private path.
+   */
+  readonly environment:
+    | Readonly<{
+        policy: "allow-list-scrub";
+        allowed: readonly string[];
+      }>
+    | Readonly<{
+        policy: "fixed-values";
+        values: Readonly<Record<string, string>>;
+      }>;
   /** Statements that are true of this profile and that a reader should not have to infer. */
   readonly notes: readonly string[];
 }
@@ -225,6 +246,49 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
   },
   {
     protocol: "DetectorExecutionProfileDocumentV1",
+    id: "host-process-uv-v1",
+    isolation: "none",
+    network: "unenforced",
+    backend: "host-process-uv",
+    executables: [BASELINE_UV_EXECUTABLE_V1],
+    image: null,
+    containment: [],
+    acquisition: [
+      "sync",
+      "--locked",
+      "--no-dev",
+      "--no-install-project",
+      "--no-build",
+      "--link-mode",
+      "copy",
+      "--no-python-downloads",
+      "--no-config",
+      "--no-sources",
+      "--keyring-provider",
+      "disabled",
+    ],
+    mounts: [],
+    environment: {
+      policy: "fixed-values",
+      values: {
+        ...BASELINE_HOST_FIXED_ENVIRONMENT_V1,
+        HOME: "<run home directory>",
+        TMPDIR: "<run temporary directory>",
+        UV_CACHE_DIR: "<run cache directory>",
+        UV_PROJECT_ENVIRONMENT: "<run venv directory>",
+      },
+    },
+    notes: [
+      "Used only when a caller names it; Scan never falls back to it when bubblewrap is missing.",
+      "Isolation is 'none': uv and Semgrep run as host processes with the invoking user's filesystem access.",
+      "Network is not enforced at any stage; the scan stage passes --offline to uv and --metrics=off to Semgrep, but nothing blocks a connection.",
+      "Each spawn leads its own process group; Scan signals the group on timeout or when descendants outlive the leader, polls for it for a bounded time, and fails the spawn as truncated with a nonzero code if it is still present. Cleanup of every descendant is not guaranteed.",
+      "Every spawn receives only run-private HOME, TMPDIR and uv paths plus fixed PATH, LANG and Python values; no caller variable reaches it.",
+      "Windows is refused because Scan has no proven fail-closed process-tree containment there; macOS is refused pending a hosted proof.",
+    ],
+  },
+  {
+    protocol: "DetectorExecutionProfileDocumentV1",
     id: "docker-hardened-skillspector-v1",
     isolation: "container",
     network: "none",
@@ -317,9 +381,12 @@ function profileDocument(id: string): DetectorExecutionProfileDocumentV1 {
   return document;
 }
 
+type ProfileGates = Pick<DetectorExecutionProfileV1, "supportedPlatforms" | "prerequisites">;
+
 function profile(
   id: string,
   evidence: DetectorExecutionProfileV1["evidence"],
+  gates: ProfileGates,
 ): DetectorExecutionProfileV1 {
   const document = profileDocument(id);
   return deepFreezeStrictJsonV1({
@@ -328,15 +395,24 @@ function profile(
     network: document.network,
     sha256: canonicalStrictJsonSha256V1(document),
     evidence,
+    supportedPlatforms: gates.supportedPlatforms,
+    prerequisites: gates.prerequisites,
   });
 }
 
-type CapabilityAuthoring = Omit<DetectorCapabilityV1, "protocol" | "capabilitySha256"> & {
-  readonly executionProfiles: readonly DetectorExecutionProfileV1[];
-};
+type CapabilityAuthoring = Omit<
+  DetectorCapabilityV1,
+  "protocol" | "capabilitySha256" | "supportedPlatforms" | "prerequisites"
+>;
 
 function capability(authoring: CapabilityAuthoring): DetectorCapabilityV1 {
-  const base = { protocol: "DetectorCapabilityV1" as const, ...authoring };
+  // The capability's own gates restate its default profile's, so the two cannot drift.
+  const base = {
+    protocol: "DetectorCapabilityV1" as const,
+    ...authoring,
+    supportedPlatforms: authoring.executionProfile.supportedPlatforms,
+    prerequisites: authoring.executionProfile.prerequisites,
+  };
   return deepFreezeStrictJsonV1({
     ...base,
     capabilitySha256: canonicalStrictJsonSha256V1({
@@ -358,6 +434,12 @@ const UV_PREREQUISITE: DetectorPrerequisiteV1 = {
   required: true,
   detail: `Install uv at ${BASELINE_UV_EXECUTABLE_V1}; the analyzer environment is resolved from the bundled uv.lock.`,
 };
+const PYTHON_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "executable",
+  id: BASELINE_PYTHON_EXECUTABLE_V1,
+  required: true,
+  detail: `Install Python 3.13 at ${BASELINE_PYTHON_EXECUTABLE_V1}; uv runs with --no-python-downloads, so it never fetches an interpreter.`,
+};
 const DOCKER_PREREQUISITE: DetectorPrerequisiteV1 = {
   kind: "executable",
   id: BASELINE_DOCKER_EXECUTABLE_V1,
@@ -371,6 +453,78 @@ const ACQUISITION_NETWORK_PREREQUISITE: DetectorPrerequisiteV1 = {
   detail:
     "The acquisition stage resolves the locked analyzer from the default index unless the uv cache already holds it; Scan cannot determine that without running the stage.",
 };
+const CISCO_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "bundled-asset",
+  id: "tools/baseline-analyzers/cisco-skill-scanner/uv.lock",
+  required: true,
+  detail:
+    "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
+};
+const SEMGREP_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "bundled-asset",
+  id: "tools/baseline-analyzers/semgrep/uv.lock",
+  required: true,
+  detail:
+    "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
+};
+
+const NATIVE_GATES: ProfileGates = { supportedPlatforms: EVERY_PLATFORM, prerequisites: [] };
+const CISCO_GATES: ProfileGates = {
+  supportedPlatforms: LINUX_AMD64,
+  prerequisites: [
+    BWRAP_PREREQUISITE,
+    UV_PREREQUISITE,
+    CISCO_LOCK_PREREQUISITE,
+    ACQUISITION_NETWORK_PREREQUISITE,
+  ],
+};
+const SEMGREP_GATES: ProfileGates = {
+  supportedPlatforms: LINUX_AMD64,
+  prerequisites: [
+    BWRAP_PREREQUISITE,
+    UV_PREREQUISITE,
+    SEMGREP_LOCK_PREREQUISITE,
+    ACQUISITION_NETWORK_PREREQUISITE,
+  ],
+};
+/**
+ * The host profile needs no bubblewrap. Windows stays excluded until Scan has fail-closed
+ * process-tree containment there, and macOS until a hosted proof exists.
+ */
+const SEMGREP_HOST_GATES: ProfileGates = {
+  supportedPlatforms: LINUX_AMD64,
+  prerequisites: [
+    UV_PREREQUISITE,
+    PYTHON_PREREQUISITE,
+    SEMGREP_LOCK_PREREQUISITE,
+    ACQUISITION_NETWORK_PREREQUISITE,
+  ],
+};
+const SKILLSPECTOR_GATES: ProfileGates = {
+  supportedPlatforms: LINUX_AMD64,
+  prerequisites: [
+    DOCKER_PREREQUISITE,
+    {
+      kind: "container-image",
+      id: SKILLSPECTOR_IMAGE_V1,
+      required: true,
+      detail:
+        "Scan pulls this exact digest-addressed image when it is absent; whether it is present cannot be determined without Docker.",
+    },
+  ],
+};
+
+const OBSERVATION = "BaselineAnalyzerObservationV1" as const;
+const NATIVE_PROFILE = profile("in-process-native-v1", OBSERVATION, NATIVE_GATES);
+const CISCO_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, CISCO_GATES);
+const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_GATES);
+const SEMGREP_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, SEMGREP_GATES);
+const SEMGREP_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, SEMGREP_HOST_GATES);
+const SKILLSPECTOR_PROFILE = profile(
+  "docker-hardened-skillspector-v1",
+  OBSERVATION,
+  SKILLSPECTOR_GATES,
+);
 
 const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
   [
@@ -379,15 +533,13 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       analyzerIdentity: BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
       analyzerVersion: BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
       backend: "in-process",
-      executionProfile: profile("in-process-native-v1", "BaselineAnalyzerObservationV1"),
-      executionProfiles: [profile("in-process-native-v1", "BaselineAnalyzerObservationV1")],
+      executionProfile: NATIVE_PROFILE,
+      executionProfiles: [NATIVE_PROFILE],
       subjectKinds: ["source-tree"],
       subjectRequirements: [
         "The declared source root must hold at least one file.",
         "Every declared selected closure path must exist as a regular file under that root.",
       ],
-      supportedPlatforms: EVERY_PLATFORM,
-      prerequisites: [],
       outputs: ["aih-baseline-native-v1"],
       contracts: {
         capabilityVersion: 1,
@@ -402,30 +554,14 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       analyzerIdentity: null,
       analyzerVersion: CISCO_SKILL_SCANNER_VERSION_V1,
       backend: "linux-namespace-uv",
-      executionProfile: profile("linux-namespace-uv-v1", "BaselineAnalyzerObservationV1"),
-      executionProfiles: [
-        profile("linux-namespace-uv-v1", "BaselineAnalyzerObservationV1"),
-        profile("oci-hardened-cisco-v1", "ScanCandidateV2"),
-      ],
+      executionProfile: CISCO_NAMESPACE_PROFILE,
+      executionProfiles: [CISCO_NAMESPACE_PROFILE, CISCO_OCI_PROFILE],
       subjectKinds: ["skill-directory"],
       subjectRequirements: [
         "The declared source root must hold a top-level SKILL.md, and that SKILL.md must be one of the declared selected closure paths.",
         "Scan never creates, renames, copies or discovers a SKILL.md to satisfy this requirement.",
         "The scan must cover every SKILL.md the sealed snapshot holds and may skip none.",
         "The oci-hardened-cisco-v1 profile additionally needs a caller-supplied immutable OCI layout, runtime registration, broker identity and annex payloads.",
-      ],
-      supportedPlatforms: LINUX_AMD64,
-      prerequisites: [
-        BWRAP_PREREQUISITE,
-        UV_PREREQUISITE,
-        {
-          kind: "bundled-asset",
-          id: "tools/baseline-analyzers/cisco-skill-scanner/uv.lock",
-          required: true,
-          detail:
-            "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
-        },
-        ACQUISITION_NETWORK_PREREQUISITE,
       ],
       outputs: ["sarif-2.1.0"],
       contracts: {
@@ -441,25 +577,12 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       analyzerIdentity: null,
       analyzerVersion: SEMGREP_VERSION_V1,
       backend: "linux-namespace-uv",
-      executionProfile: profile("linux-namespace-uv-v1", "BaselineAnalyzerObservationV1"),
-      executionProfiles: [profile("linux-namespace-uv-v1", "BaselineAnalyzerObservationV1")],
+      executionProfile: SEMGREP_NAMESPACE_PROFILE,
+      executionProfiles: [SEMGREP_NAMESPACE_PROFILE, SEMGREP_HOST_PROFILE],
       subjectKinds: ["source-tree"],
       subjectRequirements: [
         "The declared source root must hold at least one file.",
         "Every declared selected closure path must exist as a regular file under that root.",
-      ],
-      supportedPlatforms: LINUX_AMD64,
-      prerequisites: [
-        BWRAP_PREREQUISITE,
-        UV_PREREQUISITE,
-        {
-          kind: "bundled-asset",
-          id: "tools/baseline-analyzers/semgrep/uv.lock",
-          required: true,
-          detail:
-            "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
-        },
-        ACQUISITION_NETWORK_PREREQUISITE,
       ],
       outputs: ["sarif-2.1.0"],
       contracts: {
@@ -477,25 +600,12 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
         SKILLSPECTOR_IMAGE_V1.indexOf("@") + 1,
       )}`,
       backend: "oci-container",
-      executionProfile: profile("docker-hardened-skillspector-v1", "BaselineAnalyzerObservationV1"),
-      executionProfiles: [
-        profile("docker-hardened-skillspector-v1", "BaselineAnalyzerObservationV1"),
-      ],
+      executionProfile: SKILLSPECTOR_PROFILE,
+      executionProfiles: [SKILLSPECTOR_PROFILE],
       subjectKinds: ["source-tree"],
       subjectRequirements: [
         "The declared source root must hold at least one file.",
         "The source root path must be representable as a Docker bind mount, so it may hold no comma or control character.",
-      ],
-      supportedPlatforms: LINUX_AMD64,
-      prerequisites: [
-        DOCKER_PREREQUISITE,
-        {
-          kind: "container-image",
-          id: SKILLSPECTOR_IMAGE_V1,
-          required: true,
-          detail:
-            "Scan pulls this exact digest-addressed image when it is absent; whether it is present cannot be determined without Docker.",
-        },
       ],
       outputs: ["sarif-2.1.0"],
       contracts: {

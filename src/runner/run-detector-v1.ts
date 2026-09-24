@@ -41,6 +41,8 @@ import { type SourceSealV2, sealSourceV2 } from "../observation/source-seal-v2.j
  * - every unsupported detector, subject, profile, platform or prerequisite is a
  *   returned refusal, produced before any process is spawned; a refusal and a failure
  *   are values, never thrown exceptions;
+ * - platform and prerequisite gates are the selected profile's own. A weaker profile such
+ *   as `host-process-uv-v1` runs only when named; a missing prerequisite never downgrades;
  * - the execution profile reported is the one that actually ran, and its digest is the
  *   digest of a readable document this package publishes;
  * - selection is exactly what the caller declared. Scan never discovers, widens,
@@ -255,6 +257,26 @@ function capabilityPlatform(): DetectorPlatformV1 | undefined {
     process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : undefined;
   if (os === undefined || architecture === undefined) return undefined;
   return { os, architecture };
+}
+
+/** Why this host cannot run the selected profile; decided before any probe or spawn. */
+function platformRefusal(
+  capability: DetectorCapabilityV1,
+  profile: DetectorExecutionProfileV1,
+): string {
+  const supported = profile.supportedPlatforms
+    .map((entry) => `${entry.os}/${entry.architecture}`)
+    .join(", ");
+  const hostPlatform = `${process.platform}/${process.arch}`;
+  if (profile.id !== "host-process-uv-v1")
+    return `This host is ${hostPlatform}; ${capability.detectorId} runs only on ${supported}. Scan's hardened detector profiles are Linux amd64 only.`;
+  const reason =
+    process.platform === "win32"
+      ? "Windows process-tree containment is unproven, so Scan cannot guarantee that every analyzer descendant is killed and refuses before probing or spawning anything."
+      : process.platform === "darwin"
+        ? "macOS host execution is refused until a hosted proof exists."
+        : "No other host has proven process-group containment for it.";
+  return `This host is ${hostPlatform}; ${capability.detectorId} under ${profile.id} runs only on ${supported}. ${reason}`;
 }
 
 function refuse(
@@ -546,13 +568,13 @@ function snapshotRequest(request: Record<string, unknown>): FieldSnapshot {
  * `not-probed`, so nothing is claimed, and the reason is returned for an availability failure.
  */
 function probeStates(
-  capability: DetectorCapabilityV1,
+  declared: readonly DetectorPrerequisiteV1[],
   probe: unknown,
   env: Readonly<NodeJS.ProcessEnv>,
 ): { readonly states: readonly DetectorPrerequisiteStateV1[]; readonly failure?: string } {
   const states: DetectorPrerequisiteStateV1[] = [];
   let failure: string | undefined;
-  for (const prerequisite of capability.prerequisites) {
+  for (const prerequisite of declared) {
     let state: DetectorPrerequisiteStateV1["state"] = "not-probed";
     if (failure === undefined && probe === undefined) state = probePrerequisite(prerequisite, env);
     else if (failure === undefined) {
@@ -709,17 +731,11 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   const platform = capabilityPlatform();
   if (
     platform === undefined ||
-    !capability.supportedPlatforms.some(
+    !profile.supportedPlatforms.some(
       (entry) => entry.os === platform.os && entry.architecture === platform.architecture,
     )
   )
-    return refuse(
-      "unsupported-platform",
-      `This host is ${process.platform}/${process.arch}; ${capability.detectorId} runs only on ${capability.supportedPlatforms
-        .map((entry) => `${entry.os}/${entry.architecture}`)
-        .join(", ")}. Scan's hardened detector profiles are Linux amd64 only.`,
-      capability,
-    );
+    return refuse("unsupported-platform", platformRefusal(capability, profile), capability);
 
   const env = input.env ?? process.env;
   const probe = input.prerequisiteProbe;
@@ -735,7 +751,8 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     kind: profile.evidence === "ScanCandidateV2" ? "selected-closure" : "source-tree",
     excludedPaths,
   });
-  const probed = probeStates(capability, probe, env);
+  // Only the selected profile's prerequisites are probed, and only they gate the run.
+  const probed = probeStates(profile.prerequisites, probe, env);
   const prerequisites = probed.states;
   const failed = (stage: RunDetectorFailureStageV1, error: unknown): RunDetectorV1Result =>
     Object.freeze({
@@ -749,7 +766,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       coverage,
     });
   if (probed.failure !== undefined) return failed("availability", new TypeError(probed.failure));
-  const missing = capability.prerequisites.find(
+  const missing = profile.prerequisites.find(
     (prerequisite, index) => prerequisite.required && prerequisites[index]?.state === "missing",
   );
   if (missing !== undefined)
@@ -839,6 +856,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         ...(input.acceptedImageDigests === undefined
           ? {}
           : { skillspectorAcceptedImageDigests: input.acceptedImageDigests }),
+        ...(profile.id === "host-process-uv-v1"
+          ? { semgrepExecutionProfile: "host-process-uv-v1" as const }
+          : {}),
       });
       observed = await run({ analyzer, sourceRoot: snapshotRoot });
     } catch (error) {

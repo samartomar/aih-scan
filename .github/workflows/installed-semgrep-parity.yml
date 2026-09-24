@@ -19,6 +19,9 @@ on:
     paths:
       - .github/workflows/installed-semgrep-parity.yml
       - tools/installed-semgrep-parity.mjs
+      - tools/installed-semgrep-parity-assertions.mjs
+      - tools/installed-semgrep-parity-assertions.d.mts
+      - tests/baseline/installed-semgrep-parity-assertions.test.ts
       - src/baseline/**
       - src/runner/**
       - src/capability/**

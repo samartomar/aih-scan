@@ -175,13 +175,26 @@ function npmCliPath(environment: { readonly npm_execpath?: string } = process.en
   throw new Error("npm CLI entrypoint unavailable");
 }
 
-function runNpm(args: readonly string[], cwd: string): string {
+function runNpm(args: readonly string[], cwd: string, environment = process.env): string {
   const npmCli = npmCliPath();
   return execFileSync(process.execPath, [npmCli, ...args], {
     cwd,
     encoding: "utf8",
     stdio: "pipe",
+    env: environment,
   });
+}
+
+function isolatedNpmInstallEnvironment(
+  userconfig: string,
+  inherited: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const environment = { ...inherited };
+  for (const key of Object.keys(environment)) {
+    if (/^npm_config_(?:allow[-_]?scripts|userconfig)$/i.test(key)) delete environment[key];
+  }
+  environment.npm_config_userconfig = userconfig;
+  return environment;
 }
 
 function writeCandidateInput(path: string): void {
@@ -451,6 +464,27 @@ describe("npm CLI resolution", () => {
   });
 });
 
+describe("packed install npm configuration", () => {
+  it("drops only inherited script and userconfig overrides while retaining connection settings", () => {
+    const inherited = {
+      NPM_CONFIG_ALLOW_SCRIPTS: "true",
+      npm_config_userconfig: "poisoned.npmrc",
+      HTTPS_PROXY: "http://proxy.invalid",
+      NODE_EXTRA_CA_CERTS: "ca.pem",
+      npm_config_registry: "https://registry.invalid",
+    };
+    const isolated = isolatedNpmInstallEnvironment("empty.npmrc", inherited);
+    expect(isolated).toEqual({
+      HTTPS_PROXY: inherited.HTTPS_PROXY,
+      NODE_EXTRA_CA_CERTS: inherited.NODE_EXTRA_CA_CERTS,
+      npm_config_registry: inherited.npm_config_registry,
+      npm_config_userconfig: "empty.npmrc",
+    });
+    expect(inherited.NPM_CONFIG_ALLOW_SCRIPTS).toBe("true");
+    expect(inherited.npm_config_userconfig).toBe("poisoned.npmrc");
+  });
+});
+
 describe("published V2 package installation", () => {
   it("packs a minimal public boundary and signs then verifies a fully detached bundle", async () => {
     const directory = mkdtempSync(join(tmpdir(), "aih-scan-package-install-v2-"));
@@ -486,7 +520,28 @@ describe("published V2 package installation", () => {
     writeFileSync(join(directory, "package.json"), JSON.stringify({ private: true }), {
       mode: 0o600,
     });
-    runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], directory);
+    const poisonedUserconfig = join(directory, "poisoned.npmrc");
+    writeFileSync(poisonedUserconfig, "allow-scripts=true\n");
+    const emptyUserconfig = join(directory, "empty.npmrc");
+    writeFileSync(emptyUserconfig, "");
+    const inheritedEnvironment = {
+      ...process.env,
+      npm_config_userconfig: poisonedUserconfig,
+      npm_config_allow_scripts: "true",
+    };
+    runNpm(
+      [
+        "install",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--userconfig",
+        emptyUserconfig,
+        tarball,
+      ],
+      directory,
+      isolatedNpmInstallEnvironment(emptyUserconfig, inheritedEnvironment),
+    );
     const installedReadme = readFileSync(
       join(directory, "node_modules/@aihq/scan/README.md"),
       "utf8",

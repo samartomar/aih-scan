@@ -38,6 +38,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import { compareFindingKeys, coreRanSemgrep, normaliseFindingPath, scanRefusedForEmpty } from "./installed-semgrep-parity-assertions.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name) => {
@@ -223,15 +224,8 @@ function scanSide(root) {
   return { exit: r.status, selectedCount: selected.length, summary: parsed?.summary ?? null, findings, stderrTail: r.stderr.slice(-600), childError: r.error };
 }
 
-// 6. comparison: (code, fixture-relative path, start line). A URI is matched to the fixture
-//    file whose relative path it ends with, so absolute, snapshot-relative and root-relative
-//    spellings compare equal; a URI that matches no fixture file keeps its raw text.
-function normalisePath(uri, files) {
-  if (typeof uri !== "string") return null;
-  const clean = uri.replace(/^file:\/\//, "").replace(/\\/g, "/");
-  const hit = files.filter((f) => clean === f || clean.endsWith(`/${f}`)).sort((a, b) => b.length - a.length)[0];
-  return hit ?? clean;
-}
+// 6. comparison: (code, fixture-relative path, start line). Accept only known source roots
+//    or exact fixture-relative files; preserve unknown raw URIs in the report, but never match them.
 const keyOf = (code, path, line) => `${code}|${path}|${line}`;
 function compare(name, root) {
   const files = filesUnder(root);
@@ -244,12 +238,18 @@ function compare(name, root) {
   // cannot be compared from Core's report, so both sides compare on (code, line) and the report
   // says so; when Core kept the path, the comparison is (code, path, line).
   const pathComparable = core.semgrepChecks.every((c) => !c.pathLost);
-  const pathOf = (uri) => (pathComparable ? normalisePath(uri, files) : "(path not compared)");
-  const coreKeys = core.semgrepChecks.map((c) => keyOf(c.code, pathOf(c.uri), c.startLine)).sort();
-  const scanKeys = scan.findings.map((f) => keyOf(f.code, pathOf(f.uri), f.startLine)).sort();
-  const onlyCore = coreKeys.filter((k) => !scanKeys.includes(k));
-  const onlyScan = scanKeys.filter((k) => !coreKeys.includes(k));
-  return { fixture: name, files, core, scan, pathComparable, coreKeys, scanKeys, onlyCore, onlyScan, identical: onlyCore.length === 0 && onlyScan.length === 0 && coreKeys.length === scanKeys.length };
+  let unrecognisedPath = false;
+  const pathOf = (uri, side) => {
+    if (!pathComparable) return "(path not compared)";
+    const result = normaliseFindingPath(uri, files, side === "core" ? root : "/aih/source");
+    if (result.accepted) return result.path;
+    unrecognisedPath = true;
+    return `(unrecognised ${side} URI: ${result.path})`;
+  };
+  const coreKeys = core.semgrepChecks.map((c) => keyOf(c.code, pathOf(c.uri, "core"), c.startLine)).sort();
+  const scanKeys = scan.findings.map((f) => keyOf(f.code, pathOf(f.uri, "scan"), f.startLine)).sort();
+  const comparison = compareFindingKeys(coreKeys, scanKeys, !unrecognisedPath);
+  return { fixture: name, files, core, scan, pathComparable, coreKeys, scanKeys, ...comparison };
 }
 const positive = compare("positive", fixtures.positive);
 const clean = compare("clean", fixtures.clean);
@@ -261,14 +261,8 @@ const checks = [];
 const ok = (name, pass, detail = "") => checks.push({ name, pass: Boolean(pass), detail: String(detail).slice(0, 400) });
 // "Zero findings" is evidence only when Core's own detector check says the scan COMPLETED:
 // a skipped, unavailable or failed Semgrep also yields zero Semgrep findings.
-const coreRanSemgrep = (core) =>
-  core.parsedJson &&
-  /(^|\s)semgrep=core-legacy(,|\.|$)/.test(core.executorsLine ?? "") &&
-  core.semgrepDetector !== null &&
-  core.semgrepDetector.verdict === "pass" &&
-  /Semgrep static scan completed/.test(core.semgrepDetector.detail ?? "");
 ok("Core's Semgrep uv project warmed (uv sync --locked)", warm.status === 0, warm.stderr.slice(-300));
-ok("Core ran Semgrep itself on positive (semgrep=core-legacy; detector check not skipped)", positive.core.parsedJson && /semgrep=core-legacy/.test(positive.core.executorsLine ?? "") && positive.core.semgrepDetector !== null && positive.core.semgrepDetector.verdict !== "skip", `${positive.core.executorsLine} | ${JSON.stringify(positive.core.semgrepDetector)}`);
+ok("Core ran Semgrep itself on positive to completion (semgrep=core-legacy; detector check pass)", coreRanSemgrep(positive.core), `${positive.core.executorsLine} | ${JSON.stringify(positive.core.semgrepDetector)}`);
 ok("Scan succeeded on positive through the installed runDetectorV1 under linux-namespace-uv-v1", positive.scan.summary?.outcome === "succeeded" && positive.scan.summary?.executionProfileId === "linux-namespace-uv-v1" && positive.scan.summary?.producer?.name === "@aihq/scan", JSON.stringify(positive.scan.summary ?? positive.scan.stderrTail));
 ok("Scan used its own runner (no caller seam)", positive.scan.summary?.seams?.runner === "scan-owned-default", JSON.stringify(positive.scan.summary?.seams));
 ok("positive: both sides report findings", positive.coreKeys.length > 0 && positive.scanKeys.length > 0, `core ${positive.coreKeys.length}, scan ${positive.scanKeys.length}`);
@@ -278,7 +272,7 @@ ok("positive: identical finding sets (code, path, line)", positive.pathComparabl
 ok("clean: Core ran Semgrep itself to completion (semgrep=core-legacy; detector check pass, not skipped or unavailable)", coreRanSemgrep(clean.core), `${clean.core.executorsLine} | ${JSON.stringify(clean.core.semgrepDetector)}`);
 ok("clean: both sides report zero Semgrep findings from completed scans", clean.identical && clean.coreKeys.length === 0 && clean.scanKeys.length === 0 && clean.scan.summary?.outcome === "succeeded" && coreRanSemgrep(clean.core), `core ${clean.coreKeys.length}, scan ${clean.scanKeys.length}, scan outcome ${clean.scan.summary?.outcome}`);
 ok("empty: Core ran Semgrep itself to completion (detector check pass)", coreRanSemgrep(emptyCore), `${emptyCore.executorsLine} | ${JSON.stringify(emptyCore.semgrepDetector)}`);
-ok("empty: Scan refuses with a typed reason (nothing to seal), no rejection", emptyScan.summary !== null && emptyScan.summary.outcome === "refused" && typeof emptyScan.summary.reason === "string", JSON.stringify(emptyScan.summary ?? emptyScan.stderrTail));
+ok("empty: Scan refuses with subject-requirement-unmet (nothing to seal), no rejection", scanRefusedForEmpty(emptyScan), JSON.stringify(emptyScan.summary ?? emptyScan.stderrTail));
 ok("Scan's findings protocol is digest-bound (ScanFindingsV1 from the annex)", positive.scan.summary?.findings?.source === "annex" || positive.scan.summary?.findings?.source === "analyzer-output-digest-bound", JSON.stringify(positive.scan.summary?.findings));
 
 const passed = checks.every((c) => c.pass);

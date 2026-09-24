@@ -79,6 +79,12 @@ Concretely:
 - The hardened detector execution profiles additionally require Linux `amd64`;
   see [CONTRACTS.md](CONTRACTS.md). Only the in-process `aih-native` analyzer
   runs on any other platform, and it is not isolated because it spawns nothing.
+- `detector.semgrep` also offers `host-process-uv-v1`, used only when a caller
+  names it and never as a fallback. It runs uv and Semgrep as ordinary host
+  processes with no isolation and no network enforcement, on Linux `amd64`
+  only: Windows is refused because process-tree containment is unproven there,
+  macOS is refused pending a hosted proof, and a real installed-uv run is not
+  yet proven.
 
 Runnable examples live in [`examples/`](examples). They reach the package
 through its public entry point only:
