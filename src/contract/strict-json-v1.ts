@@ -103,7 +103,98 @@ export function decodeStrictUtf8V1(bytes: Uint8Array, label: string): string {
   }
 }
 
-const NUMBER = /-?(?:0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y;
+/**
+ * U1g (review of S2i, P2): the most characters one JSON number token may hold. It is checked
+ * while the token is scanned, before any work on its value, so a valid but huge token (a
+ * million digits fit under every analyzer-output cap) is refused in time linear in the bound.
+ * The longest plain spelling of any double's exact value is 2^-1074 written out in full,
+ * `-0.` and 1074 digits (1077 characters), so no exact spelling of a double is refused.
+ */
+export const STRICT_JSON_MAX_NUMBER_CHARACTERS_V1 = 1100;
+
+/** U1g: which resource bound of {@link parseStrictJsonV1} a text exceeded. */
+export type StrictJsonBoundV1 = "number-characters";
+
+/**
+ * U1g (review of S2i, P2): the typed refusal of a JSON text that exceeds a resource bound of
+ * the parser. It is a `TypeError`, so every caller that maps a malformed analyzer text to a
+ * failure maps this one too.
+ */
+export class StrictJsonBoundErrorV1 extends TypeError {
+  readonly bound: StrictJsonBoundV1;
+  readonly limit: number;
+  constructor(message: string, bound: StrictJsonBoundV1, limit: number) {
+    super(message);
+    this.name = "StrictJsonBoundErrorV1";
+    this.bound = bound;
+    this.limit = limit;
+  }
+}
+
+/** The parts of one decimal number text: its sign, digit runs and exponent digits. */
+type DecimalPartsV1 = Readonly<{
+  /** The offset just past the token. */
+  end: number;
+  negative: boolean;
+  whole: string;
+  fraction: string;
+  /** The exponent's digits with their sign, or `""` when there is no exponent. */
+  scale: string;
+}>;
+
+const isDigitCode = (code: number) => code >= 0x30 && code <= 0x39;
+
+/**
+ * U1g (review of S2i, P2): one JSON number (RFC 8259 section 6) scanned from `start` in a
+ * single linear pass, never a regular expression: `-`? (`0` | a non-zero digit and digits),
+ * then `.` and digits, then `e`/`E`, a sign and digits, each part taken only when complete.
+ * Returns `undefined` when no number starts there. `over` is called as soon as the token
+ * would exceed `limit` characters, before anything else is read.
+ */
+function scanDecimalV1(
+  text: string,
+  start: number,
+  limit: number,
+  over: () => never,
+): DecimalPartsV1 | undefined {
+  let at = start;
+  const step = () => {
+    at += 1;
+    if (at - start > limit) over();
+  };
+  const digits = () => {
+    while (isDigitCode(text.charCodeAt(at))) step();
+  };
+  const negative = text.charCodeAt(at) === 0x2d;
+  if (negative) step();
+  const wholeStart = at;
+  const first = text.charCodeAt(at);
+  if (first === 0x30) step();
+  else if (isDigitCode(first)) digits();
+  else return undefined;
+  const whole = text.slice(wholeStart, at);
+  let fraction = "";
+  if (text.charCodeAt(at) === 0x2e && isDigitCode(text.charCodeAt(at + 1))) {
+    step();
+    const fractionStart = at;
+    digits();
+    fraction = text.slice(fractionStart, at);
+  }
+  let scale = "";
+  const marker = text.charCodeAt(at);
+  if (marker === 0x65 || marker === 0x45) {
+    const sign = text.charCodeAt(at + 1);
+    const signed = sign === 0x2b || sign === 0x2d;
+    if (isDigitCode(text.charCodeAt(at + (signed ? 2 : 1)))) {
+      step();
+      const scaleStart = at;
+      if (signed) step();
+      digits();
+      scale = text.slice(scaleStart, at);
+    }
+  }
+  return { end: at, negative, whole, fraction, scale };
+}
 
 /** S2i: how the double a JSON number text names would differ from the text's value. */
 export type StrictJsonNumberLossV1 = "overflow" | "underflow" | "rounded" | "negative-zero";
@@ -131,15 +222,27 @@ export class StrictJsonNumberErrorV1 extends TypeError {
  */
 type ExactDecimal = Readonly<{ negative: boolean; digits: string; exponent: number }>;
 
-function exactDecimal(text: string): ExactDecimal {
-  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/u.exec(text);
-  if (match === null) throw new TypeError(`not a decimal number: ${text}`);
-  const [, sign, whole = "", fraction = "", scale = "0"] = match;
-  const all = `${whole}${fraction}`.replace(/^0+/u, "");
-  const digits = all.replace(/0+$/u, "");
+function exactDecimalOfParts({ negative, whole, fraction, scale }: DecimalPartsV1): ExactDecimal {
+  // U1g: leading and trailing zeros are counted by linear scans, never a backtracking regex.
+  const all = `${whole}${fraction}`;
+  let first = 0;
+  while (first < all.length && all.charCodeAt(first) === 0x30) first += 1;
+  let last = all.length;
+  while (last > first && all.charCodeAt(last - 1) === 0x30) last -= 1;
+  const digits = all.slice(first, last);
   const exponent =
-    digits === "" ? 0 : Number.parseInt(scale, 10) - fraction.length + (all.length - digits.length);
-  return { negative: sign === "-", digits, exponent };
+    digits === "" ? 0 : Number.parseInt(scale || "0", 10) - fraction.length + (all.length - last);
+  return { negative, digits, exponent };
+}
+
+/** The exact value of a whole decimal text (a JavaScript number's or a BigInt's spelling). */
+function exactDecimal(text: string): ExactDecimal {
+  const malformed = (): never => {
+    throw new TypeError(`not a decimal number: ${text}`);
+  };
+  const parts = scanDecimalV1(text, 0, Number.POSITIVE_INFINITY, malformed);
+  if (parts === undefined || parts.end !== text.length) return malformed();
+  return exactDecimalOfParts(parts);
 }
 
 const sameDecimal = (left: ExactDecimal, right: ExactDecimal) =>
@@ -174,10 +277,11 @@ function exactDecimalOfFraction(value: number): ExactDecimal {
  *   refused too.
  * Returns the loss, or `undefined` when there is none.
  */
-function numberLossV1(lexeme: string, value: number): StrictJsonNumberLossV1 | undefined {
+function numberLossV1(parts: DecimalPartsV1, value: number): StrictJsonNumberLossV1 | undefined {
   // The common case: a plain integer of at most 15 digits is always exactly a double.
-  if (/^-?(?:0|[1-9]\d{0,14})$/u.test(lexeme)) return lexeme === "-0" ? "negative-zero" : undefined;
-  const decimal = exactDecimal(lexeme);
+  if (parts.fraction === "" && parts.scale === "" && parts.whole.length <= 15)
+    return parts.negative && parts.whole === "0" ? "negative-zero" : undefined;
+  const decimal = exactDecimalOfParts(parts);
   if (decimal.digits === "") return decimal.negative ? "negative-zero" : undefined;
   if (!Number.isFinite(value)) return "overflow";
   if (value === 0) return "underflow";
@@ -274,12 +378,17 @@ export function parseStrictJsonV1(
     }
   };
   const number = (): number => {
-    NUMBER.lastIndex = at;
-    const match = NUMBER.exec(text);
-    if (match === null) return invalid("an unexpected character");
-    const lexeme = match[0];
+    const parts = scanDecimalV1(text, at, STRICT_JSON_MAX_NUMBER_CHARACTERS_V1, () => {
+      throw new StrictJsonBoundErrorV1(
+        `invalid JSON ${label}: a number longer than ${String(STRICT_JSON_MAX_NUMBER_CHARACTERS_V1)} characters at offset ${String(at)}`,
+        "number-characters",
+        STRICT_JSON_MAX_NUMBER_CHARACTERS_V1,
+      );
+    });
+    if (parts === undefined) return invalid("an unexpected character");
+    const lexeme = text.slice(at, parts.end);
     const value = Number(lexeme);
-    const loss = numberLossV1(lexeme, value);
+    const loss = numberLossV1(parts, value);
     if (loss !== undefined) {
       const shown = lexeme.length > 64 ? `${lexeme.slice(0, 64)}…` : lexeme;
       throw new StrictJsonNumberErrorV1(

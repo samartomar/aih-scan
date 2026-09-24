@@ -1,0 +1,318 @@
+{
+  "summary": {
+    "total_skills_scanned": 1,
+    "total_findings": 8,
+    "safe_skills": 0,
+    "findings_by_severity": {
+      "critical": 0,
+      "high": 1,
+      "medium": 3,
+      "low": 0,
+      "info": 4
+    },
+    "timestamp": "2026-09-24T19:26:46.128337+00:00"
+  },
+  "results": [
+    {
+      "skill_name": "aih-scan-baseline-source-7ljjc6",
+      "skill_path": "@SKILL_PATH@",
+      "is_safe": false,
+      "max_severity": "HIGH",
+      "findings_count": 8,
+      "findings": [
+        {
+          "id": "LOW_ANALYZABILITY_CRITICAL",
+          "rule_id": "LOW_ANALYZABILITY",
+          "category": "policy_violation",
+          "severity": "HIGH",
+          "title": "Critically low analyzability score",
+          "description": "Only 64% of skill content could be analyzed. 3 of 8 files are opaque to the scanner. The safety assessment has low confidence.",
+          "file_path": null,
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Replace opaque files (binaries, encrypted content) with inspectable source code to improve scan confidence.",
+          "analyzer": "analyzability",
+          "metadata": {
+            "score": 63.8,
+            "unanalyzable_files": 3,
+            "total_files": 8,
+            "risk_level": "HIGH"
+          }
+        },
+        {
+          "id": "UNANALYZABLE_BINARY_assets\\blob.bin",
+          "rule_id": "UNANALYZABLE_BINARY",
+          "category": "policy_violation",
+          "severity": "MEDIUM",
+          "title": "Unanalyzable binary file",
+          "description": "Binary file 'assets\\blob.bin' cannot be inspected by the scanner. Reason: Binary file (.bin) - cannot inspect content. Binary files resist static analysis and may contain hidden functionality.",
+          "file_path": "assets\\blob.bin",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Replace binary files with source code, or submit the binary to VirusTotal for independent verification (--use-virustotal).",
+          "analyzer": "analyzability",
+          "metadata": {
+            "skip_reason": "Binary file (.bin) - cannot inspect content",
+            "weight": 4.321928094887363,
+            "semantic_facts": {
+              "evidence_kind": "file_analyzability",
+              "evidence_value_class": "opaque_binary",
+              "context_kind": "binary",
+              "signal_kind": "unanalyzable_binary"
+            },
+            "cel": {
+              "decision": "fallback",
+              "reason": "MANIFEST_METADATA_INCOMPLETE",
+              "fact_schema": "v1",
+              "expression_hash": "5a9db9ca3422a0d8437343780ce9aaabdc4dca71aa98bcf63a85b681ef985ce2",
+              "pack": "core",
+              "rollout": "shadow"
+            }
+          }
+        },
+        {
+          "id": "BINARY_FILE_DETECTED_366b23eabc",
+          "rule_id": "BINARY_FILE_DETECTED",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Binary file detected in skill package",
+          "description": "Binary file found: assets\\blob.bin. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency.",
+          "file_path": "assets\\blob.bin",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Review binary file necessity. Replace with auditable scripts if possible.",
+          "analyzer": "static",
+          "metadata": {
+            "semantic_facts": {
+              "evidence_kind": "file_inventory",
+              "context_kind": "binary",
+              "signals": [
+                {
+                  "rule_id": "BINARY_FILE_DETECTED",
+                  "kind": "unanalyzable_binary",
+                  "file_path": "assets\\blob.bin",
+                  "value_class": "binary"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "BINARY_FILE_DETECTED_6799a40b2b",
+          "rule_id": "BINARY_FILE_DETECTED",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Binary file detected in skill package",
+          "description": "Binary file found: docs\\latin1.md. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency.",
+          "file_path": "docs\\latin1.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Review binary file necessity. Replace with auditable scripts if possible.",
+          "analyzer": "static",
+          "metadata": {
+            "semantic_facts": {
+              "evidence_kind": "file_inventory",
+              "context_kind": "binary",
+              "signals": [
+                {
+                  "rule_id": "BINARY_FILE_DETECTED",
+                  "kind": "unanalyzable_binary",
+                  "file_path": "docs\\latin1.md",
+                  "value_class": "binary"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "UNANALYZABLE_BINARY_scripts\\install-data.bin",
+          "rule_id": "UNANALYZABLE_BINARY",
+          "category": "policy_violation",
+          "severity": "MEDIUM",
+          "title": "Unanalyzable binary file",
+          "description": "Binary file 'scripts\\install-data.bin' cannot be inspected by the scanner. Reason: Binary file (.bin) - cannot inspect content. Binary files resist static analysis and may contain hidden functionality.",
+          "file_path": "scripts\\install-data.bin",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Replace binary files with source code, or submit the binary to VirusTotal for independent verification (--use-virustotal).",
+          "analyzer": "analyzability",
+          "metadata": {
+            "skip_reason": "Binary file (.bin) - cannot inspect content",
+            "weight": 5.0,
+            "semantic_facts": {
+              "evidence_kind": "file_analyzability",
+              "evidence_value_class": "opaque_binary",
+              "context_kind": "binary",
+              "signal_kind": "unanalyzable_binary"
+            },
+            "cel": {
+              "decision": "fallback",
+              "reason": "MANIFEST_METADATA_INCOMPLETE",
+              "fact_schema": "v1",
+              "expression_hash": "5a9db9ca3422a0d8437343780ce9aaabdc4dca71aa98bcf63a85b681ef985ce2",
+              "pack": "core",
+              "rollout": "shadow"
+            }
+          }
+        },
+        {
+          "id": "BINARY_FILE_DETECTED_41e217d627",
+          "rule_id": "BINARY_FILE_DETECTED",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Binary file detected in skill package",
+          "description": "Binary file found: scripts\\install-data.bin. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency.",
+          "file_path": "scripts\\install-data.bin",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Review binary file necessity. Replace with auditable scripts if possible.",
+          "analyzer": "static",
+          "metadata": {
+            "semantic_facts": {
+              "evidence_kind": "file_inventory",
+              "context_kind": "binary",
+              "signals": [
+                {
+                  "rule_id": "BINARY_FILE_DETECTED",
+                  "kind": "unanalyzable_binary",
+                  "file_path": "scripts\\install-data.bin",
+                  "value_class": "binary"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "FILE_MAGIC_MISMATCH_fdd34aac2c",
+          "rule_id": "FILE_MAGIC_MISMATCH",
+          "category": "obfuscation",
+          "severity": "MEDIUM",
+          "title": "File extension does not match actual content type",
+          "description": "File 'skill.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file.",
+          "file_path": "skill.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Rename the file to match its actual content type, or remove it if it appears malicious.",
+          "analyzer": "static",
+          "metadata": {
+            "actual_type": "code/yaml",
+            "actual_family": "code",
+            "claimed_extension": ".md",
+            "confidence_score": 0.9166280031204224,
+            "semantic_facts": {
+              "evidence_kind": "file_magic",
+              "context_kind": "binary",
+              "signals": [
+                {
+                  "rule_id": "FILE_MAGIC_MISMATCH",
+                  "kind": "file_magic_mismatch",
+                  "file_path": "skill.md",
+                  "value_class": "binary"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "SKILL_LOAD_FALLBACK_USED",
+          "rule_id": "SKILL_LOAD_FALLBACK_USED",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Strict manifest load failed; inert fallback scan used",
+          "description": "SkillLoadError rejected malformed or missing manifest metadata. The bounded package body was still scanned as inert content; manifest capabilities were not trusted.",
+          "file_path": "skill.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Repair the YAML frontmatter and provide the required manifest fields.",
+          "analyzer": "skill_loader",
+          "metadata": {
+            "fallback_used": true,
+            "fallback_mode": "bounded_inert_raw_body",
+            "strict_error_type": "SkillLoadError",
+            "strict_error_code": "MISSING_REQUIRED_MANIFEST_FIELD",
+            "manifest_complete": false,
+            "capability_facts_trusted": false,
+            "projection_complete": false,
+            "projection_error_code": "MANIFEST_METADATA_INCOMPLETE"
+          }
+        }
+      ],
+      "scan_duration_seconds": 2.4921629428863525,
+      "duration_ms": 2492,
+      "analyzers_used": [
+        "static_analyzer",
+        "bytecode",
+        "pipeline",
+        "correlation"
+      ],
+      "timestamp": "2026-09-24T19:26:48.650532+00:00",
+      "scan_metadata": {
+        "policy_name": "default",
+        "policy_version": "1.0",
+        "policy_preset_base": "balanced",
+        "policy_fingerprint_sha256": "26ada30a1f502eecdbe7b7e35a3fe7a324be2298494208e1019b75e72b0bc516",
+        "cel": {
+          "mode": "shadow",
+          "runtime": "cel-go",
+          "runtime_version": "v0.32.0;helper=2.1.0",
+          "fact_schema": "v1",
+          "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+          "evaluated": 0,
+          "retained": 8,
+          "would_suppress": 0,
+          "suppressed": 0,
+          "fallbacks": 2,
+          "projection_incomplete": 2,
+          "elapsed_ms": 2.066,
+          "projection_ms": 1.958,
+          "evaluation_ms": 0.0,
+          "errors": [
+            {
+              "rule_id": "UNANALYZABLE_BINARY",
+              "code": "MANIFEST_METADATA_INCOMPLETE"
+            },
+            {
+              "rule_id": "UNANALYZABLE_BINARY",
+              "code": "MANIFEST_METADATA_INCOMPLETE"
+            }
+          ],
+          "per_rule": {
+            "UNANALYZABLE_BINARY": {
+              "keep": 0,
+              "would_suppress": 0,
+              "fallback": 2,
+              "suppressed": 0,
+              "expression_hash": "5a9db9ca3422a0d8437343780ce9aaabdc4dca71aa98bcf63a85b681ef985ce2",
+              "pack": "core",
+              "rollout": "shadow"
+            }
+          },
+          "suppressed_candidates": []
+        },
+        "rule_contract": {
+          "status": "passed",
+          "schema_version": 2,
+          "checked": 8,
+          "invalid_findings": 0,
+          "errors": []
+        },
+        "loader": {
+          "fallback_used": true,
+          "fallback_mode": "bounded_inert_raw_body",
+          "strict_error_type": "SkillLoadError",
+          "strict_error_code": "MISSING_REQUIRED_MANIFEST_FIELD",
+          "manifest_complete": false,
+          "capability_facts_trusted": false,
+          "projection_complete": false,
+          "projection_error_code": "MANIFEST_METADATA_INCOMPLETE"
+        }
+      },
+      "analyzers_failed": [
+        {
+          "analyzer": "skill_loader",
+          "error": "SkillLoadError:MISSING_REQUIRED_MANIFEST_FIELD"
+        }
+      ]
+    }
+  ]
+}

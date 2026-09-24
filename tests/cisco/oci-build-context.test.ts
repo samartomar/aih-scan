@@ -8,9 +8,9 @@ const candidateRoot = resolve(root, "tools", "cisco-oci-candidate");
 const read = (name: string) => readFileSync(resolve(candidateRoot, name), "utf8");
 const sha256 = (name: string) => createHash("sha256").update(read(name)).digest("hex");
 
-const pyprojectSha256 = "68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f";
-const lockSha256 = "aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1";
-const ciscoWheelSha256 = "30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2";
+const pyprojectSha256 = "35de8ad9e2d243fb418f8dbeba2f55c4a430495fe1c7163a21809f0ea3999ead";
+const lockSha256 = "1e98c5679994dc56f82c1d88a77528d4c4b076160aff85b4d97ce239360bc210";
+const ciscoWheelSha256 = "c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e";
 const uvWheelSha256 = "3e195ccf1ed60c8bb24a6447ce306441a4181d54b602407e09bc56e963911c15";
 
 describe("Cisco OCI candidate build context", () => {
@@ -40,15 +40,21 @@ describe("Cisco OCI candidate build context", () => {
     expect(dockerfile).toContain(lockSha256);
     expect(dockerfile).toMatch(/sha256sum -c/);
     expect(dockerfile).toContain("SOURCE_DATE_EPOCH=1785167267");
-    expect(dockerfile).toContain("UV_EXCLUDE_NEWER=2026-09-02T00:00:00Z");
+    expect(dockerfile).toContain("UV_EXCLUDE_NEWER=2026-09-24T00:00:00Z");
     expect(dockerfile).toMatch(/tar[^\n]*--sort=name[^\n]*--mtime=@1785167267/);
     expect(dockerfile).toMatch(/USER\s+65532(?::65532)?/);
     expect(dockerfile).toContain('ENTRYPOINT ["/runtime/.venv/bin/skill-scanner"]');
     expect(dockerfile).not.toMatch(
       /ADD\s+https?:|curl\b|pip install\s+uv\b|latest|credential|policy/i,
     );
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf("\nFROM "));
+    // One copy of the environment: the tar is bind-mounted from the builder, never a layer.
+    expect(runtimeStage).not.toMatch(/^(COPY|ADD)\b/m);
+    expect(runtimeStage).toContain(
+      "RUN --mount=type=bind,from=builder,source=/runtime-venv.tar,target=/runtime-venv.tar tar -xf /runtime-venv.tar\n",
+    );
     expect(read("uv.lock")).toMatch(
-      /cisco-ai-skill-scanner[\s\S]*2\.0\.14[\s\S]*30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2/i,
+      /cisco-ai-skill-scanner[\s\S]*2\.1\.0[\s\S]*c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e/i,
     );
   });
 });

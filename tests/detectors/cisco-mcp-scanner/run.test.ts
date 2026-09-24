@@ -130,7 +130,7 @@ describe("runCiscoMcpScannerPlanV1 (parity: Core tests/trust/scan.test.ts ~4379)
       status: "completed",
       sarif: {
         version: "2.1.0",
-        runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.2" } }, results: [] }],
+        runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.4" } }, results: [] }],
       },
     });
     expect(seen).toHaveLength(1);

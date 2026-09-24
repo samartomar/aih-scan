@@ -234,12 +234,17 @@ if (job.fakeSnykStdout !== undefined) {
   fakeHome = mkdtempSync(join(tmpdir(), "proof-fake-uv-"));
   const bin = join(fakeHome, "bin");
   mkdirSync(bin);
-  writeFileSync(join(bin, "uv"), "fake uv");
-  chmodSync(join(bin, "uv"), 0o755);
-  const python = join(fakeHome, "python3.12");
+  const onWindows = process.platform === "win32";
+  const uvFile = join(bin, onWindows ? "uv.exe" : "uv");
+  writeFileSync(uvFile, "fake uv");
+  if (!onWindows) chmodSync(uvFile, 0o755);
+  const python = join(fakeHome, onWindows ? "python.exe" : "python3.12");
   writeFileSync(python, "fake python");
+  mkdirSync(join(fakeHome, "AppData", "Local"), { recursive: true });
   process.env.PATH = bin;
   process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
+  process.env.LOCALAPPDATA = join(fakeHome, "AppData", "Local");
   process.env.XDG_CACHE_HOME = join(fakeHome, ".cache");
   const line = String.fromCharCode(10);
   const ok = (stdout, code = 0) => ({ code, stdout, stderr: "", truncated: false });
@@ -443,7 +448,7 @@ if (detectors.includes("cisco-source-tree")) {
   } else {
     check("cisco source-tree positive succeeded, one job per SKILL.md directory, injected skill found", positive.outcome === "succeeded" && positive.findings.some((f) => /prompt_injection/i.test(f.rule ?? "") && f.path === "skills/injected/SKILL.md"), `${brief(positive)} ${positive.findings.map((f) => `${f.rule}|${f.path}`).join(", ")}`);
     check("cisco source-tree SARIF URIs are source-relative and job-prefixed", positive.sarifUris.length > 0 && positive.sarifUris.every(relative) && positive.sarifUris.every((uri) => uri.startsWith("skills/")), positive.sarifUris.join(", "));
-    check("cisco source-tree runs the host lock", /^2\.0\.14\+uvlock\.[0-9a-f]{12}$/.test(positive.analyzerVersion ?? "") && positive.analyzerVersion === `2.0.14+uvlock.${profileOf("detector.cisco", HOST)?.analyzerLock?.sha256.slice(0, 12)}`, positive.analyzerVersion);
+    check("cisco source-tree runs the bundled skill-scanner 2.1.0 lock", positive.analyzerVersion === `2.1.0+uvlock.${profileOf("detector.cisco", HOST)?.analyzerLock?.sha256.slice(0, 12)}`, positive.analyzerVersion);
     check("cisco source-tree clean succeeded with no prompt-injection finding", clean.outcome === "succeeded" && !clean.findings.some((f) => /prompt_injection/i.test(f.rule ?? "")), brief(clean));
     check("cisco source-tree empty is refused subject-requirement-unmet", empty.outcome === "refused" && empty.reason === "subject-requirement-unmet", brief(empty));
     check("cisco source-tree concurrency 65 is refused detector-options-invalid", malformed.outcome === "refused" && malformed.reason === "detector-options-invalid", brief(malformed));
@@ -460,14 +465,15 @@ if (detectors.includes("cisco-shard")) {
   const { hashComponentTreeV1 } = await import(new URL(`file:///${join(packageDir, "dist", "observation", "source-hash-v1.js").replaceAll("\\", "/")}`).href);
   const lock = profileOf("detector.cisco", HOST)?.analyzerLock?.sha256;
   const namespaceLock = profileOf("detector.cisco", "linux-namespace-uv-v1")?.analyzerLock?.sha256;
+  const foreignLock = profileOf("detector.semgrep", HOST)?.analyzerLock?.sha256;
   const jobs = ["skills/injected", "skills/tables"].map((path, index) => ({ id: `job-${index}`, path, inputSha256: hashComponentTreeV1(roots.skills, [path]).treeSha256 }));
-  const shard = (extra = {}) => ({ shard: true, request: { sourceRoot: roots.skills, jobs, expected: { analyzerVersion: "2.0.14", lockSha256: lock }, executionProfileId: HOST, concurrency: 2, ...extra } });
+  const shard = (extra = {}) => ({ shard: true, request: { sourceRoot: roots.skills, jobs, expected: { analyzerVersion: "2.1.0", lockSha256: lock }, executionProfileId: HOST, concurrency: 2, ...extra } });
   const positive = run("cisco shard positive (2 jobs)", shard());
-  const mismatch = run("cisco shard lock mismatch (namespace lock)", shard({ expected: { analyzerVersion: "2.0.14", lockSha256: namespaceLock } }));
+  const mismatch = run("cisco shard lock mismatch (semgrep's lock)", shard({ expected: { analyzerVersion: "2.1.0", lockSha256: foreignLock } }));
   const traversal = run("cisco shard malformed (job path ../x)", shard({ jobs: [{ ...jobs[0], path: "../x" }] }));
   const empty = run("cisco shard empty (no jobs)", shard({ jobs: [] }));
   const version = run("cisco shard version gate (expects 2.0.13)", shard({ expected: { analyzerVersion: "2.0.13", lockSha256: lock } }));
-  const namespace = run("cisco shard linux-namespace-uv-v1", shard({ executionProfileId: "linux-namespace-uv-v1", expected: { analyzerVersion: "2.0.14", lockSha256: namespaceLock } }));
+  const namespace = run("cisco shard linux-namespace-uv-v1", shard({ executionProfileId: "linux-namespace-uv-v1", expected: { analyzerVersion: "2.1.0", lockSha256: namespaceLock } }));
   const noUv = run("cisco shard missing prerequisite (no uv)", shard({ env: noUvEnv }));
   const budget = Math.max(1_500, Math.round((positive.ms ?? 10_000) * 0.4));
   const timeout = run(`cisco shard timeout (${budget} ms)`, shard({ timeoutMs: budget }));
@@ -483,8 +489,11 @@ if (detectors.includes("cisco-shard")) {
     unproven("cisco shard real run", `host-process-uv-v1 does not support ${hostKey}`);
   } else {
     const [first, second] = positive.outputs ?? [];
-    check("cisco shard positive succeeded: two outputs in job order, sha256 over each SARIF, seals equal", positive.outcome === "succeeded" && positive.outputs.length === 2 && first?.jobId === "job-0" && second?.jobId === "job-1" && positive.outputs.every((o) => o.sha256Matches) && positive.sourceSeal?.same === true && positive.analyzer?.lockSha256 === lock && positive.analyzer?.version === "2.0.14", brief(positive));
+    check("cisco shard positive succeeded: two outputs in job order, sha256 over each SARIF, seals equal", positive.outcome === "succeeded" && positive.outputs.length === 2 && first?.jobId === "job-0" && second?.jobId === "job-1" && positive.outputs.every((o) => o.sha256Matches) && positive.sourceSeal?.same === true && positive.analyzer?.lockSha256 === lock && positive.analyzer?.version === "2.1.0", brief(positive));
     check("cisco shard SARIF URIs are prefixed with each job path", (first?.uris ?? []).every((uri) => uri.startsWith("skills/injected/")) && (second?.uris ?? []).every((uri) => uri.startsWith("skills/tables/")) && (first?.results ?? 0) > 0, JSON.stringify(positive.outputs));
+    // U1f (owner decision D1): Cisco 2.1.0 reports skill.md on Windows; each job binds it to its
+    // own sealed SKILL.md before hashing, so the job SARIF names the real file on every OS.
+    check("cisco shard job SARIF names the sealed SKILL.md by its real name, with findings", (first?.uris ?? []).includes("skills/injected/SKILL.md") && ![...(first?.uris ?? []), ...(second?.uris ?? [])].some((uri) => uri.endsWith("/skill.md")) && (first?.results ?? 0) > 0, JSON.stringify(first?.uris ?? []));
     check("cisco shard version gate fails at availability against the real analyzer", version.outcome === "failed" && version.failure?.stage === "availability", brief(version));
     if (sharedWellKnownUv) notes.push({ name: "cisco shard missing prerequisite", status: "not-applicable", why: "uv is installed in a shared well-known directory" });
     else check("cisco shard without uv is refused prerequisite-missing", noUv.outcome === "refused" && noUv.reason === "prerequisite-missing", brief(noUv));
@@ -538,7 +547,7 @@ if (detectors.includes("snyk")) {
   if (!supported("detector.snyk-agent-scan", HOST)) {
     const withToken = run("snyk on an unsupported host (token present)", job(refusalRoot));
     cases.snykUnsupported = withToken;
-    check("snyk refuses this host as unsupported-platform before anything runs, naming the analyzer's pwd import", [missingToken, withToken].every((record) => record.outcome === "refused" && record.reason === "unsupported-platform" && /pwd/.test(record.detail ?? "")), `${brief(missingToken)} ${brief(withToken)}`);
+    check("snyk refuses this host as unsupported-platform before anything runs, naming the missing wheel", [missingToken, withToken].every((record) => record.outcome === "refused" && record.reason === "unsupported-platform" && /cryptography 50/.test(record.detail ?? "")), `${brief(missingToken)} ${brief(withToken)}`);
     unproven("snyk real run", `host-process-uv-v1 for snyk-agent-scan does not support ${hostKey}`);
   } else {
     check("snyk without SNYK_TOKEN is refused prerequisite-missing, naming the variable, before anything runs", missingToken.outcome === "refused" && missingToken.reason === "prerequisite-missing" && /SNYK_TOKEN is not set/.test(missingToken.detail ?? ""), brief(missingToken));
@@ -552,6 +561,7 @@ if (detectors.includes("snyk")) {
     const skill = (extra = {}) => ({ name: "clean", config_path: null, server: { path: "@ROOT@", type: "skill" }, signature, error: null, ...extra });
     const note = { message: "File or folder not found", is_failure: false, category: "file_not_found" };
     const analyzed = (entry) => ({ "@ROOT@": { client: null, path: "@ROOT@", servers: [skill()], issues: [], labels: [], error: null, ...entry } });
+    const responded = (entry) => ({ scan_path_responses: [{ client: "@ROOT@", path: "~/display", server_risks: [], skill_risks: [{ name: "clean", files: [{ name: "SKILL.md", type: "instruction" }], risk_indexes: {} }], ...entry }] });
     const mock = {
       clean: mocked("clean (root analyzed, no issues)", analyzed({})),
       reportError: mocked("report-level error", { error: { message: "analysis failed", is_failure: true } }),
@@ -563,14 +573,21 @@ if (detectors.includes("snyk")) {
       unsigned: mocked("server recorded but never inspected", analyzed({ servers: [skill({ signature: null })] })),
       missingPath: mocked("keys and server paths that do not exist", { "@ROOT@/ghost": { client: null, path: "@ROOT@/ghost", servers: [skill({ server: { path: "@ROOT@/ghost/skill", type: "skill" } })], issues: [], labels: [], error: null } }),
       failureCode: mocked("X-code issue", analyzed({ issues: [{ code: "X007", message: "agent-scan failure" }] })),
+      // The pinned 0.6.4 ScanResponse: client is the scanned path, path a home display path.
+      v06Clean: mocked("0.6.4 clean response naming the root", responded({})),
+      v06Quota: mocked("0.6.4 real quota shape (path-level analysis_error, exit 0)", responded({ skill_risks: [], error: { message: "Daily usage limit reached", is_failure: true, category: "analysis_error" } })),
+      v06Unnamed: mocked("0.6.4 response that does not name the root", responded({ client: "@ROOT@-missing" })),
+      v06Malformed: mocked("0.6.4 malformed server record", responded({ server_risks: [{}] })),
+      v06Note: mocked("0.6.4 response note beside an analyzed skill", responded({ error: note })),
       // S2g: every entry and server is bound to the subject; an existing root key never vouches
       // for a missing server path, and an unrelated empty entry fails beside a valid root entry.
       ghostServer: mocked("root entry whose signed server path does not exist", analyzed({ servers: [skill({ server: { path: "@ROOT@/ghost-skill", type: "skill" } })] })),
       unrelatedEntry: mocked("unrelated empty entry beside the root entry", { ...analyzed({}), "@ROOT@/..": { client: null, path: "@ROOT@/..", servers: [], issues: [], labels: [], error: null } }),
     };
     for (const [key, record] of Object.entries(mock)) cases[`snykMock${key[0].toUpperCase()}${key.slice(1)}`] = record;
-    check("snyk mocked clean report that names the scanned root succeeds with zero findings", mock.clean.outcome === "succeeded" && mock.clean.findings.length === 0 && noSurvivors(mock.clean), brief(mock.clean));
-    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "malformedServer", "entryNote", "unsigned", "missingPath", "ghostServer", "unrelatedEntry"]) {
+    for (const key of ["clean", "v06Clean"])
+      check(`snyk mocked ${key} report that names the scanned root succeeds with zero findings`, mock[key].outcome === "succeeded" && mock[key].findings.length === 0 && noSurvivors(mock[key]), brief(mock[key]));
+    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "malformedServer", "entryNote", "unsigned", "missingPath", "ghostServer", "unrelatedEntry", "v06Quota", "v06Unnamed", "v06Malformed", "v06Note"]) {
       const record = mock[key];
       check(`snyk mocked ${key} fails closed at the output stage, never a clean result`, record.outcome === "failed" && record.failure?.stage === "output" && /snyk-agent-scan/.test(record.failure?.detail ?? "") && noSurvivors(record), brief(record));
     }
@@ -620,9 +637,20 @@ if (detectors.includes("skillspector")) {
     unproven("skillspector real run", "no Docker engine on this host");
   } else {
     check("skillspector with Docker unreachable fails at availability and pulls nothing", unreachable.outcome === "failed" && unreachable.failure?.stage === "availability", brief(unreachable));
+    // The local tag must be the pinned image pulled by digest from its registry: RepoDigests
+    // then carries the pinned reference itself (a local build or load carries none).
+    const { SKILLSPECTOR_IMAGE_V1, SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 } = await import(new URL(`file:///${join(packageDir, "dist", "baseline", "runtime-v1.js").replaceAll("\\", "/")}`).href);
+    const inspected = spawnSync("docker", ["image", "inspect", SKILLSPECTOR_LOCAL_IMAGE_TAG_V1, "--format", "{{json .}}"], { encoding: "utf8", env: baseEnv });
+    let image = null;
+    try {
+      const parsed = JSON.parse(inspected.stdout);
+      image = { tag: SKILLSPECTOR_LOCAL_IMAGE_TAG_V1, id: parsed.Id, repoDigests: parsed.RepoDigests, revision: parsed.Config?.Labels?.["org.opencontainers.image.revision"] ?? null };
+    } catch {}
+    cases.skillspectorImage = image;
+    check("skillspector local tag is the pinned image pulled by digest (RepoDigests names the pinned reference)", image !== null && Array.isArray(image.repoDigests) && image.repoDigests.includes(SKILLSPECTOR_IMAGE_V1), JSON.stringify(image));
     const positive = run("skillspector positive (local approved image, --pull never)", job(roots.skills));
     cases.skillspectorPositive = positive;
-    check("skillspector local run returns a typed outcome under --pull never", positive.outcome === "succeeded" || positive.outcome === "failed", brief(positive));
+    check("skillspector positive succeeds under --pull never: its SARIF proves a completed analysis (S2e) and carries findings", positive.outcome === "succeeded" && positive.findings.length > 0 && positive.sarifUris.every(relative), brief(positive));
     const nodeModules = run("skillspector tree holding a skipped node_modules directory", job(roots.skillspectorNodeModules));
     cases.skillspectorNodeModules = nodeModules;
     check("skillspector succeeds on a tree holding a skipped node_modules directory (a contained directory notification is accepted)", nodeModules.outcome === "succeeded", `${brief(nodeModules)} directory URIs: ${(nodeModules.sarifUris ?? []).filter((uri) => uri.endsWith("/")).join(", ") || "none"}`);

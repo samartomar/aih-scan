@@ -23,6 +23,7 @@ import {
   createScannerManifestV1,
   type ScannerManifestEntryV1,
 } from "../../src/observation/scanner-manifest-v1.js";
+import { writeCiscoCaptureReportV1 } from "../support/cisco-job-report.js";
 
 const roots: string[] = [];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -151,6 +152,7 @@ async function brandedInput(
         if (argv.at(-1) !== containerId || outputRoot === undefined)
           throw new Error("broker did not start the claimed container");
         writeFileSync(join(outputRoot, "result.sarif"), sarif(options.sarifResult));
+        writeCiscoCaptureReportV1(outputRoot);
         return { code: 0, stdout: "", stderr: "" };
       }
       if (argv[2] === "rm") {

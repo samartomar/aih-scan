@@ -26,6 +26,7 @@ import {
   type SnykAgentScanRunnerV1,
   validateSnykAgentScanRequestEnvV1,
 } from "../../../src/detectors/snyk-agent-scan/index.js";
+import { strictJsonHostileTextsV1 } from "../../support/strict-json-hostile.js";
 
 let root: string;
 
@@ -452,7 +453,7 @@ describe("run outcomes", () => {
     if (outcome.kind !== "completed") return;
     expect(outcome.sarif.runs[0]?.results).toEqual([]);
     expect(outcome.sarifText).toBe(
-      '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"snyk-agent-scan","version":"0.5.17"}},"results":[]}]}',
+      '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"snyk-agent-scan","version":"0.6.4"}},"results":[]}]}',
     );
   });
 
@@ -1305,6 +1306,236 @@ describe("fail-closed analysis evidence (S2e)", () => {
   });
 });
 
+// snyk-agent-scan 0.6.x `scan --json` prints a ScanResponse (`agent_scan/models/api/
+// v20260710.py`): `{scan_path_responses: [ScanPathResponse]}` dumped with
+// `exclude_none=True`, so every present key is a model field. The CLI makes the response
+// `path` home-relative (`~/…`, `utils.get_relative_path`) and sets `client` to the scanned
+// path as given on the command line. A 401/429 from the analysis API is exit 0 with a
+// path-level `analysis_error` ScanError (`verify_api._analysis_error_response`); the one
+// real 0.6.4 run (U1, evidence/U1/raw-outputs/snyk-real) is exactly that shape. The same
+// fail-closed rules as the 0.5.17 report apply (S2e): zero findings completes only when
+// every response names the scanned root by an existing path and nothing reports a
+// failure; every record, risk and error is validated, none is skipped.
+describe("snyk-agent-scan 0.6.x scan response (fail-closed, S2e rules)", () => {
+  const ANALYZER_ERROR = "snyk-agent-scan JSON reported an analyzer error";
+  const NO_ANALYSIS = "snyk-agent-scan JSON shows no analysis of the scanned root";
+  const MALFORMED = "snyk-agent-scan JSON carries a malformed finding";
+  const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
+  const parse = (report: unknown) => parseSnykAgentScanSarifV1(JSON.stringify(report), root);
+  const at = (uri: string) => [
+    { physicalLocation: { artifactLocation: { uri }, region: { startLine: 1 } } },
+  ];
+  const server = (extra: Record<string, unknown> = {}) => ({
+    name: "github",
+    entities: [
+      { name: "create_pull_request", type: "tool" },
+      { name: "search_code", type: "tool" },
+    ],
+    risk_indexes: {},
+    ...extra,
+  });
+  const skill = (extra: Record<string, unknown> = {}) => ({
+    name: "release-helper",
+    files: [
+      { name: "SKILL.md", type: "instruction" },
+      { name: "scripts/install.sh", type: "script" },
+    ],
+    risk_indexes: {},
+    ...extra,
+  });
+  const entry = (extra: Record<string, unknown> = {}) => ({
+    client: root,
+    path: "~/display/path",
+    server_risks: [],
+    skill_risks: [skill()],
+    ...extra,
+  });
+  const response = (extra: Record<string, unknown> = {}) => ({
+    scan_path_responses: [entry(extra)],
+  });
+  const quotaError = {
+    message: "Daily usage limit reached for the public version of Agent-Scan.",
+    exception:
+      "429, message='Too Many Requests', url='https://api.snyk.io/hidden/mcp-scan/cli/analysis-machine?version=2026-07-10'",
+    traceback: "Traceback (most recent call last): ...",
+    is_failure: true,
+    category: "analysis_error",
+  };
+  const note = { message: "not found", is_failure: false, category: "file_not_found" };
+
+  it("maps every present risk to one result named by its risk key", () => {
+    const report = response({
+      server_risks: [
+        server({
+          risk_indexes: {
+            prompt_injection_tool_desc: {
+              score: 1000,
+              evidence: "The tool description contains instructions directed at the agent.",
+              affected_tools: [0],
+            },
+          },
+        }),
+        server({ name: "clean-server", entities: [] }),
+      ],
+      skill_risks: [
+        skill({
+          risk_indexes: {
+            suspicious_download_url: {
+              score: 600,
+              evidence: "The script downloads an executable from an untrusted host.",
+              locations: [{ start: { path: "scripts/install.sh", line: 12 } }],
+              malicious_urls: ["https://downloads.example.invalid/install.sh"],
+            },
+          },
+        }),
+      ],
+    });
+    expect(parse(report).runs[0].results).toEqual([
+      {
+        ruleId: "prompt_injection_tool_desc",
+        message: {
+          text: 'The tool description contains instructions directed at the agent. (MCP server "github"; score 1000/1000; affected tools: create_pull_request)',
+        },
+        locations: at("."),
+      },
+      {
+        ruleId: "suspicious_download_url",
+        message: {
+          text: 'The script downloads an executable from an untrusted host. (skill "release-helper"; score 600/1000; at scripts/install.sh:12 in the skill)',
+        },
+        locations: at("."),
+      },
+    ]);
+  });
+
+  it("completes zero findings when the response names the root and reports no failure", () => {
+    // The Windows shape: `path` is a home display path, `client` the scanned root.
+    expect(parse(response()).runs[0].results).toEqual([]);
+    // Discovery ran on the root and found nothing to send: the analyzer's own statement.
+    expect(parse(response({ skill_risks: [] })).runs[0].results).toEqual([]);
+    // No client: an absolute `path` that is the root names it.
+    const byPath = {
+      scan_path_responses: [{ path: root, server_risks: [], skill_risks: [skill()] }],
+    };
+    expect(parse(byPath).runs[0].results).toEqual([]);
+  });
+
+  it("fails the real 0.6.4 quota response (exit 0, path-level analysis_error)", async () => {
+    const stdout = JSON.stringify(response({ skill_risks: [], error: quotaError }));
+    const outcome = await runSnykAgentScanRequestV1(
+      fakeRunner((argv) => (argv.includes("scan") ? { code: 0, stdout, stderr: "" } : undefined))
+        .run,
+      { platform: "linux", tree: root, hostEnv: {}, requestEnv: { SNYK_TOKEN: "tok-v06" } },
+    );
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: `${ANALYZER_ERROR}; exit 0, stdout ${Buffer.byteLength(stdout)} bytes, stderr 0 bytes`,
+    });
+  });
+
+  it("fails a failure ScanError on a response, server or skill, and any report-level marker", () => {
+    const failures: unknown[] = [
+      response({ error: quotaError }),
+      response({ error: "analysis failed" }),
+      // `is_failure` defaults to true in models/errors.py when omitted.
+      response({ error: { message: "x" } }),
+      response({ error: { message: "x", is_failure: "no" } }),
+      response({
+        server_risks: [server({ error: { ...quotaError, category: "server_startup" } })],
+      }),
+      response({
+        skill_risks: [skill({ error: { is_failure: true, category: "skill_scan_error" } })],
+      }),
+      { ...response(), error: "authentication failed" },
+      { ...response(), is_failure: true },
+      { ...response(), errors: ["x"] },
+    ];
+    for (const report of failures) expect(() => parse(report)).toThrow(ANALYZER_ERROR);
+  });
+
+  it("fails a response that proves no analysis of the scanned root", () => {
+    mkdirSync(join(root, "v06-sub"), { recursive: true });
+    const unanalysed: unknown[] = [
+      { scan_path_responses: [] },
+      // Neither client nor path names the root: a descendant, another directory, a home
+      // display path alone, and a path that does not exist (never counts).
+      response({ client: join(root, "v06-sub") }),
+      response({ client: tmpdir() }),
+      {
+        scan_path_responses: [{ path: "~/display/path", server_risks: [], skill_risks: [skill()] }],
+      },
+      response({ client: join(root, "missing-dir") }),
+      {
+        scan_path_responses: [
+          { path: join(root, "missing-dir"), server_risks: [], skill_risks: [skill()] },
+        ],
+      },
+      // One response names the root, another does not.
+      { scan_path_responses: [entry(), entry({ client: tmpdir() })] },
+      // A non-failure note on a response (S2f: that path was not analyzed, even beside an
+      // analyzed record), or on a record (that record was not analyzed).
+      response({ skill_risks: [], error: note }),
+      response({ error: note }),
+      response({ server_risks: [server()], error: note }),
+      response({ skill_risks: [skill({ error: note })] }),
+      response({ server_risks: [server({ error: note })] }),
+    ];
+    for (const report of unanalysed) expect(() => parse(report)).toThrow(NO_ANALYSIS);
+  });
+
+  it("fails malformed responses, servers and skills instead of skipping them", () => {
+    const malformedEntries: unknown[] = [
+      { scan_path_responses: {} },
+      { scan_path_responses: [1] },
+      { scan_path_responses: [{}] },
+      { scan_path_responses: [{ client: root, path: "", server_risks: [], skill_risks: [] }] },
+      { scan_path_responses: [{ client: root, path: "~", skill_risks: [] }] },
+      { ...response(), unexpected: true },
+      response({ client: 42 }),
+      response({ skill_risks: "x" }),
+      response({ unexpected: 1 }),
+      response({ server_risks: [{}] }),
+      response({ server_risks: [1] }),
+      response({ server_risks: [server({ name: " " })] }),
+      response({ server_risks: [server({ entities: [{ name: "t", type: "shell" }] })] }),
+      response({ server_risks: [server({ risk_indexes: [] })] }),
+      response({ server_risks: [server({ config_path: root })] }),
+      response({ skill_risks: [{ name: "k" }] }),
+      response({ skill_risks: [skill({ files: [{ name: "x" }] })] }),
+      response({ skill_risks: [skill({ risk_indexes: undefined })] }),
+    ];
+    for (const report of malformedEntries) expect(() => parse(report)).toThrow(MALFORMED_ENTRY);
+  });
+
+  it("fails malformed risks instead of skipping them", () => {
+    const skillRisk = (value: unknown, name = "malicious_code") =>
+      response({ skill_risks: [skill({ risk_indexes: { [name]: value } })] });
+    const serverRisk = (value: unknown) =>
+      response({ server_risks: [server({ risk_indexes: { private_data: value } })] });
+    const malformedRisks: unknown[] = [
+      skillRisk(1),
+      skillRisk(null),
+      skillRisk({ score: 1001, evidence: "e" }),
+      skillRisk({ score: -1, evidence: "e" }),
+      skillRisk({ score: 1.5, evidence: "e" }),
+      skillRisk({ score: 5 }),
+      skillRisk({ score: 5, evidence: "e", extra: true }),
+      skillRisk({ score: 5, evidence: "e" }, "X007"),
+      skillRisk({ score: 5, evidence: "e" }, "Bad Name"),
+      skillRisk({ score: 5, evidence: "e", locations: [{ start: { line: 3 } }] }),
+      skillRisk({ score: 5, evidence: "e", locations: [{ start: { path: "a", line: 1.5 } }] }),
+      skillRisk({ score: 5, evidence: "e", locations: "a" }),
+      skillRisk({ score: 5, evidence: "e", malicious_urls: [1] }),
+      skillRisk({ score: 5, evidence: "e", affected_tools: [0] }),
+      serverRisk({ score: 1, evidence: "e", affected_tools: [2] }),
+      serverRisk({ score: 1, evidence: "e", affected_tools: ["0"] }),
+      serverRisk({ score: 1, evidence: "e", locations: [] }),
+    ];
+    for (const report of malformedRisks) expect(() => parse(report)).toThrow(MALFORMED);
+  });
+});
+
 // S2f (review of S2e): every ServerScanResult is validated against snyk-agent-scan 0.5.17's
 // models (`agent_scan/models.py`, `inspect.py`), and only records that prove analysis count.
 // A server proves analysis when it carries its server config and the ServerSignature that
@@ -1595,5 +1826,35 @@ describe("server records must prove analysis (S2f)", () => {
       NO_ANALYSIS,
     );
     await failedWith(entry(root, { servers: [stdio(dirname(root))] }), NO_ANALYSIS);
+  });
+});
+
+// U1g: snyk-agent-scan 0.6.x's ScanResponse is read only through the one strict parser: a
+// repeated key, a number no double holds, and a number token beyond the bound are each
+// refused before any record is read.
+describe("snyk-agent-scan 0.6.x strict analyzer output (U1g)", () => {
+  const tree = mkdtempSync(join(tmpdir(), "aih-snyk-strict-"));
+  afterAll(() => rmSync(tree, { recursive: true, force: true }));
+  const response = () =>
+    JSON.stringify({
+      scan_path_responses: [
+        {
+          client: tree,
+          path: "~/display/path",
+          server_risks: [],
+          skill_risks: [
+            { name: "alpha", files: [{ name: "SKILL.md", type: "instruction" }], risk_indexes: {} },
+          ],
+        },
+      ],
+    });
+
+  it.each(
+    strictJsonHostileTextsV1(response()),
+  )("refuses a response holding %s", (_label, hostile) => {
+    expect(parseSnykAgentScanSarifV1(response(), tree).runs[0]?.results).toEqual([]);
+    expect(() => parseSnykAgentScanSarifV1(hostile, tree)).toThrow(
+      "snyk-agent-scan did not emit parseable JSON",
+    );
   });
 });

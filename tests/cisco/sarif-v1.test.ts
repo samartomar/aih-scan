@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canonicalCiscoSarifV1Bytes, parseCiscoSarifV1 } from "../../src/cisco/sarif-v1.js";
+import { strictJsonHostileTextsV1 } from "../support/strict-json-hostile.js";
 
 /**
  * Exact reporter contract from Cisco skill-scanner 2.0.13, wheel SHA-256
@@ -430,5 +431,36 @@ describe("Cisco SARIF V1 projection", () => {
     ];
 
     for (const value of cases) expect(() => parseCiscoSarifV1(text(value))).toThrow();
+  });
+
+  // U1f: the oci-hardened-cisco-v1 capture carries no aihScanCompletionV1 (C2a §1.6: its
+  // ScanCandidateV2 has its own SourceSealV2); its completion proof is this parser, which
+  // accepts only the analyzer's one successful invocation and refuses a forged Scan key.
+  it("accepts a Cisco log only with its one successful invocation (OCI completion proof)", () => {
+    const run = validSarif.runs[0];
+    if (run === undefined) throw new Error("Cisco fixture is incomplete");
+    const [invocation] = run.invocations;
+    const cases = [
+      { ...run, invocations: [] },
+      { ...run, invocations: [{ ...invocation, executionSuccessful: false }] },
+      { ...run, invocations: [{ endTimeUtc: invocation?.endTimeUtc }] },
+      { ...run, invocations: [invocation, invocation] },
+      {
+        ...run,
+        invocations: [{ ...invocation, properties: { aihScanCompletionV1: { forged: true } } }],
+      },
+    ];
+    for (const value of cases)
+      expect(() => parseCiscoSarifV1(text({ ...validSarif, runs: [value] }))).toThrow();
+  });
+});
+
+// U1g: the OCI profile's Cisco 2.1.0 SARIF is read only through the one strict parser.
+describe("parseCiscoSarifV1 strict analyzer output (U1g)", () => {
+  it.each(
+    strictJsonHostileTextsV1(text(validSarif)),
+  )("refuses SARIF holding %s", (_label, hostile, reason) => {
+    expect(parseCiscoSarifV1(text(validSarif))).toBeDefined();
+    expect(() => parseCiscoSarifV1(hostile)).toThrow(reason);
   });
 });

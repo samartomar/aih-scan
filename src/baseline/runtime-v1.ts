@@ -40,20 +40,29 @@ import {
 } from "../detectors/sarif-completion-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
-import { ciscoSourceRelativeSarifV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
+import {
+  ANALYZER_OUTPUT_MAX_BYTES_V1,
+  readBoundedAnalyzerOutputV1,
+} from "./bounded-output-read-v1.js";
+import { assertCiscoScanAllSkillInventoryV1 } from "./cisco-report-skills-v1.js";
+import {
+  assertCiscoScanAllAnalyzersCompleteV1,
+  ciscoSourceRelativeSarifV1,
+  sourceRelativeSarifV1,
+} from "./sarif-source-relative-v1.js";
 
 export const SKILLSPECTOR_IMAGE_V1 =
-  "ghcr.io/samartomar/skillspector@sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
-export const SKILLSPECTOR_SOURCE_REVISION_V1 = "2d198ab910add401cad658d1087e7c7ba24fd640";
+  "ghcr.io/samartomar/skillspector@sha256:efe47bd7e073064426541381c8cb284162086950748424d1b4633788a2275bc6";
+export const SKILLSPECTOR_SOURCE_REVISION_V1 = "c7958a3268d9498644b22edb75d0f051bbc8cbfc";
 export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
-  "sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
+  "sha256:efe47bd7e073064426541381c8cb284162086950748424d1b4633788a2275bc6";
 /**
  * The local tag Core documents for its SkillSpector image (docs/security/skillspector.md).
  * `docker-host-local-skillspector-v1` inspects only this tag and never pulls.
  */
-export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 = "skillspector:aih-2d198ab910ad";
-export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.14";
-export const SEMGREP_VERSION_V1 = "1.173.0";
+export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 = "skillspector:aih-c7958a3268d9";
+export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.1.0";
+export const SEMGREP_VERSION_V1 = "1.178.0";
 /** The interpreter the Linux namespace profile binds; the host profile discovers its own. */
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
@@ -66,7 +75,7 @@ export const HOST_PROCESS_UV_PYTHON_REQUEST_V1 = "3.12";
  */
 export const HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1 = 64;
 
-const maxOutputBytes = 16 * 1024 * 1024;
+const maxOutputBytes = ANALYZER_OUTPUT_MAX_BYTES_V1;
 const maxStderrBytes = 64 * 1024;
 const maxProjectBytes = 64 * 1024;
 const maxFailureDetailCharacters = 400;
@@ -78,14 +87,11 @@ const packageRoot = resolve(moduleDirectory, "..", "..");
 const analyzerRoot = join(packageRoot, "tools", "baseline-analyzers");
 const ciscoProject = join(analyzerRoot, "cisco-skill-scanner");
 /**
- * The Cisco closure the host profile installs. `litellm` 1.92.0 publishes manylinux wheels
- * only and `win-unicode-console` publishes only an sdist, so the build-free host install
- * pins `litellm` 1.92.2 (same dependencies, wheels for every host) and leaves the console
- * helper out. The namespace and OCI profiles keep `cisco-skill-scanner`, unchanged.
+ * The bundled Cisco project both uv profiles install: its 2.1.0 lock (litellm 1.102.1, no
+ * win-unicode-console) has binary wheels for every host profile platform, so the host and
+ * namespace profiles share one lock and one analyzerLock digest.
  */
-const ciscoHostProject = join(analyzerRoot, "cisco-skill-scanner-host");
-/** The bundled host-profile Cisco project (its lock is host-process-uv-v1's analyzerLock). */
-export const CISCO_SKILL_SCANNER_HOST_PROJECT_V1 = ciscoHostProject;
+export const CISCO_SKILL_SCANNER_PROJECT_V1 = ciscoProject;
 const semgrepProject = join(analyzerRoot, "semgrep");
 const semgrepRules = [
   "rules:",
@@ -1270,7 +1276,7 @@ async function hostProcessUv(
   analyzer: "semgrep" | "cisco",
   input: HostUvSessionInput,
 ): Promise<AnalyzerOutput> {
-  const project = analyzer === "semgrep" ? semgrepProject : ciscoHostProject;
+  const project = analyzer === "semgrep" ? semgrepProject : ciscoProject;
   const version = analyzer === "semgrep" ? SEMGREP_VERSION_V1 : CISCO_SKILL_SCANNER_VERSION_V1;
   return withHostUvSession(project, input, async (session) => {
     const { run, tool, uvRun, hostRuntime } = session;
@@ -1310,10 +1316,8 @@ async function hostProcessUv(
         hostRuntime,
       };
     }
-    const expectedSkills = hashSourceTreeV1(input.sourceRoot).files.filter(
-      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
-    ).length;
-    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
+    const expectedSkills = ciscoSkillDirectories(input.sourceRoot);
+    if (expectedSkills.length === 0) fail("Cisco skill discovery found no SKILL.md files");
     const reported = (
       await run(
         uvRun([tool("skill-scanner"), "--version"]),
@@ -1345,14 +1349,22 @@ async function hostProcessUv(
     );
     const report = verifyCiscoCoverage(
       readBoundedAnalyzerOutput(jsonPath, "Cisco JSON output"),
-      expectedSkills,
+      expectedSkills.length,
     );
+    // U1j (review of U1i, P1): every expected skill is listed exactly once, so no skill's
+    // failed analyzers can be left out of the D30 decision below.
+    assertCiscoScanAllSkillInventoryV1(report, {
+      sourceRoots: roots,
+      expected: expectedSkills,
+      platform: process.platform,
+    });
     const sarif = parsedSarif(readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output"), "cisco");
+    const normalized = ciscoSourceRelativeSarifV1(sarif, report, roots).document;
+    // U1i, coordinator decision D30 (revised 20:58Z): complete only when every failed
+    // analyzer Cisco reports is the matched skill_loader fallback.
+    assertCiscoScanAllAnalyzersCompleteV1(report, normalized, roots);
     return {
-      ...sarifOutput(
-        ciscoSourceRelativeSarifV1(sarif, report, roots).document,
-        lockIdentity(version, project),
-      ),
+      ...sarifOutput(normalized, lockIdentity(version, project)),
       hostRuntime,
     };
   });
@@ -1835,8 +1847,26 @@ async function semgrep(
   }
 }
 
+/**
+ * U1j: an analyzer's report file, read by the one bounded read every analyzer-output path
+ * uses (typed at output, the analyzer-output cap).
+ */
 function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
-  return readBoundedRegularFile(path, maxOutputBytes, label);
+  return readBoundedAnalyzerOutputV1(path, label);
+}
+
+/**
+ * U1j: the skill directories Cisco `scan-all --recursive` must report, one per sealed
+ * `SKILL.md` ("" is the root skill), source-relative.
+ */
+function ciscoSkillDirectories(sourceRoot: string): string[] {
+  return hashSourceTreeV1(sourceRoot).files.flatMap(({ path }) =>
+    path === "SKILL.md"
+      ? [""]
+      : path.endsWith("/SKILL.md")
+        ? [path.slice(0, -"/SKILL.md".length)]
+        : [],
+  );
 }
 
 /** Checks the Cisco JSON report's coverage and returns the parsed report. */
@@ -1847,8 +1877,9 @@ function verifyCiscoCoverage(output: Buffer, expectedSkills: number): Record<str
       decodeStrictUtf8V1(output, "Cisco JSON report"),
       "Cisco JSON report",
     );
-  } catch {
-    fail("Cisco JSON report is invalid");
+  } catch (error) {
+    // U1g: the strict parser's reason is kept; a malformed report fails at output.
+    fail(`Cisco JSON report is invalid: ${error instanceof Error ? error.message : "JSON"}`);
   }
   const summary = report.summary;
   if (typeof summary !== "object" || summary === null || Array.isArray(summary))
@@ -1886,10 +1917,8 @@ async function cisco(
     mkdirSync(venvDirectory, { mode: 0o700 });
     const sarifOutputPath = join(workDirectory, "results.sarif");
     const jsonOutput = join(workDirectory, "results.json");
-    const expectedSkills = hashSourceTreeV1(sourceRoot).files.filter(
-      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
-    ).length;
-    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
+    const expectedSkills = ciscoSkillDirectories(sourceRoot);
+    if (expectedSkills.length === 0) fail("Cisco skill discovery found no SKILL.md files");
     const sandboxState = {
       project: ciscoProject,
       workDirectory,
@@ -1943,16 +1972,22 @@ async function cisco(
     );
     const report = verifyCiscoCoverage(
       readBoundedAnalyzerOutput(jsonOutput, "Cisco JSON output"),
-      expectedSkills,
+      expectedSkills.length,
     );
+    // U1j, as for host-process-uv-v1.
+    assertCiscoScanAllSkillInventoryV1(report, {
+      sourceRoots: ["/aih/source"],
+      expected: expectedSkills,
+      platform: process.platform,
+    });
     const sarif = parsedSarif(
       readBoundedAnalyzerOutput(sarifOutputPath, "Cisco SARIF output"),
       "cisco",
     );
-    return sarifOutput(
-      ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"]).document,
-      lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject),
-    );
+    const normalized = ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"]).document;
+    // U1i, coordinator decision D30 (revised 20:58Z), as for host-process-uv-v1.
+    assertCiscoScanAllAnalyzersCompleteV1(report, normalized, ["/aih/source"]);
+    return sarifOutput(normalized, lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject));
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }

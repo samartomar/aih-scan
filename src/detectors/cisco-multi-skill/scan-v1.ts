@@ -1,6 +1,19 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
+import {
+  AnalyzerOutputReadErrorV1,
+  readBoundedAnalyzerOutputV1,
+} from "../../baseline/bounded-output-read-v1.js";
+import {
+  CiscoAnalyzerFailureV1,
+  ciscoSingleSkillReportV1,
+} from "../../baseline/cisco-analyzer-failures-v1.js";
+import {
+  assertCiscoSingleSkillAnalyzersCompleteV1,
+  assertCiscoSingleSkillReportSkillV1,
+  ciscoSarifResultIdentitiesV1,
+} from "../../baseline/cisco-report-skills-v1.js";
 import {
   ciscoJobDirectoryProblemTextV1,
   resolveContainedCiscoJobDirectoryV1,
@@ -70,6 +83,12 @@ export interface CiscoSkillDirectoryScanRequestV1 {
   readonly root: string;
   /** Absolute skill directory; also the scan's working directory. */
   readonly skillDir: string;
+  /**
+   * U1k: the run's source-relative skill directories (`""` for the root), the candidates owner
+   * decision D1 binds the job's JSON report among (a unique match only); defaults to this
+   * job's own directory.
+   */
+  readonly skills?: readonly string[];
   readonly analyzerProject?: string;
 }
 
@@ -106,8 +125,17 @@ export async function mapConcurrentStableV1<T, R>(
   return results;
 }
 
-/** Failure stages the C2a typed surface reports (C2a §3.5 and §8.4). */
-export type CiscoScanFailureStageV1 = "acquisition" | "availability" | "execution" | "output";
+/**
+ * Failure stages the C2a typed surface reports (C2a §3.5 and §8.4). U1i, coordinator decision
+ * D30: `coverage` when Cisco reports a failed analyzer other than the matched skill_loader
+ * fallback.
+ */
+export type CiscoScanFailureStageV1 =
+  | "acquisition"
+  | "availability"
+  | "execution"
+  | "output"
+  | "coverage";
 
 const MAX_CISCO_DETAIL_CHARACTERS_V1 = 1024;
 
@@ -193,7 +221,7 @@ export async function probeCiscoSkillScannerV1(
 /** Typed outcome of one skill directory's scan (C2a §3.2). */
 export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
   | { kind: "completed"; log: CiscoSarifLogV1 }
-  | { kind: "failed"; stage: "execution" | "output"; detail: string }
+  | { kind: "failed"; stage: "execution" | "output" | "coverage"; detail: string }
 >;
 
 /**
@@ -202,14 +230,20 @@ export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
  * process failure is stage `execution`; a SARIF file that is missing, does
  * not parse or does not prove completion is stage `output`, and one whose
  * invocation reports the analyzer's own failure is stage `execution`
- * ({@link ciscoJobSarifV1}). The private temporary directory is always
- * removed.
+ * ({@link ciscoJobSarifV1}). U1i, coordinator decision D30 (revised 20:58Z): the job's
+ * single-skill JSON report is then read with the one strict parser; a missing, unreadable or
+ * malformed report, or a malformed `analyzers_failed`, is stage `output` (never a fallback
+ * to SARIF alone), and a failed analyzer other than the matched skill_loader fallback is stage
+ * `coverage`. U1j: a report whose `skill_path` does not name exactly this job's directory
+ * (`assertCiscoSingleSkillReportSkillV1`) is stage `output`, before its `analyzers_failed` is
+ * read. The private temporary directory is always removed.
  */
 export async function scanCiscoSkillDirectoryOutcomeV1(
   request: CiscoSkillDirectoryScanRequestV1,
 ): Promise<CiscoSkillDirectoryScanOutcomeV1> {
   const tmp = mkdtempSync(join(tmpdir(), "aih-cisco-sarif-"));
   const output = join(tmp, "results.sarif");
+  const jsonOutput = join(tmp, "results.json");
   try {
     let scan: CiscoMultiSkillRunResultV1;
     try {
@@ -218,6 +252,7 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
           request.platform,
           request.skillDir,
           output,
+          jsonOutput,
           request.analyzerProject,
         ),
         {
@@ -241,14 +276,19 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         detail: boundedCiscoDetailV1(reason),
       });
     }
+    // U1j: both output files are read as bounded regular files (the analyzer-output cap).
     let raw: Buffer;
     try {
-      raw = readFileSync(output);
-    } catch {
+      raw = readBoundedAnalyzerOutputV1(output, "Cisco SARIF");
+    } catch (error) {
+      if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
       return Object.freeze({
         kind: "failed" as const,
         stage: "output" as const,
-        detail: "detector did not emit valid SARIF",
+        detail:
+          error.reason === "missing"
+            ? "detector did not emit valid SARIF"
+            : boundedCiscoDetailV1(`detector did not emit valid SARIF: ${error.message}`),
       });
     }
     const sarif = ciscoJobSarifV1(raw, request.root, request.skillDir);
@@ -258,6 +298,46 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         stage: sarif.stage,
         detail: boundedCiscoDetailV1(sarif.detail),
       });
+    const skill = relative(request.root, request.skillDir).split(sep).join("/");
+    const label = `job ${skill === "" ? "." : skill}`;
+    let reportBytes: Buffer;
+    try {
+      reportBytes = readBoundedAnalyzerOutputV1(jsonOutput, "Cisco JSON report");
+    } catch (error) {
+      if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: "output" as const,
+        detail:
+          error.reason === "missing"
+            ? "detector did not emit its Cisco JSON report"
+            : boundedCiscoDetailV1(`Cisco JSON report of ${label} is unreadable: ${error.message}`),
+      });
+    }
+    try {
+      const report = ciscoSingleSkillReportV1(reportBytes, label);
+      // U1j (review of U1i, P1): the report is evidence only for the skill this job scanned.
+      assertCiscoSingleSkillReportSkillV1(report, {
+        label,
+        sourceRoots: [request.root],
+        skill,
+        ...(request.skills === undefined ? {} : { skills: request.skills }),
+        platform: request.platform === "windows" ? "win32" : request.platform,
+      });
+      assertCiscoSingleSkillAnalyzersCompleteV1(
+        report,
+        // U1j: the job log keeps each result's D28 identity for the fallback pairing.
+        ciscoSarifResultIdentitiesV1(sarif.log),
+        skill,
+      );
+    } catch (error) {
+      if (!(error instanceof CiscoAnalyzerFailureV1)) throw error;
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: error.stage,
+        detail: boundedCiscoDetailV1(error.message),
+      });
+    }
     return Object.freeze({ kind: "completed" as const, log: sarif.log });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -286,6 +366,13 @@ export interface CiscoSourceTreeScanRequestV1 {
   /** Strictly validated per C2a §3.3; absent selects the default concurrency. */
   readonly detectorOptions?: unknown;
   readonly analyzerProject?: string;
+  /**
+   * The version the gate requires; defaults to the pinned
+   * {@link CISCO_MULTI_SKILL_SCANNER_VERSION_V1}. Only for a caller that runs a
+   * project locked at another version (e.g. replaying evidence recorded at an
+   * earlier pin); never widens the gate to more than one version.
+   */
+  readonly expectedVersion?: string;
 }
 
 /** Typed outcome of a `source-tree` Cisco scan (C2a §3.5). */
@@ -363,6 +450,7 @@ export async function runCiscoSourceTreeScanV1(
     platform: request.platform,
     env: request.env,
     ...(request.analyzerProject === undefined ? {} : { analyzerProject: request.analyzerProject }),
+    ...(request.expectedVersion === undefined ? {} : { expectedVersion: request.expectedVersion }),
   });
   if (probe.kind !== "available") return failedSourceTreeScanV1(probe.stage, probe.detail);
   const scanJob = async (job: CiscoSourceTreeJobV1): Promise<CiscoSarifRunV1[]> => {
@@ -380,6 +468,8 @@ export async function runCiscoSourceTreeScanV1(
       env: request.env,
       root: request.sourceRoot,
       skillDir: job.skillDir,
+      // U1k: every job's report binds among all of the run's skill directories (D1).
+      skills: jobs.map((entry) => entry.path),
       ...(request.analyzerProject === undefined
         ? {}
         : { analyzerProject: request.analyzerProject }),

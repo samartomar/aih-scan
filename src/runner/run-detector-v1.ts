@@ -9,6 +9,16 @@ import {
   createBaselineAnalyzerSnapshotV1,
   normalizedObservation,
 } from "../baseline/batch-v1.js";
+import { ANALYZER_OUTPUT_READ_PREFIX_V1 } from "../baseline/bounded-output-read-v1.js";
+import {
+  CISCO_FAILED_ANALYZERS_PREFIX_V1,
+  CISCO_REPORT_PREFIX_V1,
+  CISCO_SKILL_COVERAGE_PREFIX_V1,
+} from "../baseline/cisco-analyzer-failures-v1.js";
+import {
+  bindCiscoSarifToSealedFilesV1,
+  unboundCiscoSarifResultV1,
+} from "../baseline/cisco-sealed-case-binding-v1.js";
 import {
   type AnalyzerFailureCauseV1,
   AnalyzerRunFailureV1,
@@ -29,6 +39,7 @@ import {
   type DetectorSubjectKindV1,
   listDetectorCapabilitiesV1,
   resolveDetectorCapabilityV1,
+  snykAgentScanPlatformSupportV1,
 } from "../capability/detector-capability-v1.js";
 import { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "../cisco/capture-v2.js";
 import { resolveHostExecutableV1 } from "../cli/host-executable.js";
@@ -396,7 +407,7 @@ export function platformRefusal(
       ? capability.detectorId === "detector.cisco-mcp-scanner"
         ? "Its lock pins litellm 1.93.0, which publishes manylinux wheels only, and Scan never builds analyzer dependencies from source."
         : capability.detectorId === "detector.snyk-agent-scan"
-          ? `snyk-agent-scan ${capability.analyzerVersion} imports Python's POSIX-only pwd module, so it cannot run on Windows, and macOS amd64 lacks an exact-pinned cryptography 50.0.0 wheel, which Scan never builds from source.`
+          ? snykAgentScanPlatformSupportV1(capability.analyzerVersion ?? "").refusal
           : "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 lacks cryptography 50.0.0, Windows arm64 lacks Semgrep), and Scan never builds analyzer dependencies from source."
       : profile.id === "docker-host-local-skillspector-v1"
         ? "Its Docker engine must run the linux/amd64 SkillSpector image, natively or emulated."
@@ -421,6 +432,18 @@ function refuse(
 }
 
 export function failureStage(message: string): RunDetectorFailureStageV1 {
+  // U1i, coordinator decision D30: a failed analyzer Cisco reported is a coverage failure, and
+  // an unusable Cisco JSON report an output failure. Checked first and by their fixed
+  // prefixes, since the analyzer's own text follows them.
+  // U1j: so is a scan-all report whose skills are not the expected inventory.
+  if (
+    message.startsWith(CISCO_FAILED_ANALYZERS_PREFIX_V1) ||
+    message.startsWith(CISCO_SKILL_COVERAGE_PREFIX_V1)
+  )
+    return "coverage";
+  if (message.startsWith(CISCO_REPORT_PREFIX_V1)) return "output";
+  // U1j: an analyzer report file refused by the one bounded read is the analyzer's output.
+  if (message.startsWith(ANALYZER_OUTPUT_READ_PREFIX_V1)) return "output";
   if (message.includes("environment acquisition") || message.includes("image acquisition"))
     return "acquisition";
   if (
@@ -435,7 +458,10 @@ export function failureStage(message: string): RunDetectorFailureStageV1 {
     message.includes("observation") ||
     message.includes("emitted no SARIF") ||
     message.includes("SARIF artifact URI") ||
-    message.includes("Cisco SARIF")
+    message.includes("Cisco SARIF") ||
+    // U1g: a Cisco JSON report the strict parser refuses, or whose shape is malformed, is the
+    // analyzer's output; a skipped skill or a count mismatch stays a coverage failure above.
+    message.includes("Cisco JSON report")
   )
     return "output";
   return "execution";
@@ -1188,6 +1214,43 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     } catch (error) {
       return failed("coverage", error);
     }
+    const sealedFiles = new Map(
+      before.entries.flatMap((entry) =>
+        entry.kind === "file" || entry.kind === "file-link"
+          ? [[entry.path, entry.sha256] as const]
+          : [],
+      ),
+    );
+    // Owner decision D1: Cisco 2.1.0 reports os.path.normcase paths, lowercased on Windows.
+    // There, and only there, each is bound to the unique sealed file equal ignoring case and
+    // carries that file's real name in the SARIF itself; no match still fails below.
+    // U1g (review of S2i, P1): then, on every platform, every location of every Cisco result
+    // (related, code-flow, stack, fix, analysis target; by URI or by index) must name a file
+    // of the analyzed subject, by the one Cisco binding the shard uses for each job.
+    if (analyzer === "cisco" && normalized.mediaType === "application/sarif+json") {
+      try {
+        const subjectFiles = scanCompletionSubjectFilesV1({
+          engine: (engineAnalyzer ?? analyzer) as ScanCompletionSubjectEngineV1,
+          entries: before.entries,
+          selectedClosurePaths: before.selectedClosurePaths,
+          detectorOptions,
+        }).map((file) => file.path);
+        const bound = bindCiscoSarifToSealedFilesV1(
+          parseStrictJsonObjectV1(normalized.bytes.toString("utf8"), "Cisco SARIF"),
+          subjectFiles,
+          process.platform,
+        );
+        const unbound = unboundCiscoSarifResultV1(bound.document, new Set(subjectFiles), "subject");
+        if (unbound !== undefined) throw new TypeError(`Cisco SARIF: ${unbound}`);
+        if (bound.rebound > 0)
+          normalized = {
+            ...normalized,
+            bytes: Buffer.from(canonicalStrictJsonBytesV1(bound.document)),
+          };
+      } catch (error) {
+        return failed("output", error);
+      }
+    }
     // C2a §1.6: only now, with the analyzer's own completion proven and the source re-sealed
     // unchanged, does every SARIF run name the files the analyzer received.
     if (normalized.mediaType === "application/sarif+json") {
@@ -1238,15 +1301,10 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
                 byteLength: annex.byteLength,
               },
               bytes: normalized.bytes,
-              sealedFiles: new Map(
-                before.entries.flatMap((entry) =>
-                  entry.kind === "file" || entry.kind === "file-link"
-                    ? [[entry.path, entry.sha256] as const]
-                    : [],
-                ),
-              ),
-              // Engine SARIF may name no file (a whole-tree finding, a fallback URI).
-              ...(engineAnalyzer === undefined
+              sealedFiles,
+              // Engine SARIF may name no file (a whole-tree finding, a fallback URI). Cisco's
+              // source-tree jobs are skill-scanner SARIF and stay bound like its directory run.
+              ...(engineAnalyzer === undefined || engineAnalyzer === "cisco-source-tree"
                 ? {}
                 : { unboundLocations: "unavailable" as const, maxResults: ENGINE_MAX_RESULTS_V1 }),
             })

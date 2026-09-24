@@ -53,12 +53,12 @@ jobs:
         run: |
           set -euo pipefail
           runtime="tools/baseline-analyzers/cisco-skill-scanner"
-          wheel="$RUNNER_TEMP/cisco_ai_skill_scanner-2.0.14-py3-none-any.whl"
-          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/cisco_ai_skill_scanner-2.0.14-py3-none-any.whl" "https://files.pythonhosted.org/packages/93/db/4ee95f579c4a55b3505f16812bae3410044e161a56467427f54094dc74d9/cisco_ai_skill_scanner-2.0.14-py3-none-any.whl"
+          wheel="$RUNNER_TEMP/cisco_ai_skill_scanner-2.1.0-cp311.cp312.cp313.cp314-none-manylinux_2_17_x86_64.whl"
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/cisco_ai_skill_scanner-2.1.0-cp311.cp312.cp313.cp314-none-manylinux_2_17_x86_64.whl" "https://files.pythonhosted.org/packages/ff/be/5b468d653ece56ab24497b6bb308e0487cc6b4b1b77bb1ebd4b5eb26a19c/cisco_ai_skill_scanner-2.1.0-cp311.cp312.cp313.cp314-none-manylinux_2_17_x86_64.whl"
           cat > "$RUNNER_TEMP/cisco-runtime-inputs.sha256" <<EOF
-          68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f  $runtime/pyproject.toml
-          aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1  $runtime/uv.lock
-          30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2  $RUNNER_TEMP/cisco_ai_skill_scanner-2.0.14-py3-none-any.whl
+          35de8ad9e2d243fb418f8dbeba2f55c4a430495fe1c7163a21809f0ea3999ead  $runtime/pyproject.toml
+          1e98c5679994dc56f82c1d88a77528d4c4b076160aff85b4d97ce239360bc210  $runtime/uv.lock
+          c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e  $RUNNER_TEMP/cisco_ai_skill_scanner-2.1.0-cp311.cp312.cp313.cp314-none-manylinux_2_17_x86_64.whl
           EOF
           sha256sum -c "$RUNNER_TEMP/cisco-runtime-inputs.sha256"
 

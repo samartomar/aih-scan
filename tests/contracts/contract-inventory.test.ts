@@ -161,7 +161,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 172,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 144, contains: "RunDetectorRefusalReasonV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 155, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/observation/source-observation-seal-v1.ts",
     line: 138,
@@ -174,7 +174,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 240,
+    line: 251,
     contains: "readonly detectorOptions?: DetectorOptionsV1",
   },
   {
@@ -184,12 +184,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1345,
+    line: 1403,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1304,
+    line: 1362,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
@@ -198,71 +198,106 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "export async function runCiscoShardV1",
   },
   {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 89,
+    contains: "export function assertCiscoSingleSkillReportSkillV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 126,
+    contains: "export function assertCiscoScanAllSkillInventoryV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 177,
+    contains: "export function assertCiscoSingleSkillAnalyzersCompleteV1",
+  },
+  {
+    path: "src/baseline/bounded-output-read-v1.ts",
+    line: 55,
+    contains: "export function readBoundedAnalyzerOutputV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 1050,
+    contains: "export function ciscoFallbackPairingV1",
+  },
+  {
+    path: "src/baseline/cisco-analyzer-failures-v1.ts",
+    line: 106,
+    contains: "export function assertCiscoAnalyzersCompleteV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 1123,
+    contains: "export function assertCiscoScanAllAnalyzersCompleteV1",
+  },
+  {
     path: "src/runner/run-cisco-shard-v1.ts",
     line: 52,
     contains: "export type RunCiscoShardV1Result",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 167,
+    line: 178,
     contains: "export type RunDetectorFailureCauseV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 169, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 180, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 786,
+    line: 812,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 289,
+    line: 300,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 265,
+    line: 276,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 205,
+    line: 216,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 207,
+    line: 218,
     contains: "readonly hostRuntime?: HostProcessRuntimeV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 242, contains: "readonly signal?: AbortSignal" },
-  { path: "src/runner/run-detector-v1.ts", line: 247, contains: "readonly timeoutMs?: number" },
+  { path: "src/runner/run-detector-v1.ts", line: 253, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 258, contains: "readonly timeoutMs?: number" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 338,
+    line: 349,
     contains: "      sourceSeal:",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 54,
+    line: 63,
     contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 743,
+    line: 749,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 223,
+    line: 229,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 312,
+    line: 597,
     contains: "export function sourceRelativeSarifV1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 459,
+    line: 815,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {

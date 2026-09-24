@@ -7,9 +7,11 @@ import {
   HOST_DOCKER_ENVIRONMENT_V1,
   SKILLSPECTOR_IMAGE_DIGEST_V1,
   SKILLSPECTOR_IMAGE_V1,
+  SKILLSPECTOR_SOURCE_REVISION_V1,
 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import { strictJsonHostileTextsV1 } from "../support/strict-json-hostile.js";
 import {
   completionOfObservationV1,
   diskFilesV1,
@@ -17,7 +19,7 @@ import {
 } from "./completion-evidence-support.js";
 
 const PROFILE = "docker-host-local-skillspector-v1";
-const LOCAL_TAG = "skillspector:aih-2d198ab910ad";
+const LOCAL_TAG = "skillspector:aih-c7958a3268d9";
 const windows = process.platform === "win32";
 const hostOs = windows ? "windows" : process.platform === "darwin" ? "darwin" : "linux";
 const temporaryDirectories: string[] = [];
@@ -516,6 +518,11 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 completion evidence v1
         lockSha256: null,
       },
     });
+    // U1f: the upgraded analyzer, SkillSpector v2.12.0 (revision c7958a32), by its image digest.
+    expect(evidence.analyzer).toMatchObject({
+      version: `${SKILLSPECTOR_SOURCE_REVISION_V1}@${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
+    });
+    expect(SKILLSPECTOR_SOURCE_REVISION_V1.startsWith("c7958a32")).toBe(true);
   });
 
   it("gives an empty source root a zero count", async () => {
@@ -536,5 +543,20 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 completion evidence v1
     });
 
     expect(completionOfObservationV1(outcome)).toMatchObject({ analyzedFileCount: 0 });
+  });
+});
+
+// U1g: SkillSpector v2.12.0's SARIF is read only through the one strict parser; each of its
+// refusals fails the run at output.
+describe("runDetectorV1 docker-host-local-skillspector-v1 strict analyzer output (U1g)", () => {
+  const text = sarif;
+  it.each(
+    strictJsonHostileTextsV1(text),
+  )("fails SARIF holding %s at output", async (_label, hostile, reason) => {
+    const outcome = await runDetectorV1(
+      request({ env: hostFixture().env, runner: dockerRunner([], async () => okay(hostile)) }),
+    );
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
   });
 });

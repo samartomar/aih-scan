@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runBindingGateV1 } from "../../src/detectors/binding-gate/index.js";
-import { parseCiscoMcpScannerSarifV1 } from "../../src/detectors/cisco-mcp-scanner/index.js";
+import {
+  CISCO_MCP_SCANNER_VERSION_V1,
+  parseCiscoMcpScannerSarifV1,
+} from "../../src/detectors/cisco-mcp-scanner/index.js";
 import {
   CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
   type CiscoMultiSkillRunnerV1,
@@ -13,10 +16,14 @@ import { runCiscoSourceTreeScanV1 } from "../../src/detectors/cisco-multi-skill/
 import { runCiscoShardV1 } from "../../src/detectors/cisco-multi-skill/shard-v1.js";
 import { attachScanCompletionV1 } from "../../src/detectors/completion-evidence-v1.js";
 import { assertSarifCompletedV1 } from "../../src/detectors/sarif-completion-v1.js";
-import { parseSnykAgentScanSarifV1 } from "../../src/detectors/snyk-agent-scan/index.js";
+import {
+  parseSnykAgentScanSarifV1,
+  SNYK_AGENT_SCAN_VERSION,
+} from "../../src/detectors/snyk-agent-scan/index.js";
 import { runTrustLintV1 } from "../../src/detectors/trust-lint/index.js";
 import { hashComponentTreeV1 } from "../../src/observation/source-hash-v1.js";
 import { sarif210RequiredProblemsV1 } from "../runner/completion-evidence-support.js";
+import { writeCiscoJobReportV1 } from "../support/cisco-job-report.js";
 
 // S2h (coordinator decision D16, from Core worker W2D): SARIF 2.1.0 requires run.tool.driver
 // on every run. Every SARIF shape Scan returns is checked here against the required-field set
@@ -83,22 +90,40 @@ describe("every SARIF shape Scan returns has the SARIF 2.1.0 required fields", (
     expectDriver(log, "aih-binding-gate", "1.0.0");
   });
 
-  it("snyk-agent-scan, with and without findings", () => {
+  it("snyk-agent-scan, with and without findings, in the 0.5.17 and 0.6.x shapes", () => {
     const root = fixture();
+    // U1g: the 0.6.x ScanResponse builder carries the driver too.
+    let checked = 0;
+    const skill = (risks: Record<string, unknown>) => ({
+      name: "alpha",
+      files: [{ name: "SKILL.md", type: "instruction" }],
+      risk_indexes: risks,
+    });
+    const scanResponse = (risks: Record<string, unknown>) => ({
+      scan_path_responses: [
+        { client: root, path: "~/display/path", server_risks: [], skill_risks: [skill(risks)] },
+      ],
+    });
     for (const report of [
       { issues: [{ id: "R1", title: "Found", file: "skills/alpha/SKILL.md", line: 1 }] },
       { issues: [] },
+      scanResponse({ prompt_injection: { score: 900, evidence: "Injected." } }),
+      scanResponse({}),
     ]) {
+      checked += 1;
       let log: unknown;
       try {
         log = parseSnykAgentScanSarifV1(JSON.stringify(report), root);
       } catch {
+        checked -= 1;
         continue; // An empty report proves no analysis (S2e); the positive shape is the case.
       }
       expect(sarif210RequiredProblemsV1(log)).toEqual([]);
       expect(sarif210RequiredProblemsV1(returned(log))).toEqual([]);
-      expectDriver(log, "snyk-agent-scan", "0.5.17");
+      expectDriver(log, "snyk-agent-scan", SNYK_AGENT_SCAN_VERSION);
     }
+    // The 0.5.17 finding and both 0.6.x responses (a risk, and none) are checked.
+    expect(checked).toBe(3);
   });
 
   it("cisco-mcp-scanner, with and without findings", () => {
@@ -129,13 +154,13 @@ describe("every SARIF shape Scan returns has the SARIF 2.1.0 required fields", (
       );
       expect(sarif210RequiredProblemsV1(log)).toEqual([]);
       expect(sarif210RequiredProblemsV1(returned(log))).toEqual([]);
-      expectDriver(log, "mcp-scanner", "4.8.2");
+      expectDriver(log, "mcp-scanner", CISCO_MCP_SCANNER_VERSION_V1);
     }
   });
 
   const cisco: CiscoMultiSkillRunnerV1 = async (argv) => {
-    if (argv.includes("--version"))
-      return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+    if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
+    writeCiscoJobReportV1(argv);
     const output = argv[argv.indexOf("--output-sarif") + 1] ?? "";
     writeFileSync(
       output,
@@ -143,7 +168,7 @@ describe("every SARIF shape Scan returns has the SARIF 2.1.0 required fields", (
         version: "2.1.0",
         runs: [
           {
-            tool: { driver: { name: "skill-scanner", version: "2.0.14" } },
+            tool: { driver: { name: "skill-scanner", version: "2.1.0" } },
             invocations: [{ executionSuccessful: true }],
             results: [
               {
@@ -187,7 +212,7 @@ describe("every SARIF shape Scan returns has the SARIF 2.1.0 required fields", (
         },
       ],
       expected: {
-        analyzerVersion: "2.0.14",
+        analyzerVersion: "2.1.0",
         lockSha256: createHash("sha256")
           .update(readFileSync(join(CISCO_MULTI_SKILL_SCANNER_PROJECT_V1, "uv.lock")))
           .digest("hex"),

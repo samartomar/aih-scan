@@ -11,6 +11,7 @@ import {
 import { runCiscoSourceTreeScanV1 } from "../../../src/detectors/cisco-multi-skill/scan-v1.js";
 import { runCiscoShardV1 } from "../../../src/detectors/cisco-multi-skill/shard-v1.js";
 import { hashComponentTreeV1 } from "../../../src/observation/source-hash-v1.js";
+import { strictJsonHostileTextsV1 } from "../../support/strict-json-hostile.js";
 
 // S2e: a Cisco job's SARIF is evidence only when it proves the job completed. Real
 // skill-scanner 2.0.14 output (the linux-x64 parity transcripts) is always
@@ -53,11 +54,23 @@ function sarif(runs: unknown[]) {
   return { version: "2.1.0", runs };
 }
 
-/** The version gate passes; each job writes `perJob(<job dir basename>)`. */
-function runner(perJob: (name: string) => unknown, delays?: Record<string, number>) {
+/** A single-skill `scan` JSON report with no failed analyzer (D30). */
+function scanReport(skillPath: string, extra: Record<string, unknown> = {}) {
+  return { skill_name: "fixture", skill_path: skillPath, findings: [], ...extra };
+}
+
+/**
+ * The version gate passes; each job writes `perJob(<job dir basename>)` as its SARIF and, when
+ * asked for one (D30), `report(<name>, <scanned dir>)` as its JSON report (none when
+ * `undefined`).
+ */
+function runner(
+  perJob: (name: string) => unknown,
+  delays?: Record<string, number>,
+  report: (name: string, target: string) => unknown = (_name, target) => scanReport(target),
+) {
   const run: CiscoMultiSkillRunnerV1 = async (argv) => {
-    if (argv.includes("--version"))
-      return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+    if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
     const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
     const output = argv[argv.indexOf("--output-sarif") + 1];
     if (output === undefined) return { code: 2, stdout: "", stderr: "no output path" };
@@ -68,6 +81,13 @@ function runner(perJob: (name: string) => unknown, delays?: Record<string, numbe
       output,
       typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
     );
+    const jsonAt = argv.indexOf("--output-json");
+    const json = report(name, target);
+    if (jsonAt >= 0 && json !== undefined)
+      writeFileSync(
+        argv[jsonAt + 1] ?? "",
+        typeof json === "string" || Buffer.isBuffer(json) ? json : JSON.stringify(json),
+      );
     return { code: 0, stdout: "", stderr: "" };
   };
   return run;
@@ -98,7 +118,7 @@ function shard(run: CiscoMultiSkillRunnerV1) {
       path,
       inputSha256: hashComponentTreeV1(root, [path]).treeSha256,
     })),
-    expected: { analyzerVersion: "2.0.14", lockSha256: lock },
+    expected: { analyzerVersion: "2.1.0", lockSha256: lock },
     concurrency: 2,
   });
 }
@@ -449,5 +469,466 @@ describe.each(BOTH)("Cisco job analysisTarget normalization (%s)", (label, execu
       expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
       expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/detector SARIF location/);
     }
+  });
+});
+
+// U1g (review of S2i, P2): only `result.analysisTarget` is an analysis target. A property
+// bag is the analyzer's own data: it never fails a job and is never rewritten.
+describe.each(BOTH)("Cisco job property bags (%s)", (_label, execute) => {
+  const bag = () => ({
+    analysisTarget: { uri: "SKILL.md" },
+    artifactLocation: { uri: "SKILL.md" },
+    escaping: { analysisTarget: { uri: "../example" } },
+  });
+
+  it("completes and keeps every property bag exactly as the analyzer wrote it", async () => {
+    const outcome = await execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([
+              {
+                ...cleanRun([{ ...result("SKILL.md"), properties: bag() }]),
+                properties: bag(),
+              },
+            ])
+          : sarif([cleanRun()]),
+      ),
+    );
+    if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
+    const text =
+      "outputs" in outcome
+        ? Buffer.from(outcome.outputs[0]?.sarif ?? new Uint8Array()).toString("utf8")
+        : outcome.sarifText;
+    const log = JSON.parse(text) as {
+      runs: { properties: unknown; results: { properties: unknown }[] }[];
+    };
+    const alpha = log.runs.find((run) => run.results.length > 0);
+    expect(alpha?.properties).toEqual(bag());
+    expect(alpha?.results[0]?.properties).toEqual(bag());
+  });
+});
+
+// U1g (review of S2i, P1): the source-tree scan resolves artifact indices exactly as the
+// shard does, through the one shared rule of the job normalization.
+describe.each(BOTH)("Cisco job artifact indices (%s)", (_label, execute) => {
+  const outcomeOf = (analysisTarget: unknown, artifacts: unknown[]) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([{ ...cleanRun([{ ...result("SKILL.md"), analysisTarget }]), artifacts }])
+          : sarif([cleanRun()]),
+      ),
+    );
+
+  it("fails a URI and an index that name different files (reviewer case)", async () => {
+    const outcome = await outcomeOf({ uri: "SKILL.md", index: 0 }, [
+      { location: { uri: "guide.md" } },
+    ]);
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/disagree/);
+  });
+
+  it("fails a missing or malformed index", async () => {
+    for (const analysisTarget of [{ index: 0 }, { index: -1 }, { uri: "SKILL.md", index: 2 }]) {
+      const outcome = await outcomeOf(analysisTarget, []);
+      expect(outcome, JSON.stringify(analysisTarget)).toMatchObject({
+        kind: "failed",
+        stage: "output",
+      });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/artifact index/);
+    }
+  });
+
+  it("keeps an index that names the same job file as its URI", async () => {
+    const outcome = await outcomeOf({ uri: "SKILL.md", index: 0 }, [
+      { location: { uri: "SKILL.md" } },
+    ]);
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});
+
+// U1g: every Cisco 2.1.0 source-tree or shard job's SARIF is read only through the one strict
+// parser; each of its refusals fails the job at output.
+describe.each(BOTH)("Cisco job strict analyzer output (%s, U1g)", (_label, execute) => {
+  const valid = JSON.stringify(sarif([cleanRun([result("SKILL.md")])]));
+  it.each(
+    strictJsonHostileTextsV1(valid),
+  )("fails a job whose SARIF holds %s", async (_name, hostile, reason) => {
+    const outcome = await execute(
+      runner((name) => (name === "alpha" ? hostile : sarif([cleanRun()]))),
+    );
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+  });
+});
+
+// U1h (review of U1g, P1): a job's result names every location it holds and every location
+// of the run-level objects it references (`run.threadFlowLocations[i]` by `index`,
+// `run.graphs[i]` by `runGraphIndex`). Each is resolved for that result and must lie in the
+// job's skill directory, on the source-tree scan and the shard alike.
+describe.each(
+  BOTH,
+)("Cisco job shared references resolve per result (%s, U1h)", (_label, execute) => {
+  const rootBase = () => ({ ROOT: { uri: `${pathToFileURL(root).href}/` } });
+  const at = (uri: string) => ({
+    physicalLocation: { artifactLocation: { uri, uriBaseId: "ROOT" } },
+  });
+  const outcomeOf = (fields: Record<string, unknown>, run: Record<string, unknown>) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([
+              {
+                ...cleanRun([{ ...result("SKILL.md"), ...fields }]),
+                originalUriBaseIds: rootBase(),
+                ...run,
+              },
+            ])
+          : sarif([cleanRun()]),
+      ),
+    );
+  const flowTo = (index: unknown) => ({
+    codeFlows: [{ threadFlows: [{ locations: [{ index }] }] }],
+  });
+  const graph = (uri: string) => ({ nodes: [{ id: "n", location: at(uri) }], edges: [] });
+
+  it("fails a shared thread-flow location or run graph in a sibling skill", async () => {
+    for (const [fields, run] of [
+      [flowTo(0), { threadFlowLocations: [{ location: at("skills/beta/SKILL.md") }] }],
+      [{ graphTraversals: [{ runGraphIndex: 0 }] }, { graphs: [graph("skills/beta/SKILL.md")] }],
+    ] as const) {
+      const outcome = await outcomeOf(fields, run);
+      expect(outcome, JSON.stringify(fields)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+        /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
+      );
+    }
+  });
+
+  it("fails an unresolved or ambiguous shared reference", async () => {
+    for (const [fields, run, reason] of [
+      [flowTo(1), { threadFlowLocations: [] }, /thread-flow location index 1 resolves to no/],
+      [
+        { graphTraversals: [{ runGraphIndex: 0, resultGraphIndex: 0 }] },
+        { graphs: [graph("skills/alpha/SKILL.md")] },
+        /exactly one of runGraphIndex and resultGraphIndex/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(fields, run);
+      expect(outcome, JSON.stringify(fields)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  it("keeps shared references inside the job's skill", async () => {
+    const outcome = await outcomeOf(
+      { ...flowTo(0), graphTraversals: [{ runGraphIndex: 0 }] },
+      {
+        threadFlowLocations: [{ location: at("skills/alpha/SKILL.md") }],
+        graphs: [graph("skills/alpha/SKILL.md")],
+      },
+    );
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});
+
+// U1i (review of U1h, P1): an artifact a job's result references by index lies inside its
+// parent (`run.artifacts[i].parentIndex`) and so on up; every artifact of that ancestry must
+// lie in the job's skill directory, and a malformed, out-of-range or cyclic parent fails at
+// output, on the source-tree scan and the shard alike.
+describe.each(
+  BOTH,
+)("Cisco job artifact ancestry resolves per result (%s, U1i)", (_label, execute) => {
+  const rootBase = () => ({ ROOT: { uri: `${pathToFileURL(root).href}/` } });
+  const artifact = (uri: string, parentIndex?: unknown) => ({
+    location: { uri, uriBaseId: "ROOT" },
+    ...(parentIndex === undefined ? {} : { parentIndex }),
+  });
+  const outcomeOf = (artifacts: unknown[]) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([
+              {
+                ...cleanRun([
+                  {
+                    ...result("SKILL.md"),
+                    relatedLocations: [{ physicalLocation: { artifactLocation: { index: 0 } } }],
+                  },
+                ]),
+                originalUriBaseIds: rootBase(),
+                artifacts,
+              },
+            ])
+          : sarif([cleanRun()]),
+      ),
+    );
+
+  it("fails a parent in a sibling skill (reviewer case)", async () => {
+    const outcome = await outcomeOf([
+      artifact("skills/alpha/SKILL.md", 1),
+      artifact("skills/beta/SKILL.md"),
+    ]);
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+      /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
+    );
+  });
+
+  it("fails a cyclic, out-of-range or malformed parent", async () => {
+    for (const [artifacts, reason] of [
+      [[artifact("skills/alpha/SKILL.md", 0)], /parentIndex 0 forms a cycle/],
+      [[artifact("skills/alpha/SKILL.md", 3)], /parentIndex 3 resolves to no run artifact URI/],
+      [[artifact("skills/alpha/SKILL.md", "1")], /parentIndex \\?"1\\?" is malformed/],
+    ] as const) {
+      const outcome = await outcomeOf([...artifacts]);
+      expect(outcome, JSON.stringify(artifacts)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  it("keeps a parent chain inside the job's skill", async () => {
+    writeFileSync(join(root, "skills", "alpha", "bundle.zip"), "zip\n");
+    const outcome = await outcomeOf([
+      artifact("skills/alpha/SKILL.md", 1),
+      artifact("skills/alpha/bundle.zip"),
+    ]);
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});
+
+// U1i, coordinator decision D30 (revised 20:58Z): every job asks Cisco for its single-skill
+// JSON report beside the SARIF and reads it strictly; a missing, unreadable or malformed report
+// fails the job at output, never falling back to SARIF alone. The job completes only when every
+// top-level `analyzers_failed` entry is the documented skill_loader fallback with its
+// SKILL_LOAD_FALLBACK_USED finding in the report and its SARIF counterpart in the job's skill;
+// anything else fails at coverage, naming each analyzer and error.
+describe.each(
+  BOTH,
+)("Cisco job analyzers_failed decides completion (%s, D30)", (_label, execute) => {
+  const FALLBACK = "SKILL_LOAD_FALLBACK_USED";
+  // Real Cisco 2.1.0 gives its fallback finding the identity (SKILL_LOAD_FALLBACK_USED,
+  // SKILL_LOAD_FALLBACK_USED) on both sides (U1j pairs by it).
+  const fallbackSarif = (fingerprint: string = FALLBACK) =>
+    sarif([
+      cleanRun([
+        {
+          ...result("SKILL.md"),
+          ruleId: FALLBACK,
+          fingerprints: { primaryLocationLineHash: fingerprint },
+        },
+      ]),
+    ]);
+  const loader = { analyzers_failed: [{ analyzer: "skill_loader", error: "SkillLoadError:X" }] };
+  const fallbackFinding = {
+    findings: [{ id: FALLBACK, rule_id: FALLBACK, file_path: "SKILL.md", line_number: null }],
+  };
+  const outcomeOf = (alphaSarif: unknown, alphaReport: (target: string) => unknown) =>
+    execute(
+      runner(
+        (name) => (name === "alpha" ? alphaSarif : sarif([cleanRun()])),
+        undefined,
+        (name, target) => (name === "alpha" ? alphaReport(target) : scanReport(target)),
+      ),
+    );
+
+  it("asks Cisco for the JSON report and completes when it reports no failure", async () => {
+    const argvs: string[][] = [];
+    const base = runner(() => sarif([cleanRun()]));
+    const outcome = await execute(async (argv, options) => {
+      argvs.push([...argv]);
+      return base(argv, options);
+    });
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+    for (const argv of argvs.filter((entry) => entry.includes("scan")))
+      expect(argv.slice(argv.indexOf("scan") + 2)).toEqual([
+        "--format",
+        "sarif",
+        "--format",
+        "json",
+        "--output-sarif",
+        expect.stringMatching(/results\.sarif$/),
+        "--output-json",
+        expect.stringMatching(/results\.json$/),
+      ]);
+  });
+
+  it("completes the documented skill_loader fallback", async () => {
+    const outcome = await outcomeOf(fallbackSarif(), (target) =>
+      scanReport(target, { ...loader, ...fallbackFinding }),
+    );
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+
+  it("fails coverage for any other failed analyzer or an unmatched skill_loader failure", async () => {
+    for (const [alphaSarif, extra, reason] of [
+      [
+        fallbackSarif(),
+        { analyzers_failed: [{ analyzer: "behavioral", error: "Timeout" }], ...fallbackFinding },
+        /Cisco reported failed analyzers: behavioral \(Timeout\) in skills\/alpha$/,
+      ],
+      [
+        fallbackSarif(),
+        loader,
+        /skill_loader \(SkillLoadError:X\) in skills\/alpha: no SKILL_LOAD_FALLBACK_USED finding in that skill$/,
+      ],
+      [
+        sarif([cleanRun()]),
+        { ...loader, ...fallbackFinding },
+        /no SARIF counterpart in that skill$/,
+      ],
+      [
+        fallbackSarif(),
+        {
+          analyzers_failed: [...loader.analyzers_failed, { analyzer: "skill_loader", error: "Y" }],
+          ...fallbackFinding,
+        },
+        /more than one skill_loader failure/,
+      ],
+      // U1j (review of U1i, P2): a rule-name match is not a counterpart.
+      [
+        fallbackSarif("B"),
+        {
+          ...loader,
+          findings: [{ id: "A", rule_id: FALLBACK, file_path: "SKILL.md", line_number: null }],
+        },
+        /its SKILL_LOAD_FALLBACK_USED finding \(SKILL_LOAD_FALLBACK_USED, A\) has no SARIF counterpart in that skill$/,
+      ],
+      [
+        fallbackSarif(),
+        { ...loader, findings: [...fallbackFinding.findings, ...fallbackFinding.findings] },
+        /is not unique across the paired reports \(JSON 2, SARIF 1\)$/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(alphaSarif, (target) => scanReport(target, extra));
+      expect(outcome, JSON.stringify(extra)).toMatchObject({ kind: "failed", stage: "coverage" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  it("fails output for a missing, unreadable or malformed JSON report, or a malformed analyzers_failed", async () => {
+    for (const [report, reason] of [
+      [() => undefined, /JSON report/],
+      [() => "{", /Cisco JSON report/],
+      [() => Buffer.from([0xff]), /Cisco JSON report/],
+      [() => ({ summary: {}, results: [] }), /not a single-skill scan report/],
+      [
+        (target: string) => ({
+          skill_path: target,
+          findings: [],
+          analyzers_failed: "skill_loader",
+        }),
+        /analyzers_failed .*is malformed/,
+      ],
+      [
+        (target: string) => ({
+          skill_path: target,
+          findings: [],
+          analyzers_failed: [{ analyzer: "a" }],
+        }),
+        /analyzers_failed .*is malformed/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(sarif([cleanRun()]), report);
+      expect(outcome, String(report)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  // U1j (review of U1i, P1): the report is evidence only for the skill the job scanned.
+  it("fails output for another skill's failure-free report on the alpha job (U1j)", async () => {
+    for (const [report, reason] of [
+      [
+        (target: string) => scanReport(target.replace(/alpha$/u, "beta")),
+        /Cisco JSON report of job skills\/alpha is for skill skills\/beta, not skills\/alpha/,
+      ],
+      [(target: string) => scanReport(`${target}/nested`), /is for skill skills\/alpha\/nested/],
+      [() => scanReport("/elsewhere/skills/alpha"), /is outside the source root/],
+      [
+        (target: string) => ({ ...scanReport(target), skill_path: undefined }),
+        /not a single-skill scan report/,
+      ],
+    ] as const) {
+      // alpha's own SARIF is clean, so only the report binding can refuse the job.
+      const outcome = await outcomeOf(sarif([cleanRun()]), report);
+      expect(outcome, String(report)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  // U1j: the job reads its SARIF and JSON report as bounded regular files (the one 16 MiB
+  // analyzer-output cap), so even well-formed output over the cap fails at output.
+  it("fails output for a job SARIF or JSON report over the analyzer-output cap (U1j)", async () => {
+    const pad = (value: unknown) => `${JSON.stringify(value)}${" ".repeat(16 * 1024 * 1024)}`;
+    for (const [alphaSarif, report, reason] of [
+      [
+        sarif([cleanRun()]),
+        (target: string) => pad(scanReport(target)),
+        /Cisco JSON report of job skills\/alpha is unreadable: aih-scan analyzer output: Cisco JSON report exceeds 16777216 bytes/,
+      ],
+      [
+        pad(sarif([cleanRun()])),
+        (target: string) => scanReport(target),
+        /detector did not emit valid SARIF: aih-scan analyzer output: Cisco SARIF exceeds 16777216 bytes/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(alphaSarif, report);
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+});
+
+// U1k (review of U1j, P2): owner decision D1 binds only a unique match among the run's skill
+// directories. On a windows run two skills equal ignoring case cannot bind their job reports,
+// not even the exact spellings; elsewhere the twins are distinct skills. Twin directories need
+// a case-sensitive file system, so this runs on Linux only.
+describe.runIf(process.platform === "linux")("Cisco job report D1 uniqueness (U1k)", () => {
+  const twins = ["skills/Twin", "skills/twin"];
+  const withTwins = () => {
+    for (const path of twins) {
+      mkdirSync(join(root, path), { recursive: true });
+      writeFileSync(join(root, path, "SKILL.md"), `# ${path}\n`, "utf8");
+    }
+  };
+  const twinTree = (platform: "windows" | "linux") =>
+    runCiscoSourceTreeScanV1({
+      run: runner(() => sarif([cleanRun()])),
+      platform,
+      env: {},
+      sourceRoot: root,
+      selectedClosurePaths: twins.map((path) => `${path}/SKILL.md`),
+      detectorOptions: { concurrency: 1 },
+    });
+  const twinShard = (platform: "windows" | "linux") => {
+    const lock = createHash("sha256")
+      .update(readFileSync(join(CISCO_MULTI_SKILL_SCANNER_PROJECT_V1, "uv.lock")))
+      .digest("hex");
+    return runCiscoShardV1({
+      run: runner(() => sarif([cleanRun()])),
+      platform,
+      env: {},
+      sourceRoot: root,
+      jobs: twins.map((path) => ({
+        id: createHash("sha256").update(path).digest("hex"),
+        path,
+        inputSha256: hashComponentTreeV1(root, [path]).treeSha256,
+      })),
+      expected: { analyzerVersion: "2.1.0", lockSha256: lock },
+      concurrency: 1,
+    });
+  };
+
+  it.each([
+    ["source-tree", twinTree],
+    ["shard", twinShard],
+  ] as const)("refuses case-twin skills' exactly spelled reports on windows (%s)", async (_label, execute) => {
+    withTwins();
+    const outcome = await execute("windows");
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+      /Cisco JSON report of job skills\/[Tt]win skill path .*: aih-scan Cisco SARIF: skills\/[Tt]win\/SKILL\.md matches 2 sealed files ignoring case/,
+    );
+    expect(await execute("linux")).toMatchObject({ kind: "completed" });
   });
 });

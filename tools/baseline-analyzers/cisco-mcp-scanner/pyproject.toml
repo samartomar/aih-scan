@@ -2,7 +2,7 @@
 name = "aih-cisco-mcp-scanner"
 version = "0.0.0"
 requires-python = ">=3.11.4"
-dependencies = ["cisco-ai-mcp-scanner==4.8.2"]
+dependencies = ["cisco-ai-mcp-scanner==4.8.4"]
 
 [tool.uv]
 package = false
@@ -11,3 +11,11 @@ constraint-dependencies = [
   "httpx2==2.12.0",
   "pip==26.2",
 ]
+# cisco-ai-mcp-scanner 4.8.4 pins litellm==1.93.0, which ships manylinux-only
+# wheels (mixed python/rust build); >=1.102.0 is the first release with
+# win_amd64 and macOS wheels, required for `uv sync --no-build` off Linux.
+# mcp-scanner imports litellm at startup (litellm loads its bundled tiktoken
+# rank file), but Scan runs only the yara/static analyzers, which make no LLM
+# call. 1.102.1 is not the version upstream pins; the U1 corpus run showed
+# identical yara/static findings to 4.8.2+litellm 1.93.0 on Linux.
+override-dependencies = ["litellm>=1.102.0,<2"]

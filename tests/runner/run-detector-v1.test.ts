@@ -557,7 +557,11 @@ describe("runDetectorV1 hardened analyzer profiles", () => {
         writeFileSync(join(workDirectory, "results.sarif"), sarif("cisco"), "utf8");
         writeFileSync(
           join(workDirectory, "results.json"),
-          canonicalStrictJsonBytesV1({ summary: { total_skills_scanned: 1 }, results: [] }),
+          // U1j: the report lists the one expected skill, the sandbox's source root.
+          canonicalStrictJsonBytesV1({
+            summary: { total_skills_scanned: 1 },
+            results: [{ skill_path: "/aih/source", findings: [] }],
+          }),
         );
         return okay("");
       }

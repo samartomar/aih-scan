@@ -2,7 +2,7 @@ import {
   AnalyzerRunFailureV1,
   type BaselineProcessRunnerV1,
   boundedDiagnosticDetailV1,
-  CISCO_SKILL_SCANNER_HOST_PROJECT_V1,
+  CISCO_SKILL_SCANNER_PROJECT_V1,
   CISCO_SKILL_SCANNER_VERSION_V1,
   runHostUvEngineV1,
 } from "../baseline/runtime-v1.js";
@@ -187,7 +187,7 @@ async function shard(request: unknown): Promise<RunCiscoShardV1Result> {
     jobs: input.jobs as readonly CiscoShardJobV1[],
     expected: input.expected as { analyzerVersion: string; lockSha256: string },
     concurrency: input.concurrency as number,
-    analyzerProject: CISCO_SKILL_SCANNER_HOST_PROJECT_V1,
+    analyzerProject: CISCO_SKILL_SCANNER_PROJECT_V1,
   };
   // The shard's identity is the named profile's published lock, before any file is read.
   const expected = shardRequest.expected;
@@ -238,7 +238,7 @@ async function shard(request: unknown): Promise<RunCiscoShardV1Result> {
   >;
   try {
     ran = await runHostUvEngineV1({
-      project: CISCO_SKILL_SCANNER_HOST_PROJECT_V1,
+      project: CISCO_SKILL_SCANNER_PROJECT_V1,
       version: CISCO_SKILL_SCANNER_VERSION_V1,
       tools: ["skill-scanner"],
       sourceRoot: preflight.safeRoot,

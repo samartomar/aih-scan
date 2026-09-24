@@ -15,6 +15,7 @@ import type { BaselineProcessRunnerV1 } from "../../src/baseline/runtime-v1.js";
 import { resolveDetectorCapabilityV1 } from "../../src/capability/detector-capability-v1.js";
 import { hashComponentTreeV1 } from "../../src/observation/source-hash-v1.js";
 import { runCiscoShardV1 } from "../../src/runner/run-cisco-shard-v1.js";
+import { writeCiscoJobReportV1 } from "../support/cisco-job-report.js";
 
 /**
  * C2a §3.7 through the public boundary: one exact-source Cisco shard, its lock proven
@@ -110,7 +111,7 @@ function shardHost(
     skill: string,
     skillDir: string,
   ) => ReturnType<BaselineProcessRunnerV1> | undefined = () => undefined,
-  version = "skill-scanner 2.0.14\n",
+  version = "skill-scanner 2.1.0\n",
 ): BaselineProcessRunnerV1 {
   return async (argv, options) => {
     if (argv[1] === "--version") return ok("uv 0.12.13 (0123456 2026-09-01 x86_64)");
@@ -123,6 +124,7 @@ function shardHost(
     const skill = skillDir.split(/[\\/]/).at(-1) ?? "";
     const special = onScan(skill, skillDir);
     if (special !== undefined) return special;
+    writeCiscoJobReportV1(argv);
     writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", jobSarif(skill));
     return ok("");
   };
@@ -139,7 +141,7 @@ function shardRequest(root: string, extra: Record<string, unknown> = {}) {
   return {
     sourceRoot: root,
     jobs: jobsFor(root),
-    expected: { analyzerVersion: "2.0.14", lockSha256: lockOf(HOST) },
+    expected: { analyzerVersion: "2.1.0", lockSha256: lockOf(HOST) },
     executionProfileId: HOST,
     concurrency: 2,
     ...extra,
@@ -160,7 +162,7 @@ describe("runCiscoShardV1", () => {
     if (outcome.outcome !== "succeeded") return;
     expect(outcome.executionProfile.id).toBe(HOST);
     expect(outcome.producer.name).toBe("@aihq/scan");
-    expect(outcome.analyzer).toEqual({ version: "2.0.14", lockSha256: lockOf(HOST) });
+    expect(outcome.analyzer).toEqual({ version: "2.1.0", lockSha256: lockOf(HOST) });
     expect(outcome.outputs.map((output) => output.jobId)).toEqual(["job-a", "job-b", "job-c"]);
     for (const [index, output] of outcome.outputs.entries()) {
       const skill = ["a", "b", "c"][index];
@@ -176,7 +178,13 @@ describe("runCiscoShardV1", () => {
   });
 
   it.each([
-    ["the namespace profile's lock", () => lockOf("linux-namespace-uv-v1")],
+    [
+      "another analyzer's lock",
+      () =>
+        resolveDetectorCapabilityV1("detector.semgrep")?.executionProfiles.find(
+          (entry) => entry.id === HOST,
+        )?.analyzerLock?.sha256 ?? "",
+    ],
     ["an unrelated digest", () => "0".repeat(64)],
   ])("refuses %s under host-process-uv-v1 before anything runs", async (_label, lock) => {
     const root = baseline();
@@ -184,7 +192,7 @@ describe("runCiscoShardV1", () => {
 
     const outcome = await runCiscoShardV1(
       shardRequest(root, {
-        expected: { analyzerVersion: "2.0.14", lockSha256: lock() },
+        expected: { analyzerVersion: "2.1.0", lockSha256: lock() },
         env: hostEnv().env,
         runner: forbiddenRunner(record),
       }),
@@ -268,7 +276,7 @@ describe("runCiscoShardV1", () => {
     const scans: Scan[] = [];
     const outcome = await runCiscoShardV1(
       shardRequest(root, {
-        expected: { analyzerVersion: "2.0.14+core.1", lockSha256: lockOf(HOST) },
+        expected: { analyzerVersion: "2.1.0+core.1", lockSha256: lockOf(HOST) },
         env: host.env,
         runner: shardHost(host.python, scans, undefined, "skill-scanner 2.0.13\n"),
       }),

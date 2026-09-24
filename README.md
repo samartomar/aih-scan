@@ -44,7 +44,9 @@ cache, an `--offline` scan stage, and a process group or a Windows Job Object th
 whole analyzer tree on timeout or `signal` abort. SARIF artifact URIs are relative to the
 declared source root, SARIF observations carry a `ScanFindingsV1` projection, and an empty
 source root completes for Semgrep. The profile is unisolated and does not enforce the
-network; it is never a default. Source state does not prove this candidate is published.
+network; it is never a default. The `0.5.0` candidate bundles Cisco `2.1.0+uvlock.1e98c5679994` as one lock
+shared by the host profile, the namespace profile and the Linux OCI candidate image recipe.
+Source state does not prove this candidate is published.
 
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is

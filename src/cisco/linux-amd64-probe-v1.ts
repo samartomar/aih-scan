@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, type Stats } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import {
+  AnalyzerOutputReadErrorV1,
+  readBoundedAnalyzerOutputV1,
+} from "../baseline/bounded-output-read-v1.js";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
@@ -17,10 +21,9 @@ import {
 import { createCiscoFactsOnlyV1 } from "./facts-only-v1.js";
 import { type CiscoSarifV1, parseCiscoSarifV1 } from "./sarif-v1.js";
 
-const LOCK_SHA256 = "aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1";
-const WHEEL_SHA256 = "30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2";
+const LOCK_SHA256 = "1e98c5679994dc56f82c1d88a77528d4c4b076160aff85b4d97ce239360bc210";
+const WHEEL_SHA256 = "c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e";
 const MAX_STDIO_BYTES = 64 * 1024;
-const MAX_SARIF_BYTES = 16 * 1024 * 1024;
 const TIMEOUT_MS = 120_000;
 const inputKeys = [
   "protocol",
@@ -36,7 +39,7 @@ const inputKeys = [
 
 const runtimeSchema = z.strictObject({
   packageName: z.literal("cisco-ai-skill-scanner"),
-  version: z.literal("2.0.14"),
+  version: z.literal("2.1.0"),
   uvVersion: z.literal("0.12.5"),
   lockSha256: z.literal(LOCK_SHA256),
   wheelSha256: z.literal(WHEEL_SHA256),
@@ -131,19 +134,20 @@ function parseResponse(value: unknown): { code: number; stdout: string; stderr: 
   return { code: response.code, stdout: response.stdout, stderr: response.stderr };
 }
 
+/** U1j: the probe's SARIF, read by the one bounded analyzer-output read. */
 function outputBytes(path: string): Buffer {
-  if (!existsSync(path)) fail("SARIF output missing");
-  let stat: Stats;
   try {
-    stat = lstatSync(path);
-  } catch {
-    fail("SARIF output missing");
+    return readBoundedAnalyzerOutputV1(path, "SARIF output");
+  } catch (error) {
+    if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
+    return fail(
+      error.reason === "missing"
+        ? "SARIF output missing"
+        : error.reason === "size"
+          ? "SARIF output exceeds bounded size"
+          : "SARIF output invalid",
+    );
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SARIF_BYTES)
-    fail("SARIF output invalid");
-  const bytes = readFileSync(path);
-  if (bytes.length > MAX_SARIF_BYTES) fail("SARIF output exceeds bounded size");
-  return bytes;
 }
 
 function strictUtf8(bytes: Buffer): string {

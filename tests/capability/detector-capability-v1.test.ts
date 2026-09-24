@@ -283,7 +283,8 @@ describe("DetectorCapabilityV1", () => {
     expect(notes).toMatch(/persistent, Scan-owned uv cache/);
     expect(notes).toMatch(/--no-python-downloads/);
     expect(notes).toMatch(/macOS amd64 \(cryptography 50\.0\.0\) and Windows arm64/);
-    expect(notes).toMatch(/cisco-skill-scanner-host lock/);
+    expect(notes).not.toMatch(/cisco-skill-scanner-host/);
+    expect(notes).toMatch(/Cisco installs the same cisco-skill-scanner lock under both profiles/);
     expect(notes).toMatch(/empty source root completes for detector\.semgrep/);
 
     expect(
@@ -340,7 +341,7 @@ describe("DetectorCapabilityV1", () => {
     const hardened = resolveDetectorExecutionProfileDocumentV1("docker-hardened-skillspector-v1");
     expect(hostDocker?.containment).toEqual(["--pull", "never", ...(hardened?.containment ?? [])]);
     expect(hostDocker?.image).toBe(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1);
-    expect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1).toBe("skillspector:aih-2d198ab910ad");
+    expect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1).toBe("skillspector:aih-c7958a3268d9");
     expect(hostDocker?.network).toBe("none");
     expect(hostDocker?.acquisition).toEqual([]);
     expect(hostDocker?.notes.join(" ")).toMatch(/never pulls/);
@@ -416,7 +417,7 @@ describe("DetectorCapabilityV1", () => {
     }
     for (const [detectorId, lock] of [
       ["detector.semgrep", "tools/baseline-analyzers/semgrep/uv.lock"],
-      ["detector.cisco", "tools/baseline-analyzers/cisco-skill-scanner-host/uv.lock"],
+      ["detector.cisco", "tools/baseline-analyzers/cisco-skill-scanner/uv.lock"],
     ] as const) {
       const host = resolveDetectorCapabilityV1(detectorId)?.executionProfiles.find(
         (entry) => entry.id === "host-process-uv-v1",

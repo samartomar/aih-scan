@@ -8,6 +8,8 @@ import {
   deepFreezeStrictJsonV1,
   parseStrictJsonObjectV1,
   parseStrictJsonV1,
+  STRICT_JSON_MAX_NUMBER_CHARACTERS_V1,
+  StrictJsonBoundErrorV1,
   StrictJsonNumberErrorV1,
 } from "../../src/contract/strict-json-v1.js";
 
@@ -252,6 +254,62 @@ describe("parseStrictJsonV1 and decodeStrictUtf8V1", () => {
       ];
       for (const [lexeme, loss] of refused)
         expect(refusal(lexeme), lexeme).toMatchObject({ lexeme, loss });
+    });
+
+    // U1g (review of S2i, P2): one numeric token is bounded before any work on its value, and
+    // the scan of a token is linear, so a valid but huge token cannot stall the parser.
+    describe("a typed resource bound on one numeric token", () => {
+      const exactSmallest = `0.${(5n ** 1074n).toString().padStart(1074, "0")}`;
+
+      it("accepts the longest plain spelling of any double's exact value", () => {
+        // 2^-1074 written out in full: the longest exact expansion a double has.
+        expect(`-${exactSmallest}`.length).toBeLessThanOrEqual(
+          STRICT_JSON_MAX_NUMBER_CHARACTERS_V1,
+        );
+        expect(parsed(exactSmallest)).toBe(5e-324);
+        expect(parsed(`-${exactSmallest}`)).toBe(-5e-324);
+      });
+
+      it("refuses a token one character beyond the bound, typed, whatever its value", () => {
+        for (const lexeme of [
+          `1${"0".repeat(STRICT_JSON_MAX_NUMBER_CHARACTERS_V1)}`,
+          `0.${"0".repeat(STRICT_JSON_MAX_NUMBER_CHARACTERS_V1 - 1)}`,
+          `1e${"0".repeat(STRICT_JSON_MAX_NUMBER_CHARACTERS_V1 - 1)}`,
+        ]) {
+          expect(lexeme.length, lexeme.slice(0, 8)).toBe(STRICT_JSON_MAX_NUMBER_CHARACTERS_V1 + 1);
+          const error = refusal(lexeme);
+          expect(error).toBeInstanceOf(StrictJsonBoundErrorV1);
+          expect(error).toBeInstanceOf(TypeError);
+          expect(error).toMatchObject({
+            bound: "number-characters",
+            limit: STRICT_JSON_MAX_NUMBER_CHARACTERS_V1,
+          });
+        }
+      });
+
+      it("refuses the reviewer's hostile token fast (1, a million zeros, 1)", () => {
+        const hostile = `{"n":1${"0".repeat(1_000_000)}1}`;
+        const started = performance.now();
+        let error: unknown;
+        try {
+          parseStrictJsonV1(hostile, "fixture");
+        } catch (caught) {
+          error = caught;
+        }
+        const elapsed = performance.now() - started;
+        expect(error).toBeInstanceOf(StrictJsonBoundErrorV1);
+        expect(elapsed).toBeLessThan(250);
+      });
+
+      it("judges long tokens within the bound in linear time", () => {
+        const width = STRICT_JSON_MAX_NUMBER_CHARACTERS_V1 - 2;
+        const started = performance.now();
+        for (let round = 0; round < 200; round += 1) {
+          expect(refusal(`1${"0".repeat(width)}1`)).toMatchObject({ loss: "overflow" });
+          expect(parsed(`0.${"0".repeat(width - 2)}`)).toBe(0);
+        }
+        expect(performance.now() - started).toBeLessThan(1000);
+      });
     });
   });
 
