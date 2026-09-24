@@ -1521,6 +1521,31 @@ describe("server records must prove analysis (S2f)", () => {
     await failedWith(entry(parent, { client: root, servers: [stdio] }), NO_ANALYSIS);
   });
 
+  // S2g, coordinator decision: 0.5.17's verify_api.py installs a server-side recovered
+  // signature and downgrades the retained ScanError to `is_failure: false`. No real recovery
+  // output has been captured, so a server carrying any note still fails as not analyzed.
+  it("fails the verify_api.py recovered-signature shape: a signed server with a note", async () => {
+    const recovered = server({
+      error: {
+        message: "could not inspect skill",
+        exception: "neither SKILL.md nor skill.md file found",
+        traceback: null,
+        is_failure: false,
+        category: "skill_scan_error",
+        server_output: null,
+      },
+    });
+    await failedWith(entry(root, { servers: [recovered] }), NO_ANALYSIS);
+    await failedWith(
+      entry(root, {
+        servers: [recovered],
+        issues: [{ code: "E004", message: "m", reference: [0, null] }],
+      }),
+      NO_ANALYSIS,
+      1,
+    );
+  });
+
   it("binds a server without a skill path by its existing config file inside the subject", async () => {
     const config = write("mcp/.mcp.json", "{}\n");
     const stdio = (config_path: unknown) =>
