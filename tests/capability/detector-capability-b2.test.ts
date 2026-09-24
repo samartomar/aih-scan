@@ -110,10 +110,19 @@ describe("B2 detector registration", () => {
     ]);
   });
 
-  it("publishes snyk-agent-scan's host profile for POSIX hosts only: the analyzer imports pwd", () => {
-    const profile = resolveDetectorCapabilityV1("detector.snyk-agent-scan")?.executionProfiles[0];
+  it("excludes Windows only at snyk-agent-scan 0.5.17, whose scan path imports pwd", () => {
+    const capability = resolveDetectorCapabilityV1("detector.snyk-agent-scan");
+    const profile = capability?.executionProfiles[0];
+    // Tied to the pinned analyzer: moving the lock must re-verify Windows (U1 reports 0.6.4
+    // runs there) and then restore windows/amd64 or restate this exclusion.
+    expect(capability?.analyzerVersion).toBe("0.5.17");
     expect(profile?.supportedPlatforms.map((entry) => `${entry.os}/${entry.architecture}`)).toEqual(
       ["darwin/arm64", "linux/amd64", "linux/arm64"],
+    );
+    expect(resolveDetectorExecutionProfileDocumentV1("host-process-uv-v1")?.notes).toContainEqual(
+      expect.stringContaining(
+        "windows: unsupported at snyk-agent-scan 0.5.17 (imports POSIX-only pwd)",
+      ),
     );
   });
 

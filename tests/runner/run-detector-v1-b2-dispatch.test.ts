@@ -376,7 +376,9 @@ describe("detector.snyk-agent-scan through runDetectorV1", () => {
     const outcome = await runDetectorV1(snykRequest(skill(), { runner: forbiddenRunner(record) }));
 
     expect(outcome).toMatchObject({ outcome: "refused", reason: "unsupported-platform" });
-    expect(outcome.outcome === "refused" && outcome.detail).toMatch(/POSIX-only pwd module/);
+    expect(outcome.outcome === "refused" && outcome.detail).toMatch(
+      /snyk-agent-scan 0\.5\.17 imports Python's POSIX-only pwd module/,
+    );
     expect(JSON.stringify(outcome).includes(TOKEN)).toBe(false);
     expect(record.calls).toBe(0);
   });

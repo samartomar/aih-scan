@@ -215,8 +215,10 @@ const HOST_UV_PLATFORMS: readonly DetectorPlatformV1[] = [
   { os: "windows", architecture: "amd64" },
 ];
 /**
- * snyk-agent-scan imports Python's POSIX-only `pwd` module on its scan path, so it cannot run
- * on Windows; macOS amd64 lacks a binary wheel for its cryptography 50.0.0.
+ * snyk-agent-scan 0.5.17 (the pinned lock) imports Python's POSIX-only `pwd` module on its
+ * scan path, so it cannot run on Windows; macOS amd64 lacks a binary wheel for its
+ * cryptography 50.0.0. The Windows exclusion belongs to that version: when the lock moves,
+ * re-verify a real Windows scan and restore `{ os: "windows", architecture: "amd64" }`.
  */
 const SNYK_PLATFORMS: readonly DetectorPlatformV1[] = [
   { os: "darwin", architecture: "arm64" },
@@ -405,6 +407,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "The observation records the resolved uv path and version, the discovered interpreter path and version, the uv cache key and the containment used.",
       `The run's private temporary directory must be at most ${HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1} characters, because Semgrep's core fails once it passes 79; a longer host temporary directory fails the run at availability.`,
       "Semgrep, Cisco and snyk-agent-scan publish exact-pinned binary wheels for Linux (glibc 2.34 or later) amd64 and arm64, macOS arm64 (macOS 14 or later for Cisco) and Windows amd64. macOS amd64 (cryptography 50.0.0) and Windows arm64 (Semgrep, and cryptography 50.0.0 for snyk-agent-scan) have none, and Scan never builds analyzer dependencies from source, so those hosts are not supported.",
+      `detector.snyk-agent-scan, windows: unsupported at snyk-agent-scan ${SNYK_AGENT_SCAN_VERSION} (imports POSIX-only pwd), because its scan path needs it; it runs on Linux amd64 and arm64 and macOS arm64 only.`,
       "detector.cisco-mcp-scanner runs on Linux amd64 and arm64 only: its lock pins litellm 1.93.0, which publishes manylinux wheels alone, so macOS and Windows would need a source build Scan never performs.",
       "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest. Each profile's analyzerLock names the lock it installs.",
       "A detector.cisco source-tree subject runs one skill-scanner scan job per directory holding a selected SKILL.md, over that directory of the private snapshot, at most detectorOptions.concurrency (1 through 64, default 4) at a time; the jobs' SARIF is merged in job order.",
