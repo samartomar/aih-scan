@@ -38,6 +38,7 @@ import {
   scanCompletionSubjectFilesV1,
 } from "../detectors/completion-evidence-v1.js";
 import { assertSarifCompletedV1 } from "../detectors/sarif-completion-v1.js";
+import { projectAnalyzerSarifFindingsV1 } from "../findings/scan-findings-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import {
   type SourceObservationSealV1,
@@ -55,6 +56,12 @@ const maxComponents = 100;
 const maxAnnexBytes = 16 * 1024 * 1024;
 const maxSourceEntries = 100_000;
 const maxSourceBytes = 256 * 1024 * 1024;
+/**
+ * The most results the §1.4 location check reads from one annex (S2k): more than a 16 MiB
+ * annex can hold, since a result the check accepts takes at least 82 canonical bytes, so the
+ * annex byte bound stays the batch's resource bound.
+ */
+const maxAnnexResults = Math.floor(maxAnnexBytes / 64);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const gitCommit = z.string().regex(/^[0-9a-f]{40}$/);
 const safeId = z
@@ -841,6 +848,43 @@ function assertVersionNamesLock(
     );
 }
 
+/**
+ * S2k: the §1.4 location rules the delegated path applies to the same analyzers, through the
+ * same projection: every result names a rule and a first location that is a sealed file of
+ * the snapshot, by a safe source-relative POSIX path. A refusal publishes nothing.
+ */
+function assertAnnexLocations(
+  analyzerName: BaselineAnalyzerV1,
+  observed: ReturnType<typeof normalizedObservation>,
+  sealed: SourceObservationSealV1,
+): void {
+  try {
+    projectAnalyzerSarifFindingsV1({
+      detectorId: BASELINE_DETECTOR_IDS_V1[analyzerName],
+      analyzer: analyzerName,
+      analyzerIdentity: `${analyzerName}@${observed.analyzerVersion}`,
+      annex: {
+        descriptorId: `annex/${analyzerName}.json`,
+        sha256: createHash("sha256").update(observed.bytes).digest("hex"),
+        byteLength: observed.bytes.byteLength,
+      },
+      bytes: observed.bytes,
+      sealedFiles: new Map(
+        sealed.entries.flatMap((entry) =>
+          entry.kind === "file" || entry.kind === "file-link"
+            ? [[entry.path, entry.sha256] as const]
+            : [],
+        ),
+      ),
+      maxResults: maxAnnexResults,
+    });
+  } catch (error) {
+    fail(
+      `${analyzerName} SARIF fails the §1.4 location rules (output): ${error instanceof Error ? error.message : "SARIF"}`,
+    );
+  }
+}
+
 /** The analyzer snapshot's seal: what every analyzer received, top-level `.git` never among it. */
 function sealAnalyzerSnapshot(snapshotRoot: string): SourceObservationSealV1 {
   return sealSourceObservationV1({ sourceRoot: snapshotRoot, selectedClosurePaths: [] });
@@ -878,8 +922,10 @@ export async function executeBaselineVetBatchV1(
       const observed = normalizedObservation(analyzerName, result);
       assertVersionNamesLock(analyzerName, observed.analyzerVersion, executed);
       // S2e: the analyzer's own completion proof, before anything is published from it.
-      if (observed.mediaType === "application/sarif+json")
+      if (observed.mediaType === "application/sarif+json") {
         assertSarifCompletedV1(parseStrictJsonObjectV1(observed.bytes.toString("utf8"), "SARIF"));
+        assertAnnexLocations(analyzerName, observed, sealed);
+      }
       ran.push({ analyzer: analyzerName, observed, executed });
     }
     assertSafeAnalyzerSnapshot(snapshotRoot);

@@ -735,3 +735,79 @@ describe("S2k: a batch annex names the batch profile, never the executor's claim
     });
   });
 });
+
+/** An otherwise successful analyzer SARIF holding one result at `uri`. */
+const locatedSarif = (name: string, uri: string) =>
+  canonicalStrictJsonBytesV1({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name } },
+        results: [
+          {
+            ruleId: `${name}.rule`,
+            level: "warning",
+            message: { text: "finding" },
+            locations: [
+              { physicalLocation: { artifactLocation: { uri }, region: { startLine: 1 } } },
+            ],
+          },
+        ],
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
+  });
+
+describe("S2k: every annex SARIF passes the §1.4 location rules before it is certified", () => {
+  it.each<[string, BaselineAnalyzerV1, string]>([
+    ["an escaping location (the reviewer's case)", "semgrep", "../../outside.js"],
+    ["an escaping Cisco location", "cisco", "../outside/SKILL.md"],
+    ["an absolute location", "skillspector", "/etc/passwd"],
+    ["a drive-letter location", "semgrep", "C:/outside.js"],
+    ["a file URL", "semgrep", "file:///tmp/outside.js"],
+    ["a backslash location", "semgrep", "srca.js"],
+    ["a path that is not a sealed file", "semgrep", "src/missing.js"],
+  ])("publishes nothing for %s", async (_label, name, uri) => {
+    const { root, request } = vectorTree();
+    await expect(
+      executeBaselineVetBatchV1(request, {
+        sourceRoot: root,
+        execute: fakeExecution({ [name]: () => ({ bytes: locatedSarif(name, uri) }) }),
+      }),
+    ).rejects.toThrow(new RegExp(`${name} SARIF fails the §1.4 location rules`));
+  });
+
+  it("refuses a location through an omitted directory link (D26)", async () => {
+    const { root } = vectorTree();
+    symlinkSync("src", join(root, "alias"), "dir");
+    await expect(
+      executeBaselineVetBatchV1(requestOver(root), {
+        sourceRoot: root,
+        execute: fakeExecution({
+          semgrep: () => ({ bytes: locatedSarif("semgrep", "alias/a.js") }),
+        }),
+      }),
+    ).rejects.toThrow(/semgrep SARIF fails the §1.4 location rules/);
+  });
+
+  it("certifies a legitimate source-relative location", async () => {
+    const { root, request } = vectorTree();
+    const result = await executeBaselineVetBatchV1(request, {
+      sourceRoot: root,
+      execute: fakeExecution({
+        semgrep: () => ({ bytes: locatedSarif("semgrep", "src/a.js") }),
+        cisco: () => ({ bytes: locatedSarif("cisco", "SKILL.md") }),
+      }),
+    });
+    const log = JSON.parse(annexOf(result, "semgrep").bytes.toString("utf8")) as {
+      runs: { results: { locations: unknown[] }[] }[];
+    };
+    expect(log.runs[0]?.results[0]?.locations).toEqual([
+      { physicalLocation: { artifactLocation: { uri: "src/a.js" }, region: { startLine: 1 } } },
+    ]);
+    expect(evidenceOf(result, "semgrep")).toMatchObject({
+      subjectTreeSha256: VECTOR_SUBJECT_SHA256,
+    });
+    expect(verifyBaselineVetReceiptV1(request, result)).toEqual({ kind: "complete" });
+  });
+});
