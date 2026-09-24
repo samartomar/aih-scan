@@ -169,11 +169,27 @@ describe("Cisco skill-level findings: refusals (D28)", () => {
     );
   });
 
-  it("accepts a duplicate identity when each counterpart names its own skill independently", () => {
+  it("refuses a duplicate identity even when each counterpart names its own skill through a base (U1i)", () => {
+    // The analyzer supplies the base, so it cannot disambiguate an identity D28 requires to be
+    // unique: (rule_id, id) must occur exactly once among the JSON findings and exactly once
+    // among the SARIF results (review of U1h, P2).
     const { sarif, report } = twoSkills((skill) => ({
       uri: `skills/${skill}/SKILL.md`,
       uriBaseId: "ROOT",
     }));
+    expect(() => scan(sarif, report)).toThrow(
+      /\(LOW_ANALYZABILITY, LOW_ANALYZABILITY_CRITICAL\) is not unique across the paired reports \(JSON 2, SARIF 2\)$/,
+    );
+  });
+
+  it("still accepts two skills whose skill-level identities differ", () => {
+    const { sarif, report } = twoSkills(
+      (skill) => ({
+        uri: `skills/${skill}/SKILL.md`,
+        uriBaseId: "ROOT",
+      }),
+      ["A", "B"],
+    );
     expect(uris(scan(sarif, report).document)).toEqual([
       "LOW_ANALYZABILITY skills/alpha/SKILL.md",
       "LOW_ANALYZABILITY skills/beta/SKILL.md",

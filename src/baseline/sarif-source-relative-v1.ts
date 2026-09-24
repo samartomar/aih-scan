@@ -677,11 +677,9 @@ function ciscoLocationIdentity(
  * - Its SARIF counterpart (the result at the same position) must carry the same identity:
  *   JSON `(rule_id, id)` is SARIF `(ruleId, fingerprints.primaryLocationLineHash)`. Otherwise
  *   the finding has no counterpart and the run fails.
- * - That identity must occur once among the JSON findings and once among the SARIF results.
- *   A duplicate (across skills too) fails, unless every counterpart names its skill
- *   independently of the pairing: its location's base resolves to an absolute location
- *   inside the source root, not to the analyzer's per-skill `%SRCROOT%`, both sides hold the
- *   identity equally often, and no skill reports it twice.
+ * - That identity must occur exactly once among the JSON findings and exactly once among the
+ *   SARIF results. Any duplicate fails, across skills too (U1i): a base the analyzer supplies
+ *   cannot disambiguate an identity D28 requires to be unique.
  * - The counterpart's own location must resolve to exactly `<skill>/SKILL.md` (the caller's
  *   identity check); every other location, index and (on win32) D1 rule then applies to it
  *   as to any result. Scan never writes a location for a finding without a counterpart.
@@ -691,14 +689,11 @@ function ciscoLocationIdentity(
 function ciscoSkillLevelFindingV1(
   finding: CiscoFinding,
   result: Record<string, Json>,
-  artifact: Record<string, Json>,
-  base: (id: string) => Base,
   identity: string,
   index: number,
   identities: Readonly<{
     fingerprint: string | undefined;
     json: ReadonlyMap<string, number>;
-    jsonInSkill: ReadonlyMap<string, number>;
     sarif: ReadonlyMap<string, number>;
     key: (ruleId: unknown, id: unknown) => string;
   }>,
@@ -711,23 +706,10 @@ function ciscoSkillLevelFindingV1(
   const key = identities.key(finding.ruleId, finding.id);
   const json = identities.json.get(key) ?? 0;
   const sarif = identities.sarif.get(key) ?? 0;
-  if (json !== 1 || sarif !== 1) {
-    let independent = false;
-    try {
-      independent =
-        typeof artifact.uriBaseId === "string" && "absolute" in base(artifact.uriBaseId);
-    } catch {
-      // A malformed base fails in the identity check.
-    }
-    if (
-      !independent ||
-      json !== sarif ||
-      identities.jsonInSkill.get(key + JSON.stringify(finding.skill)) !== 1
-    )
-      ciscoFail(
-        `skill-level finding identity ${named} is not unique across the paired reports (JSON ${json}, SARIF ${sarif}), and its counterpart does not name its skill independently`,
-      );
-  }
+  if (json !== 1 || sarif !== 1)
+    ciscoFail(
+      `skill-level finding identity ${named} is not unique across the paired reports (JSON ${json}, SARIF ${sarif})`,
+    );
   const manifest = finding.skill === "" ? "SKILL.md" : `${finding.skill}/SKILL.md`;
   if (identity !== manifest)
     ciscoFail(
@@ -795,11 +777,6 @@ export function ciscoSourceRelativeSarifV1(
   const jsonIdentities = count(
     findings.flatMap(({ ruleId, id }) => (id === undefined ? [] : [identityKey(ruleId, id)])),
   );
-  const jsonSkillIdentities = count(
-    findings.flatMap(({ ruleId, id, skill }) =>
-      id === undefined ? [] : [identityKey(ruleId, id) + JSON.stringify(skill)],
-    ),
-  );
   const sarifIdentities = count(
     results.flatMap(({ result }) => {
       const fingerprint = fingerprintOf(result);
@@ -820,10 +797,9 @@ export function ciscoSourceRelativeSarifV1(
     const identity = ciscoLocationIdentity(artifact, finding.skill, base, candidates, index);
     const expected =
       finding.file === null
-        ? ciscoSkillLevelFindingV1(finding, result, artifact, base, identity, index, {
+        ? ciscoSkillLevelFindingV1(finding, result, identity, index, {
             fingerprint: fingerprintOf(result),
             json: jsonIdentities,
-            jsonInSkill: jsonSkillIdentities,
             sarif: sarifIdentities,
             key: identityKey,
           })
