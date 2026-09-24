@@ -316,6 +316,24 @@ describe("attaching the evidence", () => {
     );
   });
 
+  // S2h (review of S2g): only an absent `properties` is created; a present non-object is
+  // never repaired, as C2a §1.6 says.
+  it.each([
+    null,
+    false,
+    0,
+    "",
+    "x",
+  ])("fails closed on invocation properties %j (reviewer reproduction: null)", (properties) => {
+    const log = {
+      version: "2.1.0",
+      runs: [run({ invocations: [{ executionSuccessful: true, properties }] })],
+    };
+    expect(() => attachScanCompletionV1(log, evidence, { scanBuilt: false })).toThrow(
+      /properties that are not an object/,
+    );
+  });
+
   it("treats an analyzer-supplied completion key on any invocation as a forgery", () => {
     for (const index of [0, 1]) {
       const invocations = [{ executionSuccessful: true }, { executionSuccessful: true }] as Record<

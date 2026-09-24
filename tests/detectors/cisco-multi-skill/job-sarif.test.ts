@@ -227,6 +227,25 @@ describe.each(BOTH)("Cisco job SARIF completion evidence (%s)", (_label, execute
     );
   });
 
+  // The shard attaches completion evidence itself; the source-tree scan leaves it to
+  // runDetectorV1, which uses the same attachScanCompletionV1.
+  it.runIf(_label === "shard")(
+    "fails a job whose invocation carries properties: null (reviewer reproduction)",
+    async () => {
+      await failsWith(
+        sarif([
+          {
+            tool: DRIVER,
+            results: [],
+            invocations: [{ executionSuccessful: true, properties: null }],
+          },
+        ]),
+        "output",
+        /properties that are not an object/,
+      );
+    },
+  );
+
   it("fails a job whose SARIF repeats a key anywhere, or is not one strict JSON text", async () => {
     const body = JSON.stringify(sarif([cleanRun()]));
     await failsWith(`{"version":"2.1.0",${body.slice(1)}`, "output", /duplicate JSON object key/);

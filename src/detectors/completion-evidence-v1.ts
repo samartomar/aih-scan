@@ -212,7 +212,8 @@ export function attachScanCompletionV1(
     const first: unknown = invocations[0];
     if (!isRecord(first) || first.executionSuccessful !== true)
       return fail(`SARIF run ${index} does not report a successful first invocation`);
-    const properties = first.properties ?? {};
+    // S2h: only an absent `properties` is created; a present non-object (null included) fails.
+    const properties = first.properties === undefined ? {} : first.properties;
     if (!isRecord(properties))
       return fail(`SARIF run ${index} has invocation properties that are not an object`);
     first.properties = { ...properties, [SCAN_COMPLETION_PROPERTY_V1]: evidence };
