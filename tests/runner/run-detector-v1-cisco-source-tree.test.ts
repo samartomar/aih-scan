@@ -15,6 +15,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BaselineProcessRunnerV1 } from "../../src/baseline/runtime-v1.js";
 import { resolveDetectorCapabilityV1 } from "../../src/capability/detector-capability-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import {
+  completionOfObservationV1,
+  diskFilesV1,
+  diskSubjectV1,
+} from "./completion-evidence-support.js";
 
 /**
  * C2a §3.1–§3.6 through the public runner: a detector.cisco source-tree subject under
@@ -276,5 +281,45 @@ describe("detectorOptions.concurrency is accepted only where it is applied", () 
       /applied only to a detector\.cisco source-tree subject under host-process-uv-v1/,
     );
     expect(record.calls).toBe(0);
+  });
+});
+
+// S2g (C2a §1.6): every merged run names the files inside the job directories, and only them.
+describe("detector.cisco source-tree completion evidence v1", () => {
+  it("carries one evidence over the job directories' files in every run", async () => {
+    const host = hostEnv();
+    const root = skillsTree();
+    mkdirSync(join(root, "skills", "a", "scripts"));
+    writeFileSync(join(root, "skills", "a", "scripts", "run.sh"), "echo\n");
+    mkdirSync(join(root, "docs"));
+    writeFileSync(join(root, "docs", "outside.md"), "# not in a job\n");
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    const outcome = await runDetectorV1(
+      request(root, host.env, { runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }) }),
+    );
+
+    const evidence = completionOfObservationV1(outcome);
+    if (
+      outcome.outcome !== "succeeded" ||
+      outcome.evidence.kind !== "baseline-analyzer-observation-v1"
+    )
+      return;
+    const lock = resolveDetectorCapabilityV1("detector.cisco")?.executionProfiles.find(
+      (entry) => entry.id === HOST,
+    )?.analyzerLock;
+    const jobFiles = diskFilesV1(root).filter((path) => path.startsWith("skills/"));
+    expect(jobFiles).toHaveLength(SKILLS.length + 1);
+    expect(evidence).toEqual({
+      detectorId: "detector.cisco",
+      ...diskSubjectV1(root, jobFiles),
+      analyzer: {
+        version: outcome.evidence.observation.analyzerVersion,
+        lockSha256: lock?.sha256,
+      },
+    });
+    const log = JSON.parse(Buffer.from(outcome.evidence.observation.bytes).toString("utf8"));
+    expect(log.runs).toHaveLength(SKILLS.length);
   });
 });

@@ -22,6 +22,11 @@ import {
   runCiscoShardV1,
 } from "../../../src/detectors/cisco-multi-skill/shard-v1.js";
 import { hashComponentTreeV1 } from "../../../src/observation/source-hash-v1.js";
+import {
+  completionOfLogV1,
+  diskFilesV1,
+  diskSubjectV1,
+} from "../../runner/completion-evidence-support.js";
 
 // Parity tests for the shard EXECUTION side of Core's `detector.cisco`
 // (`src/trust/detectors.ts` `runCiscoSourceShard`), ported from Core's
@@ -234,8 +239,19 @@ describe("runCiscoShardV1", () => {
           }>;
         }>;
       };
-      // §3.4 applied per job: URIs prefixed, invocation timestamps removed.
-      expect(sarif.runs[0]?.invocations).toEqual([{ executionSuccessful: true }]);
+      // §3.4 applied per job: URIs prefixed, invocation timestamps removed; §1.6 (S2g): the
+      // invocation gains Scan's completion evidence for the job.
+      expect(sarif.runs[0]?.invocations).toEqual([
+        {
+          executionSuccessful: true,
+          properties: {
+            aihScanCompletionV1: expect.objectContaining({
+              detectorId: "detector.cisco",
+              analyzedFileCount: 1,
+            }),
+          },
+        },
+      ]);
       expect(sarif.runs[0]?.results[0]?.message.text).toBe(`# ${output.path.split("/")[1] ?? ""}`);
       expect(sarif.runs[0]?.results[0]?.locations[0]?.physicalLocation.artifactLocation.uri).toBe(
         `${output.path}/SKILL.md`,
@@ -730,6 +746,55 @@ describe("runCiscoShardV1", () => {
     const sarif = JSON.parse(Buffer.from(second.outputs[0]?.sarif ?? []).toString("utf8")) as {
       runs: Array<{ invocations?: Array<Record<string, unknown>> }>;
     };
-    expect(sarif.runs[0]?.invocations).toEqual([{ executionSuccessful: true }]);
+    // S2g: the only invocation property left is Scan's completion evidence.
+    expect(sarif.runs[0]?.invocations).toEqual([
+      { executionSuccessful: true, properties: { aihScanCompletionV1: expect.any(Object) } },
+    ]);
+  });
+
+  // S2g (C2a §1.6): each job output names the files its job sealed, and Scan alone writes it.
+  describe("completion evidence v1", () => {
+    it("names, in every job's SARIF, exactly the job's own files", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-evidence-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      mkdirSync(join(root, "skills", "alpha", "scripts"));
+      writeFileSync(join(root, "skills", "alpha", "scripts", "run.sh"), "echo\n", "utf8");
+      skill(root, join("skills", "beta"), "# beta\n");
+      writeFileSync(join(root, "README.md"), "# outside every job\n", "utf8");
+
+      const outcome = await runCiscoShardV1(shardRequest(root));
+
+      expect(outcome.kind).toBe("completed");
+      if (outcome.kind !== "completed") return;
+      expect(outcome.outputs.map((output) => output.path)).toEqual(["skills/alpha", "skills/beta"]);
+      for (const output of outcome.outputs) {
+        const files = diskFilesV1(root).filter((path) => path.startsWith(`${output.path}/`));
+        const log = JSON.parse(Buffer.from(output.sarif).toString("utf8"));
+        expect(completionOfLogV1(log)).toEqual({
+          detectorId: "detector.cisco",
+          ...diskSubjectV1(root, files),
+          analyzer: { version: outcome.analyzer.version, lockSha256: outcome.analyzer.lockSha256 },
+        });
+        expect(output.sha256).toBe(createHash("sha256").update(output.sarif).digest("hex"));
+      }
+    });
+
+    it("fails a job whose analyzer already wrote the completion key, with no partial outputs", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-evidence-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      const outcome = await runCiscoShardV1(
+        shardRequest(root, {
+          run: scanningRunner({
+            invocations: () => [
+              { executionSuccessful: true, properties: { aihScanCompletionV1: { forged: true } } },
+            ],
+          }),
+        }),
+      );
+
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome).not.toHaveProperty("outputs");
+      if (outcome.kind === "failed") expect(outcome.detail).toMatch(/skills\/alpha: .*forged/);
+    });
   });
 });

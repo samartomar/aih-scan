@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
+import { attachScanCompletionV1, scanCompletionEvidenceV1 } from "../completion-evidence-v1.js";
 import {
   ciscoJobDirectoryProblemTextV1,
   resolveContainedCiscoJobDirectoryV1,
@@ -427,7 +428,29 @@ export async function runCiscoShardV1(
             boundedCiscoDetailV1(`Cisco shard job ${job.path}: ${unbound}`),
           );
         }
-        const sarif: Uint8Array = Buffer.from(JSON.stringify(outcome.log), "utf8");
+        // C2a §1.6: with completion proven, the tree unchanged and every result bound, the
+        // job's SARIF names the files the job sealed; a forged completion key fails the job.
+        let sarif: Uint8Array;
+        try {
+          const log = attachScanCompletionV1(
+            JSON.parse(JSON.stringify(outcome.log)),
+            scanCompletionEvidenceV1({
+              detectorId: "detector.cisco",
+              files: sealed.files.map((file) => ({ path: file.path, sha256: file.sha256 })),
+              emptyAllowed: false,
+              analyzer: { version: expectedVersion, lockSha256: localLockSha256 },
+            }),
+            { scanBuilt: false },
+          );
+          sarif = Buffer.from(JSON.stringify(log), "utf8");
+        } catch (error) {
+          throw new CiscoShardJobFailureV1(
+            "output",
+            boundedCiscoDetailV1(
+              `Cisco shard job ${job.path}: ${error instanceof Error ? error.message : "completion evidence"}`,
+            ),
+          );
+        }
         return Object.freeze({
           jobId: job.id,
           path: job.path,

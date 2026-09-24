@@ -31,6 +31,11 @@ import {
   canonicalStrictJsonSha256V1,
 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import {
+  completionOfObservationV1,
+  diskFilesV1,
+  diskSubjectV1,
+} from "./completion-evidence-support.js";
 
 const HOST_PROFILE = "host-process-uv-v1";
 const windows = process.platform === "win32";
@@ -940,5 +945,175 @@ describe("runDetectorV1 host-process-uv-v1 analyzer SARIF completion (S2e)", () 
     if (outcome.outcome !== "failed") return;
     expect(outcome.failure.stage).toBe("execution");
     expect(outcome.failure.detail).toMatch(/did not complete successfully/);
+  });
+});
+
+// S2g (C2a §1.6): a succeeded run names, in every SARIF run, the files its analyzer received,
+// and Scan writes that evidence only itself.
+describe("runDetectorV1 host-process-uv-v1 completion evidence v1", () => {
+  const lockOf = (detectorId: string) =>
+    resolveDetectorCapabilityV1(detectorId)?.executionProfiles.find(
+      (entry) => entry.id === HOST_PROFILE,
+    )?.analyzerLock?.sha256;
+  const versionOf = (outcome: Awaited<ReturnType<typeof runDetectorV1>>) =>
+    outcome.outcome === "succeeded" && outcome.evidence.kind === "baseline-analyzer-observation-v1"
+      ? outcome.evidence.observation.analyzerVersion
+      : undefined;
+
+  it("gives Semgrep's evidence over the whole tree, top-level .git included", async () => {
+    const host = hostFixture();
+    const sourceRoot = sourceFixture();
+    mkdirSync(join(sourceRoot, ".git"));
+    writeFileSync(join(sourceRoot, ".git", "HEAD"), "ref: refs/heads/main\n");
+    mkdirSync(join(sourceRoot, "node_modules", "dep"), { recursive: true });
+    writeFileSync(join(sourceRoot, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+
+    const outcome = await runDetectorV1(
+      semgrepRequest(
+        { env: host.env, runner: hostRunner([], host.python, async () => okay(sarif([]))) },
+        sourceRoot,
+      ),
+    );
+
+    const evidence = completionOfObservationV1(outcome);
+    expect(diskFilesV1(sourceRoot)).toHaveLength(3);
+    expect(evidence).toEqual({
+      detectorId: "detector.semgrep",
+      ...diskSubjectV1(sourceRoot, diskFilesV1(sourceRoot)),
+      analyzer: { version: versionOf(outcome), lockSha256: lockOf("detector.semgrep") },
+    });
+    expect(evidence.analyzer).toMatchObject({
+      lockSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+  });
+
+  it("gives Semgrep a zero count on an empty source root, which it completes", async () => {
+    const host = hostFixture();
+    const outcome = await runDetectorV1({
+      ...semgrepRequest({
+        env: host.env,
+        runner: hostRunner([], host.python, async () => okay(sarif([]))),
+      }),
+      subject: { kind: "source-tree", sourceRoot: temporary("empty"), selectedClosurePaths: [] },
+    });
+
+    expect(completionOfObservationV1(outcome)).toMatchObject({
+      subjectTreeSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      analyzedFileCount: 0,
+    });
+  });
+
+  it("gives Cisco skill-directory's evidence over the snapshot, top-level .git left out", async () => {
+    const host = hostFixture();
+    const sourceRoot = skillFixture();
+    mkdirSync(join(sourceRoot, ".git"));
+    writeFileSync(join(sourceRoot, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const runner = hostRunner([], host.python, async (argv) => {
+      const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
+      writeFileSync(
+        argv[argv.indexOf("--output-json") + 1] ?? "",
+        canonicalStrictJsonBytesV1({
+          summary: { total_skills_scanned: 2 },
+          results: [
+            { skill_path: snapshot, findings: [] },
+            { skill_path: join(snapshot, "skills", "nested"), findings: [] },
+          ],
+        }),
+      );
+      writeFileSync(
+        argv[argv.indexOf("--output-sarif") + 1] ?? "",
+        canonicalStrictJsonBytesV1({
+          version: "2.1.0",
+          runs: [
+            {
+              tool: { driver: { name: "skill-scanner" } },
+              invocations: [{ executionSuccessful: true, properties: { vendor: "kept" } }],
+              results: [],
+            },
+          ],
+        }),
+      );
+      return okay("");
+    });
+
+    const outcome = await runDetectorV1({
+      detectorId: "detector.cisco",
+      executionProfileId: HOST_PROFILE,
+      subject: {
+        kind: "skill-directory",
+        sourceRoot,
+        selectedClosurePaths: ["SKILL.md", "skills/nested/SKILL.md"],
+      },
+      env: host.env,
+      runner,
+    });
+
+    const evidence = completionOfObservationV1(outcome);
+    const files = diskFilesV1(sourceRoot).filter((path) => !path.startsWith(".git/"));
+    expect(files).toEqual(["SKILL.md", "skills/nested/SKILL.md"]);
+    expect(evidence).toEqual({
+      detectorId: "detector.cisco",
+      ...diskSubjectV1(sourceRoot, files),
+      analyzer: { version: versionOf(outcome), lockSha256: lockOf("detector.cisco") },
+    });
+    if (
+      outcome.outcome !== "succeeded" ||
+      outcome.evidence.kind !== "baseline-analyzer-observation-v1"
+    )
+      return;
+    const log = JSON.parse(Buffer.from(outcome.evidence.observation.bytes).toString("utf8"));
+    expect(log.runs[0].invocations[0].properties.vendor).toBe("kept");
+  });
+
+  it.each([
+    [
+      "an analyzer-supplied completion key (a forgery)",
+      [
+        {
+          executionSuccessful: true,
+          properties: {
+            aihScanCompletionV1: {
+              detectorId: "detector.semgrep",
+              subjectTreeSha256: "0".repeat(64),
+              analyzedFileCount: 99,
+              analyzer: { version: "x", lockSha256: null },
+            },
+          },
+        },
+      ],
+      /forged/,
+    ],
+    [
+      "a forgery on a later invocation",
+      [
+        { executionSuccessful: true },
+        { executionSuccessful: true, properties: { aihScanCompletionV1: {} } },
+      ],
+      /forged/,
+    ],
+    [
+      "invocation properties that are not an object",
+      [{ executionSuccessful: true, properties: ["x"] }],
+      /not an object/,
+    ],
+  ])("fails Semgrep SARIF carrying %s at output, with no evidence", async (_label, invocations, detail) => {
+    const host = hostFixture();
+    const document = {
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "semgrep" } }, results: [], invocations }],
+    };
+    const outcome = await runDetectorV1(
+      semgrepRequest({
+        env: host.env,
+        runner: hostRunner([], host.python, async () =>
+          okay(canonicalStrictJsonBytesV1(document).toString("utf8")),
+        ),
+      }),
+    );
+
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome !== "failed") return;
+    expect(outcome.failure.detail).toMatch(detail);
+    expect("evidence" in outcome).toBe(false);
   });
 });

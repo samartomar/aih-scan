@@ -29,6 +29,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { COMPLETION_EXTRACT_SOURCE, completionProblem, subjectPaths } from "./lib/completion-evidence-proof.mjs";
 
 const argv = process.argv.slice(2);
 const option = (name) => {
@@ -163,6 +164,7 @@ writeFileSync(
 import { tmpdir } from "node:os";
 import { runDetectorV1 } from "@aihq/scan";
 const job = JSON.parse(process.argv[2]);
+${COMPLETION_EXTRACT_SOURCE}
 const seen = new Set();
 const watch = setInterval(() => {
   try {
@@ -194,6 +196,7 @@ process.stdout.write(JSON.stringify({
   annexSha256: observation?.annex?.sha256 ?? null,
   hostRuntime: observation?.hostRuntime ?? null,
   sarifUris: observation ? [...new Set([...Buffer.from(observation.bytes).toString("utf8").matchAll(/"uri":"([^"]*)"/g)].map((m) => m[1]))] : [],
+  completion: observation?.mediaType === "application/sarif+json" ? completionOf(observation.bytes) : null,
   findingsSource: result.findings?.source ?? null,
   findings: (result.findings?.findings ?? []).map((f) => ({ rule: f.rule.value?.nativeRuleId ?? null, level: f.severity.value?.level ?? null, path: f.location.value?.path ?? null, line: f.location.value?.startLine ?? null })),
   coverage: result.coverage ?? null,
@@ -256,6 +259,7 @@ function run(label, job) {
   }
   const survivors = processesNaming(summary.privateDirectories ?? []);
   const record = { label, wallMs: Date.now() - started, ...summary, survivors };
+  if (record.outcome === "succeeded") completionChecks(label, job, record);
   process.stdout.write(`${label}: ${summary.outcome}${summary.reason ? ` ${summary.reason}` : ""}${summary.failure ? ` ${summary.failure.stage}/${summary.failure.cause ?? "-"}` : ""} (${summary.ms ?? "?"} ms)\n`);
   return record;
 }
@@ -289,6 +293,22 @@ const checks = [];
 const check = (name, pass, detail = "") =>
   checks.push({ name, pass: Boolean(pass), detail: String(detail).slice(0, 600) });
 const noSurvivors = (record) => Array.isArray(record.survivors) && record.survivors.length === 0;
+// S2g (C2a §1.6): every succeeded result carries completion evidence v1 in every SARIF run,
+// recomputed here from the fixture files on disk.
+const { resolveDetectorCapabilityV1 } = await import(new URL(`file:///${join(consumer, "node_modules", "@aihq", "scan", "dist", "index.js").replaceAll("\\", "/")}`).href);
+function completionChecks(label, job, record) {
+  const request = job.request;
+  const subject = request.subject;
+  const problem = completionProblem(record.completion, {
+    root: subject.sourceRoot,
+    paths: subjectPaths({ detectorId: request.detectorId, subjectKind: subject.kind, root: subject.sourceRoot, selected: subject.selectedClosurePaths }),
+    detectorId: request.detectorId,
+    version: record.analyzerVersion,
+    lockSha256:
+      resolveDetectorCapabilityV1(request.detectorId)?.executionProfiles.find((entry) => entry.id === record.executionProfile?.id)?.analyzerLock?.sha256 ?? null,
+  });
+  check(`${label}: completion evidence v1 on every SARIF run`, problem === undefined, problem ?? "");
+}
 const relativeUris = (record) =>
   record.sarifUris.every((uri) => !uri.startsWith("/") && !/^[A-Za-z]:/.test(uri) && !uri.includes("\\") && !uri.includes("aih-scan-baseline-source"));
 
