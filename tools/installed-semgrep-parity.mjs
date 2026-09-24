@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Installed Semgrep parity (Linux amd64): Core's legacy Semgrep execution versus Scan's
- * `detector.semgrep` through the INSTALLED public `runDetectorV1`, on identical fixtures.
+ * Installed Semgrep parity: Core's legacy Semgrep execution versus Scan's `detector.semgrep`
+ * through the INSTALLED public `runDetectorV1`, on identical fixtures, under one named Scan
+ * execution profile (`linux-namespace-uv-v1` on Linux, `host-process-uv-v1` on any host).
  *
  * Why this exists: Core still executes Semgrep itself (`semgrep=core-legacy`) and will hand
  * that detector to Scan only once parity is proven (WO-CROSS-REPO-CLEANUP Step 2; deletion
@@ -18,18 +19,20 @@
  *   4. Core side: `aih trust scan <fixture> --root <fixture> --json --no-log`; takes the checks
  *      whose detail names Semgrep (`<uri>:<line> — Semgrep: …`) and the advisory's executor line;
  *   5. Scan side: a child process imports `@aihq/scan` from the consumer and calls
- *      `runDetectorV1({ detectorId: "detector.semgrep", subject: { kind: "source-tree", … } })`
- *      with no runner seam; the SARIF in `evidence.observation.bytes` is parsed;
+ *      `runDetectorV1({ detectorId: "detector.semgrep", executionProfileId, subject: { kind:
+ *      "source-tree", … } })` with no runner seam; the SARIF in `evidence.observation.bytes`,
+ *      whose artifact URIs are relative to the fixture root, is parsed;
  *   6. compares the two finding sets as (check code, fixture-relative path, start line), where the
  *      Semgrep rule ids map to Core's check codes exactly as Core's SEMGREP_RULE_MAP does;
  *   7. asserts: Core actually ran Semgrep to completion on every fixture (`semgrep=core-legacy`,
  *      detector check `pass` with "Semgrep static scan completed"), Core kept every finding's file
- *      path (no `semgrep.sarif` fallback), Scan succeeded under `linux-namespace-uv-v1` with
- *      producer `@aihq/scan`, identical (code, path, line) sets on `positive` (non-empty) and on
- *      `clean` (empty), and a typed refusal from Scan on `empty` (nothing to seal).
+ *      path (no `semgrep.sarif` fallback), Scan succeeded under the named profile with producer
+ *      `@aihq/scan`, identical (code, path, line) sets on `positive` (non-empty) and on `clean`
+ *      (empty), and on `empty` both sides complete with no findings (Core's behaviour).
  *
  * usage: node tools/installed-semgrep-parity.mjs --core-tgz <path> --scan-tgz <path> --work <dir>
  *        --out <report.json> [--uv <path>] [--python <version>]
+ *        [--execution-profile linux-namespace-uv-v1|host-process-uv-v1]
  * exit 0 = parity established for these fixtures; 1 = not established (the report says why); 2 = usage.
  *
  * None of this is release approval. A passing run is evidence for ONE detector on ONE host class.
@@ -38,7 +41,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import { compareFindingKeys, coreRanSemgrep, normaliseFindingPath, scanRefusedForEmpty } from "./installed-semgrep-parity-assertions.mjs";
+import { compareFindingKeys, coreRanSemgrep, normaliseFindingPath, scanCompletedEmpty } from "./installed-semgrep-parity-assertions.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name) => {
@@ -56,6 +59,11 @@ const work = resolve(opt("work"));
 const out = resolve(opt("out"));
 const uv = opt("uv") ?? "uv";
 const python = opt("python") ?? "3.12";
+const executionProfile = opt("execution-profile") ?? "linux-namespace-uv-v1";
+if (executionProfile !== "linux-namespace-uv-v1" && executionProfile !== "host-process-uv-v1") {
+  process.stderr.write(`installed-semgrep-parity: unknown --execution-profile ${executionProfile}\n`);
+  process.exit(2);
+}
 mkdirSync(work, { recursive: true });
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const posix = (p) => p.split(sep).join("/");
@@ -192,10 +200,10 @@ writeFileSync(
   scanChild,
   [
     'import { runDetectorV1, listDetectorCapabilitiesV1 } from "@aihq/scan";',
-    "const [sourceRoot, selectedJson] = process.argv.slice(2);",
+    "const [sourceRoot, selectedJson, executionProfileId] = process.argv.slice(2);",
     "const selected = JSON.parse(selectedJson);",
     "const capability = listDetectorCapabilitiesV1().find((c) => c.detectorId === 'detector.semgrep') ?? null;",
-    "const result = await runDetectorV1({ detectorId: 'detector.semgrep', subject: { kind: 'source-tree', sourceRoot, selectedClosurePaths: selected } });",
+    "const result = await runDetectorV1({ detectorId: 'detector.semgrep', executionProfileId, subject: { kind: 'source-tree', sourceRoot, selectedClosurePaths: selected } });",
     "const sarif = result.outcome === 'succeeded' && result.evidence.kind === 'baseline-analyzer-observation-v1' ? Buffer.from(result.evidence.observation.bytes).toString('utf8') : null;",
     "const summary = { outcome: result.outcome, reason: result.reason ?? null, detail: result.detail ?? null, failure: result.failure ?? null, executionProfileId: result.executionProfile?.id ?? null, producer: result.producer ?? null, prerequisites: result.prerequisites ?? null, seams: result.seams ?? null, findings: result.findings ? { count: result.findings.findings.length, source: result.findings.source, gaps: result.findings.gaps.length, gapDetails: result.findings.gaps, findingsList: result.findings.findings } : null, coverage: result.coverage ?? null, mediaType: result.evidence?.observation?.mediaType ?? null, annexSha256: result.evidence?.observation?.annex?.sha256 ?? null, capabilityPlatforms: capability?.supportedPlatforms ?? null };",
     "process.stdout.write(JSON.stringify({ summary, sarif }));",
@@ -204,7 +212,7 @@ writeFileSync(
 writeFileSync(join(consumer, "scan-side.mjs"), readFileSync(scanChild));
 function scanSide(root) {
   const selected = filesUnder(root);
-  const r = result(spawnSync(process.execPath, [join(consumer, "scan-side.mjs"), root, JSON.stringify(selected)], options(consumer)));
+  const r = result(spawnSync(process.execPath, [join(consumer, "scan-side.mjs"), root, JSON.stringify(selected), executionProfile], options(consumer)));
   let parsed;
   try {
     parsed = JSON.parse(r.stdout);
@@ -241,7 +249,8 @@ function compare(name, root) {
   let unrecognisedPath = false;
   const pathOf = (uri, side) => {
     if (!pathComparable) return "(path not compared)";
-    const result = normaliseFindingPath(uri, files, side === "core" ? root : "/aih/source");
+    // Scan's artifact URIs are relative to the declared source root, which is the fixture.
+    const result = normaliseFindingPath(uri, files, root);
     if (result.accepted) return result.path;
     unrecognisedPath = true;
     return `(unrecognised ${side} URI: ${result.path})`;
@@ -263,7 +272,7 @@ const ok = (name, pass, detail = "") => checks.push({ name, pass: Boolean(pass),
 // a skipped, unavailable or failed Semgrep also yields zero Semgrep findings.
 ok("Core's Semgrep uv project warmed (uv sync --locked)", warm.status === 0, warm.stderr.slice(-300));
 ok("Core ran Semgrep itself on positive to completion (semgrep=core-legacy; detector check pass)", coreRanSemgrep(positive.core), `${positive.core.executorsLine} | ${JSON.stringify(positive.core.semgrepDetector)}`);
-ok("Scan succeeded on positive through the installed runDetectorV1 under linux-namespace-uv-v1", positive.scan.summary?.outcome === "succeeded" && positive.scan.summary?.executionProfileId === "linux-namespace-uv-v1" && positive.scan.summary?.producer?.name === "@aihq/scan", JSON.stringify(positive.scan.summary ?? positive.scan.stderrTail));
+ok(`Scan succeeded on positive through the installed runDetectorV1 under ${executionProfile}`, positive.scan.summary?.outcome === "succeeded" && positive.scan.summary?.executionProfileId === executionProfile && positive.scan.summary?.producer?.name === "@aihq/scan", JSON.stringify(positive.scan.summary ?? positive.scan.stderrTail));
 ok("Scan used its own runner (no caller seam)", positive.scan.summary?.seams?.runner === "scan-owned-default", JSON.stringify(positive.scan.summary?.seams));
 ok("positive: both sides report findings", positive.coreKeys.length > 0 && positive.scanKeys.length > 0, `core ${positive.coreKeys.length}, scan ${positive.scanKeys.length}`);
 ok("positive: both rules fire (prompt-injection and malicious-code)", ["trust.prompt-injection", "trust.malicious-code"].every((c) => positive.scanKeys.some((k) => k.startsWith(`${c}|`)) && positive.coreKeys.some((k) => k.startsWith(`${c}|`))), `scan ${positive.scanKeys.join(", ")} | core ${positive.coreKeys.join(", ")}`);
@@ -272,8 +281,9 @@ ok("positive: identical finding sets (code, path, line)", positive.pathComparabl
 ok("clean: Core ran Semgrep itself to completion (semgrep=core-legacy; detector check pass, not skipped or unavailable)", coreRanSemgrep(clean.core), `${clean.core.executorsLine} | ${JSON.stringify(clean.core.semgrepDetector)}`);
 ok("clean: both sides report zero Semgrep findings from completed scans", clean.identical && clean.coreKeys.length === 0 && clean.scanKeys.length === 0 && clean.scan.summary?.outcome === "succeeded" && coreRanSemgrep(clean.core), `core ${clean.coreKeys.length}, scan ${clean.scanKeys.length}, scan outcome ${clean.scan.summary?.outcome}`);
 ok("empty: Core ran Semgrep itself to completion (detector check pass)", coreRanSemgrep(emptyCore), `${emptyCore.executorsLine} | ${JSON.stringify(emptyCore.semgrepDetector)}`);
-ok("empty: Scan refuses with subject-requirement-unmet (nothing to seal), no rejection", scanRefusedForEmpty(emptyScan), JSON.stringify(emptyScan.summary ?? emptyScan.stderrTail));
-ok("Scan's findings protocol is digest-bound (ScanFindingsV1 from the annex)", positive.scan.summary?.findings?.source === "annex" || positive.scan.summary?.findings?.source === "analyzer-output-digest-bound", JSON.stringify(positive.scan.summary?.findings));
+ok("empty: Scan completes with zero findings, as Core does", scanCompletedEmpty(emptyScan, executionProfile), JSON.stringify(emptyScan.summary ?? emptyScan.stderrTail));
+ok("Scan projects its SARIF into ScanFindingsV1 (analyzer-sarif), one finding per SARIF result", positive.scan.summary?.findings?.source === "analyzer-sarif" && positive.scan.summary.findings.count === positive.scan.findings.length, JSON.stringify(positive.scan.summary?.findings));
+ok("Scan's SARIF artifact URIs are relative to the fixture root", positive.scan.findings.every((f) => typeof f.uri === "string" && !f.uri.startsWith("/") && !/^[A-Za-z]:/.test(f.uri) && !f.uri.includes("\\")), positive.scan.findings.map((f) => f.uri).join(", "));
 
 const passed = checks.every((c) => c.pass);
 const report = {
@@ -281,7 +291,7 @@ const report = {
   version: 1,
   generatedAt: new Date().toISOString(),
   host: { platform: process.platform, arch: process.arch, node: process.version },
-  inputs: { core: { tarball: coreTgz, sha256: sha256(readFileSync(coreTgz)), version: versions.core }, scan: { tarball: scanTgz, sha256: sha256(readFileSync(scanTgz)), version: versions.scan } },
+  inputs: { executionProfile, core: { tarball: coreTgz, sha256: sha256(readFileSync(coreTgz)), version: versions.core }, scan: { tarball: scanTgz, sha256: sha256(readFileSync(scanTgz)), version: versions.scan } },
   fixtures: { injectionLine: INJECTION_LINE, downloadLine: DOWNLOAD_LINE },
   warm: { status: warm.status, stderrTail: warm.stderr.slice(-400) },
   positive,
@@ -294,7 +304,7 @@ const report = {
     coreExecutorsLine: positive.core.executorsLine,
     coreSemgrepDetectorCheck: positive.core.semgrepDetector,
   },
-  meaning: "Evidence for ONE detector (Semgrep) on ONE host class with the exact tarballs named above. Not release approval; not evidence for any other detector.",
+  meaning: `Evidence for ONE detector (Semgrep) under ${executionProfile} on ONE host class (${process.platform}/${process.arch}) with the exact tarballs named above. Not release approval; not evidence for any other detector or host.`,
 };
 writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
 for (const c of checks) process.stdout.write(`${c.pass ? "PASS" : "FAIL"}  ${c.name}${c.pass ? "" : `  — ${c.detail}`}\n`);

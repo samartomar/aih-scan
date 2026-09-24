@@ -1521,7 +1521,9 @@ function verifyCiscoCoverage(output: Buffer, expectedSkills: number): Record<str
   if (skipped !== undefined && !Array.isArray(skipped))
     fail("Cisco JSON report skipped-skill state is invalid");
   if (Array.isArray(skipped) && skipped.length > 0)
-    fail(`Cisco skill-scanner skipped ${skipped.length} skill${skipped.length === 1 ? "" : "s"}`);
+    fail(
+      `Cisco skill-scanner skipped ${skipped.length} skill${skipped.length === 1 ? "" : "s"}, so its coverage is incomplete`,
+    );
   const scanned = values.total_skills_scanned;
   if (!Number.isSafeInteger(scanned) || (scanned as number) < 1)
     fail("Cisco JSON report scanned-skill count is invalid");

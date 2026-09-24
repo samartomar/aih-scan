@@ -499,6 +499,41 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
     expect(outcome.coverage.coveredPaths).toContain(".git/hooks/inject.md");
   });
 
+  it("fails closed at coverage when Cisco skips a skill it was given", async () => {
+    const host = hostFixture();
+    const runner = hostRunner([], host.python, async (argv) => {
+      writeFileSync(
+        argv[argv.indexOf("--output-json") + 1] ?? "",
+        canonicalStrictJsonBytesV1({
+          summary: {
+            total_skills_scanned: 1,
+            skills_skipped: [{ skill: "nested", reason: "invalid" }],
+          },
+          results: [],
+        }),
+      );
+      writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", sarif([]));
+      return okay("");
+    });
+
+    const outcome = await runDetectorV1({
+      detectorId: "detector.cisco",
+      executionProfileId: HOST_PROFILE,
+      subject: {
+        kind: "skill-directory",
+        sourceRoot: skillFixture(),
+        selectedClosurePaths: ["SKILL.md", "skills/nested/SKILL.md"],
+      },
+      env: host.env,
+      runner,
+    });
+
+    expect(outcome.outcome).toBe("failed");
+    if (outcome.outcome !== "failed") return;
+    expect(outcome.failure.stage).toBe("coverage");
+    expect(outcome.failure.detail).toMatch(/Cisco skill-scanner skipped 1 skill/);
+  });
+
   it("fails closed at output when an analyzer reports a URI outside the source root", async () => {
     const host = hostFixture();
     const outside = windows ? "C:\\Windows\\win.ini" : "/etc/passwd";

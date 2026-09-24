@@ -37,6 +37,15 @@ and artifact-attestation checks succeed.
 with fail-closed coverage accounting and direct/OCI equivalence evidence. Source state does
 not prove this candidate is published or promoted; use the live custody checks below.
 
+`@aihq/scan@0.5.0` runs Semgrep and Cisco through the explicitly named
+`host-process-uv-v1` profile on Linux `amd64` and `arm64`, macOS `arm64` and Windows `amd64`:
+uv from `PATH`, a uv-discovered Python 3.12 with no downloads, a persistent lock-addressed uv
+cache, an `--offline` scan stage, and a process group or a Windows Job Object that ends the
+whole analyzer tree on timeout or `signal` abort. SARIF artifact URIs are relative to the
+declared source root, SARIF observations carry a `ScanFindingsV1` projection, and an empty
+source root completes for Semgrep. The profile is unisolated and does not enforce the
+network; it is never a default. Source state does not prove this candidate is published.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment

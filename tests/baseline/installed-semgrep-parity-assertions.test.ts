@@ -3,7 +3,7 @@ import {
   compareFindingKeys,
   coreRanSemgrep,
   normaliseFindingPath,
-  scanRefusedForEmpty,
+  scanCompletedEmpty,
 } from "../../tools/installed-semgrep-parity-assertions.mjs";
 
 const completedCore = {
@@ -103,29 +103,43 @@ describe("installed Semgrep parity assertions", () => {
     ).toEqual({ path: "file:///aih/source/../source/skills/injected/SKILL.md", accepted: false });
   });
 
-  it("accepts only a successful child with the expected typed empty-tree refusal", () => {
+  it("accepts the empty tree only as a completed run with no findings under the requested profile", () => {
     const scan = {
       exit: 0,
       childError: null,
       summary: {
-        outcome: "refused",
-        reason: "subject-requirement-unmet",
-        detail: "Diagnostic wording is not a typed contract",
-        executionProfileId: null,
+        outcome: "succeeded",
+        reason: null,
+        executionProfileId: "host-process-uv-v1",
+        findings: { count: 0, source: "analyzer-sarif" },
       },
     };
-    expect(scanRefusedForEmpty(scan)).toBe(true);
+    expect(scanCompletedEmpty(scan, "host-process-uv-v1")).toBe(true);
+    expect(scanCompletedEmpty(scan, "linux-namespace-uv-v1")).toBe(false);
     expect(
-      scanRefusedForEmpty({ ...scan, summary: { ...scan.summary, reason: "different" } }),
+      scanCompletedEmpty(
+        {
+          ...scan,
+          summary: { ...scan.summary, outcome: "refused", reason: "subject-requirement-unmet" },
+        },
+        "host-process-uv-v1",
+      ),
     ).toBe(false);
-    expect(scanRefusedForEmpty({ ...scan, summary: { ...scan.summary, reason: "" } })).toBe(false);
     expect(
-      scanRefusedForEmpty({
-        ...scan,
-        summary: { ...scan.summary, executionProfileId: "unexpected" },
-      }),
+      scanCompletedEmpty(
+        { ...scan, summary: { ...scan.summary, findings: { count: 1, source: "analyzer-sarif" } } },
+        "host-process-uv-v1",
+      ),
     ).toBe(false);
-    expect(scanRefusedForEmpty({ ...scan, exit: 1 })).toBe(false);
-    expect(scanRefusedForEmpty({ ...scan, childError: "child failed" })).toBe(false);
+    expect(
+      scanCompletedEmpty(
+        { ...scan, summary: { ...scan.summary, findings: null } },
+        "host-process-uv-v1",
+      ),
+    ).toBe(false);
+    expect(scanCompletedEmpty({ ...scan, exit: 1 }, "host-process-uv-v1")).toBe(false);
+    expect(scanCompletedEmpty({ ...scan, childError: "child failed" }, "host-process-uv-v1")).toBe(
+      false,
+    );
   });
 });
