@@ -434,7 +434,9 @@ if (detectors.includes("mcp-scanner")) {
   } else {
     const clean = run("mcp-scanner clean", job(roots.mcpClean, files(roots.mcpClean)));
     const empty = run("mcp-scanner empty", request("detector.cisco-mcp-scanner", roots.empty, [], { executionProfileId: HOST, detectorOptions: { mcpConfigPaths: [] } }));
-    const malformed = run("mcp-scanner malformed (config path not selected)", job(roots.mcpClean, ["SKILL.md"]));
+    // A root .mcp.json need not be selected (C2a §2.1); a path that is not an incoming MCP
+    // config name is malformed.
+    const malformed = run("mcp-scanner malformed (not an incoming MCP config name)", request("detector.cisco-mcp-scanner", roots.mcpClean, files(roots.mcpClean), { executionProfileId: HOST, detectorOptions: { mcpConfigPaths: ["SKILL.md"] } }));
     const noUv = run("mcp-scanner missing prerequisite (no uv)", { ...job(roots.mcpClean, files(roots.mcpClean)), env: noUvEnv });
     const budget = Math.max(1_500, Math.round((clean.ms ?? 10_000) * 0.5));
     const timeout = run(`mcp-scanner timeout (${budget} ms)`, job(roots.mcpPoisoned, files(roots.mcpPoisoned), { timeoutMs: budget }));
@@ -445,7 +447,7 @@ if (detectors.includes("mcp-scanner")) {
     check("mcp-scanner positive SARIF URIs are source-relative", positive.sarifUris.every(relative), positive.sarifUris.join(", "));
     check("mcp-scanner clean succeeded with zero findings", clean.outcome === "succeeded" && clean.findings.length === 0, `${brief(clean)} ${clean.findings.map((f) => `${f.rule}|${f.path}`).join(", ")}`);
     check("mcp-scanner empty (no config) is refused before anything runs", empty.outcome === "refused", brief(empty));
-    check("mcp-scanner malformed (unselected config path) is refused detector-options-invalid", malformed.outcome === "refused" && malformed.reason === "detector-options-invalid", brief(malformed));
+    check("mcp-scanner malformed (a path that is not an incoming MCP config name) is refused detector-options-invalid", malformed.outcome === "refused" && malformed.reason === "detector-options-invalid", brief(malformed));
     if (sharedWellKnownUv) notes.push({ name: "mcp-scanner missing prerequisite", status: "not-applicable", why: "uv is installed in a shared well-known directory" });
     else check("mcp-scanner without uv is refused prerequisite-missing", noUv.outcome === "refused" && noUv.reason === "prerequisite-missing", brief(noUv));
     check("mcp-scanner timeout fails typed timed-out, no survivor", timeout.outcome === "failed" && timeout.failure?.cause === "timed-out" && noSurvivors(timeout), brief(timeout));
