@@ -276,6 +276,9 @@ describe.each(BOTH)("Cisco job uriBaseId resolution (%s)", (_label, execute) => 
   });
 
   it("relates an absolute base inside the root, then drops the base references", async () => {
+    // S2g: a shard result's related location must name a sealed file of its job.
+    mkdirSync(join(root, "skills", "alpha", "notes", "docs"), { recursive: true });
+    writeFileSync(join(root, "skills", "alpha", "notes", "docs", "x.md"), "x\n", "utf8");
     const jobDir = `${pathToFileURL(join(root, "skills", "alpha")).href}/`;
     const run = await uris({
       ...cleanRun([

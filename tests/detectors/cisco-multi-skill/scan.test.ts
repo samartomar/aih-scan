@@ -558,7 +558,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
   it("fails the reviewer's ../outside.md beside a sealed root-level cisco.sarif (S2g)", async () => {
     skill("skills/clean", "# Clean\n");
     writeFileSync(join(dir, "cisco.sarif"), "{}\n");
-    const escape = {
+    const escaping = {
       runs: [
         {
           results: [
@@ -572,7 +572,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
       ],
     };
     const tree = realpathSync(dir);
-    const scanner = ciscoRunner(escape);
+    const scanner = ciscoRunner(escaping);
     const outcome = await runCiscoSourceTreeScanV1({
       run: async (argv, opts) =>
         argv.includes("--version")

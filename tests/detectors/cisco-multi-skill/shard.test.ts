@@ -57,6 +57,10 @@ function bundledLockSha256(): string {
 function scanningRunner(hooks?: {
   beforeOutput?: (target: string) => void;
   invocations?: (scanCount: number) => Record<string, unknown>[];
+  /** S2g: the job's result locations (default: one `SKILL.md` location). */
+  locations?: (target: string) => unknown[] | undefined;
+  /** S2g: extra run properties, such as `originalUriBaseIds`. */
+  run?: (target: string) => Record<string, unknown>;
 }): CiscoMultiSkillRunnerV1 {
   let scanCount = 0;
   return async (argv) => {
@@ -86,16 +90,10 @@ function scanningRunner(hooks?: {
               {
                 ruleId: "fixture",
                 message: { text: heading },
-                locations: [
-                  {
-                    physicalLocation: {
-                      artifactLocation: { uri: "SKILL.md" },
-                      region: { startLine: 1 },
-                    },
-                  },
-                ],
+                ...fixtureLocations(hooks?.locations, target),
               },
             ],
+            ...(hooks?.run?.(target) ?? {}),
           },
         ],
       }),
@@ -103,6 +101,21 @@ function scanningRunner(hooks?: {
     );
     return { code: 0, stdout: "", stderr: "" };
   };
+}
+
+/** A fixture result's `locations` property: the hook's list, none, or one `SKILL.md`. */
+function fixtureLocations(
+  hook: ((target: string) => unknown[] | undefined) | undefined,
+  target: string,
+): Record<string, unknown> {
+  if (hook === undefined)
+    return {
+      locations: [
+        { physicalLocation: { artifactLocation: { uri: "SKILL.md" }, region: { startLine: 1 } } },
+      ],
+    };
+  const locations = hook(target);
+  return locations === undefined ? {} : { locations };
 }
 
 /** Source-relative directories holding a SKILL.md, sorted (the fixture manifest's jobs). */
@@ -586,6 +599,106 @@ describe("runCiscoShardV1", () => {
       kind: "failed",
       stage: "execution",
       detail: "fixture shard failure",
+    });
+  });
+
+  // S2g (review of U1d): the tree hashes prove the inputs did not change, not that a result
+  // names a file the job analyzed. Every result location must name a sealed file of that
+  // job's own inventory, or the shard fails at `output` (lowest index, no partial outputs).
+  describe("results are bound to their job's sealed files", () => {
+    const at = (uri: unknown) => [{ physicalLocation: { artifactLocation: { uri } } }];
+    const failsAtOutput = async (
+      root: string,
+      hooks: Parameters<typeof scanningRunner>[0],
+      detail: RegExp,
+    ) => {
+      const outcome = await runCiscoShardV1(shardRequest(root, { run: scanningRunner(hooks) }));
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome).not.toHaveProperty("outputs");
+      if (outcome.kind === "failed") expect(outcome.detail).toMatch(detail);
+    };
+
+    it("fails a result naming a file the job does not hold (reviewer: missing.md)", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-bind-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      await failsAtOutput(
+        root,
+        { locations: () => at("missing.md") },
+        /skills\/alpha\/missing\.md/,
+      );
+    });
+
+    it("fails a case-folded name the file system might resolve (reviewer: skill.md)", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-bind-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      await failsAtOutput(root, { locations: () => at("skill.md") }, /skills\/alpha\/skill\.md/);
+    });
+
+    it("fails a result without a location or URI, and an unbound further location", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-bind-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      await failsAtOutput(root, { locations: () => undefined }, /names no sealed file/);
+      await failsAtOutput(root, { locations: () => [] }, /names no sealed file/);
+      await failsAtOutput(
+        root,
+        { locations: () => [{ physicalLocation: {} }] },
+        /names no sealed file/,
+      );
+      await failsAtOutput(
+        root,
+        { locations: () => [...at("SKILL.md"), ...at("ghost.md")] },
+        /ghost\.md/,
+      );
+    });
+
+    it("fails a result naming a sealed file of another job in the same shard", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-bind-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      skill(root, join("skills", "beta"), "# beta\n");
+      const safeRoot = realpathSync(root).replaceAll("\\", "/");
+      const rootUri = `file://${safeRoot.startsWith("/") ? "" : "/"}${safeRoot}/`;
+      await failsAtOutput(
+        root,
+        {
+          locations: () => [
+            {
+              physicalLocation: {
+                artifactLocation: { uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" },
+              },
+            },
+          ],
+          run: () => ({ originalUriBaseIds: { ROOT: { uri: rootUri } } }),
+        },
+        /skills\/alpha: .*skills\/beta\/SKILL\.md/,
+      );
+    });
+
+    it("reports the lowest-index unbound job", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-bind-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      skill(root, join("skills", "beta"), "# beta\n");
+      await failsAtOutput(
+        root,
+        {
+          locations: (target) =>
+            at(target.replaceAll("\\", "/").endsWith("beta") ? "gone.md" : "SKILL.md"),
+        },
+        /skills\/beta\/gone\.md/,
+      );
+      await failsAtOutput(root, { locations: () => at("gone.md") }, /skills\/alpha\/gone\.md/);
+    });
+
+    it("completes when every result names a sealed file of its own job", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-bind-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      mkdirSync(join(root, "skills", "alpha", "scripts"));
+      writeFileSync(join(root, "skills", "alpha", "scripts", "run.sh"), "echo\n", "utf8");
+      const outcome = await runCiscoShardV1(
+        shardRequest(root, {
+          run: scanningRunner({ locations: () => [...at("SKILL.md"), ...at("scripts/run.sh")] }),
+        }),
+      );
+      expect(outcome.kind).toBe("completed");
     });
   });
 
