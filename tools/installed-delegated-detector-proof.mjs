@@ -491,6 +491,9 @@ if (detectors.includes("cisco-shard")) {
     const [first, second] = positive.outputs ?? [];
     check("cisco shard positive succeeded: two outputs in job order, sha256 over each SARIF, seals equal", positive.outcome === "succeeded" && positive.outputs.length === 2 && first?.jobId === "job-0" && second?.jobId === "job-1" && positive.outputs.every((o) => o.sha256Matches) && positive.sourceSeal?.same === true && positive.analyzer?.lockSha256 === lock && positive.analyzer?.version === "2.1.0", brief(positive));
     check("cisco shard SARIF URIs are prefixed with each job path", (first?.uris ?? []).every((uri) => uri.startsWith("skills/injected/")) && (second?.uris ?? []).every((uri) => uri.startsWith("skills/tables/")) && (first?.results ?? 0) > 0, JSON.stringify(positive.outputs));
+    // U1f (owner decision D1): Cisco 2.1.0 reports skill.md on Windows; each job binds it to its
+    // own sealed SKILL.md before hashing, so the job SARIF names the real file on every OS.
+    check("cisco shard job SARIF names the sealed SKILL.md by its real name, with findings", (first?.uris ?? []).includes("skills/injected/SKILL.md") && ![...(first?.uris ?? []), ...(second?.uris ?? [])].some((uri) => uri.endsWith("/skill.md")) && (first?.results ?? 0) > 0, JSON.stringify(first?.uris ?? []));
     check("cisco shard version gate fails at availability against the real analyzer", version.outcome === "failed" && version.failure?.stage === "availability", brief(version));
     if (sharedWellKnownUv) notes.push({ name: "cisco shard missing prerequisite", status: "not-applicable", why: "uv is installed in a shared well-known directory" });
     else check("cisco shard without uv is refused prerequisite-missing", noUv.outcome === "refused" && noUv.reason === "prerequisite-missing", brief(noUv));
