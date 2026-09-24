@@ -5,20 +5,22 @@ import {
   type CiscoSarifLogV1,
   type CiscoSarifRunV1,
   mergedCiscoSarifTextV1,
+  parseCiscoSarifLogV1,
   prefixCiscoSarifUrisV1,
 } from "./merge-v1.js";
 import {
   CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1,
   CISCO_MULTI_SKILL_SCANNER_VERSION_V1,
+  type CiscoDetectorOptionsValidationV1,
   type CiscoMultiSkillPlatformV1,
   type CiscoMultiSkillRunnerV1,
   type CiscoMultiSkillRunResultV1,
-  type CiscoSkillInventoryV1,
+  type CiscoSourceTreeJobV1,
   ciscoSkillScannerRunArgvV1,
   ciscoSkillScannerVersionArgvV1,
-  collectCiscoSkillDirsV1,
-  resolveCiscoScanConcurrencyV1,
+  planCiscoSourceTreeJobsV1,
   scrubCiscoScanEnvV1,
+  validateCiscoDetectorOptionsV1,
 } from "./plan-v1.js";
 
 /**
@@ -28,9 +30,12 @@ import {
  * `mapConcurrentStable`, `runCiscoSkillScan`). This module never spawns a
  * process itself; the runtime supplies {@link CiscoMultiSkillRunnerV1}.
  *
- * Failure behaviour mirrors Core message-for-message and is thrown as an
- * `Error`: one failing skill fails the whole scan, in-flight jobs are drained,
- * and the lowest-index failure is the one reported.
+ The C2a typed-outcome surface ({@link runCiscoSourceTreeScanV1},
+ * {@link probeCiscoSkillScannerV1} and {@link scanCiscoSkillDirectoryOutcomeV1})
+ * keeps Core's per-job behaviour and messages but never throws on bad input:
+ * options and the subject are validated at the boundary, and every failure
+ * carries its stage (`acquisition`, `availability`, `execution` or `output`,
+ * C2a §3.5) so the B2 wiring can map it to Core's refusal and failure reasons.
  */
 
 /**
@@ -54,35 +59,6 @@ export interface CiscoSkillScannerAvailabilityRequestV1 {
   readonly analyzerProject?: string;
 }
 
-/**
- * Availability probe, ported from Core's `checkCiscoAvailable`: runs
- * `skill-scanner --version` under the locked offline project and returns why
- * the scanner cannot run, or `undefined` when it can. A reported version must
- * equal `skill-scanner <expectedVersion>` exactly.
- */
-export async function checkCiscoSkillScannerAvailableV1(
-  request: CiscoSkillScannerAvailabilityRequestV1,
-): Promise<string | undefined> {
-  const expectedVersion = request.expectedVersion ?? CISCO_MULTI_SKILL_SCANNER_VERSION_V1;
-  const version = await request.run(
-    ciscoSkillScannerVersionArgvV1(request.platform, request.analyzerProject),
-    {
-      env: scrubCiscoScanEnvV1(request.env),
-      timeoutMs: CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1,
-    },
-  );
-  const reason = ciscoScanFailureReasonV1(version, `uvx exit ${version.code ?? "signal"}`);
-  if (reason !== undefined) return reason;
-  const reportedVersion = version.stdout.trim();
-  if (reportedVersion.length === 0) {
-    return "skill-scanner version check emitted no output";
-  }
-  if (reportedVersion !== `skill-scanner ${expectedVersion}`) {
-    return `skill-scanner version ${JSON.stringify(reportedVersion)} does not match ${expectedVersion}`;
-  }
-  return undefined;
-}
-
 export interface CiscoSkillDirectoryScanRequestV1 {
   readonly run: CiscoMultiSkillRunnerV1;
   readonly platform: CiscoMultiSkillPlatformV1;
@@ -92,39 +68,6 @@ export interface CiscoSkillDirectoryScanRequestV1 {
   /** Absolute skill directory; also the scan's working directory. */
   readonly skillDir: string;
   readonly analyzerProject?: string;
-}
-
-/**
- * One skill's scan, ported from Core's `scanCiscoSkillDirectory`: the scanner
- * writes SARIF to a private temporary file, a non-zero/spawn-failed run throws
- * its failure reason, and the parsed log is returned with URIs prefixed and
- * invocation timestamps removed. The temporary directory is always removed.
- */
-export async function scanCiscoSkillDirectoryV1(
-  request: CiscoSkillDirectoryScanRequestV1,
-): Promise<CiscoSarifLogV1> {
-  const tmp = mkdtempSync(join(tmpdir(), "aih-cisco-sarif-"));
-  const output = join(tmp, "results.sarif");
-  try {
-    const scan = await request.run(
-      ciscoSkillScannerRunArgvV1(
-        request.platform,
-        request.skillDir,
-        output,
-        request.analyzerProject,
-      ),
-      {
-        cwd: request.skillDir,
-        env: scrubCiscoScanEnvV1(request.env),
-        timeoutMs: CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1,
-      },
-    );
-    const reason = ciscoScanFailureReasonV1(scan, `detector exit ${scan.code ?? "signal"}`);
-    if (reason !== undefined) throw new Error(reason);
-    return prefixCiscoSarifUrisV1(readFileSync(output, "utf8"), request.root, request.skillDir);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
 }
 
 /**
@@ -160,43 +103,280 @@ export async function mapConcurrentStableV1<T, R>(
   return results;
 }
 
-export interface CiscoSkillScanRequestV1 {
+/** Failure stages the C2a typed surface reports (C2a §3.5 and §8.4). */
+export type CiscoScanFailureStageV1 = "acquisition" | "availability" | "execution" | "output";
+
+const MAX_CISCO_DETAIL_CHARACTERS_V1 = 1024;
+
+/**
+ * Bounded, control-character-encoded diagnostic text for the typed surface.
+ * Analyzer stderr/stdout is untrusted, so only an encoded, capped projection
+ * of it reaches a result detail.
+ */
+export function boundedCiscoDetailV1(value: string): string {
+  const encoded = JSON.stringify(value).slice(1, -1);
+  if (encoded.length <= MAX_CISCO_DETAIL_CHARACTERS_V1) return encoded;
+  const marker = "… middle omitted …";
+  const retained = MAX_CISCO_DETAIL_CHARACTERS_V1 - marker.length;
+  const headLength = Math.ceil(retained / 2);
+  return `${encoded.slice(0, headLength)}${marker}${encoded.slice(-(retained - headLength))}`;
+}
+
+function errorDetailV1(error: unknown, fallback: string): string {
+  return boundedCiscoDetailV1(error instanceof Error ? error.message : fallback);
+}
+
+/** Typed availability probe verdict (C2a §3.2 version gate, §3.5 stages). */
+export type CiscoSkillScannerProbeOutcomeV1 = Readonly<
+  | { kind: "available" }
+  | { kind: "unavailable"; stage: "acquisition" | "availability"; detail: string }
+>;
+
+/**
+ * Core's `checkCiscoAvailable` version gate, typed: the locked offline
+ * `skill-scanner --version` probe, with the failure classified by
+ * stage. A probe that cannot run at all (spawn failure, non-zero exit, a
+ * runner that throws) is an `acquisition` failure — the analyzer environment
+ * could not be acquired; a probe that answered wrongly (empty output, version
+ * mismatch) is an `availability` failure (C2a §3.5).
+ */
+export async function probeCiscoSkillScannerV1(
+  request: CiscoSkillScannerAvailabilityRequestV1,
+): Promise<CiscoSkillScannerProbeOutcomeV1> {
+  const expectedVersion = request.expectedVersion ?? CISCO_MULTI_SKILL_SCANNER_VERSION_V1;
+  let version: CiscoMultiSkillRunResultV1;
+  try {
+    version = await request.run(
+      ciscoSkillScannerVersionArgvV1(request.platform, request.analyzerProject),
+      {
+        env: scrubCiscoScanEnvV1(request.env),
+        timeoutMs: CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1,
+      },
+    );
+  } catch (error) {
+    return Object.freeze({
+      kind: "unavailable" as const,
+      stage: "acquisition" as const,
+      detail: errorDetailV1(error, "Cisco skill-scanner version check could not run"),
+    });
+  }
+  if (version.spawnError || version.code !== 0) {
+    return Object.freeze({
+      kind: "unavailable" as const,
+      stage: "acquisition" as const,
+      detail: boundedCiscoDetailV1(
+        version.stderr || version.stdout || `uvx exit ${version.code ?? "signal"}`,
+      ),
+    });
+  }
+  const reportedVersion = version.stdout.trim();
+  if (reportedVersion.length === 0) {
+    return Object.freeze({
+      kind: "unavailable" as const,
+      stage: "availability" as const,
+      detail: "skill-scanner version check emitted no output",
+    });
+  }
+  if (reportedVersion !== `skill-scanner ${expectedVersion}`) {
+    return Object.freeze({
+      kind: "unavailable" as const,
+      stage: "availability" as const,
+      detail: `skill-scanner version ${JSON.stringify(reportedVersion)} does not match ${expectedVersion}`,
+    });
+  }
+  return Object.freeze({ kind: "available" as const });
+}
+
+/** Typed outcome of one skill directory's scan (C2a §3.2). */
+export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
+  | { kind: "completed"; log: CiscoSarifLogV1 }
+  | { kind: "failed"; stage: "execution" | "output"; detail: string }
+>;
+
+/**
+ * Core's `scanCiscoSkillDirectory`, typed: the same argv, cwd, timeout and
+ * exit-0 requirement, but failures are returned, not thrown. A
+ * process failure is stage `execution`; a SARIF file that is missing or does
+ * not parse is stage `output`. The private temporary directory is always
+ * removed.
+ */
+export async function scanCiscoSkillDirectoryOutcomeV1(
+  request: CiscoSkillDirectoryScanRequestV1,
+): Promise<CiscoSkillDirectoryScanOutcomeV1> {
+  const tmp = mkdtempSync(join(tmpdir(), "aih-cisco-sarif-"));
+  const output = join(tmp, "results.sarif");
+  try {
+    let scan: CiscoMultiSkillRunResultV1;
+    try {
+      scan = await request.run(
+        ciscoSkillScannerRunArgvV1(
+          request.platform,
+          request.skillDir,
+          output,
+          request.analyzerProject,
+        ),
+        {
+          cwd: request.skillDir,
+          env: scrubCiscoScanEnvV1(request.env),
+          timeoutMs: CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1,
+        },
+      );
+    } catch (error) {
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: "execution" as const,
+        detail: errorDetailV1(error, "Cisco skill-scanner runner failed"),
+      });
+    }
+    const reason = ciscoScanFailureReasonV1(scan, `detector exit ${scan.code ?? "signal"}`);
+    if (reason !== undefined) {
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: "execution" as const,
+        detail: boundedCiscoDetailV1(reason),
+      });
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(output, "utf8");
+    } catch {
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: "output" as const,
+        detail: "detector did not emit valid SARIF",
+      });
+    }
+    if (parseCiscoSarifLogV1(raw) === undefined) {
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: "output" as const,
+        detail: "detector did not emit valid SARIF",
+      });
+    }
+    return Object.freeze({
+      kind: "completed" as const,
+      log: prefixCiscoSarifUrisV1(raw, request.root, request.skillDir),
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** One failing job's stage and detail, carried through the worker drain. */
+class CiscoJobFailureV1 extends Error {
+  readonly stage: CiscoScanFailureStageV1;
+  constructor(stage: CiscoScanFailureStageV1, detail: string) {
+    super(detail);
+    this.name = "CiscoJobFailureV1";
+    this.stage = stage;
+  }
+}
+
+/** The C2a §3 `source-tree` scan request as Core's B2 wiring will send it. */
+export interface CiscoSourceTreeScanRequestV1 {
   readonly run: CiscoMultiSkillRunnerV1;
   readonly platform: CiscoMultiSkillPlatformV1;
   readonly env: NodeJS.ProcessEnv;
-  /** Absolute source tree root; Core passes it already realpath-resolved. */
-  readonly tree: string;
-  /** Caller-built file inventory; absent, the tree is walked on disk. */
-  readonly inventory?: CiscoSkillInventoryV1;
+  /** Absolute realpath of the scanned root (Core's `subject.sourceRoot`). */
+  readonly sourceRoot: string;
+  /** Core's trust inventory; the jobs come from it, never from a walk. */
+  readonly selectedClosurePaths: readonly string[];
+  /** Strictly validated per C2a §3.3; absent selects the default concurrency. */
+  readonly detectorOptions?: unknown;
   readonly analyzerProject?: string;
 }
 
+/** Typed outcome of a `source-tree` Cisco scan (C2a §3.5). */
+export type CiscoSourceTreeScanOutcomeV1 = Readonly<
+  | {
+      kind: "completed";
+      /** The merged SARIF document: `{"version":"2.1.0","runs":[…]}`. */
+      sarifText: string;
+      /** The planned jobs in job order; `""` names the root job. */
+      skillDirectories: readonly string[];
+    }
+  | {
+      kind: "refused";
+      reason: "detector-options-invalid" | "subject-requirement-unmet";
+      detail: string;
+    }
+  | { kind: "failed"; stage: CiscoScanFailureStageV1; detail: string }
+>;
+
+function refusedSourceTreeScanV1(
+  reason: "detector-options-invalid" | "subject-requirement-unmet",
+  detail: string,
+): CiscoSourceTreeScanOutcomeV1 {
+  return Object.freeze({ kind: "refused" as const, reason, detail });
+}
+
+function failedSourceTreeScanV1(
+  stage: CiscoScanFailureStageV1,
+  detail: string,
+): CiscoSourceTreeScanOutcomeV1 {
+  return Object.freeze({ kind: "failed" as const, stage, detail });
+}
+
 /**
- * The whole multi-skill scan, ported from Core's `runCiscoSkillScan`: every
- * `SKILL.md` directory is scanned once at bounded concurrency
- * (`AIH_CISCO_SCAN_CONCURRENCY`, default 4, maximum 64), and the merged SARIF
- * text is returned. A tree with no skill directories, or any failing skill,
- * throws.
+ * The C2a §3 engine function for `detector.cisco` over a `source-tree`
+ * subject: validate `detectorOptions` (§3.3), plan one job per selected
+ * `SKILL.md` directory (§3.1), refuse when the selection holds none (§3.5,
+ * before any runner call), gate on the analyzer version before any job
+ * (§3.2), then scan every job at the validated concurrency with stable job
+ * order and merge per §3.4.
+ *
+ * Failure semantics (§3.5): a failing job stops new work, in-flight jobs are
+ * drained, the lowest-index job's error is reported with its stage, and no
+ * partial SARIF is produced.
  */
-export async function runCiscoSkillScanV1(request: CiscoSkillScanRequestV1): Promise<string> {
-  const skillDirs = collectCiscoSkillDirsV1(request.tree, request.inventory);
-  if (skillDirs.length === 0) throw new Error("no SKILL.md directories found for Cisco scan");
-  const runsBySkill = await mapConcurrentStableV1(
-    skillDirs,
-    resolveCiscoScanConcurrencyV1(request.env),
-    async (skillDir): Promise<CiscoSarifRunV1[]> =>
-      (
-        await scanCiscoSkillDirectoryV1({
-          run: request.run,
-          platform: request.platform,
-          env: request.env,
-          root: request.tree,
-          skillDir,
-          ...(request.analyzerProject === undefined
-            ? {}
-            : { analyzerProject: request.analyzerProject }),
-        })
-      ).runs ?? [],
+export async function runCiscoSourceTreeScanV1(
+  request: CiscoSourceTreeScanRequestV1,
+): Promise<CiscoSourceTreeScanOutcomeV1> {
+  const options: CiscoDetectorOptionsValidationV1 = validateCiscoDetectorOptionsV1(
+    request.detectorOptions,
   );
-  return mergedCiscoSarifTextV1(runsBySkill);
+  if (!options.ok) return refusedSourceTreeScanV1("detector-options-invalid", options.detail);
+  const jobs = planCiscoSourceTreeJobsV1(request.sourceRoot, request.selectedClosurePaths);
+  if (jobs.length === 0) {
+    return refusedSourceTreeScanV1(
+      "subject-requirement-unmet",
+      "no SKILL.md directories found for Cisco scan",
+    );
+  }
+  const probe = await probeCiscoSkillScannerV1({
+    run: request.run,
+    platform: request.platform,
+    env: request.env,
+    ...(request.analyzerProject === undefined ? {} : { analyzerProject: request.analyzerProject }),
+  });
+  if (probe.kind !== "available") return failedSourceTreeScanV1(probe.stage, probe.detail);
+  const scanJob = async (job: CiscoSourceTreeJobV1): Promise<CiscoSarifRunV1[]> => {
+    const outcome = await scanCiscoSkillDirectoryOutcomeV1({
+      run: request.run,
+      platform: request.platform,
+      env: request.env,
+      root: request.sourceRoot,
+      skillDir: job.skillDir,
+      ...(request.analyzerProject === undefined
+        ? {}
+        : { analyzerProject: request.analyzerProject }),
+    });
+    if (outcome.kind === "failed") throw new CiscoJobFailureV1(outcome.stage, outcome.detail);
+    return outcome.log.runs ?? [];
+  };
+  let runsByJob: CiscoSarifRunV1[][];
+  try {
+    runsByJob = await mapConcurrentStableV1(jobs, options.concurrency, scanJob);
+  } catch (error) {
+    if (error instanceof CiscoJobFailureV1) {
+      // The per-job boundary already bounded and encoded this detail.
+      return failedSourceTreeScanV1(error.stage, error.message);
+    }
+    return failedSourceTreeScanV1("execution", errorDetailV1(error, "Cisco skill scan failed"));
+  }
+  return Object.freeze({
+    kind: "completed" as const,
+    sarifText: mergedCiscoSarifTextV1(runsByJob),
+    skillDirectories: Object.freeze(jobs.map((job) => job.path)),
+  });
 }

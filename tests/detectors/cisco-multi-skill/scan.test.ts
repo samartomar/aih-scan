@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,12 +7,12 @@ import {
   type CiscoMultiSkillRunnerV1,
   type CiscoMultiSkillRunOptionsV1,
   type CiscoMultiSkillRunResultV1,
-  ciscoSkillScannerVersionArgvV1,
+  resolveCiscoScanConcurrencyV1,
 } from "../../../src/detectors/cisco-multi-skill/plan-v1.js";
 import {
-  checkCiscoSkillScannerAvailableV1,
   ciscoScanFailureReasonV1,
-  runCiscoSkillScanV1,
+  probeCiscoSkillScannerV1,
+  runCiscoSourceTreeScanV1,
 } from "../../../src/detectors/cisco-multi-skill/scan-v1.js";
 
 // Parity tests for the execution/merge half of Core's `detector.cisco`
@@ -73,18 +73,67 @@ function ciscoRunner(sarif: unknown, onScan?: FakeHandler): CiscoMultiSkillRunne
   });
 }
 
+const SKIP_DIRS = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".aih",
+  "coverage",
+  "dist",
+  "node_modules",
+  "vendor",
+]);
+
+/** Test stand-in for Core's trust inventory: every regular file, skip dirs excluded. */
+function inventory(root: string, prefix = ""): string[] {
+  return readdirSync(join(root, prefix), { withFileTypes: true }).flatMap((entry) => {
+    const rel = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) return SKIP_DIRS.has(entry.name) ? [] : inventory(root, rel);
+    return entry.isFile() ? [rel] : [];
+  });
+}
+
+/**
+ * Core's side of the seam for the ported `runCiscoSkillScan` cases: Core
+ * declares its inventory as the selection and sends its resolved
+ * `AIH_CISCO_SCAN_CONCURRENCY` as `detectorOptions.concurrency` (C2a §3.3);
+ * a non-completed outcome surfaces as its detail, as Core's legacy throw did.
+ * Core checked availability before `runCiscoSkillScan`, so the version gate
+ * is answered here and each case's runner sees only its scans.
+ */
+async function runTree(request: {
+  run: CiscoMultiSkillRunnerV1;
+  platform: "linux";
+  env: NodeJS.ProcessEnv;
+  tree: string;
+}): Promise<string> {
+  const outcome = await runCiscoSourceTreeScanV1({
+    run: async (argv, opts) =>
+      argv.includes("--version")
+        ? { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" }
+        : request.run(argv, opts),
+    platform: request.platform,
+    env: request.env,
+    sourceRoot: request.tree,
+    selectedClosurePaths: inventory(request.tree),
+    detectorOptions: { concurrency: resolveCiscoScanConcurrencyV1(request.env) },
+  });
+  if (outcome.kind === "completed") return outcome.sarifText;
+  throw new Error(outcome.detail);
+}
+
 function mergedRuns(text: string): Array<Record<string, unknown>> {
   return (JSON.parse(text) as { runs: Array<Record<string, unknown>> }).runs;
 }
 
-describe("runCiscoSkillScanV1", () => {
+describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () => {
   it("runs one locked offline skill-scanner scan per skill directory", async () => {
     // Ported from Core tests/trust/scan.test.ts:3052.
     skill("skills/clean", "# Clean\n");
     const scanTargets: string[] = [];
     const observed: Array<{ cwd?: string; timeoutMs?: number }> = [];
 
-    const text = await runCiscoSkillScanV1({
+    const text = await runTree({
       run: ciscoRunner(EMPTY_SARIF, (argv, opts) => {
         scanTargets.push(argv[argv.indexOf("scan") + 1] ?? "");
         observed.push({ cwd: opts?.cwd, timeoutMs: opts?.timeoutMs });
@@ -105,7 +154,7 @@ describe("runCiscoSkillScanV1", () => {
     skill("skills/clean", "# Clean\n");
     const seenEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
 
-    await runCiscoSkillScanV1({
+    await runTree({
       run: ciscoRunner(EMPTY_SARIF, (_argv, opts) => {
         seenEnvs.push(opts?.env);
       }),
@@ -186,7 +235,7 @@ describe("runCiscoSkillScanV1", () => {
           return { code: 0, stdout: `Report saved to: ${out}\n`, stderr: "" };
         };
 
-        const text = await runCiscoSkillScanV1({
+        const text = await runTree({
           run,
           platform: "linux",
           env: {},
@@ -245,7 +294,7 @@ describe("runCiscoSkillScanV1", () => {
       }
     };
 
-    const text = await runCiscoSkillScanV1({
+    const text = await runTree({
       run,
       platform: "linux",
       env: {},
@@ -280,7 +329,7 @@ describe("runCiscoSkillScanV1", () => {
       }
     };
 
-    await runCiscoSkillScanV1({
+    await runTree({
       run,
       platform: "linux",
       env: { AIH_CISCO_SCAN_CONCURRENCY: "6" },
@@ -318,7 +367,7 @@ describe("runCiscoSkillScanV1", () => {
     };
 
     await expect(
-      runCiscoSkillScanV1({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
+      runTree({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
     ).rejects.toThrow("fixture Cisco failure");
     expect(maxActive).toBeGreaterThan(1);
     expect(maxActive).toBeLessThanOrEqual(4);
@@ -352,7 +401,7 @@ describe("runCiscoSkillScanV1", () => {
     };
 
     await expect(
-      runCiscoSkillScanV1({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
+      runTree({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
     ).rejects.toThrow(/^failure-a$/);
   });
 
@@ -405,7 +454,7 @@ describe("runCiscoSkillScanV1", () => {
       ],
     };
 
-    const text = await runCiscoSkillScanV1({
+    const text = await runTree({
       run: ciscoRunner(sarif),
       platform: "linux",
       env: {},
@@ -435,9 +484,9 @@ describe("runCiscoSkillScanV1", () => {
     ]);
   });
 
-  it("leaves unsafe Cisco SARIF artifact URIs unprefixed", async () => {
-    // The merge half of Core tests/trust/scan.test.ts:4851 — unsafe URIs pass
-    // through unchanged; Core's downstream sanitizer owns the fallback.
+  it("rewrites unsafe Cisco SARIF artifact URIs to cisco.sarif", async () => {
+    // C2a §3.4: Core fails closed on a non-source-relative URI, so the merge
+    // applies Core's downstream fallback (`normalizeSarifUri`) itself.
     skill("skills/clean", "# Clean\n");
     const sarif = {
       runs: [
@@ -472,7 +521,7 @@ describe("runCiscoSkillScanV1", () => {
       ],
     };
 
-    const text = await runCiscoSkillScanV1({
+    const text = await runTree({
       run: ciscoRunner(sarif),
       platform: "linux",
       env: {},
@@ -488,10 +537,10 @@ describe("runCiscoSkillScanV1", () => {
     ).results;
     expect(
       results.map((result) => result.locations[0]?.physicalLocation.artifactLocation.uri),
-    ).toEqual(["../../../../etc/passwd", "C:evil"]);
+    ).toEqual(["cisco.sarif", "cisco.sarif"]);
   });
 
-  it("strips authority-free file:// prefixes but leaves absolute file URIs untouched", async () => {
+  it("strips authority-free file:// prefixes and falls back for absolute file URIs", async () => {
     skill("skills/clean", "# Clean\n");
     const sarif = {
       runs: [
@@ -514,7 +563,7 @@ describe("runCiscoSkillScanV1", () => {
       ],
     };
 
-    const text = await runCiscoSkillScanV1({
+    const text = await runTree({
       run: ciscoRunner(sarif),
       platform: "linux",
       env: {},
@@ -530,7 +579,7 @@ describe("runCiscoSkillScanV1", () => {
     ).results;
     expect(
       results.map((result) => result.locations[0]?.physicalLocation.artifactLocation.uri),
-    ).toEqual(["skills/clean/SKILL.md", "file:///etc/passwd"]);
+    ).toEqual(["skills/clean/SKILL.md", "cisco.sarif"]);
   });
 
   it("fails when a skill scan emits no valid SARIF", async () => {
@@ -547,13 +596,13 @@ describe("runCiscoSkillScanV1", () => {
     });
 
     await expect(
-      runCiscoSkillScanV1({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
+      runTree({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
     ).rejects.toThrow("detector did not emit valid SARIF");
   });
 
   it("fails when the tree holds no SKILL.md directory", async () => {
     await expect(
-      runCiscoSkillScanV1({
+      runTree({
         run: fakeRunner(() => undefined),
         platform: "linux",
         env: {},
@@ -571,67 +620,8 @@ describe("runCiscoSkillScanV1", () => {
     });
 
     await expect(
-      runCiscoSkillScanV1({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
+      runTree({ run, platform: "linux", env: {}, tree: realpathSync(dir) }),
     ).rejects.toThrow("detector exit 2");
-  });
-});
-
-describe("checkCiscoSkillScannerAvailableV1", () => {
-  it("accepts the pinned version under the startup timeout", async () => {
-    // The Cisco half of Core tests/trust/scan.test.ts:5297.
-    let timeoutMs: number | undefined;
-    let seenArgv: readonly string[] = [];
-    const run = fakeRunner((argv, opts) => {
-      if (argv.includes("skill-scanner") && argv.includes("--version")) {
-        timeoutMs = opts?.timeoutMs;
-        seenArgv = argv;
-        return { code: 0, stdout: "skill-scanner 2.0.14\n" };
-      }
-      return undefined;
-    });
-
-    await expect(
-      checkCiscoSkillScannerAvailableV1({ run, platform: "linux", env: {} }),
-    ).resolves.toBeUndefined();
-    expect(timeoutMs).toBe(120_000);
-    expect(seenArgv).toEqual(ciscoSkillScannerVersionArgvV1("linux"));
-  });
-
-  it("reports the process's own words when uv cannot run the scanner", async () => {
-    // The availability half of Core tests/trust/scan.test.ts:3346 and :4462.
-    const run = fakeRunner((argv) =>
-      isCiscoSkillScannerArgv(argv)
-        ? { code: 127, stdout: "", stderr: "uv not found", spawnError: true }
-        : undefined,
-    );
-
-    await expect(
-      checkCiscoSkillScannerAvailableV1({ run, platform: "linux", env: {} }),
-    ).resolves.toBe("uv not found");
-  });
-
-  it("reports an empty version probe", async () => {
-    const run = fakeRunner(() => ({ code: 0, stdout: "  \n" }));
-
-    await expect(
-      checkCiscoSkillScannerAvailableV1({ run, platform: "linux", env: {} }),
-    ).resolves.toBe("skill-scanner version check emitted no output");
-  });
-
-  it("reports a version mismatch against the expected version", async () => {
-    const run = fakeRunner(() => ({ code: 0, stdout: "skill-scanner 9.9.9\n" }));
-
-    await expect(
-      checkCiscoSkillScannerAvailableV1({ run, platform: "linux", env: {} }),
-    ).resolves.toBe('skill-scanner version "skill-scanner 9.9.9" does not match 2.0.14');
-    await expect(
-      checkCiscoSkillScannerAvailableV1({
-        run,
-        platform: "linux",
-        env: {},
-        expectedVersion: "9.9.9",
-      }),
-    ).resolves.toBeUndefined();
   });
 });
 
@@ -652,5 +642,442 @@ describe("ciscoScanFailureReasonV1", () => {
         "detector exit signal",
       ),
     ).toBe("detector exit signal");
+  });
+});
+
+describe("probeCiscoSkillScannerV1", () => {
+  it("accepts the pinned version", async () => {
+    const run = fakeRunner((argv) =>
+      argv.includes("--version") ? { code: 0, stdout: "skill-scanner 2.0.14\n" } : undefined,
+    );
+
+    await expect(probeCiscoSkillScannerV1({ run, platform: "linux", env: {} })).resolves.toEqual({
+      kind: "available",
+    });
+  });
+
+  it("classifies a probe that cannot run as an acquisition failure", async () => {
+    const spawnFailed = fakeRunner(() => ({
+      code: 127,
+      stdout: "",
+      stderr: "uv not found",
+      spawnError: true,
+    }));
+    const exited = fakeRunner(() => ({ code: 1, stdout: "", stderr: "lock unsatisfiable" }));
+    const throwing: CiscoMultiSkillRunnerV1 = async () => {
+      throw new Error("spawn blew up");
+    };
+
+    await expect(
+      probeCiscoSkillScannerV1({ run: spawnFailed, platform: "linux", env: {} }),
+    ).resolves.toEqual({ kind: "unavailable", stage: "acquisition", detail: "uv not found" });
+    await expect(
+      probeCiscoSkillScannerV1({ run: exited, platform: "linux", env: {} }),
+    ).resolves.toEqual({
+      kind: "unavailable",
+      stage: "acquisition",
+      detail: "lock unsatisfiable",
+    });
+    await expect(
+      probeCiscoSkillScannerV1({ run: throwing, platform: "linux", env: {} }),
+    ).resolves.toEqual({ kind: "unavailable", stage: "acquisition", detail: "spawn blew up" });
+  });
+
+  it("classifies a wrong answer from the probe as an availability failure", async () => {
+    const empty = fakeRunner(() => ({ code: 0, stdout: "  \n" }));
+    const mismatched = fakeRunner(() => ({ code: 0, stdout: "skill-scanner 9.9.9\n" }));
+
+    await expect(
+      probeCiscoSkillScannerV1({ run: empty, platform: "linux", env: {} }),
+    ).resolves.toEqual({
+      kind: "unavailable",
+      stage: "availability",
+      detail: "skill-scanner version check emitted no output",
+    });
+    await expect(
+      probeCiscoSkillScannerV1({ run: mismatched, platform: "linux", env: {} }),
+    ).resolves.toEqual({
+      kind: "unavailable",
+      stage: "availability",
+      detail: 'skill-scanner version "skill-scanner 9.9.9" does not match 2.0.14',
+    });
+  });
+});
+
+describe("runCiscoSourceTreeScanV1", () => {
+  // C2a §3 engine-function behaviour: boundary validation and failure
+  // classification are typed outcomes, never thrown errors.
+  function selectionOf(...skillDirs: readonly string[]): string[] {
+    return skillDirs.map((rel) => (rel.length === 0 ? "SKILL.md" : `${rel}/SKILL.md`));
+  }
+
+  it("refuses invalid detector options before any runner call", async () => {
+    skill("skills/clean", "# Clean\n");
+    let invoked = false;
+    const run: CiscoMultiSkillRunnerV1 = async () => {
+      invoked = true;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+      detectorOptions: { concurrency: 0 },
+    });
+
+    expect(outcome).toEqual({
+      kind: "refused",
+      reason: "detector-options-invalid",
+      detail: "concurrency must be an integer from 1 through 64",
+    });
+    expect(invoked).toBe(false);
+  });
+
+  it("refuses unknown detector option keys", async () => {
+    skill("skills/clean", "# Clean\n");
+    const outcome = await runCiscoSourceTreeScanV1({
+      run: fakeRunner(() => undefined),
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+      detectorOptions: { concurrency: 2, extra: true },
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "refused",
+      reason: "detector-options-invalid",
+      detail: 'detectorOptions holds unknown key: "extra"',
+    });
+  });
+
+  it("refuses a selection with no SKILL.md directory before any runner call", async () => {
+    // C2a §3.5: B2 maps this refusal to Core's `subject-requirement-unmet`.
+    let invoked = false;
+    const run: CiscoMultiSkillRunnerV1 = async () => {
+      invoked = true;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: ["docs/readme.md"],
+    });
+
+    expect(outcome).toEqual({
+      kind: "refused",
+      reason: "subject-requirement-unmet",
+      detail: "no SKILL.md directories found for Cisco scan",
+    });
+    expect(invoked).toBe(false);
+  });
+
+  it("fails at the availability stage when the version gate mismatches, before any job", async () => {
+    skill("skills/clean", "# Clean\n");
+    const seenArgv: string[][] = [];
+    const run = fakeRunner((argv) => {
+      seenArgv.push([...argv]);
+      if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 9.9.9\n" };
+      return { code: 0, stdout: "" };
+    });
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+    });
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "availability",
+      detail: 'skill-scanner version "skill-scanner 9.9.9" does not match 2.0.14',
+    });
+    expect(seenArgv.length).toBeGreaterThan(0);
+    expect(seenArgv.every((argv) => argv.includes("--version"))).toBe(true);
+  });
+
+  it("fails at the acquisition stage when the analyzer environment cannot run", async () => {
+    skill("skills/clean", "# Clean\n");
+    const run = fakeRunner((argv) =>
+      argv.includes("--version")
+        ? { code: 127, stdout: "", stderr: "uv not found", spawnError: true }
+        : undefined,
+    );
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+    });
+
+    expect(outcome).toEqual({ kind: "failed", stage: "acquisition", detail: "uv not found" });
+  });
+
+  it("merges job runs in stable job order, not completion order", async () => {
+    // C2a §3.3: results are stable in job order; job order is the
+    // localeCompare-sorted selection order of §3.1.
+    for (let index = 0; index < 3; index++) skill(`skills/skill-${index}`, `# Skill ${index}\n`);
+    const delays = new Map([
+      ["skill-0", 40],
+      ["skill-1", 20],
+      ["skill-2", 5],
+    ]);
+    const run: CiscoMultiSkillRunnerV1 = async (argv) => {
+      if (argv.includes("--version")) {
+        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+      }
+      const target = argv[argv.indexOf("scan") + 1] ?? "";
+      const output = argv[argv.indexOf("--output-sarif") + 1];
+      if (output === undefined) return { code: 1, stdout: "", stderr: "missing SARIF path" };
+      const name = target.replaceAll("\\", "/").split("/").pop() ?? "";
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, delays.get(name) ?? 0));
+      writeFileSync(
+        output,
+        JSON.stringify({
+          runs: [{ results: [{ ruleId: "fixture", message: { text: name } }] }],
+        }),
+        "utf8",
+      );
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/skill-0", "skills/skill-1", "skills/skill-2"),
+    });
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    expect(outcome.skillDirectories).toEqual([
+      "skills/skill-0",
+      "skills/skill-1",
+      "skills/skill-2",
+    ]);
+    expect(
+      mergedRuns(outcome.sarifText).map(
+        (jobRun) =>
+          (jobRun as { results: Array<{ message: { text: string } }> }).results[0]?.message.text,
+      ),
+    ).toEqual(["skill-0", "skill-1", "skill-2"]);
+  });
+
+  it("runs at the validated detectorOptions concurrency", async () => {
+    for (let index = 0; index < 5; index++) skill(`skills/skill-${index}`, `# Skill ${index}\n`);
+    let active = 0;
+    let maxActive = 0;
+    const run: CiscoMultiSkillRunnerV1 = async (argv) => {
+      if (argv.includes("--version")) {
+        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+      }
+      const output = argv[argv.indexOf("--output-sarif") + 1];
+      if (output === undefined) return { code: 1, stdout: "", stderr: "missing SARIF path" };
+      active++;
+      maxActive = Math.max(maxActive, active);
+      try {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 15));
+        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        return { code: 0, stdout: "", stderr: "" };
+      } finally {
+        active--;
+      }
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf(
+        "skills/skill-0",
+        "skills/skill-1",
+        "skills/skill-2",
+        "skills/skill-3",
+        "skills/skill-4",
+      ),
+      detectorOptions: { concurrency: 2 },
+    });
+
+    expect(outcome.kind).toBe("completed");
+    expect(maxActive).toBe(2);
+  });
+
+  it("drains in-flight jobs and reports the lowest-index failure at the execution stage", async () => {
+    // C2a §3.5: no new jobs start, in-flight jobs finish, the lowest-index
+    // failing job's error is reported, and there is no partial SARIF.
+    for (let index = 0; index < 5; index++) skill(`skills/skill-${index}`, `# Skill ${index}\n`);
+    let active = 0;
+    const run: CiscoMultiSkillRunnerV1 = async (argv) => {
+      if (argv.includes("--version")) {
+        return { code: 0, stdout: "skill-scanner 2.0.14\n", stderr: "" };
+      }
+      const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
+      const output = argv[argv.indexOf("--output-sarif") + 1];
+      if (output === undefined) return { code: 1, stdout: "", stderr: "missing SARIF path" };
+      active++;
+      try {
+        if (target.endsWith("skill-2")) {
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+          return { code: 2, stdout: "", stderr: "failure-2" };
+        }
+        if (target.endsWith("skill-0")) {
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 30));
+          return { code: 2, stdout: "", stderr: "failure-0" };
+        }
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
+        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        return { code: 0, stdout: "", stderr: "" };
+      } finally {
+        active--;
+      }
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf(
+        "skills/skill-0",
+        "skills/skill-1",
+        "skills/skill-2",
+        "skills/skill-3",
+        "skills/skill-4",
+      ),
+    });
+
+    expect(outcome).toEqual({ kind: "failed", stage: "execution", detail: "failure-0" });
+    expect(active).toBe(0);
+  });
+
+  it("fails at the output stage when a job emits no parseable SARIF", async () => {
+    skill("skills/clean", "# Clean\n");
+    const run = fakeRunner((argv) => {
+      if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.0.14\n" };
+      if (argv.includes("scan")) {
+        const out = argv[argv.indexOf("--output-sarif") + 1];
+        if (out === undefined) return { code: 1, stderr: "missing --output-sarif" };
+        writeFileSync(out, "not SARIF", "utf8");
+        return { code: 0, stdout: "done\n" };
+      }
+      return undefined;
+    });
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+    });
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: "detector did not emit valid SARIF",
+    });
+  });
+
+  it("fails at the output stage when a job writes no SARIF file", async () => {
+    skill("skills/clean", "# Clean\n");
+    const run = fakeRunner((argv) =>
+      argv.includes("--version")
+        ? { code: 0, stdout: "skill-scanner 2.0.14\n" }
+        : { code: 0, stdout: "done\n" },
+    );
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+    });
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: "detector did not emit valid SARIF",
+    });
+  });
+
+  it("scans a root-level SKILL.md as the root job with bare URIs", async () => {
+    // C2a §3.1: a root-level SKILL.md makes the root one of the jobs, with
+    // the empty prefix (§3.4: just `<uri>` for the root job).
+    writeFileSync(join(dir, "SKILL.md"), "# Root\n", "utf8");
+    const sarif = {
+      runs: [
+        {
+          results: [
+            {
+              ruleId: "FIXTURE",
+              message: { text: "root finding" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "SKILL.md" },
+                    region: { startLine: 1 },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run: ciscoRunner(sarif),
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: ["SKILL.md"],
+    });
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    expect(outcome.skillDirectories).toEqual([""]);
+    const run0 = mergedRuns(outcome.sarifText)[0] as {
+      results: Array<{
+        locations: Array<{ physicalLocation: { artifactLocation: { uri: string } } }>;
+      }>;
+    };
+    expect(run0.results[0]?.locations[0]?.physicalLocation.artifactLocation.uri).toBe("SKILL.md");
+  });
+
+  it("bounds and control-character-encodes untrusted analyzer output in details", async () => {
+    skill("skills/clean", "# Clean\n");
+    const noisy = `boom\n${"x".repeat(4000)}`;
+    const run = fakeRunner((argv) =>
+      argv.includes("--version")
+        ? { code: 0, stdout: "skill-scanner 2.0.14\n" }
+        : { code: 2, stdout: "", stderr: noisy },
+    );
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: selectionOf("skills/clean"),
+    });
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind !== "failed") return;
+    expect(outcome.stage).toBe("execution");
+    expect(outcome.detail.length).toBeLessThanOrEqual(1024);
+    expect(outcome.detail).not.toContain("\n");
   });
 });

@@ -9,9 +9,10 @@ import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
  *
  * The per-skill SARIF log is evidence: it passes through structurally
  * untouched except that artifact URIs are prefixed with the source-relative
- * skill directory and volatile invocation timestamps are removed, so merged
- * output is projection- and time-independent. Rule mapping, grading and
- * verdicts stay with the caller (Core keeps them).
+ * skill directory (unsafe URIs rewritten to `cisco.sarif`, C2a §3.4) and
+ * volatile invocation timestamps are removed, so merged output is projection-
+ * and time-independent. Rule mapping, grading and verdicts stay with the
+ * caller (Core keeps them).
  */
 
 export interface CiscoSarifArtifactLocationV1 {
@@ -51,6 +52,13 @@ export interface CiscoSarifLogV1 {
 export const MAX_CISCO_SARIF_BYTES_V1 = 16 * 1024 * 1024;
 
 /**
+ * Core's fallback artifact URI for this detector (C2a §1.4 and §3.4): an
+ * analyzer URI that cannot be made a safe source-relative path is rewritten
+ * to it, exactly as legacy Core's `normalizeSarifUri` mapped it downstream.
+ */
+export const CISCO_SARIF_FALLBACK_URI_V1 = "cisco.sarif";
+
+/**
  * Output gate for one skill scan's SARIF file, mirroring Core's
  * `parseSarifLog`: parseable JSON whose root holds a `runs` array, or
  * `undefined`. Deeper validation is deliberately not done here.
@@ -79,13 +87,16 @@ function isSafeRelativeSarifUriV1(uri: string): boolean {
 /**
  * Prefixes one artifact URI with the skill's source-relative directory. A
  * `file://` prefix is stripped first; an unsafe URI (absolute, drive-relative,
- * or escaping through `..`) is returned untouched, exactly as Core leaves it
- * for the downstream sanitizer.
+ * or escaping through `..`) is rewritten to {@link CISCO_SARIF_FALLBACK_URI_V1}
+ * (C2a §3.4), because C2a Core fails closed on any URI that is not
+ * source-relative instead of sanitizing downstream. A non-string or empty
+ * value passes through untouched; Core's boundary maps a missing URI to the
+ * same fallback.
  */
 export function prefixSafeCiscoUriV1(prefix: string, raw: unknown): unknown {
   if (typeof raw !== "string" || raw.length === 0) return raw;
   const stripped = toPosixV1(raw.replace(/^file:\/\//, ""));
-  if (!isSafeRelativeSarifUriV1(stripped)) return raw;
+  if (!isSafeRelativeSarifUriV1(stripped)) return CISCO_SARIF_FALLBACK_URI_V1;
   return prefix.length > 0 ? `${prefix}/${stripped}` : stripped;
 }
 

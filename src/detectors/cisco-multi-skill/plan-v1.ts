@@ -1,17 +1,16 @@
-import { lstatSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
  * Planning for the `detector.cisco` multi-skill scan, ported behaviour-for-
- * behaviour from Core's `src/trust/detectors.ts` (`collectCiscoSkillDirs`,
- * `ciscoSkillScannerRunArgv`, `ciscoSkillScannerVersionArgv`,
+ * behaviour from Core's `src/trust/detectors.ts` (`ciscoSkillScannerRunArgv`, `ciscoSkillScannerVersionArgv`,
  * `resolveCiscoScanConcurrency`) and `src/trust/fetch.ts` (`scrubFetchEnv`).
  *
- * This module only plans: it computes skill directories, argv, environment and
- * concurrency for a subject. It never spawns a process and never reads
- * detector output; the runtime drives execution through the injected
- * {@link CiscoMultiSkillRunnerV1} seam.
+ * This module only plans: argv, environment and concurrency. For the C2a
+ * `source-tree` subject it plans jobs from Core's `selectedClosurePaths` ({@link planCiscoSourceTreeJobsV1}) and
+ * validates `detectorOptions` ({@link validateCiscoDetectorOptionsV1}). It
+ * never spawns a process and never reads detector output; the runtime drives
+ * execution through the injected {@link CiscoMultiSkillRunnerV1} seam.
  */
 
 export type CiscoMultiSkillPlatformV1 = "windows" | "darwin" | "linux";
@@ -60,6 +59,59 @@ export const CISCO_MULTI_SKILL_SCANNER_PROJECT_V1 = resolve(
 
 export const DEFAULT_CISCO_SCAN_CONCURRENCY_V1 = 4;
 export const MAX_CISCO_SCAN_CONCURRENCY_V1 = 64;
+
+/** Typed result of validating `detectorOptions` for `detector.cisco` (C2a §3.3). */
+export type CiscoDetectorOptionsValidationV1 = Readonly<
+  | { ok: true; concurrency: number }
+  | { ok: false; reason: "detector-options-invalid"; detail: string }
+>;
+
+function invalidCiscoDetectorOptionsV1(detail: string): CiscoDetectorOptionsValidationV1 {
+  return Object.freeze({ ok: false as const, reason: "detector-options-invalid" as const, detail });
+}
+
+/**
+ * Boundary validation for the `detector.cisco` `detectorOptions` (C2a §3.3):
+ * an absent option selects the default; a present option must be a plain
+ * object holding only `concurrency`, a safe integer from 1 through 64. Core
+ * clamps `AIH_CISCO_SCAN_CONCURRENCY` before sending; Scan validates the
+ * received integer and never coerces. Bad input is a typed refusal, never a
+ * thrown error.
+ */
+export function validateCiscoDetectorOptionsV1(value: unknown): CiscoDetectorOptionsValidationV1 {
+  if (value === undefined) {
+    return Object.freeze({ ok: true as const, concurrency: DEFAULT_CISCO_SCAN_CONCURRENCY_V1 });
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return invalidCiscoDetectorOptionsV1("detectorOptions must be a plain object");
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return invalidCiscoDetectorOptionsV1("detectorOptions must be a plain object");
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "concurrency") {
+      return invalidCiscoDetectorOptionsV1(
+        `detectorOptions holds unknown key: ${JSON.stringify(key)}`,
+      );
+    }
+  }
+  const concurrency = (value as { readonly concurrency?: unknown }).concurrency;
+  if (concurrency === undefined) {
+    return Object.freeze({ ok: true as const, concurrency: DEFAULT_CISCO_SCAN_CONCURRENCY_V1 });
+  }
+  if (
+    typeof concurrency !== "number" ||
+    !Number.isSafeInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > MAX_CISCO_SCAN_CONCURRENCY_V1
+  ) {
+    return invalidCiscoDetectorOptionsV1(
+      `concurrency must be an integer from 1 through ${MAX_CISCO_SCAN_CONCURRENCY_V1}`,
+    );
+  }
+  return Object.freeze({ ok: true as const, concurrency });
+}
 
 /**
  * Mirrors Core's `resolveCiscoScanConcurrency`: unset, empty, malformed or
@@ -196,84 +248,42 @@ export function scrubCiscoScanEnvV1(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return out;
 }
 
-/** Directories Core's trust walk never descends into. */
-export const CISCO_SKILL_SKIP_DIRS_V1: ReadonlySet<string> = new Set([
-  ".git",
-  ".hg",
-  ".svn",
-  ".aih",
-  "coverage",
-  "dist",
-  "node_modules",
-  "vendor",
-]);
-
-/** Minimal inventory seam: Core's `TrustFileInventory` as this engine reads it. */
-export interface CiscoSkillInventoryEntryV1 {
-  readonly absolutePath: string;
-  readonly relativePath: string;
-  readonly size: number;
-}
-
-export interface CiscoSkillInventoryV1 {
-  matching(
-    predicate: (entry: CiscoSkillInventoryEntryV1) => boolean,
-  ): Iterable<CiscoSkillInventoryEntryV1>;
-}
-
-function toPosixV1(path: string): string {
-  return path.replace(/\\/g, "/");
+/** One Cisco job planned from a source-tree subject's selection (C2a §3.1). */
+export interface CiscoSourceTreeJobV1 {
+  /** Source-relative POSIX skill directory; `""` for a root-level `SKILL.md`. */
+  readonly path: string;
+  /** Absolute skill directory the job scans; also its working directory. */
+  readonly skillDir: string;
 }
 
 /**
- * Filesystem fallback for {@link collectCiscoSkillDirsV1}, mirroring Core's
- * `collectFilesUnder` over `buildTrustFileInventory`: skip directories are not
- * descended (except the root itself), a symlink is followed only when its
- * target is a file, and a symlinked directory is never traversed.
+ * Job planning for a `source-tree` subject (C2a §3.1): the skill directories
+ * are the `dirname` of every SELECTED path whose basename is `SKILL.md`,
+ * deduplicated and sorted by relative path with Core's `localeCompare`
+ * collation (coordinator decision 7). Jobs come from the selection alone —
+ * the tree is never walked and skip directories are never consulted here.
+ * Nested skill directories are separate jobs; a root-level `SKILL.md` plans
+ * the root job with the empty prefix. `sourceRoot` is Core's absolute
+ * realpath of the scanned root.
  */
-function walkSkillFilesV1(root: string): string[] {
-  const absoluteRoot = resolve(root);
-  const files: string[] = [];
-  const visit = (absolutePath: string): void => {
-    const stats = lstatSync(absolutePath);
-    if (stats.isSymbolicLink()) {
-      const target = statSync(absolutePath);
-      if (target.isFile() && basename(absolutePath) === "SKILL.md") files.push(absolutePath);
-      return;
-    }
-    if (stats.isDirectory()) {
-      if (absolutePath !== absoluteRoot && CISCO_SKILL_SKIP_DIRS_V1.has(basename(absolutePath)))
-        return;
-      for (const entry of readdirSync(absolutePath).sort()) visit(join(absolutePath, entry));
-      return;
-    }
-    if (!stats.isFile()) return;
-    if (basename(absolutePath) === "SKILL.md") files.push(absolutePath);
-  };
-  visit(absoluteRoot);
-  return files;
-}
-
-/**
- * Every directory holding a `SKILL.md`, sorted by its source-relative POSIX
- * path with Core's `localeCompare` ordering. Nested skills are each listed;
- * when an inventory is supplied it is the only source of candidates.
- */
-export function collectCiscoSkillDirsV1(root: string, inventory?: CiscoSkillInventoryV1): string[] {
+export function planCiscoSourceTreeJobsV1(
+  sourceRoot: string,
+  selectedClosurePaths: readonly string[],
+): CiscoSourceTreeJobV1[] {
   const dirs = new Set<string>();
-  const skillFiles: Iterable<string> = inventory
-    ? {
-        *[Symbol.iterator]() {
-          for (const entry of inventory.matching(
-            (candidate) => basename(candidate.absolutePath) === "SKILL.md",
-          )) {
-            yield entry.absolutePath;
-          }
-        },
-      }
-    : walkSkillFilesV1(root);
-  for (const file of skillFiles) dirs.add(dirname(file));
-  return [...dirs].sort((left, right) =>
-    toPosixV1(relative(root, left)).localeCompare(toPosixV1(relative(root, right))),
-  );
+  for (const entry of selectedClosurePaths) {
+    if (entry === "SKILL.md") {
+      dirs.add("");
+    } else if (entry.endsWith("/SKILL.md")) {
+      dirs.add(entry.slice(0, entry.length - "/SKILL.md".length));
+    }
+  }
+  return [...dirs]
+    .sort((left, right) => left.localeCompare(right))
+    .map((path) =>
+      Object.freeze({
+        path,
+        skillDir: path.length === 0 ? sourceRoot : join(sourceRoot, ...path.split("/")),
+      }),
+    );
 }
