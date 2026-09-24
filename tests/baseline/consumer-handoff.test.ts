@@ -103,6 +103,7 @@ const COMPONENT_ARTIFACT_KEYS = [
   "content",
   "coverageComplete",
   "coverageDisposition",
+  "coverageGaps",
   "findingSummary",
   "findings",
   "globalCoverageNotifications",
@@ -159,7 +160,7 @@ function sarif(analyzer: string, results: unknown[], notifications: unknown[] = 
   });
 }
 
-async function fixture() {
+async function fixture({ quiet = false }: { quiet?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-consumer-handoff-"));
   temporaryDirectories.push(root);
   const source = join(root, "source");
@@ -211,8 +212,9 @@ async function fixture() {
         }),
         analyzerVersion: "native.0123456789ab",
       };
-    const bytes =
-      analyzer === "skillspector"
+    const bytes = quiet
+      ? sarif(analyzer, [])
+      : analyzer === "skillspector"
         ? sarif(
             analyzer,
             [
@@ -583,6 +585,7 @@ describe("emit-consumer-handoff", () => {
         missingAnalyzers: [],
         failedAnalyzers: [],
         errorNotificationCount: 0,
+        completionEvidenceAbsent: ["cisco", "semgrep", "skillspector"],
         coverageComplete: false,
       },
       api: { package: "@aihq/scan" },
@@ -639,6 +642,11 @@ describe("emit-consumer-handoff", () => {
       paths: ["skills/demo"],
       requestedAnalyzers: [...analyzers],
       coverageComplete: false,
+      coverageGaps: [
+        { analyzer: "skillspector", reason: "completion-evidence-absent" },
+        { analyzer: "semgrep", reason: "completion-evidence-absent" },
+        { analyzer: "cisco", reason: "completion-evidence-absent" },
+      ],
       source: current.request.source,
     });
     // Findings keep the exact row shape the committed Catalog digests were taken over,
@@ -718,6 +726,42 @@ describe("emit-consumer-handoff", () => {
     expect((handoff.findings as Json).mappedToDeclaredClosures).toMatchObject({ count: 2 });
     expect((handoff.findings as Json).unmapped).toMatchObject({ count: 1 });
     expect((handoff.rawReports as Json[]).map((row) => row.analyzer)).toEqual([...analyzers]);
+  });
+
+  it("never infers coverage from silence: a quiet publication is a typed coverage gap", async () => {
+    const current = await fixture({ quiet: true });
+    const result = current.emit();
+    expect(result.status, result.stderr).toBe(0);
+    const handoff = readJson(join(current.output, "consumer-handoff.json"));
+    // No notification, no unmapped finding, every analyzer successful, and still no proof
+    // that the SARIF analyzers analyzed the subject: the gap is recorded, never cleared.
+    expect(handoff.analyzerGaps).toEqual({
+      missingAnalyzers: [],
+      failedAnalyzers: [],
+      errorNotificationCount: 0,
+      coverageWarningCount: 0,
+      completionEvidenceAbsent: ["cisco", "semgrep", "skillspector"],
+      coverageComplete: false,
+    });
+    expect(handoff.outcome).toBe("observed_with_gaps");
+    expect((handoff.coverageNotifications as Json).global).toMatchObject({ count: 0 });
+    const artifact = readJson(
+      join(current.output, "components", "skill-skills-demo-0123456789ab.json"),
+    );
+    expect(artifact).toMatchObject({
+      outcome: "observed",
+      coverageComplete: false,
+      coverageGaps: [
+        { analyzer: "skillspector", reason: "completion-evidence-absent" },
+        { analyzer: "semgrep", reason: "completion-evidence-absent" },
+        { analyzer: "cisco", reason: "completion-evidence-absent" },
+      ],
+      globalCoverageNotifications: [],
+      locationBoundCoverageNotifications: [],
+    });
+    expect(artifact.coverageDisposition).toBe(
+      "0 location-bound and 0 global Scanner coverage notifications remain unresolved, and 3 requested analyzers (skillspector, semgrep, cisco) carry no subject-bound completion evidence; Scanner authority none.",
+    );
   });
 
   it("rejects a tampered publication whose checksum no longer matches", async () => {

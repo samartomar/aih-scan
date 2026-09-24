@@ -127,6 +127,12 @@ const CONTENT_CLASSES = [
 // source-relative; older ones may still carry these absolute spellings. Anything else is
 // refused by Scan's normalizer rather than guessed.
 const ANALYZER_SOURCE_ROOTS = ["/aih/source", "/scan"];
+// The one coverage-gap reason a component may carry today. Coverage is never inferred from
+// silence: an analyzer counts as having covered the subject only with positive, subject-bound
+// completion evidence. The native observation carries it (it hashes the exact request source
+// tree); Scan's SARIF annexes carry none yet, so every SARIF analyzer is a typed gap until a
+// Scan completion-evidence contract exists and is recognized here.
+const COMPLETION_EVIDENCE_ABSENT = "completion-evidence-absent";
 const SARIF_LEVELS = ["none", "note", "warning", "error"];
 const SARIF_KINDS = ["pass", "open", "informational", "notApplicable", "review", "fail"];
 const NOTIFICATION_KINDS = ["toolExecutionNotifications", "toolConfigurationNotifications"];
@@ -641,6 +647,7 @@ function observationRows(publication, request) {
   const findings = [];
   const notifications = [];
   const analyzers = [];
+  const completionEvidence = new Set();
   for (const observation of publication.receipt.observations) {
     const { analyzer } = observation;
     const encoded = annexes.get(observation.annex.path);
@@ -659,6 +666,7 @@ function observationRows(publication, request) {
       row.executionSuccessful =
         document.protocol === "BaselineNativeObservationV1" &&
         document.sourceTreeSha256 === request.source.treeSha256;
+      if (row.executionSuccessful) completionEvidence.add(analyzer);
       continue;
     }
     let sarif;
@@ -723,7 +731,7 @@ function observationRows(publication, request) {
     });
     row.executionSuccessful = successful;
   }
-  return { findings, notifications, analyzers };
+  return { findings, notifications, analyzers, completionEvidence };
 }
 
 function tally(rows, keyOf) {
@@ -822,7 +830,10 @@ export function emitConsumerHandoffV1(options, { runGh = defaultRunGh } = {}) {
   const requestedAnalyzers = [...new Set(request.components.flatMap((component) => component.analyzers))];
   const missingAnalyzers = requestedAnalyzers.filter((analyzer) => !executionByAnalyzer.has(analyzer)).sort(codeUnitCompare);
   const failedAnalyzers = rows.analyzers.filter((row) => !row.executionSuccessful).map((row) => row.analyzer).sort(codeUnitCompare);
-  const coverageComplete = rows.notifications.length === 0;
+  const completionEvidenceAbsent = requestedAnalyzers
+    .filter((analyzer) => !rows.completionEvidence.has(analyzer))
+    .sort(codeUnitCompare);
+  const coverageComplete = rows.notifications.length === 0 && completionEvidenceAbsent.length === 0;
   const common = {
     authority: "none",
     riskDecision: "consumer_required",
@@ -840,7 +851,12 @@ export function emitConsumerHandoffV1(options, { runGh = defaultRunGh } = {}) {
   for (const { component, catalogAssetId } of mapping.components) {
     const findings = rows.findings.filter((row) => row.componentIds.includes(component.id));
     const locationBound = locationRows.filter((row) => row.componentIds.includes(component.id));
-    const componentCoverageComplete = locationBound.length === 0 && globalRows.length === 0;
+    const coverageGaps = component.analyzers
+      .filter((analyzer) => !rows.completionEvidence.has(analyzer))
+      .map((analyzer) => ({ analyzer, reason: COMPLETION_EVIDENCE_ABSENT }));
+    const componentCoverageComplete =
+      locationBound.length === 0 && globalRows.length === 0 && coverageGaps.length === 0;
+    const notified = `${locationBound.length} location-bound and ${globalRows.length} global Scanner coverage notifications remain unresolved`;
     const artifact = {
       protocol: "ScannerComponentObservationHandoffV1",
       ...common,
@@ -862,9 +878,12 @@ export function emitConsumerHandoffV1(options, { runGh = defaultRunGh } = {}) {
       globalCoverageNotifications: globalRows,
       globalCoverageSummary: coverageSummary(globalRows),
       coverageComplete: componentCoverageComplete,
+      coverageGaps,
       coverageDisposition: componentCoverageComplete
-        ? "The Scanner reported no coverage notifications for this component; Scanner authority none."
-        : `${locationBound.length} location-bound and ${globalRows.length} global Scanner coverage notifications remain unresolved; Scanner authority none.`,
+        ? "Every requested analyzer carries subject-bound completion evidence and the Scanner reported no coverage notifications for this component; Scanner authority none."
+        : coverageGaps.length === 0
+          ? `${notified}; Scanner authority none.`
+          : `${notified}, and ${coverageGaps.length} requested analyzers (${coverageGaps.map((gap) => gap.analyzer).join(", ")}) carry no subject-bound completion evidence; Scanner authority none.`,
     };
     const name = artifactName(component.id);
     if (names.has(name)) fail(`component artifact name collision ${name}`);
@@ -924,6 +943,7 @@ export function emitConsumerHandoffV1(options, { runGh = defaultRunGh } = {}) {
       failedAnalyzers,
       errorNotificationCount: rows.notifications.filter((row) => row.level === "error").length,
       coverageWarningCount: rows.notifications.filter((row) => row.level === "warning").length,
+      completionEvidenceAbsent,
       coverageComplete,
     },
     findings: {
