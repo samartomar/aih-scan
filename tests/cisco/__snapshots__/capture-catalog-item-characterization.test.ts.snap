@@ -399,6 +399,7 @@ under the exact config digest the layout declares.
 
 exports[`capture-catalog-item command characterization > keeps its exported names 1`] = `
 [
+  "BROKER_DOCKER_EXECUTABLE",
   "assertPlatform",
   "assertSkillSourceRoot",
   "attemptCapture",

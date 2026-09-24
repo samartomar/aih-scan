@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  IN_PROCESS_BINDING_GATE_PROFILE_V1,
+  IN_PROCESS_TRUST_LINT_PROFILE_V1,
   listDetectorCapabilitiesV1,
   listDetectorExecutionProfileDocumentsV1,
 } from "../../src/capability/detector-capability-v1.js";
@@ -102,6 +104,14 @@ describe("genuine Cisco OCI capture golden digests", () => {
     expect(capabilityProfileDigests).not.toContain(
       candidate.scanner.detector.executionProfileSha256,
     );
-    expect(new Set(capabilityProfileDigests)).toEqual(new Set(publishedProfileDigests));
+    // The in-process trust-lint and binding-gate profiles are published and exported for the
+    // detectors that register them; every other document belongs to a listed capability.
+    expect(
+      new Set([
+        ...capabilityProfileDigests,
+        IN_PROCESS_TRUST_LINT_PROFILE_V1.sha256,
+        IN_PROCESS_BINDING_GATE_PROFILE_V1.sha256,
+      ]),
+    ).toEqual(new Set(publishedProfileDigests));
   });
 });

@@ -1,0 +1,37 @@
+{
+  "case": "empty",
+  "detector": "cisco",
+  "environment": "linux-x64",
+  "calls": [
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "--version"
+      ],
+      "cwd": null,
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 0,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 9355,
+      "stdout": "skill-scanner 2.0.14\n",
+      "stderr": "Installed 89 packages in 640ms\n"
+    }
+  ]
+}

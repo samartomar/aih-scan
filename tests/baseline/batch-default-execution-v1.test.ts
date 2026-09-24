@@ -45,14 +45,14 @@ function fixture() {
 
 describe("executeBaselineVetBatchV1 default execution", () => {
   it("uses Scan's own hardened analyzer execution when no callback is supplied", async () => {
-    // The host is declared as win32 so Scan's own process runner refuses the analyzer
-    // spawn by its documented platform rule. Reaching that refusal is the proof that
-    // the default execution really is Scan's hardened stack, and no process is started.
+    // The host is declared as win32 so Scan's hardened Linux profile refuses the analyzer
+    // by its documented platform rule. Reaching that refusal is the proof that the default
+    // execution really is Scan's hardened stack, and no process is started.
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const { root, request } = fixture();
 
     await expect(executeBaselineVetBatchV1(request, { sourceRoot: root })).rejects.toThrow(
-      /process-group execution requires a Linux analyzer host/,
+      /docker-hardened-skillspector-v1 needs a Linux analyzer host/,
     );
   });
 

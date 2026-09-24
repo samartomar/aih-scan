@@ -281,7 +281,13 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
   const acceptedB = `sha256:${"b".repeat(64)}`;
   const sarif = canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name: "skillspector" } }, results: [] }],
+    runs: [
+      {
+        tool: { driver: { name: "skillspector" } },
+        results: [],
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
   }).toString("utf8");
   const okay = (stdout: string) => ({ code: 0, stdout, stderr: "", truncated: false });
   const absent = { code: 1, stdout: "", stderr: "Error: No such image", truncated: false };
@@ -652,7 +658,7 @@ describe("runDetectorV1 multi-skill trees", () => {
     expect(record.calls).toBe(0);
   });
 
-  it("names the sharding route when a whole tree is sent to a skill-directory-only detector", async () => {
+  it("names the host profile and the sharding route when a whole tree is sent to Cisco under a skill-root profile", async () => {
     const result = await runDetectorV1({
       detectorId: "detector.cisco",
       subject: {
@@ -665,8 +671,9 @@ describe("runDetectorV1 multi-skill trees", () => {
     expect(result.outcome).toBe("refused");
     if (result.outcome !== "refused") return;
     expect(result.reason).toBe("unsupported-subject-kind");
-    expect(result.detail).toContain("accepts skill-directory, not source-tree");
-    expect(result.detail).toContain("one skill root per request");
+    expect(result.detail).toContain("source-tree subject only under host-process-uv-v1");
+    expect(result.detail).toContain("linux-namespace-uv-v1 runs one skill root per request");
+    expect(result.detail).toContain("one skill-directory request per directory");
   });
 });
 

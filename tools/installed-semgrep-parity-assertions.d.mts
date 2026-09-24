@@ -10,15 +10,19 @@ export declare function normaliseFindingPath(
   files: readonly string[],
   originRoot: string,
 ): { path: string | null; accepted: boolean };
-export declare function scanRefusedForEmpty(scan: {
-  exit: number | null;
-  childError: string | null;
-  summary: {
-    outcome: string;
-    reason: string | null;
-    executionProfileId: string | null;
-  } | null;
-}): boolean;
+export declare function scanCompletedEmpty(
+  scan: {
+    exit: number | null;
+    childError: string | null;
+    summary: {
+      outcome: string;
+      reason: string | null;
+      executionProfileId: string | null;
+      findings: { count: number; source: string } | null;
+    } | null;
+  },
+  executionProfileId: string,
+): boolean;
 export declare function compareFindingKeys(
   coreKeys: string[],
   scanKeys: string[],
