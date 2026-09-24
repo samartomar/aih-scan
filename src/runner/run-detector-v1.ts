@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -9,9 +10,14 @@ import {
   normalizedObservation,
 } from "../baseline/batch-v1.js";
 import {
+  type AnalyzerFailureCauseV1,
+  AnalyzerRunFailureV1,
+  type BaselineExecutionProfileIdV1,
   type BaselineProcessRunnerV1,
   boundedDiagnosticDetailV1,
   createBaselineAnalyzerRunV1,
+  type HostDockerRuntimeV1,
+  type HostProcessRuntimeV1,
   type SkillspectorImageMatchV1,
   skillspectorAcceptedImageDigestsRefusalV1,
 } from "../baseline/runtime-v1.js";
@@ -25,13 +31,25 @@ import {
   resolveDetectorCapabilityV1,
 } from "../capability/detector-capability-v1.js";
 import { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "../cisco/capture-v2.js";
+import { resolveHostExecutableV1 } from "../cli/host-executable.js";
 import { assertSafeRelativePosixPathV1, codeUnitCompare } from "../contract/strict-json-v1.js";
 import {
   buildScanFindingsV1,
   digestBoundAnalyzerFindingsV1,
+  projectAnalyzerSarifFindingsV1,
   type ScanFindingsV1,
 } from "../findings/scan-findings-v1.js";
+import {
+  SOURCE_OBSERVATION_SEAL_LIMITS_V1,
+  type SourceObservationSealV1,
+  sealSourceObservationV1,
+} from "../observation/source-observation-seal-v1.js";
 import { type SourceSealV2, sealSourceV2 } from "../observation/source-seal-v2.js";
+import {
+  type DetectorOptionsV1,
+  detectorOptionsSealRefusalV1,
+  readDetectorOptionsV1,
+} from "./detector-options-v1.js";
 
 /**
  * Runs one Scan-owned detector without the caller writing any execution code.
@@ -50,8 +68,11 @@ import { type SourceSealV2, sealSourceV2 } from "../observation/source-seal-v2.j
  *   coverage record states;
  * - coverage names what was covered, what the caller declared excluded, and what was
  *   neither, so "complete" is a computed field rather than a claim;
- * - findings come only from digest-verified annex bytes. An empty list is never
- *   reported as "nothing was found"; the gaps say why it is empty.
+ * - findings come only from digest-verified annex bytes, and every SARIF artifact URI is
+ *   relative to the declared source root. An empty list is never reported as "nothing is
+ *   wrong"; the gaps say what it means;
+ * - a caller's `signal` or `timeoutMs` ends the whole analyzer process tree and yields a
+ *   failure whose `cause` says so.
  *
  * A result grants no qualification, approval, installation or adoption authority.
  */
@@ -66,13 +87,32 @@ const ANALYZER_BY_DETECTOR: Readonly<Record<string, BaselineAnalyzerV1>> = Objec
   "detector.skillspector": "skillspector",
 });
 
+/**
+ * Analyzers that scan the whole tree, a top-level `.git` and dependency or build
+ * directories included, exactly as Core's own Semgrep and SkillSpector runs do. The other
+ * analyzers are given the tree without its top-level `.git`, and their coverage says so.
+ */
+const WHOLE_TREE_ANALYZERS: ReadonlySet<BaselineAnalyzerV1> = new Set(["semgrep", "skillspector"]);
+
+/** The shortest and longest whole-run budget a caller may set, in milliseconds. */
+const MIN_TIMEOUT_MS = 100;
+const MAX_TIMEOUT_MS = 3_600_000;
+/**
+ * The seal a run takes: `SourceSealV2` for the OCI capture profile, whose candidate protocol
+ * carries it, and `SourceObservationSealV1` for every observation run.
+ */
+type RunSealV1 = SourceSealV2 | SourceObservationSealV1;
+const isFileEntry = (entry: RunSealV1["entries"][number]) =>
+  entry.kind === "file" || entry.kind === "file-link";
+
 export type RunDetectorRefusalReasonV1 =
   | "unknown-detector"
   | "unsupported-platform"
   | "unsupported-subject-kind"
   | "subject-requirement-unmet"
   | "prerequisite-missing"
-  | "execution-profile-unavailable";
+  | "execution-profile-unavailable"
+  | "detector-options-invalid";
 
 export type RunDetectorFailureStageV1 =
   | "acquisition"
@@ -81,6 +121,14 @@ export type RunDetectorFailureStageV1 =
   | "output"
   | "coverage"
   | "cleanup";
+
+/**
+ * Why a run that started failed, when the analyzer's own error is not the reason:
+ * `cancelled` (the caller's signal), `timed-out` (a stage or the caller's `timeoutMs`),
+ * `residual-processes` (processes outlived the analyzer and were killed) or
+ * `containment-failure` (Scan could not prove the process tree was gone).
+ */
+export type RunDetectorFailureCauseV1 = AnalyzerFailureCauseV1;
 
 export interface ScanCoverageV1 {
   readonly kind: "selected-closure" | "source-tree";
@@ -103,7 +151,7 @@ export interface DetectorPrerequisiteStateV1 {
   readonly state: "present" | "missing" | "not-probed";
 }
 
-export type { SkillspectorImageMatchV1 };
+export type { HostDockerRuntimeV1, HostProcessRuntimeV1, SkillspectorImageMatchV1 };
 
 export interface BaselineAnalyzerObservationV1 {
   readonly protocol: "BaselineAnalyzerObservationV1";
@@ -119,6 +167,10 @@ export interface BaselineAnalyzerObservationV1 {
    * that image's provenance or source revision.
    */
   readonly image?: SkillspectorImageMatchV1;
+  /** `host-process-uv-v1` only: the uv, Python, uv cache and containment the run used. */
+  readonly hostRuntime?: HostProcessRuntimeV1;
+  /** `docker-host-local-skillspector-v1` only: the Docker client and context the run used. */
+  readonly hostDocker?: HostDockerRuntimeV1;
 }
 
 export interface RunDetectorV1Request {
@@ -126,15 +178,37 @@ export interface RunDetectorV1Request {
   readonly subject: {
     readonly kind: DetectorSubjectKindV1;
     readonly sourceRoot: string;
-    /** Exact, caller-declared selection. Never widened, never discovered. */
+    /**
+     * Exact, caller-declared selection. Never widened, never discovered. Empty only for a
+     * source root with no entries, which only an `emptySource: "completes"` detector runs.
+     */
     readonly selectedClosurePaths: readonly string[];
     /** Recorded verbatim so evidence can state what was deliberately left out. */
     readonly excludedPaths?: readonly string[];
   };
   /** Optional override; the capability's own default profile is used when absent. */
   readonly executionProfileId?: string;
-  /** Applies to the analyzer profiles; it is scrubbed to Scan's allow-list before use. */
+  /**
+   * The caller environment. Analyzer profiles scrub it to Scan's allow-list; the host
+   * profiles read only their documented variables from it (to find uv, Python, Docker and
+   * the user cache directory) and never pass it to an analyzer.
+   */
   readonly env?: Readonly<NodeJS.ProcessEnv>;
+  /**
+   * Per-detector options (C2a §2.1, §3.3, §4.1), validated strictly and snapshotted once:
+   * `detector.cisco` `{ concurrency }` (optional), `detector.aih-trust-lint`
+   * `{ internalScopes, mcpConfigPaths }` and `detector.cisco-mcp-scanner` `{ mcpConfigPaths }`
+   * (required). Any other detector must not carry them. A violation is refused
+   * `detector-options-invalid` before the source is read.
+   */
+  readonly detectorOptions?: DetectorOptionsV1;
+  /** Aborting ends the analyzer's whole process tree and fails the run `cancelled`. */
+  readonly signal?: AbortSignal;
+  /**
+   * A whole-run budget in milliseconds (100 to 3,600,000). When it runs out the process tree
+   * is ended and the run fails `timed-out`. Each stage also keeps its own built-in limit.
+   */
+  readonly timeoutMs?: number;
   /** Test and CI seam only. Absent in production; its presence is recorded in the result. */
   readonly runner?: BaselineProcessRunnerV1;
   /**
@@ -146,9 +220,11 @@ export interface RunDetectorV1Request {
     prerequisite: DetectorPrerequisiteV1,
   ) => DetectorPrerequisiteStateV1["state"];
   /**
-   * `docker-hardened-skillspector-v1` only: image digests (`sha256:` + 64 lowercase hex)
-   * the caller also accepts, consulted in order against local images only after Scan's own
-   * pinned pull has failed. It never replaces Scan's acquisition nor relaxes its check.
+   * SkillSpector only: image digests (`sha256:` + 64 lowercase hex) the caller also accepts.
+   * `docker-hardened-skillspector-v1` consults them, in order and against local images only,
+   * after Scan's own pinned pull has failed; it never replaces that acquisition nor relaxes
+   * its check. `docker-host-local-skillspector-v1` admits the local tag's image when it
+   * carries the pinned digest or one of these.
    */
   readonly acceptedImageDigests?: readonly string[];
   /** Material only the OCI capture profile needs; its absence refuses that profile. */
@@ -190,7 +266,12 @@ export type RunDetectorV1Result =
     }>
   | Readonly<{
       outcome: "failed";
-      failure: Readonly<{ stage: RunDetectorFailureStageV1; detail: string }>;
+      failure: Readonly<{
+        stage: RunDetectorFailureStageV1;
+        detail: string;
+        /** Present when the run was cancelled, timed out, or its process tree was not clean. */
+        cause?: RunDetectorFailureCauseV1;
+      }>;
       capability: DetectorCapabilityV1;
       executionProfile: DetectorExecutionProfileV1;
       prerequisites: readonly DetectorPrerequisiteStateV1[];
@@ -214,7 +295,13 @@ export type RunDetectorV1Result =
         | Readonly<{ kind: "scan-candidate-v2"; capture: CiscoCaptureV2 }>;
       findings: ScanFindingsV1;
       coverage: ScanCoverageV1;
-      sourceSeal: Readonly<{ before: SourceSealV2; after: SourceSealV2 }>;
+      /**
+       * The source seal taken before and after the run: `SourceObservationSealV1` for an
+       * observation run (an empty root included), `SourceSealV2` for the OCI capture profile.
+       */
+      sourceSeal:
+        | Readonly<{ before: SourceObservationSealV1; after: SourceObservationSealV1 }>
+        | Readonly<{ before: SourceSealV2; after: SourceSealV2 }>;
     }>;
 
 let producerRecord: RunDetectorProducerV1 | undefined;
@@ -268,14 +355,14 @@ function platformRefusal(
     .map((entry) => `${entry.os}/${entry.architecture}`)
     .join(", ");
   const hostPlatform = `${process.platform}/${process.arch}`;
-  if (profile.id !== "host-process-uv-v1")
-    return `This host is ${hostPlatform}; ${capability.detectorId} runs only on ${supported}. Scan's hardened detector profiles are Linux amd64 only.`;
   const reason =
-    process.platform === "win32"
-      ? "Windows process-tree containment is unproven, so Scan cannot guarantee that every analyzer descendant is killed and refuses before probing or spawning anything."
-      : process.platform === "darwin"
-        ? "macOS host execution is refused until a hosted proof exists."
-        : "No other host has proven process-group containment for it.";
+    profile.id === "host-process-uv-v1"
+      ? "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 lacks cryptography 50.0.0, Windows arm64 lacks Semgrep), and Scan never builds analyzer dependencies from source."
+      : profile.id === "docker-host-local-skillspector-v1"
+        ? "Its Docker engine must run the linux/amd64 SkillSpector image, natively or emulated."
+        : profile.id === "in-process-native-v1"
+          ? "The in-process analyzer knows only these operating systems and architectures."
+          : "Scan's hardened detector profiles are Linux amd64 only.";
   return `This host is ${hostPlatform}; ${capability.detectorId} under ${profile.id} runs only on ${supported}. ${reason}`;
 }
 
@@ -296,10 +383,21 @@ function refuse(
 function failureStage(message: string): RunDetectorFailureStageV1 {
   if (message.includes("environment acquisition") || message.includes("image acquisition"))
     return "acquisition";
-  if (message.includes("Docker availability") || message.includes("image availability"))
+  if (
+    message.includes("Docker availability") ||
+    message.includes("image availability") ||
+    message.includes("host runtime availability")
+  )
     return "availability";
+  if (message.includes("run directory cleanup")) return "cleanup";
   if (message.includes("coverage")) return "coverage";
-  if (message.includes("observation") || message.includes("emitted no SARIF")) return "output";
+  if (
+    message.includes("observation") ||
+    message.includes("emitted no SARIF") ||
+    message.includes("SARIF artifact URI") ||
+    message.includes("Cisco SARIF")
+  )
+    return "output";
   return "execution";
 }
 
@@ -318,25 +416,31 @@ function probePrerequisite(
       return "missing";
     }
   }
+  if (prerequisite.kind === "host-executable") {
+    if (prerequisite.id !== "uv" && prerequisite.id !== "docker") return "missing";
+    return resolveHostExecutableV1(prerequisite.id, env) === undefined ? "missing" : "present";
+  }
   if (prerequisite.kind === "environment-variable") {
     const value = env[prerequisite.id];
     return typeof value === "string" && value.length > 0 ? "present" : "missing";
   }
-  // A container image and a reachable index cannot be settled without running the
-  // detector, so they are reported as not probed rather than guessed either way.
+  // A container image, a uv-discoverable Python and a reachable index cannot be settled
+  // without running the detector, so they are reported as not probed rather than guessed.
   return "not-probed";
 }
 
 function coverageRecord(input: {
-  readonly seal: SourceSealV2;
+  readonly seal: RunSealV1;
   readonly kind: ScanCoverageV1["kind"];
   readonly excludedPaths: readonly string[];
+  /** Whether the analyzer was given the top-level `.git`; only a source-tree run asks. */
+  readonly analyzesGitDirectory: boolean;
 }): ScanCoverageV1 {
-  const sealedFiles = input.seal.entries
-    .filter((entry) => entry.kind === "file")
-    .map((entry) => entry.path);
+  const sealedFiles = input.seal.entries.filter(isFileEntry).map((entry) => entry.path);
   const coveredPaths =
-    input.kind === "source-tree" ? [...sealedFiles] : [...input.seal.selectedClosurePaths];
+    input.kind === "source-tree"
+      ? sealedFiles.filter((path) => input.analyzesGitDirectory || !path.startsWith(".git/"))
+      : [...input.seal.selectedClosurePaths];
   coveredPaths.sort(codeUnitCompare);
   const covered = new Set(coveredPaths);
   const excluded = new Set(input.excludedPaths);
@@ -385,12 +489,19 @@ function selectProfile(
     return {
       refusal: `Execution profile ${selected.id} takes no OCI capture material; remove ociCapture or name an OCI capture profile.`,
     };
+  if (
+    selected.evidence === "ScanCandidateV2" &&
+    (request.signal !== undefined || request.timeoutMs !== undefined)
+  )
+    return {
+      refusal: `Execution profile ${selected.id} cannot yet be cancelled or given a time budget; remove signal and timeoutMs, or use ${capability.executionProfile.id}.`,
+    };
   return selected;
 }
 
 function subjectRefusal(
   capability: DetectorCapabilityV1,
-  seal: SourceSealV2,
+  seal: RunSealV1,
   request: RunDetectorV1Request,
   profile: DetectorExecutionProfileV1,
 ): string | undefined {
@@ -414,7 +525,7 @@ function subjectRefusal(
   }
   if (request.subject.kind !== "skill-directory") return undefined;
   const topLevelSkill = seal.entries.some(
-    (entry) => entry.kind === "file" && entry.path === "SKILL.md",
+    (entry) => isFileEntry(entry) && entry.path === "SKILL.md",
   );
   if (!topLevelSkill) {
     // A tree of several skills is not one skill root. Say so, and how to shard it,
@@ -435,7 +546,7 @@ function subjectRefusal(
   return undefined;
 }
 
-function sameSeal(left: SourceSealV2, right: SourceSealV2): boolean {
+function sameSeal(left: RunSealV1, right: RunSealV1): boolean {
   return (
     left.sourceTreeSha256 === right.sourceTreeSha256 &&
     left.selectedClosureSha256 === right.selectedClosureSha256 &&
@@ -462,10 +573,13 @@ const REQUEST_FIELDS = [
   "subject",
   "executionProfileId",
   "env",
+  "signal",
+  "timeoutMs",
   "runner",
   "prerequisiteProbe",
   "ociCapture",
   "acceptedImageDigests",
+  "detectorOptions",
 ] as const;
 const SUBJECT_FIELDS = ["kind", "sourceRoot", "selectedClosurePaths", "excludedPaths"] as const;
 const OCI_CAPTURE_FIELDS = ["layout", "runtime", "broker", "annexPayloads", "runner"] as const;
@@ -509,6 +623,20 @@ function executionFieldRefusal(
         return `env.${key} must be a string, not ${valueKind(value)}; Scan does not coerce environment values.`;
     }
   }
+  const signal = input.signal;
+  if (signal !== undefined && !(signal instanceof AbortSignal))
+    return `signal must be an AbortSignal, not ${valueKind(signal)}.`;
+  const timeoutMs = input.timeoutMs;
+  if (
+    timeoutMs !== undefined &&
+    (typeof timeoutMs !== "number" ||
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < MIN_TIMEOUT_MS ||
+      timeoutMs > MAX_TIMEOUT_MS)
+  )
+    return `timeoutMs must be a whole number of milliseconds from ${MIN_TIMEOUT_MS} to ${MAX_TIMEOUT_MS}, not ${
+      typeof timeoutMs === "number" ? String(timeoutMs) : valueKind(timeoutMs)
+    }.`;
   const ociCapture = input.ociCapture;
   if (ociCapture !== undefined && !isRecord(ociCapture))
     return `ociCapture must be an object holding layout, runtime, broker and annexPayloads, not ${valueKind(ociCapture)}.`;
@@ -679,6 +807,14 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       capability,
     );
 
+  const optionsRead = readDetectorOptionsV1(
+    capability.detectorId,
+    top.value.detectorOptions,
+    Array.isArray(subject.selectedClosurePaths) ? subject.selectedClosurePaths : [],
+  );
+  if (!optionsRead.ok) return refuse("detector-options-invalid", optionsRead.detail, capability);
+  const detectorOptions = optionsRead.options;
+
   const fieldRefusal = executionFieldRefusal(capability, top.value);
   if (fieldRefusal !== undefined)
     return refuse("execution-profile-unavailable", fieldRefusal, capability);
@@ -687,10 +823,13 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     return refuse("execution-profile-unavailable", profileOrRefusal.refusal, capability);
   const profile = profileOrRefusal;
   if (input.acceptedImageDigests !== undefined) {
-    if (profile.id !== "docker-hardened-skillspector-v1")
+    if (
+      profile.id !== "docker-hardened-skillspector-v1" &&
+      profile.id !== "docker-host-local-skillspector-v1"
+    )
       return refuse(
         "execution-profile-unavailable",
-        `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 profile; ${capability.detectorId} runs ${profile.id}, so remove it.`,
+        `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 and docker-host-local-skillspector-v1 profiles; ${capability.detectorId} runs ${profile.id}, so remove it.`,
         capability,
       );
     const digestRefusal = skillspectorAcceptedImageDigestsRefusalV1(input.acceptedImageDigests);
@@ -711,12 +850,18 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     return refuse("subject-requirement-unmet", detail(error), capability);
   }
 
-  let before: SourceSealV2;
+  const oci = profile.evidence === "ScanCandidateV2";
+  let before: RunSealV1;
   try {
-    before = sealSourceV2({
-      sourceRoot: subject.sourceRoot,
-      selectedClosurePaths: subject.selectedClosurePaths,
-    });
+    before = oci
+      ? sealSourceV2({
+          sourceRoot: subject.sourceRoot,
+          selectedClosurePaths: subject.selectedClosurePaths,
+        })
+      : sealSourceObservationV1({
+          sourceRoot: subject.sourceRoot,
+          selectedClosurePaths: subject.selectedClosurePaths,
+        });
   } catch (error) {
     return refuse(
       "subject-requirement-unmet",
@@ -724,6 +869,24 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       capability,
     );
   }
+  const empty = before.entries.length === 0;
+  if (empty) {
+    if (capability.emptySource !== "completes")
+      return refuse(
+        "subject-requirement-unmet",
+        `The declared source root holds no entries, and ${capability.detectorId} refuses an empty source (capability emptySource: ${capability.emptySource}).`,
+        capability,
+      );
+    if (excludedPaths.length > 0)
+      return refuse(
+        "subject-requirement-unmet",
+        "An empty source root has nothing to exclude; remove excludedPaths.",
+        capability,
+      );
+  }
+  const optionsSealRefusal = detectorOptionsSealRefusalV1(detectorOptions, before.entries);
+  if (optionsSealRefusal !== undefined)
+    return refuse("detector-options-invalid", optionsSealRefusal, capability);
   const requirement = subjectRefusal(capability, before, input, profile);
   if (requirement !== undefined)
     return refuse("subject-requirement-unmet", requirement, capability);
@@ -746,10 +909,13 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         : ("caller-supplied" as const),
     prerequisiteProbe: probe === undefined ? "scan-owned-default" : "caller-supplied",
   });
+  const analyzerName = ANALYZER_BY_DETECTOR[capability.detectorId];
+  const wholeTree = analyzerName !== undefined && WHOLE_TREE_ANALYZERS.has(analyzerName);
   const coverage = coverageRecord({
     seal: before,
-    kind: profile.evidence === "ScanCandidateV2" ? "selected-closure" : "source-tree",
+    kind: oci ? "selected-closure" : "source-tree",
     excludedPaths,
+    analyzesGitDirectory: wholeTree,
   });
   // Only the selected profile's prerequisites are probed, and only they gate the run.
   const probed = probeStates(profile.prerequisites, probe, env);
@@ -757,7 +923,11 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   const failed = (stage: RunDetectorFailureStageV1, error: unknown): RunDetectorV1Result =>
     Object.freeze({
       outcome: "failed" as const,
-      failure: Object.freeze({ stage, detail: detail(error) }),
+      failure: Object.freeze({
+        stage,
+        detail: detail(error),
+        ...(error instanceof AnalyzerRunFailureV1 ? { cause: error.failureCause } : {}),
+      }),
       capability,
       executionProfile: profile,
       prerequisites,
@@ -775,8 +945,15 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       `${capability.detectorId} needs ${missing.kind} ${missing.id}, which is not present. ${missing.detail}`,
       capability,
     );
+  const deadline = input.timeoutMs === undefined ? undefined : Date.now() + input.timeoutMs;
+  if (input.signal?.aborted)
+    return failed(
+      "availability",
+      new AnalyzerRunFailureV1("cancelled", "the run was cancelled before anything started"),
+    );
 
-  if (profile.evidence === "ScanCandidateV2") {
+  if (oci) {
+    const sealed = before as SourceSealV2;
     const material = input.ociCapture as NonNullable<RunDetectorV1Request["ociCapture"]>;
     let capture: CiscoCaptureV2;
     try {
@@ -798,7 +975,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         sourceRoot: subject.sourceRoot,
         selectedClosurePaths: subject.selectedClosurePaths,
       });
-      if (!sameSeal(before, after)) throw new TypeError("source changed during the run");
+      if (!sameSeal(sealed, after)) throw new TypeError("source changed during the run");
     } catch (error) {
       return failed("coverage", error);
     }
@@ -827,7 +1004,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       evidence: Object.freeze({ kind: "scan-candidate-v2" as const, capture }),
       findings,
       coverage,
-      sourceSeal: Object.freeze({ before, after }),
+      sourceSeal: Object.freeze({ before: sealed, after }),
     });
   }
 
@@ -839,9 +1016,16 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       capability,
     );
 
+  const snapshotOptions = {
+    includeGitDirectory: wholeTree,
+    maxFileBytes: SOURCE_OBSERVATION_SEAL_LIMITS_V1.maxFileBytes,
+    links: "observation" as const,
+  };
   let snapshotRoot: string;
   try {
-    snapshotRoot = createBaselineAnalyzerSnapshotV1(subject.sourceRoot);
+    snapshotRoot = empty
+      ? mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"))
+      : createBaselineAnalyzerSnapshotV1(subject.sourceRoot, snapshotOptions);
   } catch (error) {
     return failed("availability", error);
   }
@@ -856,9 +1040,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         ...(input.acceptedImageDigests === undefined
           ? {}
           : { skillspectorAcceptedImageDigests: input.acceptedImageDigests }),
-        ...(profile.id === "host-process-uv-v1"
-          ? { semgrepExecutionProfile: "host-process-uv-v1" as const }
-          : {}),
+        executionProfileId: profile.id as BaselineExecutionProfileIdV1,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+        ...(deadline === undefined ? {} : { deadline }),
       });
       observed = await run({ analyzer, sourceRoot: snapshotRoot });
     } catch (error) {
@@ -870,45 +1054,78 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     } catch (error) {
       return failed("output", error);
     }
+    let after: SourceObservationSealV1;
     try {
-      assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot);
-      const after = sealSourceV2({
+      if (empty) {
+        if (readdirSync(snapshotRoot).length !== 0)
+          throw new TypeError("source changed during the run");
+      } else assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot, snapshotOptions);
+      after = sealSourceObservationV1({
         sourceRoot: subject.sourceRoot,
         selectedClosurePaths: subject.selectedClosurePaths,
       });
       if (!sameSeal(before, after)) throw new TypeError("source changed during the run");
-      return Object.freeze({
-        outcome: "succeeded" as const,
-        capability,
-        executionProfile: profile,
-        prerequisites,
-        seams,
-        producer: producer(),
-        evidence: Object.freeze({
-          kind: "baseline-analyzer-observation-v1" as const,
-          observation: Object.freeze({
-            protocol: "BaselineAnalyzerObservationV1" as const,
-            analyzer,
-            analyzerVersion: normalized.analyzerVersion,
-            mediaType: normalized.mediaType,
-            annex: Object.freeze({
-              path: `annex/${analyzer}.json`,
-              sha256: createHash("sha256").update(normalized.bytes).digest("hex"),
-              byteLength: normalized.bytes.byteLength,
-            }),
-            bytes: normalized.bytes,
-            ...(observed.image === undefined ? {} : { image: observed.image }),
-          }),
-        }),
-        findings: digestBoundAnalyzerFindingsV1(
-          `The ${analyzer} output is bound by digest in this observation and is never parsed here, so no rule, severity, message or location is derived from it.`,
-        ),
-        coverage,
-        sourceSeal: Object.freeze({ before, after }),
-      });
     } catch (error) {
       return failed("coverage", error);
     }
+    const annex = Object.freeze({
+      path: `annex/${analyzer}.json`,
+      sha256: createHash("sha256").update(normalized.bytes).digest("hex"),
+      byteLength: normalized.bytes.byteLength,
+    });
+    let findings: ScanFindingsV1;
+    try {
+      findings =
+        normalized.mediaType === "application/sarif+json"
+          ? projectAnalyzerSarifFindingsV1({
+              detectorId: capability.detectorId,
+              analyzer,
+              analyzerIdentity: `${analyzer}@${normalized.analyzerVersion}`,
+              annex: {
+                descriptorId: annex.path,
+                sha256: annex.sha256,
+                byteLength: annex.byteLength,
+              },
+              bytes: normalized.bytes,
+              sealedFiles: new Map(
+                before.entries.flatMap((entry) =>
+                  entry.kind === "file" || entry.kind === "file-link"
+                    ? [[entry.path, entry.sha256] as const]
+                    : [],
+                ),
+              ),
+            })
+          : digestBoundAnalyzerFindingsV1(
+              `The ${analyzer} output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.`,
+            );
+    } catch (error) {
+      return failed("output", error);
+    }
+    return Object.freeze({
+      outcome: "succeeded" as const,
+      capability,
+      executionProfile: profile,
+      prerequisites,
+      seams,
+      producer: producer(),
+      evidence: Object.freeze({
+        kind: "baseline-analyzer-observation-v1" as const,
+        observation: Object.freeze({
+          protocol: "BaselineAnalyzerObservationV1" as const,
+          analyzer,
+          analyzerVersion: normalized.analyzerVersion,
+          mediaType: normalized.mediaType,
+          annex,
+          bytes: normalized.bytes,
+          ...(observed.image === undefined ? {} : { image: observed.image }),
+          ...(observed.hostRuntime === undefined ? {} : { hostRuntime: observed.hostRuntime }),
+          ...(observed.hostDocker === undefined ? {} : { hostDocker: observed.hostDocker }),
+        }),
+      }),
+      findings,
+      coverage,
+      sourceSeal: Object.freeze({ before: before as SourceObservationSealV1, after }),
+    });
   })();
   try {
     rmSync(snapshotRoot, { recursive: true, force: true });
@@ -919,4 +1136,157 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     return analyzed.outcome === "succeeded" ? failed("cleanup", error) : analyzed;
   }
   return analyzed;
+}
+
+const PROBE_FIELDS = [
+  "detectorId",
+  "executionProfileId",
+  "env",
+  "signal",
+  "prerequisiteProbe",
+  "acceptedImageDigests",
+] as const;
+
+export type DetectorAvailabilityV1Result =
+  | Readonly<{
+      available: true;
+      detectorId: string;
+      /** The pinned analyzer version the capability targets; nothing was executed. */
+      analyzerVersion: string;
+      /** Exactly the profile that was named. */
+      executionProfile: DetectorExecutionProfileV1;
+      /**
+       * Every prerequisite of that profile. `not-probed` ones (a container image, a
+       * uv-discoverable Python, a reachable index) are settled only by a run.
+       */
+      prerequisites: readonly DetectorPrerequisiteStateV1[];
+      seams: Readonly<{ prerequisiteProbe: RunDetectorSeamsV1["prerequisiteProbe"] }>;
+    }>
+  | Readonly<{
+      available: false;
+      reason: RunDetectorRefusalReasonV1 | "availability-failed";
+      /** One actionable sentence; bounded and control-character encoded. */
+      detail: string;
+    }>;
+
+function unavailable(
+  reason: RunDetectorRefusalReasonV1 | "availability-failed",
+  detail: string,
+): DetectorAvailabilityV1Result {
+  return Object.freeze({
+    available: false as const,
+    reason,
+    detail: boundedDiagnosticDetailV1(detail),
+  });
+}
+
+/**
+ * Probes whether a detector could run under the named profile on this host, without a
+ * subject and without spawning, pulling or executing anything (C2a §3.8). It applies the
+ * same request-field, profile, platform and prerequisite gates as `runDetectorV1` and
+ * answers with the same refusal reasons, or `availability-failed` when the caller's signal
+ * is already aborted or its `prerequisiteProbe` misbehaves. `available: true` means no
+ * required prerequisite is known to be missing. Never throws.
+ */
+export async function probeDetectorAvailabilityV1(
+  request: unknown,
+): Promise<DetectorAvailabilityV1Result> {
+  try {
+    if (typeof request !== "object" || request === null || Array.isArray(request))
+      return unavailable(
+        "unknown-detector",
+        "A probe request must be an object naming a detector.",
+      );
+    const read = snapshotFields(request as Record<string, unknown>, PROBE_FIELDS, "");
+    if ("field" in read)
+      return unavailable(
+        "unknown-detector",
+        `The probe request could not be read: reading ${read.field} threw: ${
+          thrownMessage(read.error) ?? "unknown failure"
+        }.`,
+      );
+    const input = read.value;
+    const capability = resolveDetectorCapabilityV1(input.detectorId);
+    if (capability === undefined)
+      return unavailable(
+        "unknown-detector",
+        `Scan owns no detector ${
+          typeof input.detectorId === "string" ? input.detectorId : "of that shape"
+        }. Known detectors: ${listDetectorCapabilitiesV1()
+          .map((entry) => entry.detectorId)
+          .join(", ")}.`,
+      );
+    const available = capability.executionProfiles.map((entry) => entry.id).join(", ");
+    if (input.executionProfileId === undefined)
+      return unavailable(
+        "execution-profile-unavailable",
+        `A probe names the execution profile it asks about; ${capability.detectorId} has ${available}.`,
+      );
+    const fieldRefusal = executionFieldRefusal(capability, input);
+    if (fieldRefusal !== undefined)
+      return unavailable("execution-profile-unavailable", fieldRefusal);
+    const profile = capability.executionProfiles.find(
+      (entry) => entry.id === input.executionProfileId,
+    );
+    if (profile === undefined)
+      return unavailable(
+        "execution-profile-unavailable",
+        `${capability.detectorId} has no execution profile ${String(
+          input.executionProfileId,
+        )}. Available profiles: ${available}.`,
+      );
+    if (input.acceptedImageDigests !== undefined) {
+      if (
+        profile.id !== "docker-hardened-skillspector-v1" &&
+        profile.id !== "docker-host-local-skillspector-v1"
+      )
+        return unavailable(
+          "execution-profile-unavailable",
+          `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 and docker-host-local-skillspector-v1 profiles; ${capability.detectorId} runs ${profile.id}, so remove it.`,
+        );
+      const digestRefusal = skillspectorAcceptedImageDigestsRefusalV1(input.acceptedImageDigests);
+      if (digestRefusal !== undefined)
+        return unavailable("execution-profile-unavailable", digestRefusal);
+    }
+    const platform = capabilityPlatform();
+    if (
+      platform === undefined ||
+      !profile.supportedPlatforms.some(
+        (entry) => entry.os === platform.os && entry.architecture === platform.architecture,
+      )
+    )
+      return unavailable("unsupported-platform", platformRefusal(capability, profile));
+    const signal = input.signal as AbortSignal | undefined;
+    if (signal?.aborted)
+      return unavailable("availability-failed", "The probe was cancelled before it started.");
+    const env = (input.env as Readonly<NodeJS.ProcessEnv> | undefined) ?? process.env;
+    const probed = probeStates(profile.prerequisites, input.prerequisiteProbe, env);
+    if (probed.failure !== undefined) return unavailable("availability-failed", probed.failure);
+    const missing = profile.prerequisites.find(
+      (prerequisite, index) => prerequisite.required && probed.states[index]?.state === "missing",
+    );
+    if (missing !== undefined)
+      return unavailable(
+        "prerequisite-missing",
+        `${capability.detectorId} needs ${missing.kind} ${missing.id}, which is not present. ${missing.detail}`,
+      );
+    return Object.freeze({
+      available: true as const,
+      detectorId: capability.detectorId,
+      analyzerVersion: capability.analyzerVersion,
+      executionProfile: profile,
+      prerequisites: probed.states,
+      seams: Object.freeze({
+        prerequisiteProbe:
+          input.prerequisiteProbe === undefined
+            ? ("scan-owned-default" as const)
+            : ("caller-supplied" as const),
+      }),
+    });
+  } catch (error) {
+    return unavailable(
+      "unknown-detector",
+      `The probe request could not be read: ${thrownMessage(error) ?? "unknown failure"}.`,
+    );
+  }
 }

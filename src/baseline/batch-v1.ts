@@ -11,13 +11,15 @@ import {
   readdirSync,
   readlinkSync,
   readSync,
+  realpathSync,
   rmSync,
   type Stats,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { z } from "zod";
 import {
   assertSafeRelativePosixPathV1,
@@ -410,30 +412,114 @@ function readBoundedSourceFile(path: string, beforePath: Stats): Buffer {
   }
 }
 
-type SafeAnalyzerSourceSymlink = Readonly<{
-  target: string;
-  targetType: "directory" | "file";
+type SafeAnalyzerSourceSymlink =
+  | Readonly<{ rule: "relative"; target: string; targetType: "directory" | "file" }>
+  | Readonly<{ rule: "observation"; targetType: "directory" }>
+  | Readonly<{ rule: "observation"; targetType: "file"; real: string; identity: Stats }>;
+
+/**
+ * What an analyzer snapshot copies. By default a top-level `.git` is left out, as the
+ * batch receipts have always done; a single-detector run for an analyzer that scans the
+ * whole tree (Semgrep, SkillSpector) copies it too.
+ */
+export type BaselineAnalyzerSnapshotOptionsV1 = Readonly<{
+  includeGitDirectory?: boolean;
+  /**
+   * The largest single file the snapshot copies, at most the 256 MiB tree budget; 16 MiB
+   * (the batch receipts' bound) when absent.
+   */
+  maxFileBytes?: number;
+  /**
+   * Which symbolic links the snapshot accepts. `"relative"` (the default, the batch
+   * receipts' rule) accepts a relative target that resolves through real directories inside
+   * the root and recreates the link. `"observation"` accepts exactly what
+   * `SourceObservationSealV1` accepts, any link whose real target is inside the root
+   * (absolute targets and chains included): a file link becomes a regular file holding the
+   * target's bytes at the link path, and a directory link, which the seal records but does
+   * not traverse, is not copied. An observation snapshot then holds no link at all.
+   */
+  links?: "relative" | "observation";
 }>;
+
+/** The link rule for a tree: a snapshot taken under "observation" may hold no link. */
+type LinkRule = "relative" | "observation" | "none";
+
+function snapshotLinkRule(options: BaselineAnalyzerSnapshotOptionsV1): LinkRule {
+  if (options.links === undefined || options.links === "relative") return "relative";
+  if (options.links === "observation") return "observation";
+  return fail("baseline source link rule");
+}
+
+/** The seal's containment: the real target, relative to the real root, never escaping it. */
+function containedRealTarget(realRoot: string, real: string): void {
+  const child = relative(realRoot, real);
+  if (child === "") return;
+  if (
+    child === ".." ||
+    child.startsWith(`..${sep}`) ||
+    isAbsolute(child) ||
+    /^[A-Za-z]:/.test(child)
+  )
+    fail("baseline source symbolic link target");
+}
+
+function snapshotFileBound(options: BaselineAnalyzerSnapshotOptionsV1): number {
+  const bound = options.maxFileBytes ?? maxAnnexBytes;
+  if (!Number.isSafeInteger(bound) || bound < 0 || bound > maxSourceBytes)
+    fail("baseline source file bound");
+  return bound;
+}
+
+function topLevelNames(root: string, options: BaselineAnalyzerSnapshotOptionsV1): string[] {
+  return readdirSync(root)
+    .filter((value) => options.includeGitDirectory === true || value !== ".git")
+    .sort(codeUnitCompare);
+}
 
 function inspectSafeAnalyzerSource(
   sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+  rule: LinkRule = snapshotLinkRule(options),
 ): ReadonlyMap<string, SafeAnalyzerSourceSymlink> {
   const root = resolve(sourceRoot);
   const rootStat = lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("baseline source directory shape");
+  const realRoot = realpathSync.native(root);
   const budget = { entries: 0, bytes: 0 };
   const entries = new Map<string, "directory" | "file">();
   const symlinks = new Map<string, string>();
+  const observed = new Map<string, SafeAnalyzerSourceSymlink>();
   const visit = (path: string): void => {
     const stat = lstatSync(path);
     budget.entries += 1;
     if (budget.entries > maxSourceEntries) fail("baseline source entry bound");
     if (stat.isSymbolicLink()) {
+      if (rule === "none") fail("baseline analyzer snapshot holds a symbolic link");
       const target = readlinkSync(path);
+      if (rule === "observation") {
+        let real: string;
+        try {
+          real = realpathSync.native(path);
+        } catch {
+          fail("baseline source symbolic link target");
+        }
+        containedRealTarget(realRoot, real);
+        const targetStat = statSync(real);
+        if (targetStat.isDirectory()) observed.set(path, { rule, targetType: "directory" });
+        else if (targetStat.isFile()) {
+          if (targetStat.nlink !== 1) fail("baseline source file shape");
+          if (
+            targetStat.size > snapshotFileBound(options) ||
+            targetStat.size > maxSourceBytes - budget.bytes
+          )
+            fail("baseline source byte bound");
+          budget.bytes += targetStat.size;
+          observed.set(path, { rule, targetType: "file", real, identity: targetStat });
+        } else fail("baseline source symbolic link target");
+      } else symlinks.set(path, target);
       const after = lstatSync(path);
       if (!sameIdentity(stat, after) || target !== readlinkSync(path))
         fail("baseline source symbolic link replacement");
-      symlinks.set(path, target);
       return;
     }
     if (stat.isDirectory()) {
@@ -445,19 +531,18 @@ function inspectSafeAnalyzerSource(
       return;
     }
     if (!stat.isFile() || stat.nlink !== 1) fail("baseline source file shape");
-    if (stat.size > maxAnnexBytes || stat.size > maxSourceBytes - budget.bytes)
+    if (stat.size > snapshotFileBound(options) || stat.size > maxSourceBytes - budget.bytes)
       fail("baseline source byte bound");
     budget.bytes += stat.size;
     entries.set(path, "file");
   };
-  for (const name of readdirSync(root)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    visit(join(root, name));
+  for (const name of topLevelNames(root, options)) visit(join(root, name));
   const rootAfter = lstatSync(root);
   if (!rootAfter.isDirectory() || rootAfter.isSymbolicLink() || !sameIdentity(rootStat, rootAfter))
     fail("baseline source directory replacement");
-  if (budget.entries === 0) fail("baseline source has no content");
+  // An observation snapshot may be empty: the seal accepts a tree of directory links only.
+  if (budget.entries === 0 && rule !== "none") fail("baseline source has no content");
+  if (rule !== "relative") return observed;
 
   const safeSymlinks = new Map<string, SafeAnalyzerSourceSymlink>();
   const directoriesContainingSymlinks = new Set<string>();
@@ -478,7 +563,10 @@ function inspectSafeAnalyzerSource(
       fail("baseline source symbolic link target");
     return pathRelative === "" ? "directory" : entries.get(path);
   };
-  for (const [path, target] of symlinks) {
+  for (const [path, stored] of symlinks) {
+    // Windows stores a relative link target with its own separator; the check below is on
+    // the portable form, and the link is still copied with the target as stored.
+    const target = process.platform === "win32" ? stored.replaceAll("\\", "/") : stored;
     if (
       !target ||
       target.includes("\\") ||
@@ -499,16 +587,20 @@ function inspectSafeAnalyzerSource(
     if (targetType === undefined) fail("baseline source symbolic link target");
     if (targetType === "directory" && directoriesContainingSymlinks.has(targetPath))
       fail("baseline source symbolic link cycle");
-    safeSymlinks.set(path, { target, targetType });
+    safeSymlinks.set(path, { rule: "relative", target: stored, targetType });
   }
   return safeSymlinks;
 }
 
-function copyAnalyzerSource(source: string, snapshot: string): void {
+function copyAnalyzerSource(
+  source: string,
+  snapshot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
   const rootBefore = lstatSync(source);
   if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink())
     fail("baseline source directory shape");
-  const safeSymlinks = inspectSafeAnalyzerSource(source);
+  const safeSymlinks = inspectSafeAnalyzerSource(source, options);
   const rootAfterInspection = lstatSync(source);
   if (
     !rootAfterInspection.isDirectory() ||
@@ -527,12 +619,26 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
       const after = lstatSync(from);
       if (
         expected === undefined ||
-        target !== expected.target ||
+        (expected.rule === "relative" && target !== expected.target) ||
         target !== readlinkSync(from) ||
         !sameIdentity(before, after)
       )
         fail("baseline source symbolic link replacement");
-      symlinkSync(target, to, expected.targetType === "directory" ? "dir" : "file");
+      if (expected.rule === "relative") {
+        symlinkSync(target, to, expected.targetType === "directory" ? "dir" : "file");
+        return;
+      }
+      // Recorded by the seal and not traversed, so the analyzer is not shown it.
+      if (expected.targetType === "directory") return;
+      if (realpathSync.native(from) !== expected.real)
+        fail("baseline source symbolic link replacement");
+      const targetStat = lstatSync(expected.real);
+      if (!targetStat.isFile() || !sameIdentity(expected.identity, targetStat))
+        fail("baseline source file replacement");
+      if (targetStat.size > maxSourceBytes - budget.bytes) fail("baseline source byte bound");
+      const bytes = readBoundedSourceFile(expected.real, targetStat);
+      budget.bytes += bytes.byteLength;
+      writeFileSync(to, bytes, { flag: "wx", mode: 0o600 });
       return;
     }
     if (before.isDirectory()) {
@@ -545,16 +651,13 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
       return;
     }
     if (!before.isFile() || before.nlink !== 1) fail("baseline source file shape");
-    if (before.size > maxAnnexBytes || before.size > maxSourceBytes - budget.bytes)
+    if (before.size > snapshotFileBound(options) || before.size > maxSourceBytes - budget.bytes)
       fail("baseline source byte bound");
     const bytes = readBoundedSourceFile(from, before);
     budget.bytes += bytes.byteLength;
     writeFileSync(to, bytes, { flag: "wx", mode: 0o600 });
   };
-  for (const name of readdirSync(source)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    copy(join(source, name), join(snapshot, name));
+  for (const name of topLevelNames(source, options)) copy(join(source, name), join(snapshot, name));
   const rootAfter = lstatSync(source);
   if (
     !rootAfter.isDirectory() ||
@@ -565,8 +668,16 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
   if (budget.entries === 0) fail("baseline source has no content");
 }
 
-function assertSafeAnalyzerSource(sourceRoot: string): void {
-  inspectSafeAnalyzerSource(sourceRoot);
+/** A snapshot taken under the observation rule holds no link; one taken as relative, safe ones. */
+function assertSafeAnalyzerSnapshot(
+  snapshotRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
+  inspectSafeAnalyzerSource(
+    snapshotRoot,
+    options,
+    snapshotLinkRule(options) === "observation" ? "none" : "relative",
+  );
 }
 
 /**
@@ -575,7 +686,10 @@ function assertSafeAnalyzerSource(sourceRoot: string): void {
  * Exported for Scan's own single-detector runner so the snapshot, symbolic-link and
  * byte-bound rules are one implementation; it is not part of the package API.
  */
-export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
+export function createBaselineAnalyzerSnapshotV1(
+  sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): string {
   const source = resolve(sourceRoot);
   const snapshot = mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"));
   try {
@@ -584,8 +698,8 @@ export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
     // Windows ACLs are platform-managed; mkdtemp remains the private creation boundary.
   }
   try {
-    copyAnalyzerSource(source, snapshot);
-    assertSafeAnalyzerSource(snapshot);
+    copyAnalyzerSource(source, snapshot, options);
+    assertSafeAnalyzerSnapshot(snapshot, options);
     return snapshot;
   } catch (error) {
     rmSync(snapshot, { recursive: true, force: true });
@@ -594,8 +708,11 @@ export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
 }
 
 /** Re-proves that a snapshot still matches the source shape it was taken from. */
-export function assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot: string): void {
-  assertSafeAnalyzerSource(snapshotRoot);
+export function assertBaselineAnalyzerSnapshotUnchangedV1(
+  snapshotRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
+  assertSafeAnalyzerSnapshot(snapshotRoot, options);
 }
 
 function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {
@@ -647,7 +764,7 @@ export async function executeBaselineVetBatchV1(
       });
       annexArtifacts.push({ path, bytes: observed.bytes });
     }
-    assertSafeAnalyzerSource(snapshotRoot);
+    assertSafeAnalyzerSnapshot(snapshotRoot);
     sourceAndComponentsMatch(request, snapshotRoot);
     const reobservedRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
     rmSync(reobservedRoot, { recursive: true, force: true });

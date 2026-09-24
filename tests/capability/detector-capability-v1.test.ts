@@ -1,18 +1,24 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
-  BASELINE_PYTHON_EXECUTABLE_V1,
   type BaselineProcessRunnerV1,
   CISCO_SKILL_SCANNER_VERSION_V1,
   createBaselineAnalyzerRunV1,
+  HOST_DOCKER_CONTEXT_VARIABLES_V1,
+  HOST_DOCKER_ENVIRONMENT_V1,
+  HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1,
+  HOST_PROCESS_UV_ENVIRONMENT_V1,
   SEMGREP_VERSION_V1,
   SKILLSPECTOR_IMAGE_DIGEST_V1,
   SKILLSPECTOR_IMAGE_V1,
+  SKILLSPECTOR_LOCAL_IMAGE_TAG_V1,
 } from "../../src/baseline/runtime-v1.js";
 import {
+  IN_PROCESS_BINDING_GATE_PROFILE_V1,
+  IN_PROCESS_TRUST_LINT_PROFILE_V1,
   listDetectorCapabilitiesV1,
   listDetectorExecutionProfileDocumentsV1,
   resolveDetectorCapabilityV1,
@@ -29,6 +35,7 @@ import {
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of temporaryDirectories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
@@ -120,6 +127,8 @@ describe("DetectorCapabilityV1", () => {
   });
 
   it("documents the containment the analyzer profiles actually apply", async () => {
+    // The hardened profiles run absolute Linux executables, so this declares a Linux host.
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const calls: string[][] = [];
     const runner: BaselineProcessRunnerV1 = async (argv) => {
       calls.push([...argv]);
@@ -164,8 +173,11 @@ describe("DetectorCapabilityV1", () => {
     const documents = listDetectorExecutionProfileDocumentsV1();
     expect(documents.map((entry) => entry.id).sort()).toEqual([
       "docker-hardened-skillspector-v1",
+      "docker-host-local-skillspector-v1",
       "host-process-uv-v1",
+      "in-process-binding-gate-v1",
       "in-process-native-v1",
+      "in-process-trust-lint-v1",
       "linux-namespace-uv-v1",
       "oci-hardened-cisco-v1",
     ]);
@@ -173,9 +185,30 @@ describe("DetectorCapabilityV1", () => {
     expect(inProcess?.executables).toEqual([]);
     expect(inProcess?.containment).toEqual([]);
     expect(inProcess?.notes.join(" ")).toContain("spawns nothing");
-    // Every profile except the host profile keeps its unchanged allow-list-scrub rule.
+    for (const id of ["in-process-trust-lint-v1", "in-process-binding-gate-v1"]) {
+      const document = resolveDetectorExecutionProfileDocumentV1(id);
+      expect(document, id).toMatchObject({
+        isolation: "none",
+        network: "none",
+        backend: "in-process",
+        executables: [],
+        image: null,
+        containment: [],
+        acquisition: [],
+        mounts: [],
+      });
+      expect(document?.notes.join(" "), id).toContain("spawns nothing");
+    }
+    // The host profiles fix every spawn's whole environment per OS; the others keep their
+    // unchanged allow-list-scrub rule.
     for (const document of documents) {
-      if (document.id === "host-process-uv-v1") continue;
+      if (
+        document.id === "host-process-uv-v1" ||
+        document.id === "docker-host-local-skillspector-v1"
+      ) {
+        expect(document.environment.policy, document.id).toBe("fixed-values-by-os");
+        continue;
+      }
       expect(document.environment, document.id).toEqual({
         policy: "allow-list-scrub",
         allowed: BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
@@ -183,7 +216,7 @@ describe("DetectorCapabilityV1", () => {
     }
   });
 
-  it("publishes host-process-uv-v1 as an explicit, truthfully unisolated Semgrep profile", () => {
+  it("publishes host-process-uv-v1 as an explicit, truthfully unisolated profile for Semgrep and Cisco", () => {
     const semgrep = resolveDetectorCapabilityV1("detector.semgrep");
     expect(semgrep?.backend).toBe("linux-namespace-uv");
     expect(semgrep?.executionProfile.id).toBe("linux-namespace-uv-v1");
@@ -191,6 +224,9 @@ describe("DetectorCapabilityV1", () => {
       "linux-namespace-uv-v1",
       "host-process-uv-v1",
     ]);
+    expect(
+      resolveDetectorCapabilityV1("detector.cisco")?.executionProfiles.map((entry) => entry.id),
+    ).toEqual(["linux-namespace-uv-v1", "host-process-uv-v1", "oci-hardened-cisco-v1"]);
     const host = semgrep?.executionProfiles.find((entry) => entry.id === "host-process-uv-v1");
     expect(host).toMatchObject({
       isolation: "none",
@@ -205,16 +241,37 @@ describe("DetectorCapabilityV1", () => {
       isolation: "none",
       network: "unenforced",
       image: null,
+      mounts: [],
     });
-    expect(document?.executables).toEqual([BASELINE_UV_EXECUTABLE_V1]);
+    expect(document?.executables.join(" ")).toMatch(
+      /uv \(uv\.exe on Windows\) on the declared PATH/,
+    );
+    expect(document?.executables.join(" ")).toMatch(/WindowsPowerShell.+powershell\.exe/);
     expect(document?.acquisition).toEqual(namespace?.acquisition);
     for (const flag of namespace?.containment ?? [])
       expect(document?.containment, flag).not.toContain(flag);
-    expect(document?.notes.join(" ")).toMatch(/not enforced/i);
-    expect(document?.notes.join(" ")).toMatch(/Windows/);
-    // Process-group cleanup is bounded, not guaranteed: a surviving group fails the spawn.
-    expect(document?.notes.join(" ")).not.toMatch(/gone before it settles/i);
-    expect(document?.notes.join(" ")).toMatch(/not guaranteed/i);
+    const containment = document?.containment.join(" ") ?? "";
+    expect(containment).toMatch(/process group/);
+    expect(containment).toMatch(
+      /Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway/,
+    );
+    expect(containment).toMatch(/killed and the run fails closed/);
+    expect(containment).toMatch(
+      /membership part of process creation \(PROC_THREAD_ATTRIBUTE_JOB_LIST\)/,
+    );
+    expect(containment).toMatch(/command line, inherited environment or working directory/);
+    const notes = document?.notes.join(" ") ?? "";
+    expect(notes).toMatch(
+      /Residual limit on linux and darwin: a descendant that deliberately leaves the session \(setsid\) and also clears its environment and moves its working directory/,
+    );
+    expect(notes).toMatch(/linux-namespace-uv-v1 is the containment option on Linux/);
+    expect(notes).toMatch(/not enforced/i);
+    expect(notes).toMatch(/--offline/);
+    expect(notes).toMatch(/persistent, Scan-owned uv cache/);
+    expect(notes).toMatch(/--no-python-downloads/);
+    expect(notes).toMatch(/macOS amd64 \(cryptography 50\.0\.0\) and Windows arm64/);
+    expect(notes).toMatch(/cisco-skill-scanner-host lock/);
+    expect(notes).toMatch(/empty source root completes for detector\.semgrep/);
 
     expect(
       listDetectorCapabilitiesV1()
@@ -222,7 +279,110 @@ describe("DetectorCapabilityV1", () => {
           entry.executionProfiles.some((profile) => profile.id === "host-process-uv-v1"),
         )
         .map((entry) => entry.detectorId),
-    ).toEqual(["detector.semgrep"]);
+    ).toEqual(["detector.cisco", "detector.semgrep"]);
+  });
+
+  it("publishes the exact per-OS environment the host runtime applies, and the caller variables it reads", () => {
+    const document = resolveDetectorExecutionProfileDocumentV1("host-process-uv-v1");
+    if (document?.environment.policy !== "fixed-values-by-os") throw new Error("policy");
+    expect(document.environment.values).toEqual(HOST_PROCESS_UV_ENVIRONMENT_V1);
+    expect(document.environment.callerVariables).toEqual(HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1);
+    for (const os of ["linux", "darwin", "windows"] as const) {
+      const values = document.environment.values[os];
+      expect(values.UV_NO_ENV_FILE, os).toBe("1");
+      expect(values.UV_PYTHON_DOWNLOADS, os).toBe("never");
+      expect(values.SEMGREP_ENABLE_VERSION_CHECK, os).toBe("0");
+      expect(values.PYTHONPATH, os).toBeUndefined();
+    }
+    expect(Object.keys(document.environment.values.windows)).toEqual(
+      expect.arrayContaining([
+        "SystemRoot",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "LOCALAPPDATA",
+      ]),
+    );
+  });
+
+  it("publishes docker-host-local-skillspector-v1 for SkillSpector only: never pulls, hardened container flags", () => {
+    const skillspector = resolveDetectorCapabilityV1("detector.skillspector");
+    expect(skillspector?.executionProfile.id).toBe("docker-hardened-skillspector-v1");
+    expect(skillspector?.executionProfiles.map((entry) => entry.id)).toEqual([
+      "docker-hardened-skillspector-v1",
+      "docker-host-local-skillspector-v1",
+    ]);
+    expect(
+      resolveDetectorExecutionProfileDocumentV1("docker-host-skillspector-v1"),
+    ).toBeUndefined();
+    const hostDocker = resolveDetectorExecutionProfileDocumentV1(
+      "docker-host-local-skillspector-v1",
+    );
+    const hardened = resolveDetectorExecutionProfileDocumentV1("docker-hardened-skillspector-v1");
+    expect(hostDocker?.containment).toEqual(["--pull", "never", ...(hardened?.containment ?? [])]);
+    expect(hostDocker?.image).toBe(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1);
+    expect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1).toBe("skillspector:aih-2d198ab910ad");
+    expect(hostDocker?.network).toBe("none");
+    expect(hostDocker?.acquisition).toEqual([]);
+    expect(hostDocker?.notes.join(" ")).toMatch(/never pulls/);
+    expect(hostDocker?.notes.join(" ")).toMatch(/RepoDigests/);
+    expect(hostDocker?.notes.join(" ")).toMatch(/acceptedImageDigests/);
+    if (hostDocker?.environment.policy !== "fixed-values-by-os") throw new Error("policy");
+    expect(hostDocker.environment.values).toEqual(HOST_DOCKER_ENVIRONMENT_V1);
+    expect(hostDocker.environment.callerVariables).toEqual(HOST_DOCKER_CONTEXT_VARIABLES_V1);
+    expect(hostDocker.notes.join(" ")).toMatch(/removed by name with docker rm --force --volumes/);
+    expect(hostDocker.notes.join(" ")).toMatch(/current Docker context/);
+    const profile = skillspector?.executionProfiles.find(
+      (entry) => entry.id === "docker-host-local-skillspector-v1",
+    );
+    expect(profile?.prerequisites.map((entry) => `${entry.kind}:${entry.id}`)).toEqual([
+      "host-executable:docker",
+      `container-image:${SKILLSPECTOR_LOCAL_IMAGE_TAG_V1}`,
+    ]);
+    expect(profile?.supportedPlatforms).toEqual([
+      { os: "darwin", architecture: "amd64" },
+      { os: "darwin", architecture: "arm64" },
+      { os: "linux", architecture: "amd64" },
+      { os: "windows", architecture: "amd64" },
+    ]);
+  });
+
+  it("says in every SARIF profile document that artifact URIs are made source-relative", () => {
+    for (const id of [
+      "linux-namespace-uv-v1",
+      "host-process-uv-v1",
+      "docker-hardened-skillspector-v1",
+      "docker-host-local-skillspector-v1",
+    ])
+      expect(resolveDetectorExecutionProfileDocumentV1(id)?.notes.join(" "), id).toMatch(
+        /artifact URI is rewritten relative to the declared source root/,
+      );
+  });
+
+  it("states which detectors complete on an empty source root", () => {
+    expect(
+      Object.fromEntries(
+        listDetectorCapabilitiesV1().map((entry) => [entry.detectorId, entry.emptySource]),
+      ),
+    ).toEqual({
+      "detector.aih-native": "refused",
+      "detector.cisco": "refused",
+      "detector.semgrep": "completes",
+      "detector.skillspector": "completes",
+    });
+  });
+
+  it("exports the in-process trust-lint and binding-gate profiles for every platform, with no prerequisite", () => {
+    for (const [profile, id] of [
+      [IN_PROCESS_TRUST_LINT_PROFILE_V1, "in-process-trust-lint-v1"],
+      [IN_PROCESS_BINDING_GATE_PROFILE_V1, "in-process-binding-gate-v1"],
+    ] as const) {
+      expect(profile.id).toBe(id);
+      expect(profile).toMatchObject({ isolation: "none", network: "none", prerequisites: [] });
+      expect(profile.supportedPlatforms).toHaveLength(6);
+      expect(Object.isFrozen(profile)).toBe(true);
+    }
   });
 
   it("gates platforms and prerequisites per profile, and the default restates the capability", () => {
@@ -232,17 +392,30 @@ describe("DetectorCapabilityV1", () => {
       for (const profile of capability.executionProfiles)
         expect(profile.supportedPlatforms.length, profile.id).toBeGreaterThan(0);
     }
-    const host = resolveDetectorCapabilityV1("detector.semgrep")?.executionProfiles.find(
-      (entry) => entry.id === "host-process-uv-v1",
-    );
-    // Windows has no fail-closed process-tree containment yet and macOS has no hosted proof.
-    expect(host?.supportedPlatforms).toEqual([{ os: "linux", architecture: "amd64" }]);
-    const ids = host?.prerequisites.map((entry) => entry.id) ?? [];
-    expect(ids).toContain(BASELINE_UV_EXECUTABLE_V1);
-    expect(ids).toContain("tools/baseline-analyzers/semgrep/uv.lock");
-    expect(ids).not.toContain(BASELINE_BWRAP_EXECUTABLE_V1);
-    // uv runs with --no-python-downloads, so the pinned interpreter must already exist.
-    expect(ids).toContain(BASELINE_PYTHON_EXECUTABLE_V1);
+    for (const [detectorId, lock] of [
+      ["detector.semgrep", "tools/baseline-analyzers/semgrep/uv.lock"],
+      ["detector.cisco", "tools/baseline-analyzers/cisco-skill-scanner-host/uv.lock"],
+    ] as const) {
+      const host = resolveDetectorCapabilityV1(detectorId)?.executionProfiles.find(
+        (entry) => entry.id === "host-process-uv-v1",
+      );
+      // Exact-pinned binary wheels exist for every dependency on exactly these hosts.
+      expect(host?.supportedPlatforms, detectorId).toEqual([
+        { os: "darwin", architecture: "arm64" },
+        { os: "linux", architecture: "amd64" },
+        { os: "linux", architecture: "arm64" },
+        { os: "windows", architecture: "amd64" },
+      ]);
+      expect(
+        host?.prerequisites.map((entry) => `${entry.kind}:${entry.id}`),
+        detectorId,
+      ).toEqual([
+        "host-executable:uv",
+        "uv-python:3.12",
+        `bundled-asset:${lock}`,
+        "network:https://pypi.org/simple",
+      ]);
+    }
     // The default namespace profile's prerequisites are unchanged.
     expect(
       resolveDetectorCapabilityV1("detector.semgrep")?.executionProfile.prerequisites.map(

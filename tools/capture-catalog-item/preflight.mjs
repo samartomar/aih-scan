@@ -22,7 +22,8 @@ import { log } from "./report.mjs";
 /** Bound on the staged-tree walk that reports a nested SKILL.md, never selects one. */
 const MAX_STAGED_TREE_DIRECTORIES = 256;
 const DOCKER_TIMEOUT_MS = 120_000;
-/** The broker spawns bare `docker` with this exact environment, so preflight uses it too. */
+/** The broker spawns this exact Docker executable with this exact environment, so preflight uses both too. */
+export const BROKER_DOCKER_EXECUTABLE = "/usr/bin/docker";
 const BROKER_PATH = "/usr/bin:/bin";
 
 /**
@@ -151,7 +152,7 @@ export function assertSkillSourceRoot(item) {
 
 export function dockerPreflight(layout) {
   /*
-   * The broker spawns bare `docker` with exactly this environment and an empty
+   * The broker spawns `/usr/bin/docker` with exactly this environment and an empty
    * DOCKER_CONFIG, so no DOCKER_HOST or DOCKER_CONTEXT from the operator's shell
    * can reach it. The preflight mirrors that, and would otherwise accept a daemon
    * the real capture cannot see.
@@ -171,13 +172,13 @@ export function dockerPreflight(layout) {
     });
     if (result.error !== undefined)
       refuse(
-        `${label} could not run: ${result.error.message}; the broker spawns bare 'docker' with PATH=${BROKER_PATH}`,
+        `${label} could not run: ${result.error.message}; the broker spawns ${BROKER_DOCKER_EXECUTABLE} with PATH=${BROKER_PATH}`,
       );
     return result;
   };
   try {
-    const serverOs = run(["docker", "version", "--format", "{{.Server.Os}}"], "docker version");
-    const serverArch = run(["docker", "version", "--format", "{{.Server.Arch}}"], "docker version");
+    const serverOs = run([BROKER_DOCKER_EXECUTABLE, "version", "--format", "{{.Server.Os}}"], "docker version");
+    const serverArch = run([BROKER_DOCKER_EXECUTABLE, "version", "--format", "{{.Server.Arch}}"], "docker version");
     if (serverOs.status !== 0 || serverArch.status !== 0)
       refuse(
         `no Docker daemon answered on the default socket with PATH=${BROKER_PATH}: ` +
@@ -188,7 +189,7 @@ export function dockerPreflight(layout) {
     if (os !== "linux" || architecture !== "amd64")
       refuse(`the Docker daemon must be Linux amd64; it reports ${os}/${architecture}`);
     const inspected = run(
-      ["docker", "image", "inspect", "--format", "{{.Id}}", layout.configDigestSha256],
+      [BROKER_DOCKER_EXECUTABLE, "image", "inspect", "--format", "{{.Id}}", layout.configDigestSha256],
       "docker image inspect",
     );
     const reported = inspected.stdout.trim();

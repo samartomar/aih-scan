@@ -99,9 +99,17 @@ export {
   type DetectorRegistrationV1,
   parseDetectorRegistrationV1Json,
 } from "./registration/detector-registration-v1.js";
+export type {
+  CiscoDetectorOptionsV1,
+  CiscoMcpScannerDetectorOptionsV1,
+  DetectorOptionsV1,
+  TrustLintDetectorOptionsV1,
+} from "./runner/detector-options-v1.js";
 export {
   type BaselineAnalyzerObservationV1,
+  type DetectorAvailabilityV1Result,
   type DetectorPrerequisiteStateV1,
+  probeDetectorAvailabilityV1,
   type RunDetectorFailureStageV1,
   type RunDetectorProducerV1,
   type RunDetectorRefusalReasonV1,

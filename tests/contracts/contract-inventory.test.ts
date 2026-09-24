@@ -93,12 +93,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 74,
+    line: 76,
     contains: 'protocol: z.literal("BaselineVetRequestV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 111,
+    line: 113,
     contains: 'protocol: z.literal("BaselineVetReceiptV1")',
   },
   {
@@ -153,40 +153,117 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 110,
+    line: 122,
     contains: "export interface DetectorExecutionProfileDocumentV1",
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 143,
+    line: 158,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 69, contains: "RunDetectorRefusalReasonV1" },
-  { path: "src/runner/run-detector-v1.ts", line: 85, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 108, contains: "RunDetectorRefusalReasonV1" },
+  {
+    path: "src/observation/source-observation-seal-v1.ts",
+    line: 144,
+    contains: "export function sealSourceObservationV1",
+  },
+  {
+    path: "src/observation/source-observation-seal-v1.ts",
+    line: 41,
+    contains: "export const SOURCE_OBSERVATION_SEAL_LIMITS_V1",
+  },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 611,
+    line: 204,
+    contains: "readonly detectorOptions?: DetectorOptionsV1",
+  },
+  {
+    path: "src/runner/detector-options-v1.ts",
+    line: 134,
+    contains: "export function readDetectorOptionsV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 1191,
+    contains: "export async function probeDetectorAvailabilityV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 1150,
+    contains: "export type DetectorAvailabilityV1Result",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 131,
+    contains: "export type RunDetectorFailureCauseV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 133, contains: "export interface ScanCoverageV1" },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 739,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 177,
+    line: 253,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 153,
+    line: 229,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 121,
+    line: 169,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
+    path: "src/runner/run-detector-v1.ts",
+    line: 171,
+    contains: "readonly hostRuntime?: HostProcessRuntimeV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 206, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 211, contains: "readonly timeoutMs?: number" },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 302,
+    contains: "      sourceSeal:",
+  },
+  {
     path: "src/baseline/runtime-v1.ts",
-    line: 434,
+    line: 48,
+    contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 708,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 215,
+    contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 246,
+    contains: "export function sourceRelativeSarifV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 311,
+    contains: "export function ciscoSourceRelativeSarifV1",
+  },
+  {
+    path: "src/cli/windows-job-supervisor.ts",
+    line: 559,
+    contains: "export function runUnderWindowsJobV1",
+  },
+  {
+    path: "src/cli/residual-processes.ts",
+    line: 221,
+    contains: "export async function sweepResidualProcessesV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },
   {
@@ -196,7 +273,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/findings/scan-findings-v1.ts",
-    line: 368,
+    line: 404,
+    contains: "export function projectAnalyzerSarifFindingsV1",
+  },
+  {
+    path: "src/findings/scan-findings-v1.ts",
+    line: 534,
     contains: "export function readScanFindingsV1",
   },
 ];
@@ -255,7 +337,7 @@ const BOUNDS: readonly Readonly<{
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 38,
+    line: 40,
     contains: "maxAnnexBytes = 16 * 1024 * 1024",
     phrase: "16 MiB per annex",
   },

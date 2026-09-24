@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../cli/process-runner.js";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
@@ -327,7 +328,14 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     const cidfile = join(clientRoot, "container.cid");
     temporaryPath(cidfile, "container ownership cidfile");
     const inspected = await invoke(
-      ["docker", "image", "inspect", "--format", "{{.Id}}", input.layout.configDigestSha256],
+      [
+        BASELINE_DOCKER_EXECUTABLE_V1,
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        input.layout.configDigestSha256,
+      ],
       "image inspect",
     );
     if (
@@ -344,7 +352,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     try {
       created = await invoke(
         [
-          "docker",
+          BASELINE_DOCKER_EXECUTABLE_V1,
           "container",
           "create",
           "--cidfile",
@@ -404,7 +412,14 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     const claimedContainerId = normalizedContainerId(createResult.stdout, "container creation");
     if (claimedContainerId !== cidfileId) fail("container ownership mismatch");
     const inspectedContainer = await invoke(
-      ["docker", "container", "inspect", "--format", "{{.Id}}", claimedContainerId],
+      [
+        BASELINE_DOCKER_EXECUTABLE_V1,
+        "container",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        claimedContainerId,
+      ],
       "container identity",
     );
     if (
@@ -416,7 +431,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     )
       fail("container identity mismatch");
     const run = await invoke(
-      ["docker", "container", "start", "--attach", claimedContainerId],
+      [BASELINE_DOCKER_EXECUTABLE_V1, "container", "start", "--attach", claimedContainerId],
       "container start",
     );
     if (run.truncated) fail("scanner run truncated");
@@ -459,12 +474,12 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   if (ownedContainerId !== undefined) {
     try {
       const removed = await invoke(
-        ["docker", "container", "rm", "--force", ownedContainerId],
+        [BASELINE_DOCKER_EXECUTABLE_V1, "container", "rm", "--force", ownedContainerId],
         "container rm",
       );
       const absent = await invoke(
         [
-          "docker",
+          BASELINE_DOCKER_EXECUTABLE_V1,
           "container",
           "ls",
           "--all",

@@ -54,6 +54,7 @@ describe("Strict V2 public boundary", () => {
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
       "parseScanResultRecordV1",
+      "probeDetectorAvailabilityV1",
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
@@ -80,7 +81,7 @@ describe("Strict V2 public boundary", () => {
   it("makes the 0.x package boundary explicit without treating source as publication evidence", () => {
     const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
     expect(manifest.name).toBe("@aihq/scan");
-    expect(manifest.version).toBe("0.4.0");
+    expect(manifest.version).toBe("0.5.0");
     expect(manifest.private).toBeUndefined();
     expect(manifest.bin).toEqual({ "aih-scan": "./dist/cli.js" });
     expect(manifest.exports).toEqual({

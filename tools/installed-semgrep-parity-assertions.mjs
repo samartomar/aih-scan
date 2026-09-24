@@ -30,13 +30,16 @@ export function normaliseFindingPath(uri, files, originRoot) {
   return files.includes(path) ? { path, accepted: true } : unknown;
 }
 
-/** Empty input must be a typed pre-execution refusal from a successful child. */
-export const scanRefusedForEmpty = (scan) =>
+/**
+ * Core completes Semgrep on an empty tree with no findings, so Scan must too: a successful
+ * child, a completed run under the requested profile, and zero findings.
+ */
+export const scanCompletedEmpty = (scan, executionProfileId) =>
   scan?.exit === 0 &&
   scan.childError === null &&
-  scan.summary?.outcome === "refused" &&
-  scan.summary.reason === "subject-requirement-unmet" &&
-  scan.summary.executionProfileId === null;
+  scan.summary?.outcome === "succeeded" &&
+  scan.summary.executionProfileId === executionProfileId &&
+  scan.summary.findings?.count === 0;
 
 export function compareFindingKeys(coreKeys, scanKeys, allPathsRecognised = true) {
   const unmatched = (left, right) => {
