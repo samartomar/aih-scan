@@ -235,6 +235,136 @@ describe("sourceRelativeSarifV1", () => {
   });
 });
 
+// S2g (W2 phase B finding 1): the pinned SkillSpector image reports a directory it skipped as
+// a tool-execution notification whose location URI is `node_modules/`, modelled here on its
+// captured hidden-file note. A contained directory URI (trailing slash) is accepted on
+// notification and run-artifact locations only, keeping its trailing slash; result locations
+// must still name files, and every traversal and base rule still applies.
+describe("directory URIs on notification and artifact locations (S2g)", () => {
+  const skipped = (uri: string, key = "toolExecutionNotifications") => ({
+    level: "note",
+    locations: [{ physicalLocation: { artifactLocation: { uri } } }],
+    message: { text: "Directory is excluded from the configured scan scope." },
+    properties: { fatal: false, outcome: "out_of_scope", phase: "discovery" },
+    ...(key === "toolExecutionNotifications" ? {} : { descriptor: { id: "skip" } }),
+  });
+  const skillspector = (
+    notifications: unknown[],
+    extra: Record<string, unknown> = {},
+    key = "toolExecutionNotifications",
+  ) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "SkillSpector" } },
+        invocations: [{ executionSuccessful: true, [key]: notifications }],
+        results: [result("/scan/SKILL.md")],
+        ...extra,
+      },
+    ],
+  });
+  type Run = {
+    invocations: {
+      [key: string]: { locations: { physicalLocation: { artifactLocation: { uri: string } } }[] }[];
+    }[];
+    artifacts?: { location: { uri: string } }[];
+  };
+  const notificationUris = (
+    document: Record<string, unknown>,
+    key = "toolExecutionNotifications",
+  ) =>
+    ((document.runs as Run[])[0]?.invocations[0]?.[key] ?? []).map(
+      (entry) => entry.locations[0]?.physicalLocation.artifactLocation.uri,
+    );
+
+  it("keeps the exact SkillSpector skipped-directory notification (W2 phase B finding 1)", () => {
+    const normalized = sourceRelativeSarifV1(skillspector([skipped("node_modules/")]), ["/scan"]);
+    expect(notificationUris(normalized.document)).toEqual(["node_modules/"]);
+    expect(uris(normalized.document)).toEqual(["SKILL.md"]);
+  });
+
+  it("relates the mounted, file: and nested directory spellings to the source root", () => {
+    const normalized = sourceRelativeSarifV1(
+      skillspector([
+        skipped("/scan/node_modules/"),
+        skipped("file:///scan/vendor/"),
+        skipped("skills/demo/node_modules/"),
+        skipped("./dist/"),
+      ]),
+      ["/scan"],
+    );
+    expect(notificationUris(normalized.document)).toEqual([
+      "node_modules/",
+      "vendor/",
+      "skills/demo/node_modules/",
+      "dist/",
+    ]);
+    const configuration = sourceRelativeSarifV1(
+      skillspector(
+        [skipped("/scan/.git/", "toolConfigurationNotifications")],
+        {},
+        "toolConfigurationNotifications",
+      ),
+      ["/scan"],
+    );
+    expect(notificationUris(configuration.document, "toolConfigurationNotifications")).toEqual([
+      ".git/",
+    ]);
+  });
+
+  it("accepts a contained directory on a run artifact's location", () => {
+    const normalized = sourceRelativeSarifV1(
+      skillspector([], { artifacts: [{ location: { uri: "/scan/node_modules/" } }] }),
+      ["/scan"],
+    );
+    expect((normalized.document.runs as Run[])[0]?.artifacts?.[0]?.location.uri).toBe(
+      "node_modules/",
+    );
+  });
+
+  it("refuses hostile directory URIs on a notification", () => {
+    for (const uri of [
+      "../",
+      "../outside/",
+      "node_modules/../../",
+      "/etc/",
+      "/scan/../etc/",
+      "file:///scan/%2E%2E/%2E%2E/etc/",
+      "file:///etc/",
+      "%2E%2E/",
+      "node_modules//",
+      "/scan/",
+      "./",
+      "/",
+      "C:/Windows/",
+      "node_modules\\",
+    ])
+      expect(() => sourceRelativeSarifV1(skillspector([skipped(uri)]), ["/scan"]), uri).toThrow(
+        /SARIF artifact URI/,
+      );
+  });
+
+  it("still requires every result location to name a file, never a directory", () => {
+    for (const uri of ["node_modules/", "/scan/node_modules/", "file:///scan/SKILL.md/"])
+      expect(() => sourceRelativeSarifV1(sarif(result(uri)), ["/scan"]), uri).toThrow(/safe path/);
+    const related = {
+      ...result("/scan/SKILL.md"),
+      relatedLocations: [
+        { physicalLocation: { artifactLocation: { uri: "/scan/node_modules/" } } },
+      ],
+    };
+    expect(() => sourceRelativeSarifV1(sarif(related), ["/scan"])).toThrow(/safe path/);
+  });
+
+  it("keeps directories out of a notification nested in a result", () => {
+    const nested = sarif({
+      ...result("/scan/SKILL.md"),
+      toolExecutionNotifications: [skipped("node_modules/")],
+    });
+    expect(() => sourceRelativeSarifV1(nested, ["/scan"])).toThrow(/safe path/);
+  });
+});
+
 describe("ciscoSourceRelativeSarifV1", () => {
   const root = "C:\\Temp\\aih-scan-baseline-source-z9";
   const cisco = (...entries: [string, string, number | undefined][]) => ({
