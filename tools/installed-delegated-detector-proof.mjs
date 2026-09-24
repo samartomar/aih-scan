@@ -583,9 +583,20 @@ if (detectors.includes("skillspector")) {
     unproven("skillspector real run", "no Docker engine on this host");
   } else {
     check("skillspector with Docker unreachable fails at availability and pulls nothing", unreachable.outcome === "failed" && unreachable.failure?.stage === "availability", brief(unreachable));
+    // The local tag must be the pinned image pulled by digest from its registry: RepoDigests
+    // then carries the pinned reference itself (a local build or load carries none).
+    const { SKILLSPECTOR_IMAGE_V1, SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 } = await import(new URL(`file:///${join(packageDir, "dist", "baseline", "runtime-v1.js").replaceAll("\\", "/")}`).href);
+    const inspected = spawnSync("docker", ["image", "inspect", SKILLSPECTOR_LOCAL_IMAGE_TAG_V1, "--format", "{{json .}}"], { encoding: "utf8", env: baseEnv });
+    let image = null;
+    try {
+      const parsed = JSON.parse(inspected.stdout);
+      image = { tag: SKILLSPECTOR_LOCAL_IMAGE_TAG_V1, id: parsed.Id, repoDigests: parsed.RepoDigests, revision: parsed.Config?.Labels?.["org.opencontainers.image.revision"] ?? null };
+    } catch {}
+    cases.skillspectorImage = image;
+    check("skillspector local tag is the pinned image pulled by digest (RepoDigests names the pinned reference)", image !== null && Array.isArray(image.repoDigests) && image.repoDigests.includes(SKILLSPECTOR_IMAGE_V1), JSON.stringify(image));
     const positive = run("skillspector positive (local approved image, --pull never)", job(roots.skills));
     cases.skillspectorPositive = positive;
-    check("skillspector local run returns a typed outcome under --pull never", positive.outcome === "succeeded" || positive.outcome === "failed", brief(positive));
+    check("skillspector positive succeeds under --pull never: its SARIF proves a completed analysis (S2e) and carries findings", positive.outcome === "succeeded" && positive.findings.length > 0 && positive.sarifUris.every(relative), brief(positive));
     const afterImages = images();
     check("skillspector: the local image list is unchanged (nothing pulled)", JSON.stringify(afterImages) === JSON.stringify(beforeImages), `${beforeImages.length} images before, ${afterImages?.length} after`);
     unproven("skillspector image absent", "the approved local image is present on this host and removing the owner's image is out of scope; the absent-image failure is covered by unit tests and the Docker-unreachable path above");
