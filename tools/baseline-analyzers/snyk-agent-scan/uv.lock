@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "snyk-agent-scan", specifier = "==0.5.17" }]
+requires-dist = [{ name = "snyk-agent-scan", specifier = "==0.6.4" }]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -2051,7 +2051,7 @@ wheels = [
 
 [[package]]
 name = "snyk-agent-scan"
-version = "0.5.17"
+version = "0.6.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2068,9 +2068,9 @@ dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "truststore" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/2c/214d69763d954d37d896efaed9c8a7f69a7d46351159a6bd1d953d0fb54a/snyk_agent_scan-0.5.17.tar.gz", hash = "sha256:11b5d34d0c50e2b5086405dc8aa033217db1377ca43500746566d74617b9a90c", size = 1586138, upload-time = "2026-08-11T09:00:17.376Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/a2/a1e83444efe024d819955edb6cbdf5a285fc1f8b7213fd9924b7e153fe1c/snyk_agent_scan-0.6.4.tar.gz", hash = "sha256:74e6c4b27214290bc282f4c959d27d7bc4cbf9f7bdb58b2b047368ac0acb3e45", size = 1707632, upload-time = "2026-09-21T11:11:54.833Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1d/87/464c65e4eb1ff4163f3205005afa1f1aeb2b5c23fddadd7e5051dd4fe582/snyk_agent_scan-0.5.17-py3-none-any.whl", hash = "sha256:ae928b023023fba12fdaaaa31e9da5dad4252c181545dfba72d46534d694b935", size = 157762, upload-time = "2026-08-11T09:00:16.078Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/dc/8cab4486ce20ab7eaf329523ecbad737059cc9945d1a56f0a2430ba45bb7/snyk_agent_scan-0.6.4-py3-none-any.whl", hash = "sha256:c0b9c1ecc14407c1e7f3fe634328148bcfd55d24c847e7d8b0078042e5439a06", size = 202072, upload-time = "2026-09-21T11:11:53.457Z" },
 ]
 
 [[package]]
