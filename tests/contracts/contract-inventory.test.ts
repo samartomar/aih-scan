@@ -394,6 +394,24 @@ describe("published contract inventory", () => {
     }
   });
 
+  // S2g: a `$\`` in a String.replace replacement once spliced the whole preceding document
+  // into the "Detector options" row, so the title, the prose and the tables appeared twice.
+  it("states the title once and every contract row once, each heading on its own line", () => {
+    const document = contracts();
+    expect(document.split("# Contracts published by").length - 1).toBe(1);
+    expect(document.split("Every format this package produces").length - 1).toBe(1);
+    const lines = document.split("\n");
+    for (const line of lines.filter((candidate) => candidate.includes("# ")))
+      expect(line.startsWith("#") || !/(?:^|[^#])#{1,6} [A-Z]/u.test(line), line.slice(0, 80)).toBe(
+        true,
+      );
+    const rowNames = lines
+      .filter((line) => line.startsWith("| ") && !/^| (?:---|Contract |)/u.test(line))
+      .map((line) => line.split(" | ")[0]);
+    expect(rowNames.length).toBe(new Set(rowNames).size);
+    expect(document).toContain("normalized npm scopes (`^@[a-z0-9][a-z0-9._~-]*$`)");
+  });
+
   it("anchors every source reference it publishes", () => {
     const anchored = new Set([...ANCHORS, ...BOUNDS].map((a) => `${a.path}:${a.line}`));
     const references = [...contracts().matchAll(/`((?:src|tools)\/[^`:]+:\d+)`/gu)].map(
