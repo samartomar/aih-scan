@@ -1844,8 +1844,9 @@ function verifyCiscoCoverage(output: Buffer, expectedSkills: number): Record<str
       decodeStrictUtf8V1(output, "Cisco JSON report"),
       "Cisco JSON report",
     );
-  } catch {
-    fail("Cisco JSON report is invalid");
+  } catch (error) {
+    // U1g: the strict parser's reason is kept; a malformed report fails at output.
+    fail(`Cisco JSON report is invalid: ${error instanceof Error ? error.message : "JSON"}`);
   }
   const summary = report.summary;
   if (typeof summary !== "object" || summary === null || Array.isArray(summary))

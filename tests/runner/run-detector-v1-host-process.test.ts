@@ -32,6 +32,7 @@ import {
   canonicalStrictJsonSha256V1,
 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import { strictJsonHostileTextsV1 } from "../support/strict-json-hostile.js";
 import {
   completionOfObservationV1,
   diskFilesV1,
@@ -1499,5 +1500,90 @@ describe("runDetectorV1 Cisco host result binding (U1g)", () => {
     expect(text).not.toContain("skills/a/guide.md");
     expect(text).not.toContain("skills/a/skill.md");
     expect(text.split('"uri":"skills/a/GUIDE.md"').length - 1).toBe(2);
+  });
+});
+
+// U1g: the upgraded analyzers' own output (Semgrep 1.178.0 SARIF, Cisco 2.1.0 SARIF and JSON
+// report) is read only through the one strict parser, and each of its refusals fails the run
+// at output: a repeated key, a number no double holds, and a number token beyond the bound.
+describe("runDetectorV1 host-process-uv-v1 strict analyzer output (U1g)", () => {
+  const semgrepText = (root: string) =>
+    sarif([result(join(root, "README.md"), 2)]).replace(/^\{/u, '{"aihValid":true,');
+
+  it.each(
+    strictJsonHostileTextsV1(semgrepText("/x")).map(([label]) => label),
+  )("fails Semgrep SARIF holding %s at output", async (label) => {
+    const host = hostFixture();
+    const runner = hostRunner([], host.python, async (argv) => {
+      const text = semgrepText(argv.at(-1) ?? "");
+      const hostile = strictJsonHostileTextsV1(text).find(([name]) => name === label);
+      return okay(hostile?.[1] ?? text);
+    });
+    const outcome = await runDetectorV1(semgrepRequest({ env: host.env, runner }));
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    const reason = strictJsonHostileTextsV1("{}").find(([name]) => name === label)?.[2];
+    if (outcome.outcome === "failed" && reason !== undefined)
+      expect(outcome.failure.detail).toMatch(reason);
+  });
+
+  const ciscoCase = (target: "SARIF" | "JSON report", label: string) =>
+    hostRunner([], hostFixture().python, async (argv) => {
+      const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
+      const report = canonicalStrictJsonBytesV1({
+        summary: { total_skills_scanned: 2 },
+        results: [
+          { skill_path: snapshot, findings: [] },
+          {
+            skill_path: join(snapshot, "skills", "nested"),
+            findings: [
+              { rule_id: "YARA_prompt_injection_generic", file_path: "SKILL.md", line_number: 5 },
+            ],
+          },
+        ],
+      }).toString("utf8");
+      const log = canonicalStrictJsonBytesV1({
+        version: "2.1.0",
+        runs: [
+          {
+            tool: { driver: { name: "skill-scanner" } },
+            invocations: [{ executionSuccessful: true }],
+            results: [result("SKILL.md", 5, "YARA_prompt_injection_generic")],
+          },
+        ],
+      }).toString("utf8");
+      const hostile = (text: string) =>
+        strictJsonHostileTextsV1(text).find(([name]) => name === label)?.[1] ?? text;
+      writeFileSync(
+        argv[argv.indexOf("--output-json") + 1] ?? "",
+        target === "JSON report" ? hostile(report) : report,
+      );
+      writeFileSync(
+        argv[argv.indexOf("--output-sarif") + 1] ?? "",
+        target === "SARIF" ? hostile(log) : log,
+      );
+      return okay("");
+    });
+
+  it.each(
+    (["SARIF", "JSON report"] as const).flatMap((target) =>
+      strictJsonHostileTextsV1("{}").map(([label]) => [target, label] as const),
+    ),
+  )("fails Cisco %s holding %s at output", async (target, label) => {
+    const host = hostFixture();
+    const outcome = await runDetectorV1({
+      detectorId: "detector.cisco",
+      executionProfileId: HOST_PROFILE,
+      subject: {
+        kind: "skill-directory",
+        sourceRoot: skillFixture(),
+        selectedClosurePaths: ["SKILL.md", "skills/nested/SKILL.md"],
+      },
+      env: host.env,
+      runner: ciscoCase(target, label),
+    });
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    const reason = strictJsonHostileTextsV1("{}").find(([name]) => name === label)?.[2];
+    if (outcome.outcome === "failed" && reason !== undefined)
+      expect(outcome.failure.detail).toMatch(reason);
   });
 });

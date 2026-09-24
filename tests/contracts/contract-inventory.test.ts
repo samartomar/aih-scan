@@ -184,12 +184,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1382,
+    line: 1385,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1341,
+    line: 1344,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
@@ -210,7 +210,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   { path: "src/runner/run-detector-v1.ts", line: 174, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 791,
+    line: 794,
     contains: "export async function runDetectorV1",
   },
   {

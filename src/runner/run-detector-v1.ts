@@ -440,7 +440,10 @@ export function failureStage(message: string): RunDetectorFailureStageV1 {
     message.includes("observation") ||
     message.includes("emitted no SARIF") ||
     message.includes("SARIF artifact URI") ||
-    message.includes("Cisco SARIF")
+    message.includes("Cisco SARIF") ||
+    // U1g: a Cisco JSON report the strict parser refuses, or whose shape is malformed, is the
+    // analyzer's output; a skipped skill or a count mismatch stays a coverage failure above.
+    message.includes("Cisco JSON report")
   )
     return "output";
   return "execution";
