@@ -500,10 +500,10 @@ export function ciscoSourceRelativeSarifV1(
       ciscoFail(
         `SARIF result ${index} (${String(result.ruleId)} ${identity}:${String(line)}) does not match JSON finding ${index} (${finding.ruleId} ${expected}:${String(finding.line)})`,
       );
-    for (const location of locations) {
-      const entry = isRecord(location) ? location.physicalLocation : undefined;
-      const target = isRecord(entry) ? entry.artifactLocation : undefined;
-      if (!isRecord(target) || typeof target.uri !== "string") continue;
+    // Every other location inside the result (further locations, related locations, code
+    // flows) is relative to the same skill directory (U1e review P2), never to the root.
+    for (const { location: target } of artifactLocations(result)) {
+      if (typeof target.uri !== "string") continue;
       target.uri =
         target === artifact
           ? identity
@@ -511,5 +511,28 @@ export function ciscoSourceRelativeSarifV1(
       settled.add(target);
     }
   });
+  // A location outside every result (a run artifact, a notification) names no skill, so a
+  // URI relative to the analyzer's %SRCROOT% (the skill it scanned) cannot be resolved; only
+  // an absolute URI or one under a base that resolves inside the source root stays.
+  for (const run of copy.runs as Record<string, Json>[]) {
+    const base = baseResolver(run.originalUriBaseIds);
+    for (const { location } of artifactLocations(run, true)) {
+      if (settled.has(location) || typeof location.uri !== "string") continue;
+      const baseId = location.uriBaseId;
+      if (isAbsoluteLocation(location.uri) && baseId === undefined) continue;
+      let resolved: Base;
+      try {
+        if (baseId !== undefined && typeof baseId !== "string")
+          fail("an artifact uriBaseId is not a string");
+        resolved = baseId === undefined ? { underRoot: "" } : base(baseId);
+      } catch (error) {
+        ciscoFail(`a run location: ${(error as Error).message}`);
+      }
+      if (!("absolute" in resolved))
+        ciscoFail(
+          `run location ${JSON.stringify(location.uri)} is relative to a skill directory but belongs to no result, so it names no skill`,
+        );
+    }
+  }
   return normalize(copy, sourceRoots, settled, copy);
 }

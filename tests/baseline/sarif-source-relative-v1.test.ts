@@ -515,4 +515,89 @@ describe("ciscoSourceRelativeSarifV1", () => {
     );
     expect(uris(spaced.document)).toEqual(["skills/a/my notes.md"]);
   });
+
+  // U1e review P2: Cisco writes every location relative to the skill it scanned, so a
+  // related location belongs to its result's paired skill, never to the source root.
+  const withRelated = (related: unknown[], extra: Record<string, unknown> = {}) => {
+    const document = cisco(["R", "SKILL.md", 1]);
+    const run = document.runs[0] as unknown as Record<string, unknown> & {
+      results: Record<string, unknown>[];
+    };
+    const first = run.results[0] as Record<string, unknown>;
+    first.relatedLocations = related;
+    Object.assign(run, extra);
+    return document;
+  };
+  const relatedUris = (document: Record<string, unknown>) =>
+    (
+      (
+        document.runs as {
+          results: {
+            relatedLocations?: { physicalLocation: { artifactLocation: { uri: string } } }[];
+          }[];
+        }[]
+      )[0]?.results[0]?.relatedLocations ?? []
+    ).map((entry) => entry.physicalLocation.artifactLocation.uri);
+  const related = (uri: string, uriBaseId?: string) => ({
+    physicalLocation: {
+      artifactLocation: { uri, ...(uriBaseId === undefined ? {} : { uriBaseId }) },
+    },
+  });
+
+  it("resolves a related location against its result's paired skill (U1e review P2)", () => {
+    const normalized = ciscoSourceRelativeSarifV1(
+      withRelated([related("guide.md"), related("refs/notes.md", "%SRCROOT%")]),
+      report(["/scan/skills/a", [["R", "SKILL.md", 1]]]),
+      ["/scan"],
+    );
+    expect(uris(normalized.document)).toEqual(["skills/a/SKILL.md"]);
+    expect(relatedUris(normalized.document)).toEqual([
+      "skills/a/guide.md",
+      "skills/a/refs/notes.md",
+    ]);
+  });
+
+  it.each([
+    ["an escaping related location", "../outside.md"],
+    ["an absolute related location", "/etc/passwd"],
+    ["a drive-letter related location", "C:/Windows/win.ini"],
+  ])("fails closed on %s", (_label, uri) => {
+    expect(() =>
+      ciscoSourceRelativeSarifV1(
+        withRelated([related(uri)]),
+        report(["/scan/skills/a", [["R", "SKILL.md", 1]]]),
+        ["/scan"],
+      ),
+    ).toThrow(/Cisco/);
+  });
+
+  it("refuses a run artifact location whose skill context cannot be established", () => {
+    expect(() =>
+      ciscoSourceRelativeSarifV1(
+        withRelated([], { artifacts: [{ location: { uri: "guide.md", uriBaseId: "%SRCROOT%" } }] }),
+        report(["/scan/skills/a", [["R", "SKILL.md", 1]]]),
+        ["/scan"],
+      ),
+    ).toThrow(/Cisco.*no skill/);
+    expect(() =>
+      ciscoSourceRelativeSarifV1(
+        withRelated([], { artifacts: [{ location: { uri: "guide.md" } }] }),
+        report(["/scan/skills/a", [["R", "SKILL.md", 1]]]),
+        ["/scan"],
+      ),
+    ).toThrow(/Cisco.*no skill/);
+  });
+
+  it("keeps a run artifact location whose base resolves inside the source root", () => {
+    const normalized = ciscoSourceRelativeSarifV1(
+      withRelated([], {
+        originalUriBaseIds: { SRC: { uri: "file:///scan/" } },
+        artifacts: [{ location: { uri: "skills/a/guide.md", uriBaseId: "SRC" } }],
+      }),
+      report(["/scan/skills/a", [["R", "SKILL.md", 1]]]),
+      ["/scan"],
+    );
+    const run = (normalized.document.runs as { artifacts: { location: { uri: string } }[] }[])[0];
+    expect(run?.artifacts.map((artifact) => artifact.location.uri)).toEqual(["skills/a/guide.md"]);
+  });
 });
