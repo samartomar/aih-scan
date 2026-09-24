@@ -1,0 +1,91 @@
+{
+  "case": "malformed",
+  "detector": "cisco",
+  "environment": "linux-x64",
+  "calls": [
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "--version"
+      ],
+      "cwd": null,
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 0,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 7692,
+      "stdout": "skill-scanner 2.0.14\n",
+      "stderr": "Installed 89 packages in 707ms\n"
+    },
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "scan",
+        "<root>",
+        "--format",
+        "sarif",
+        "--output-sarif",
+        "<tmp>/aih-cisco-sarif-<random>/results.sarif"
+      ],
+      "cwd": "<root>",
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 1,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 8233,
+      "stdout": "",
+      "stderr": "Installed 89 packages in 604ms\nError loading skill: SKILL.md missing required field: name\n"
+    },
+    {
+      "argv": [
+        "docker",
+        "--version"
+      ],
+      "cwd": null,
+      "timeoutMs": 10000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 127,
+      "spawnError": true,
+      "truncated": false,
+      "durationMs": 3,
+      "stdout": "",
+      "stderr": "spawn docker ENOENT"
+    }
+  ]
+}

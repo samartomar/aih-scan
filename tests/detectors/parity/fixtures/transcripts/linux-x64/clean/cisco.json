@@ -1,0 +1,73 @@
+{
+  "case": "clean",
+  "detector": "cisco",
+  "environment": "linux-x64",
+  "calls": [
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "--version"
+      ],
+      "cwd": null,
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 0,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 8895,
+      "stdout": "skill-scanner 2.0.14\n",
+      "stderr": "Installed 89 packages in 904ms\n"
+    },
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "scan",
+        "<root>",
+        "--format",
+        "sarif",
+        "--output-sarif",
+        "<tmp>/aih-cisco-sarif-<random>/results.sarif"
+      ],
+      "cwd": "<root>",
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 0,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 9397,
+      "stdout": "Report saved to: <tmp>/aih-cisco-sarif-<random>/results.sarif\n",
+      "stderr": "Installed 89 packages in 629ms\n",
+      "outputSarif": "{\n  \"$schema\": \"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json\",\n  \"version\": \"2.1.0\",\n  \"runs\": [\n    {\n      \"tool\": {\n        \"driver\": {\n          \"name\": \"skill-scanner\",\n          \"version\": \"1.0.0\",\n          \"informationUri\": \"https://github.com/cisco-ai-defense/skill-scanner\",\n          \"rules\": []\n        }\n      },\n      \"results\": [],\n      \"invocations\": [\n        {\n          \"executionSuccessful\": true,\n          \"endTimeUtc\": \"2026-09-24T02:10:27Z\"\n        }\n      ]\n    }\n  ]\n}"
+    }
+  ]
+}
