@@ -1105,10 +1105,12 @@ describe("runCiscoSourceTreeScanV1", () => {
       selectedClosurePaths: selectionOf("skills/clean"),
     });
 
+    // S2h: Core's message, then the strict parser's reason.
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "detector did not emit valid SARIF",
+      detail:
+        "detector did not emit valid SARIF: invalid JSON detector SARIF: an unexpected character at offset 0",
     });
   });
 

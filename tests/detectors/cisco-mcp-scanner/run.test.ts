@@ -265,6 +265,19 @@ describe("runCiscoMcpScannerPlanV1 error classification (parity: Core ~4303, ~43
     });
   });
 
+  it("fails closed when the scanner stdout was not well-formed UTF-8 (S2h)", async () => {
+    const root = fixture();
+    write(root, ".mcp.json", localServerConfig());
+
+    const { outcome } = plannedRun(root, { PATH: "bin" }, [], { stdoutMalformedUtf8: true });
+
+    expect(await outcome).toEqual({
+      status: "failed",
+      kind: "invalid-output",
+      detail: "mcp-scanner stdout is not well-formed UTF-8",
+    });
+  });
+
   it("fails closed when the scanner emits no JSON", async () => {
     const root = fixture();
     write(root, ".mcp.json", localServerConfig());

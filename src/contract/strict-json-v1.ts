@@ -1,11 +1,4 @@
 import { createHash } from "node:crypto";
-import {
-  type Node as JsonNode,
-  type ParseError,
-  parse,
-  parseTree,
-  printParseErrorCode,
-} from "jsonc-parser";
 
 export function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -92,37 +85,204 @@ export function deepFreezeStrictJsonV1<T>(value: T, seen = new WeakSet<object>()
   return Object.freeze(value);
 }
 
-function duplicateKeys(node: JsonNode): void {
-  if (node.type === "object") {
-    const keys = new Set<string>();
-    for (const property of node.children ?? []) {
-      const key = property.children?.[0]?.value;
-      if (typeof key === "string") {
-        if (keys.has(key)) throw new TypeError(`duplicate JSON object key: ${key}`);
-        keys.add(key);
-      }
-      const child = property.children?.[1];
-      if (child !== undefined) duplicateKeys(child);
-    }
-  } else if (node.type === "array") for (const child of node.children ?? []) duplicateKeys(child);
+/** The deepest array/object nesting a strict JSON text may use. */
+export const STRICT_JSON_MAX_DEPTH_V1 = 512;
+
+const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * S2h: the text of analyzer bytes, only when they are well-formed UTF-8. A lossy decode would
+ * repair an invalid sequence to U+FFFD; this throws instead. A leading BOM is kept, so the
+ * strict parser refuses it rather than a decoder silently dropping it.
+ */
+export function decodeStrictUtf8V1(bytes: Uint8Array, label: string): string {
+  try {
+    return UTF8_FATAL.decode(bytes);
+  } catch {
+    throw new TypeError(`${label} is not well-formed UTF-8`);
+  }
 }
 
-export function parseStrictJsonObjectV1(text: string, label: string): Record<string, unknown> {
-  assertWellFormedNfcV1(text, `${label} JSON text`);
-  const options = { allowTrailingComma: false, disallowComments: true } as const;
-  const errors: ParseError[] = [];
-  const tree = parseTree(text, errors, options);
-  if (errors.length > 0 || tree === undefined)
-    throw new TypeError(
-      `invalid JSON ${label}: ${errors.map((e) => printParseErrorCode(e.error)).join(",")}`,
-    );
-  if (tree.type !== "object") throw new TypeError(`${label} JSON root must be an object`);
-  duplicateKeys(tree);
-  const parseErrors: ParseError[] = [];
-  const parsed = parse(text, parseErrors, options);
-  if (parseErrors.length > 0 || !object(parsed) || Array.isArray(parsed))
-    throw new TypeError(`invalid JSON ${label}`);
-  return assertStrictJsonValueV1(parsed, label) as Record<string, unknown>;
+const NUMBER = /-?(?:0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y;
+const ESCAPES: Readonly<Record<string, string>> = {
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
+
+/**
+ * S2h (review of S2g): one RFC 8259 parser for every JSON text Scan reads, above all analyzer
+ * output. `JSON.parse` keeps the last of two equal keys, so a later `executionSuccessful` or
+ * `properties` could hide a failure or erase a forged key. This parser refuses, at any depth:
+ * a repeated key (compared after unescaping); any byte outside the one JSON value (a BOM,
+ * trailing data, a second value); whitespace other than space, tab, LF and CR; a control
+ * character inside a string; an invalid escape; a number `JSON.parse` would change (overflow
+ * to infinity, underflow of a non-zero literal to zero, an integer literal beyond the safe
+ * integer range) or negative zero; malformed Unicode; nesting deeper than
+ * {@link STRICT_JSON_MAX_DEPTH_V1}. A `__proto__` key is kept as an own data property, never a
+ * prototype. Strings and keys must be NFC unless `requireNfc` is `false`.
+ */
+export function parseStrictJsonV1(
+  text: string,
+  label: string,
+  options: Readonly<{ requireNfc?: boolean }> = {},
+): unknown {
+  const requireNfc = options.requireNfc ?? true;
+  assertWellFormedNfcV1(text, `${label} JSON text`, requireNfc);
+  let at = 0;
+  const invalid = (reason: string): never => {
+    throw new TypeError(`invalid JSON ${label}: ${reason} at offset ${String(at)}`);
+  };
+  const space = () => {
+    for (let code = text.charCodeAt(at); ; code = text.charCodeAt(at)) {
+      if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) at += 1;
+      else return;
+    }
+  };
+  const string = (): string => {
+    at += 1;
+    let value = "";
+    let start = at;
+    for (;;) {
+      if (at >= text.length) return invalid("an unterminated string");
+      const code = text.charCodeAt(at);
+      if (code === 0x22) {
+        value += text.slice(start, at);
+        at += 1;
+        return value;
+      }
+      if (code < 0x20) return invalid("a control character in a string");
+      if (code !== 0x5c) {
+        at += 1;
+        continue;
+      }
+      value += text.slice(start, at);
+      const escaped = text[at + 1] ?? "";
+      if (escaped === "u") {
+        const hex = text.slice(at + 2, at + 6);
+        if (!/^[0-9A-Fa-f]{4}$/.test(hex)) return invalid("an invalid \\u escape");
+        value += String.fromCharCode(Number.parseInt(hex, 16));
+        at += 6;
+      } else {
+        const decoded = ESCAPES[escaped];
+        if (decoded === undefined) return invalid("an invalid escape");
+        value += decoded;
+        at += 2;
+      }
+      start = at;
+    }
+  };
+  const number = (): number => {
+    NUMBER.lastIndex = at;
+    const match = NUMBER.exec(text);
+    if (match === null) return invalid("an unexpected character");
+    const lexeme = match[0];
+    const value = Number(lexeme);
+    if (!Number.isFinite(value)) return invalid("a number beyond the double range");
+    if (value === 0 && /[1-9]/.test(lexeme.split(/[eE]/)[0] ?? ""))
+      return invalid("a non-zero number that underflows to zero");
+    if (match[1] === undefined && match[2] === undefined && !Number.isSafeInteger(value))
+      return invalid("an integer beyond the safe integer range");
+    at += lexeme.length;
+    return value;
+  };
+  const literal = (word: string, value: boolean | null): boolean | null => {
+    if (text.startsWith(word, at)) {
+      at += word.length;
+      return value;
+    }
+    return invalid("an unexpected character");
+  };
+  const value = (depth: number): unknown => {
+    space();
+    const code = text.charCodeAt(at);
+    if (code === 0x7b || code === 0x5b) {
+      if (depth >= STRICT_JSON_MAX_DEPTH_V1) return invalid("nesting beyond the bound");
+      return code === 0x7b ? objectValue(depth + 1) : arrayValue(depth + 1);
+    }
+    if (code === 0x22) return string();
+    if (code === 0x74) return literal("true", true);
+    if (code === 0x66) return literal("false", false);
+    if (code === 0x6e) return literal("null", null);
+    if (Number.isNaN(code)) return invalid("an unexpected end of text");
+    return number();
+  };
+  const objectValue = (depth: number): Record<string, unknown> => {
+    at += 1;
+    const result: Record<string, unknown> = {};
+    const keys = new Set<string>();
+    space();
+    if (text.charCodeAt(at) === 0x7d) {
+      at += 1;
+      return result;
+    }
+    for (;;) {
+      space();
+      if (text.charCodeAt(at) !== 0x22) return invalid("an object key that is not a string");
+      const key = string();
+      if (keys.has(key)) throw new TypeError(`${label} has a duplicate JSON object key: ${key}`);
+      keys.add(key);
+      space();
+      if (text.charCodeAt(at) !== 0x3a) return invalid("a missing ':'");
+      at += 1;
+      // Defined, never assigned: a "__proto__" key stays own data instead of a prototype.
+      Object.defineProperty(result, key, {
+        value: value(depth),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      space();
+      const next = text.charCodeAt(at);
+      at += 1;
+      if (next === 0x7d) return result;
+      if (next !== 0x2c) {
+        at -= 1;
+        return invalid("a missing ',' or '}'");
+      }
+    }
+  };
+  const arrayValue = (depth: number): unknown[] => {
+    at += 1;
+    const result: unknown[] = [];
+    space();
+    if (text.charCodeAt(at) === 0x5d) {
+      at += 1;
+      return result;
+    }
+    for (;;) {
+      result.push(value(depth));
+      space();
+      const next = text.charCodeAt(at);
+      at += 1;
+      if (next === 0x5d) return result;
+      if (next !== 0x2c) {
+        at -= 1;
+        return invalid("a missing ',' or ']'");
+      }
+    }
+  };
+  const parsed = value(0);
+  space();
+  if (at !== text.length) invalid("data after the JSON value");
+  return assertStrictJsonValueV1(parsed, label, requireNfc);
+}
+
+/** {@link parseStrictJsonV1} of a text whose root must be an object. */
+export function parseStrictJsonObjectV1(
+  text: string,
+  label: string,
+  options: Readonly<{ requireNfc?: boolean }> = {},
+): Record<string, unknown> {
+  const parsed = parseStrictJsonV1(text, label, options);
+  if (!object(parsed) || Array.isArray(parsed))
+    throw new TypeError(`${label} JSON root must be an object`);
+  return parsed as Record<string, unknown>;
 }
 
 function canonical(value: unknown): string {

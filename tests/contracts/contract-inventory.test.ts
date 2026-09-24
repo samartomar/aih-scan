@@ -242,17 +242,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 52,
+    line: 54,
     contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 732,
+    line: 743,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 221,
+    line: 223,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
@@ -267,7 +267,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/cli/windows-job-supervisor.ts",
-    line: 559,
+    line: 560,
     contains: "export function runUnderWindowsJobV1",
   },
   {

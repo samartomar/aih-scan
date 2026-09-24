@@ -217,6 +217,48 @@ describe("parseCiscoMcpScannerSarifV1 fail-closed rules (parity: Core ~4333 and 
     ).toThrow("mcp-scanner did not emit parseable JSON");
   });
 
+  it("parses stdout with the one strict JSON parser (S2h)", () => {
+    const clean = JSON.stringify([
+      {
+        status: "completed",
+        is_safe: true,
+        findings: {
+          yara_analyzer: {
+            severity: "SAFE",
+            threat_names: [],
+            threat_summary: "No threats detected",
+            total_findings: 0,
+          },
+        },
+        tool_name: ".mcp.json:local",
+        tool_description: "local fixture",
+        item_type: "tool",
+      },
+    ]);
+    const tools = () => submitted([".mcp.json:local", ".mcp.json"]);
+    expect(parseCiscoMcpScannerSarifV1(clean, tools()).runs[0]?.results).toEqual([]);
+    expect(() =>
+      parseCiscoMcpScannerSarifV1(
+        clean.replace('"is_safe":true', '"is_safe":false,"is_safe":true'),
+        tools(),
+      ),
+    ).toThrow("duplicate JSON object key");
+    for (const raw of [
+      `${String.fromCharCode(0xfeff)}${clean}`,
+      `${clean}[]`,
+      `${clean} x`,
+      clean.replace('"total_findings":0', '"total_findings":9007199254740993'),
+      clean.replace('"total_findings":0', '"total_findings":1e999'),
+      clean.replace(
+        '"tool_description":"local fixture"',
+        `"tool_description":"a${String.fromCharCode(1)}"`,
+      ),
+    ])
+      expect(() => parseCiscoMcpScannerSarifV1(raw, tools()), raw).toThrow(
+        "mcp-scanner did not emit parseable JSON",
+      );
+  });
+
   it("rejects a non-array JSON root", () => {
     expect(() =>
       parseCiscoMcpScannerSarifV1('{"results": []}', submitted([".mcp.json:local", ".mcp.json"])),

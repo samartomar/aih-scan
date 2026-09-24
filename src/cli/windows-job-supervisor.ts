@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { parseStrictJsonObjectV1 } from "../contract/strict-json-v1.js";
+import { processOutputV1 } from "./process-output.js";
 import type {
   ProcessRunnerOptions,
   ProcessRunnerResult,
@@ -651,10 +652,7 @@ export function runUnderWindowsJobV1(
       if ("error" in outcome) reject(outcome.error);
       else resolveResult(Object.freeze(outcome.result));
     };
-    const output = () => ({
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    });
+    const output = () => processOutputV1(stdout, stderr);
     function terminate(reason: ProcessTerminationV1): void {
       if (settled || termination !== undefined) return;
       termination = reason;

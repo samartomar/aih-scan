@@ -64,7 +64,10 @@ function runner(perJob: (name: string) => unknown, delays?: Record<string, numbe
     const name = target.split("/").at(-1) ?? "";
     await new Promise((resolve) => setTimeout(resolve, delays?.[name] ?? 0));
     const body = perJob(name);
-    writeFileSync(output, typeof body === "string" ? body : JSON.stringify(body), "utf8");
+    writeFileSync(
+      output,
+      typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
+    );
     return { code: 0, stdout: "", stderr: "" };
   };
   return run;
@@ -203,6 +206,49 @@ describe.each(BOTH)("Cisco job SARIF completion evidence (%s)", (_label, execute
   it("keeps a complete job's SARIF", async () => {
     const outcome = await execute(runner(() => sarif([cleanRun([result("SKILL.md")])])));
     expect(outcome.kind).toBe("completed");
+  });
+
+  // S2h (review of S2g): JSON.parse kept the last of two keys, so a failed invocation and a
+  // forged completion key could both be hidden behind a later duplicate.
+  const clean = JSON.stringify({ tool: DRIVER, results: [] });
+  it("fails a job whose invocation repeats executionSuccessful (reviewer reproduction)", async () => {
+    await failsWith(
+      `{"version":"2.1.0","runs":[${clean.slice(0, -1)},"invocations":[{"executionSuccessful":false,"executionSuccessful":true}]}]}`,
+      "output",
+      /duplicate JSON object key/,
+    );
+  });
+
+  it("fails a job whose invocation repeats properties to erase a forgery (reviewer reproduction)", async () => {
+    await failsWith(
+      `{"version":"2.1.0","runs":[${clean.slice(0, -1)},"invocations":[{"executionSuccessful":true,"properties":{"aihScanCompletionV1":{}},"properties":{}}]}]}`,
+      "output",
+      /duplicate JSON object key/,
+    );
+  });
+
+  it("fails a job whose SARIF repeats a key anywhere, or is not one strict JSON text", async () => {
+    const body = JSON.stringify(sarif([cleanRun()]));
+    await failsWith(`{"version":"2.1.0",${body.slice(1)}`, "output", /duplicate JSON object key/);
+    await failsWith(
+      body.replace('"results":[]', '"results":[],"results":[]'),
+      "output",
+      /duplicate/,
+    );
+    await failsWith(`${String.fromCharCode(0xfeff)}${body}`, "output", /invalid JSON/);
+    await failsWith(`${body}{}`, "output", /invalid JSON/);
+    await failsWith(`${body} trailing`, "output", /invalid JSON/);
+    // An invalid byte inside a string would have been repaired to U+FFFD and accepted.
+    const [head, tail] = body.split('"skill-scanner"');
+    await failsWith(
+      Buffer.concat([
+        Buffer.from(`${head}"skill-scanner`),
+        Buffer.from([0xff]),
+        Buffer.from(`"${tail}`),
+      ]),
+      "output",
+      /UTF-8/,
+    );
   });
 });
 

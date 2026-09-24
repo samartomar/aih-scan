@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/strict-json-v1.js";
+import { deepFreezeStrictJsonV1, parseStrictJsonV1 } from "../../contract/strict-json-v1.js";
 
 /**
  * The `snyk-agent-scan` detector engine (detector id `detector.snyk-agent-scan`), ported
@@ -70,6 +70,8 @@ export type SnykAgentScanPlatformV1 = "windows" | "darwin" | "linux";
 
 export interface SnykAgentScanProcessResultV1 {
   readonly stdout: string;
+  /** S2h: stdout was not well-formed UTF-8, so `stdout` is a lossy decode; it is refused. */
+  readonly stdoutMalformedUtf8?: true;
   readonly stderr: string;
   readonly code: number | null;
   readonly spawnError?: boolean;
@@ -650,9 +652,9 @@ function parseReportJson(raw: string): unknown {
   if (Buffer.byteLength(raw, "utf8") > MAX_OUTPUT_BYTES)
     throw new TypeError("snyk-agent-scan output exceeds the bounded size");
   try {
-    // The wrapper object lets the strict contract parser validate every root shape,
-    // including the top-level finding array, with duplicate keys rejected.
-    return parseStrictJsonObjectV1(`{"report":${raw}}`, "snyk-agent-scan").report;
+    // S2h: the one strict parser reads any root shape directly. The former `{"report":…}`
+    // wrapper let text after the report become a sibling key instead of trailing data.
+    return parseStrictJsonV1(raw, "snyk-agent-scan");
   } catch {
     throw new TypeError("snyk-agent-scan did not emit parseable JSON");
   }
@@ -832,6 +834,12 @@ async function executeSnykAgentScanPlanV1(
       kind: "failed" as const,
       stage: "execution" as const,
       detail: processDetail("snyk-agent-scan exited outside {0, 1}", scan),
+    });
+  if (scan.stdoutMalformedUtf8 === true)
+    return Object.freeze({
+      kind: "failed" as const,
+      stage: "output" as const,
+      detail: processDetail("snyk-agent-scan stdout is not well-formed UTF-8", scan),
     });
   let sarif: SnykAgentScanSarifV1;
   try {

@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type HostExecutableV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
+import { analyzerStdoutV1 } from "../cli/process-output.js";
 import {
   BASELINE_BWRAP_EXECUTABLE_V1,
   BASELINE_DOCKER_EXECUTABLE_V1,
@@ -30,6 +31,7 @@ import { windowsSystemRootV1 } from "../cli/windows-job-supervisor.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
+  decodeStrictUtf8V1,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
 import {
@@ -538,10 +540,19 @@ type AnalyzerOutput = {
  * message names the observation); an invocation that reports its own failure, or an
  * error-level notification, is an `execution` failure.
  */
-function parsedSarif(text: string, analyzer: string): Record<string, unknown> {
+function parsedSarif(
+  output: Uint8Array | Readonly<{ stdout: string; stdoutMalformedUtf8?: true }>,
+  analyzer: string,
+): Record<string, unknown> {
   let document: Record<string, unknown>;
   try {
-    document = parseStrictJsonObjectV1(text, `${analyzer} observation`);
+    const label = `${analyzer} observation`;
+    // S2h: the analyzer's own bytes, strictly: never a lossy UTF-8 decode.
+    const text =
+      output instanceof Uint8Array
+        ? decodeStrictUtf8V1(output, label)
+        : analyzerStdoutV1(output, label);
+    document = parseStrictJsonObjectV1(text, label);
   } catch (error) {
     fail(
       `baseline ${analyzer} observation is invalid: ${error instanceof Error ? error.message : "JSON"}`,
@@ -1107,7 +1118,7 @@ async function skillspector(
       requireCleanResult(result, "SkillSpector scan", [0, 1]);
     }
     if (!result.stdout.trim()) fail("SkillSpector scan emitted no SARIF");
-    const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "skillspector"), ["/scan"]);
+    const normalized = sourceRelativeSarifV1(parsedSarif(result, "skillspector"), ["/scan"]);
     return {
       ...sarifOutput(normalized.document, `${SKILLSPECTOR_SOURCE_REVISION_V1}@${match.digest}`),
       image: match,
@@ -1293,7 +1304,7 @@ async function hostProcessUv(
         scanTimeoutMs,
       );
       if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
-      const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "semgrep"), roots);
+      const normalized = sourceRelativeSarifV1(parsedSarif(result, "semgrep"), roots);
       return {
         ...sarifOutput(normalized.document, lockIdentity(version, project)),
         hostRuntime,
@@ -1336,10 +1347,7 @@ async function hostProcessUv(
       readBoundedAnalyzerOutput(jsonPath, "Cisco JSON output"),
       expectedSkills,
     );
-    const sarif = parsedSarif(
-      readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output").toString("utf8"),
-      "cisco",
-    );
+    const sarif = parsedSarif(readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output"), "cisco");
     return {
       ...sarifOutput(
         ciscoSourceRelativeSarifV1(sarif, report, roots).document,
@@ -1610,6 +1618,8 @@ export type HostUvEngineProcessResultV1 = Readonly<{
   code: number | null;
   stdout: string;
   stderr: string;
+  /** S2h: stdout was not well-formed UTF-8; the engine refuses it as analyzer output. */
+  stdoutMalformedUtf8?: true;
   /** Set when Scan ended the spawn or refused it; the run then fails with the recorded cause. */
   spawnError?: boolean;
 }>;
@@ -1733,7 +1743,12 @@ export async function runHostUvEngineV1<T>(
           recorded ??= error;
           return Object.freeze({ code: null, stdout: "", stderr: "", spawnError: true });
         }
-        return Object.freeze({ code: result.code, stdout: result.stdout, stderr: result.stderr });
+        return Object.freeze({
+          code: result.code,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          ...(result.stdoutMalformedUtf8 === true ? { stdoutMalformedUtf8: true as const } : {}),
+        });
       };
       let produced: T;
       try {
@@ -1813,9 +1828,7 @@ async function semgrep(
       "Semgrep scan",
     );
     if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
-    const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "semgrep"), [
-      "/aih/source",
-    ]);
+    const normalized = sourceRelativeSarifV1(parsedSarif(result, "semgrep"), ["/aih/source"]);
     return sarifOutput(normalized.document, lockIdentity(SEMGREP_VERSION_V1, semgrepProject));
   } finally {
     rmSync(temporary, { recursive: true, force: true });
@@ -1830,7 +1843,10 @@ function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
 function verifyCiscoCoverage(output: Buffer, expectedSkills: number): Record<string, unknown> {
   let report: Record<string, unknown>;
   try {
-    report = parseStrictJsonObjectV1(output.toString("utf8"), "Cisco JSON report");
+    report = parseStrictJsonObjectV1(
+      decodeStrictUtf8V1(output, "Cisco JSON report"),
+      "Cisco JSON report",
+    );
   } catch {
     fail("Cisco JSON report is invalid");
   }
@@ -1930,7 +1946,7 @@ async function cisco(
       expectedSkills,
     );
     const sarif = parsedSarif(
-      readBoundedAnalyzerOutput(sarifOutputPath, "Cisco SARIF output").toString("utf8"),
+      readBoundedAnalyzerOutput(sarifOutputPath, "Cisco SARIF output"),
       "cisco",
     );
     return sarifOutput(
