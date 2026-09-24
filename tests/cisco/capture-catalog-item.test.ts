@@ -11,9 +11,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../../src/cli/process-runner.js";
 import { createDetectorRegistrationV1 } from "../../src/registration/detector-registration-v1.js";
 import {
   assertPlatform,
+  BROKER_DOCKER_EXECUTABLE,
   createRunDirectory,
   installEnvironment,
   npmCliPath,
@@ -67,6 +69,12 @@ describe("catalog capture host platform gate", () => {
 
   it("refuses the OCI spelling, which Node never reports", () => {
     expect(() => assertPlatform({ arch: "amd64", platform: "linux" })).toThrow(/linux\/amd64/);
+  });
+});
+
+describe("catalog capture Docker preflight", () => {
+  it("probes the exact Docker executable the OCI broker spawns and the profile gates", () => {
+    expect(BROKER_DOCKER_EXECUTABLE).toBe(BASELINE_DOCKER_EXECUTABLE_V1);
   });
 });
 

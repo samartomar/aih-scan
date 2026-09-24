@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { runCiscoOciEquivalenceLiveV1 } from "../../src/cisco/dual-run-equivalence-v1.js";
+import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../../src/cli/process-runner.js";
 
 const execFileAsync = promisify(execFile);
 const maxStdioBytes = 64 * 1024;
@@ -40,7 +41,7 @@ function livePrerequisites(): boolean {
   try {
     const childPath = requiredAbsoluteEnvironment("AIH_SCAN_CISCO_CHILD_PATH");
     if (!existsSync(join(childPath, "uv"))) return false;
-    execFileSync("docker", ["version", "--format", "{{.Server.Version}}"], {
+    execFileSync(BASELINE_DOCKER_EXECUTABLE_V1, ["version", "--format", "{{.Server.Version}}"], {
       shell: false,
       stdio: "ignore",
       timeout: 10_000,
@@ -52,7 +53,7 @@ function livePrerequisites(): boolean {
 }
 
 function controlledRunner(
-  expectedCommand: "docker" | "uv",
+  expectedCommand: typeof BASELINE_DOCKER_EXECUTABLE_V1 | "uv",
   fallbackCwd: string,
   uvBase?: Readonly<Record<string, string>>,
 ) {
@@ -209,7 +210,7 @@ describe("Cisco OCI equivalence live seam", () => {
         configDigestSha256: configDigest,
         summaryPath,
         uvRunner: controlledRunner("uv", runtimeProjectRoot, uvBase),
-        dockerRunner: controlledRunner("docker", runnerTemp),
+        dockerRunner: controlledRunner(BASELINE_DOCKER_EXECUTABLE_V1, runnerTemp),
       });
       if (!("validationState" in result)) throw new Error("live producer did not run");
       expect(result.validationState).toBe("cryptographically-unverified");

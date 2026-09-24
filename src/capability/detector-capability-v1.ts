@@ -332,7 +332,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     isolation: "container",
     network: "none",
     backend: "oci-container",
-    executables: ["docker"],
+    executables: [BASELINE_DOCKER_EXECUTABLE_V1],
     image: "<caller-supplied immutable OCI layout config digest>",
     containment: [
       "--pull=never",
@@ -479,8 +479,9 @@ const CISCO_GATES: ProfileGates = {
   ],
 };
 /**
- * The OCI capture profile runs only the Docker CLI (`PATH=/usr/bin:/bin`) against a
- * caller-supplied image that must already be present (`--pull=never`, `--network=none`).
+ * The OCI capture profile runs only the Docker CLI at exactly the gated absolute path, never a
+ * `PATH` lookup, against a caller-supplied image that must already be present
+ * (`--pull=never`, `--network=none`).
  * It needs no bubblewrap, uv, uv.lock or acquisition network; the image itself is run
  * material the caller supplies, so it is validated with the request, not probed here.
  */

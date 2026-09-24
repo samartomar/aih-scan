@@ -13,8 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolveDetectorCapabilityV1,
+  resolveDetectorExecutionProfileDocumentV1,
+} from "../../src/capability/detector-capability-v1.js";
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { loadCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
+import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../../src/cli/process-runner.js";
 
 const roots: string[] = [];
 const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
@@ -301,9 +306,9 @@ function expectCleanup(
   containerId = ownedContainerId,
 ): void {
   expect(calls.slice(-2).map((call) => call.argv)).toEqual([
-    ["docker", "container", "rm", "--force", containerId],
+    [BASELINE_DOCKER_EXECUTABLE_V1, "container", "rm", "--force", containerId],
     [
-      "docker",
+      BASELINE_DOCKER_EXECUTABLE_V1,
       "container",
       "ls",
       "--all",
@@ -402,7 +407,7 @@ describe("Cisco OCI broker V1", () => {
     const dockerConfig = environment?.DOCKER_CONFIG;
 
     expect(fake.calls[0]?.argv).toEqual([
-      "docker",
+      BASELINE_DOCKER_EXECUTABLE_V1,
       "image",
       "inspect",
       "--format",
@@ -410,7 +415,7 @@ describe("Cisco OCI broker V1", () => {
       value.layout.configDigestSha256,
     ]);
     expect(create?.argv).toEqual([
-      "docker",
+      BASELINE_DOCKER_EXECUTABLE_V1,
       "container",
       "create",
       "--cidfile",
@@ -476,7 +481,7 @@ describe("Cisco OCI broker V1", () => {
     expect(dockerConfig).not.toBe(process.env.DOCKER_CONFIG);
     expectBoundedDockerCalls(fake.calls, fake.clientStates);
     expect(fake.calls.map((call) => call.argv)).toContainEqual([
-      "docker",
+      BASELINE_DOCKER_EXECUTABLE_V1,
       "container",
       "inspect",
       "--format",
@@ -484,7 +489,7 @@ describe("Cisco OCI broker V1", () => {
       ownedContainerId,
     ]);
     expect(fake.calls.map((call) => call.argv)).toContainEqual([
-      "docker",
+      BASELINE_DOCKER_EXECUTABLE_V1,
       "container",
       "start",
       "--attach",
@@ -526,6 +531,22 @@ describe("Cisco OCI broker V1", () => {
     expect(result.evidenceAnnex.descriptors[0]?.sha256).toBe(sha256(result.annexBytes));
     recursivelyFrozen(result);
     expectNoAuthority(result);
+  });
+
+  it("spawns every Docker call through the one absolute executable the OCI profile gates and documents", async () => {
+    const { value, fake } = input();
+    await executeCiscoOciBrokerV1(value);
+    const oci = resolveDetectorCapabilityV1("detector.cisco")?.executionProfiles.find(
+      (entry) => entry.id === "oci-hardened-cisco-v1",
+    );
+    const gated = oci?.prerequisites.find((entry) => entry.kind === "executable")?.id;
+
+    expect(gated).toBe(BASELINE_DOCKER_EXECUTABLE_V1);
+    expect(resolveDetectorExecutionProfileDocumentV1("oci-hardened-cisco-v1")?.executables).toEqual(
+      [gated],
+    );
+    expect(fake.calls.length).toBeGreaterThan(0);
+    for (const call of fake.calls) expect(call.argv[0], call.argv.join(" ")).toBe(gated);
   });
 
   it("accepts only one Docker image-ID line terminator before exact digest binding", async () => {
@@ -694,7 +715,7 @@ describe("Cisco OCI broker V1", () => {
     expect(
       fake.calls.some(
         (call) =>
-          call.argv[0] === "docker" &&
+          call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1 &&
           call.argv[1] === "container" &&
           call.argv[2] === "rm" &&
           call.argv[3] === "--force",
@@ -719,13 +740,17 @@ describe("Cisco OCI broker V1", () => {
       expect(
         fake.calls.some(
           (call) =>
-            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "rm",
+            call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1 &&
+            call.argv[1] === "container" &&
+            call.argv[2] === "rm",
         ),
       ).toBe(false);
       expect(
         fake.calls.some(
           (call) =>
-            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "start",
+            call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1 &&
+            call.argv[1] === "container" &&
+            call.argv[2] === "start",
         ),
       ).toBe(false);
     }
@@ -749,7 +774,9 @@ describe("Cisco OCI broker V1", () => {
       expect(
         fake.calls.some(
           (call) =>
-            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "start",
+            call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1 &&
+            call.argv[1] === "container" &&
+            call.argv[2] === "start",
         ),
       ).toBe(false);
     }
@@ -808,7 +835,9 @@ describe("Cisco OCI broker V1", () => {
       expect(
         fake.calls.some(
           (call) =>
-            call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "rm",
+            call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1 &&
+            call.argv[1] === "container" &&
+            call.argv[2] === "rm",
         ),
       ).toBe(false);
     }
@@ -834,7 +863,9 @@ describe("Cisco OCI broker V1", () => {
     expect(
       fake.calls.some(
         (call) =>
-          call.argv[0] === "docker" && call.argv[1] === "container" && call.argv[2] === "inspect",
+          call.argv[0] === BASELINE_DOCKER_EXECUTABLE_V1 &&
+          call.argv[1] === "container" &&
+          call.argv[2] === "inspect",
       ),
     ).toBe(false);
   });

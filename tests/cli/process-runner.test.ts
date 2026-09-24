@@ -5,7 +5,11 @@ import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dockerRunner } from "../../src/cli/docker-runner.js";
-import { BASELINE_UV_EXECUTABLE_V1, processRunner } from "../../src/cli/process-runner.js";
+import {
+  BASELINE_DOCKER_EXECUTABLE_V1,
+  BASELINE_UV_EXECUTABLE_V1,
+  processRunner,
+} from "../../src/cli/process-runner.js";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -38,12 +42,24 @@ afterEach(() => {
 });
 
 describe("dockerRunner", () => {
+  it("runs only the one absolute Docker executable the OCI profile gates, never a PATH lookup", () => {
+    spawnMock.mockClear();
+    for (const argv of [
+      ["docker", "version"],
+      ["/bin/docker", "version"],
+      ["docker.exe", "version"],
+    ])
+      expect(() => dockerRunner(argv, options), argv[0]).toThrow("registered Docker argv");
+    expect(() => processRunner(["docker", "version"], options)).toThrow("registered process argv");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("rejects once and clears its timer when an error races a later close", async () => {
     vi.useFakeTimers();
     const child = new FakeChild();
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner(["docker", "version"], options);
+    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
     child.emit("error", new Error("docker unavailable"));
 
     await expect(completed).rejects.toThrow("docker unavailable");
@@ -57,7 +73,7 @@ describe("dockerRunner", () => {
     const child = new FakeChild();
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner(["docker", "version"], options);
+    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
     const bounded = Promise.race([
       completed,
@@ -82,7 +98,7 @@ describe("dockerRunner", () => {
     });
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner(["docker", "version"], options);
+    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
 
     await expect(completed).resolves.toEqual({
@@ -100,7 +116,7 @@ describe("dockerRunner", () => {
     child.kill.mockReturnValue(true);
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner(["docker", "version"], options);
+    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
     const bounded = Promise.race([
       completed,
@@ -126,7 +142,7 @@ describe("dockerRunner", () => {
     child.kill.mockReturnValue(true);
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner(["docker", "version"], options);
+    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
     child[stream].write(Buffer.alloc(options.maxStdoutBytes + 1));
 
     await expect(

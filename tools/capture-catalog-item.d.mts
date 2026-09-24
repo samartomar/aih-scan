@@ -182,6 +182,8 @@ export type CatalogCapturePreparedV1 = Readonly<{
   requestPath: string;
 }>;
 
+/** The exact Docker executable the OCI broker spawns and the preflight mirrors. */
+export const BROKER_DOCKER_EXECUTABLE: string;
 export function assertPlatform(
   descriptor?: Readonly<{ platform: string; arch: string }>,
 ): CatalogCapturePlatformV1;

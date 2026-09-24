@@ -7,7 +7,6 @@ export const BASELINE_DOCKER_EXECUTABLE_V1 = "/usr/bin/docker";
 export const BASELINE_BWRAP_EXECUTABLE_V1 = "/usr/bin/bwrap";
 export const BASELINE_UV_EXECUTABLE_V1 = "/usr/local/bin/uv";
 const allowedExecutables = new Set([
-  "docker",
   BASELINE_BWRAP_EXECUTABLE_V1,
   BASELINE_DOCKER_EXECUTABLE_V1,
   BASELINE_UV_EXECUTABLE_V1,
