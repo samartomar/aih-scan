@@ -571,7 +571,15 @@ export function rewriteSarifRunLocationsV1(
   assertArtifactIndices(run as Json, "run");
 }
 
-type CiscoFinding = Readonly<{ skill: string; ruleId: string; file: string; line: number | null }>;
+type CiscoFinding = Readonly<{
+  skill: string;
+  ruleId: string;
+  /** `null` for a skill-level finding (`"file_path": null`, D28): the skill's own SKILL.md. */
+  file: string | null;
+  line: number | null;
+  /** The finding's `id` when it is a string: with `ruleId`, its D28 pairing identity. */
+  id: string | undefined;
+}>;
 
 function ciscoFail(message: string): never {
   throw new TypeError(`aih-scan Cisco SARIF: ${message}`);
@@ -597,7 +605,7 @@ function ciscoFindings(
       if (
         !isRecord(finding) ||
         typeof finding.rule_id !== "string" ||
-        typeof finding.file_path !== "string" ||
+        !(typeof finding.file_path === "string" || finding.file_path === null) ||
         !(
           finding.line_number === null ||
           finding.line_number === undefined ||
@@ -605,17 +613,27 @@ function ciscoFindings(
         )
       )
         ciscoFail("a JSON report finding is malformed");
-      let file: string;
-      try {
-        file = relativeTo(finding.file_path, [], false);
-      } catch {
-        ciscoFail(`finding path ${JSON.stringify(finding.file_path)} is not a relative path`);
-      }
+      let file: string | null = null;
+      if (finding.file_path === null) {
+        // D28: a skill-level finding is paired by its identity, so it must have one, and it
+        // names no line.
+        const position = findings.length;
+        if (typeof finding.id !== "string")
+          ciscoFail(`skill-level finding ${position} ("file_path": null) has no string id`);
+        if (finding.line_number !== null && finding.line_number !== undefined)
+          ciscoFail(`skill-level finding ${position} ("file_path": null) names a line`);
+      } else
+        try {
+          file = relativeTo(finding.file_path, [], false);
+        } catch {
+          ciscoFail(`finding path ${JSON.stringify(finding.file_path)} is not a relative path`);
+        }
       findings.push({
         skill,
         ruleId: finding.rule_id,
         file,
         line: typeof finding.line_number === "number" ? finding.line_number : null,
+        id: typeof finding.id === "string" ? finding.id : undefined,
       });
     }
   }
@@ -649,6 +667,73 @@ function ciscoLocationIdentity(
   } catch (error) {
     ciscoFail(`SARIF result ${index} location: ${(error as Error).message}`);
   }
+}
+
+/**
+ * Coordinator decision D28 (U1h): a Cisco JSON finding with `"file_path": null` is accepted
+ * only as a skill-level finding at the reporting skill's own SKILL.md, and only through a
+ * bijective pairing; returns the location its counterpart must name, which is that SKILL.md.
+ *
+ * - Its SARIF counterpart (the result at the same position) must carry the same identity:
+ *   JSON `(rule_id, id)` is SARIF `(ruleId, fingerprints.primaryLocationLineHash)`. Otherwise
+ *   the finding has no counterpart and the run fails.
+ * - That identity must occur once among the JSON findings and once among the SARIF results.
+ *   A duplicate (across skills too) fails, unless every counterpart names its skill
+ *   independently of the pairing: its location's base resolves to an absolute location
+ *   inside the source root, not to the analyzer's per-skill `%SRCROOT%`, both sides hold the
+ *   identity equally often, and no skill reports it twice.
+ * - The counterpart's own location must resolve to exactly `<skill>/SKILL.md` (the caller's
+ *   identity check); every other location, index and (on win32) D1 rule then applies to it
+ *   as to any result. Scan never writes a location for a finding without a counterpart.
+ *
+ * The pairing proves no analysis: completion is decided separately and is not changed here.
+ */
+function ciscoSkillLevelFindingV1(
+  finding: CiscoFinding,
+  result: Record<string, Json>,
+  artifact: Record<string, Json>,
+  base: (id: string) => Base,
+  identity: string,
+  index: number,
+  identities: Readonly<{
+    fingerprint: string | undefined;
+    json: ReadonlyMap<string, number>;
+    jsonInSkill: ReadonlyMap<string, number>;
+    sarif: ReadonlyMap<string, number>;
+    key: (ruleId: unknown, id: unknown) => string;
+  }>,
+): string {
+  const named = `(${finding.ruleId}, ${String(finding.id)})`;
+  if (result.ruleId !== finding.ruleId || identities.fingerprint !== finding.id)
+    ciscoFail(
+      `JSON skill-level finding ${index} ${named} has no SARIF counterpart: SARIF result ${index} is (${String(result.ruleId)}, ${String(identities.fingerprint)})`,
+    );
+  const key = identities.key(finding.ruleId, finding.id);
+  const json = identities.json.get(key) ?? 0;
+  const sarif = identities.sarif.get(key) ?? 0;
+  if (json !== 1 || sarif !== 1) {
+    let independent = false;
+    try {
+      independent =
+        typeof artifact.uriBaseId === "string" && "absolute" in base(artifact.uriBaseId);
+    } catch {
+      // A malformed base fails in the identity check.
+    }
+    if (
+      !independent ||
+      json !== sarif ||
+      identities.jsonInSkill.get(key + JSON.stringify(finding.skill)) !== 1
+    )
+      ciscoFail(
+        `skill-level finding identity ${named} is not unique across the paired reports (JSON ${json}, SARIF ${sarif}), and its counterpart does not name its skill independently`,
+      );
+  }
+  const manifest = finding.skill === "" ? "SKILL.md" : `${finding.skill}/SKILL.md`;
+  if (identity !== manifest)
+    ciscoFail(
+      `JSON skill-level finding ${index} ${named}: its SARIF counterpart names ${identity}, not the reporting skill's ${manifest}`,
+    );
+  return manifest;
 }
 
 /**
@@ -695,6 +780,32 @@ export function ciscoSourceRelativeSarifV1(
     ciscoFail(
       `the SARIF report holds ${results.length} results but the JSON report ${findings.length} findings`,
     );
+  // D28: the pairing identities, JSON (rule_id, id) and SARIF (ruleId,
+  // fingerprints.primaryLocationLineHash), counted across the paired reports.
+  const identityKey = (ruleId: unknown, id: unknown) => JSON.stringify([ruleId, id]);
+  const fingerprintOf = (result: Record<string, Json>) =>
+    isRecord(result.fingerprints) && typeof result.fingerprints.primaryLocationLineHash === "string"
+      ? result.fingerprints.primaryLocationLineHash
+      : undefined;
+  const count = (keys: readonly string[]) => {
+    const counts = new Map<string, number>();
+    for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+    return counts;
+  };
+  const jsonIdentities = count(
+    findings.flatMap(({ ruleId, id }) => (id === undefined ? [] : [identityKey(ruleId, id)])),
+  );
+  const jsonSkillIdentities = count(
+    findings.flatMap(({ ruleId, id, skill }) =>
+      id === undefined ? [] : [identityKey(ruleId, id) + JSON.stringify(skill)],
+    ),
+  );
+  const sarifIdentities = count(
+    results.flatMap(({ result }) => {
+      const fingerprint = fingerprintOf(result);
+      return fingerprint === undefined ? [] : [identityKey(result.ruleId, fingerprint)];
+    }),
+  );
   results.forEach(({ result, base }, index) => {
     const finding = findings[index] as CiscoFinding;
     const locations = result.locations;
@@ -707,7 +818,18 @@ export function ciscoSourceRelativeSarifV1(
     if (!isRecord(artifact) || typeof artifact.uri !== "string")
       ciscoFail(`SARIF result ${index} has no artifact URI`);
     const identity = ciscoLocationIdentity(artifact, finding.skill, base, candidates, index);
-    const expected = finding.skill === "" ? finding.file : `${finding.skill}/${finding.file}`;
+    const expected =
+      finding.file === null
+        ? ciscoSkillLevelFindingV1(finding, result, artifact, base, identity, index, {
+            fingerprint: fingerprintOf(result),
+            json: jsonIdentities,
+            jsonInSkill: jsonSkillIdentities,
+            sarif: sarifIdentities,
+            key: identityKey,
+          })
+        : finding.skill === ""
+          ? finding.file
+          : `${finding.skill}/${finding.file}`;
     const line = isRecord(region) && typeof region.startLine === "number" ? region.startLine : null;
     if (result.ruleId !== finding.ruleId || identity !== expected || line !== finding.line)
       ciscoFail(

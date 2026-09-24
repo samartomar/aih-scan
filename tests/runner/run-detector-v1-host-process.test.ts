@@ -32,6 +32,7 @@ import {
   canonicalStrictJsonSha256V1,
 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import { materializeCaseV1, parityCasesV1 } from "../detectors/parity/support.js";
 import { strictJsonHostileTextsV1 } from "../support/strict-json-hostile.js";
 import {
   completionOfObservationV1,
@@ -1586,4 +1587,129 @@ describe("runDetectorV1 host-process-uv-v1 strict analyzer output (U1g)", () => 
     if (outcome.outcome === "failed" && reason !== undefined)
       expect(outcome.failure.detail).toMatch(reason);
   });
+});
+
+// Coordinator decision D28 (U1h), end to end on the real bytes: Cisco 2.1.0 on win32 reported
+// the golden `malformed` case with a skill-level LOW_ANALYZABILITY finding (`"file_path": null`)
+// and `analyzers_failed: [{analyzer: "skill_loader"}]`. The finding is accepted at the skill's
+// SKILL.md through its SARIF counterpart; completion is decided exactly as before, by the
+// coverage report and the invocation, never by the pairing: `analyzers_failed` was not read
+// before and is not read now, and a skipped skill or a scanned-count mismatch still fails
+// coverage. The capture is win32 output (Cisco's normcased `skill.md`, which D1 binds on win32
+// only), so the run is proven where it was captured.
+describe("runDetectorV1 Cisco skill-level finding on the real bytes (D28, U1h)", () => {
+  const fixture = (name: string) =>
+    readFileSync(new URL(`../fixtures/cisco/${name}`, import.meta.url), "utf8");
+  const malformedTree = () => {
+    const parityCase = parityCasesV1().find((entry) => entry.id === "malformed");
+    if (parityCase === undefined) throw new Error("the golden malformed case is missing");
+    const root = materializeCaseV1(parityCase);
+    temporaryDirectories.push(root);
+    return root;
+  };
+  const realRunner = (python: string, report: (text: string) => string = (text) => text) =>
+    hostRunner([], python, async (argv) => {
+      const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
+      writeFileSync(
+        argv[argv.indexOf("--output-json") + 1] ?? "",
+        report(
+          fixture("real-2.1.0-win32-malformed.report.json").replaceAll(
+            "@SKILL_PATH@",
+            JSON.stringify(snapshot).slice(1, -1),
+          ),
+        ),
+      );
+      writeFileSync(
+        argv[argv.indexOf("--output-sarif") + 1] ?? "",
+        fixture("real-2.1.0-win32-malformed.sarif"),
+      );
+      return okay("");
+    });
+  const run = (sourceRoot: string, env: Record<string, string>, runner: BaselineProcessRunnerV1) =>
+    runDetectorV1({
+      detectorId: "detector.cisco",
+      executionProfileId: HOST_PROFILE,
+      subject: {
+        kind: "skill-directory",
+        sourceRoot,
+        selectedClosurePaths: diskFilesV1(sourceRoot),
+      },
+      env,
+      runner,
+    });
+  const edited = (edit: (report: Record<string, unknown>) => void) => (text: string) => {
+    const report = JSON.parse(text) as Record<string, unknown>;
+    edit(report);
+    return JSON.stringify(report);
+  };
+
+  it.runIf(windows)(
+    "accepts LOW_ANALYZABILITY at SKILL.md and decides completion as before",
+    async () => {
+      const host = hostFixture();
+      const root = malformedTree();
+      const outcome = await run(root, host.env, realRunner(host.python));
+      expect(outcome.outcome === "failed" ? outcome.failure.detail : outcome.outcome).toBe(
+        "succeeded",
+      );
+      if (
+        outcome.outcome !== "succeeded" ||
+        outcome.evidence.kind !== "baseline-analyzer-observation-v1"
+      )
+        return;
+      const log = JSON.parse(Buffer.from(outcome.evidence.observation.bytes).toString("utf8")) as {
+        runs: {
+          results: {
+            ruleId: string;
+            locations: { physicalLocation: { artifactLocation: { uri: string } } }[];
+          }[];
+        }[];
+      };
+      const skillLevel = log.runs[0]?.results.find((entry) => entry.ruleId === "LOW_ANALYZABILITY");
+      expect(skillLevel?.locations[0]?.physicalLocation.artifactLocation.uri).toBe("SKILL.md");
+      // Completion evidence is the digest of the analyzed files on disk, as for every run.
+      expect(completionOfObservationV1(outcome)).toMatchObject(
+        diskSubjectV1(root, diskFilesV1(root)),
+      );
+      // The same run without `analyzers_failed` decides completion identically: it is not read.
+      const without = await run(
+        root,
+        host.env,
+        realRunner(
+          host.python,
+          edited((report) => {
+            for (const entry of report.results as Record<string, unknown>[])
+              delete entry.analyzers_failed;
+          }),
+        ),
+      );
+      expect(without.outcome).toBe("succeeded");
+      expect(completionOfObservationV1(without)).toEqual(completionOfObservationV1(outcome));
+    },
+  );
+
+  it.runIf(windows)(
+    "still fails coverage when the report says a skill was skipped or miscounted",
+    async () => {
+      const host = hostFixture();
+      for (const [edit, reason] of [
+        [
+          (report: Record<string, unknown>) => {
+            (report.summary as Record<string, unknown>).skills_skipped = ["x"];
+          },
+          /skipped 1 skill/,
+        ],
+        [
+          (report: Record<string, unknown>) => {
+            (report.summary as Record<string, unknown>).total_skills_scanned = 2;
+          },
+          /coverage mismatch/,
+        ],
+      ] as const) {
+        const outcome = await run(malformedTree(), host.env, realRunner(host.python, edited(edit)));
+        expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "coverage" } });
+        if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
+      }
+    },
+  );
 });
