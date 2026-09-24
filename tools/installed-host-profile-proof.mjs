@@ -346,7 +346,9 @@ if (detectors.includes("cisco")) {
   check("cisco runs the bundled skill-scanner 2.1.0 lock", positive.analyzerVersion === `2.1.0+uvlock.${ciscoLock.slice(0, 12)}`, positive.analyzerVersion);
   check("cisco clean succeeded, and reports no prompt-injection finding", clean.outcome === "succeeded" && !clean.findings.some((f) => /prompt_injection/i.test(f.rule ?? "")), clean.findings.map((f) => `${f.rule}|${f.path}`).join(", "));
   check("cisco empty source is refused (Core cannot scan Cisco without a SKILL.md either)", empty.outcome === "refused" && empty.reason === "subject-requirement-unmet", `${empty.reason}: ${empty.detail}`);
-  check("cisco malformed input (a skill Cisco skips) fails closed at coverage", unparseable.outcome === "failed" && unparseable.failure?.stage === "coverage", JSON.stringify(unparseable.failure));
+  // 2.0.14 skipped a skill without frontmatter (a coverage failure). 2.1.0 loads it in fallback
+  // mode, counts it in its JSON report and says so with a SKILL_LOAD_FALLBACK_USED finding on it.
+  check("cisco malformed input (a nested skill without frontmatter) is analyzed in fallback mode and says so", unparseable.outcome === "succeeded" && unparseable.coverage?.complete === true && unparseable.findings.some((f) => f.rule === "SKILL_LOAD_FALLBACK_USED" && f.path === "skills/broken/SKILL.md"), `${unparseable.outcome} ${JSON.stringify(unparseable.failure)} ${unparseable.findings?.map((f) => `${f.rule}|${f.path}`).join(", ")}`);
   if (sharedWellKnownUv)
     check("cisco missing prerequisite: not applicable, uv is installed in a shared well-known directory", true, "shared uv present");
   else
