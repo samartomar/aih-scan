@@ -1,11 +1,6 @@
 import { scanTrustDependencyNamesV1 } from "./depnames.js";
 import { trustLintRunFactsV1, trustLintTreeArtifactFactsV1 } from "./facts.js";
-import {
-  isSourceRelativeUriV1,
-  type TrustLintFindingV1,
-  type TrustLintSarifV1,
-  trustLintSarifV1,
-} from "./findings.js";
+import { type TrustLintFindingV1, type TrustLintSarifV1, trustLintSarifV1 } from "./findings.js";
 import { buildTrustLintTreeV1, type TrustLintTreeV1 } from "./inventory.js";
 import {
   isStrictUnicodeSurfaceV1,
@@ -19,6 +14,7 @@ import { scanMcpServerDescriptionsV1 } from "./mcp-description.js";
 import { type TrustLintDetectorOptionsV1, validateTrustLintDetectorOptionsV1 } from "./options.js";
 import { isMaliciousCodeScanFilePathV1 } from "./script-files.js";
 import { scanMcpConfigSecretsV1, scanPlaintextSecretsV1 } from "./secrets.js";
+import { validateSelectedClosurePathsV1 } from "./selection.js";
 
 /**
  * `detector.aih-trust-lint` — Core's native trust/security findings, ported
@@ -60,15 +56,7 @@ export interface TrustLintRunRequestV1 {
   readonly signal?: AbortSignal;
 }
 
-/** At least Scan's snapshot entry bound (C2a §1.3). */
-const MAX_SELECTED_PATHS = 100_000;
 const MAX_DETAIL_LENGTH = 300;
-
-function shown(value: unknown): string {
-  const text = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
-  const visible = text.replace(/[\p{C}]/gu, " ");
-  return visible.length > 80 ? `${visible.slice(0, 77)}...` : visible;
-}
 
 function bounded(detail: string): string {
   const visible = detail.replace(/[\p{C}]/gu, " ");
@@ -93,34 +81,6 @@ function cancelled(): TrustLintRunOutcomeV1 {
     detail: "trust lint was cancelled before it completed",
     cause: "cancelled" as const,
   });
-}
-
-/**
- * The declared selection must name files of the sealed tree: unique
- * source-relative POSIX paths, each a regular file or a symlink to a file
- * whose realpath stays inside the root. Anything else is a subject mismatch.
- */
-function validateSelection(
-  value: unknown,
-  tree: TrustLintTreeV1,
-): { selection: readonly string[] } | { refusal: string } {
-  if (!Array.isArray(value)) return { refusal: "selectedClosurePaths must be an array of paths" };
-  if (value.length > MAX_SELECTED_PATHS)
-    return { refusal: `selectedClosurePaths exceeds the ${MAX_SELECTED_PATHS}-path bound` };
-  const seen = new Set<string>();
-  for (const [index, entry] of value.entries()) {
-    const at = `selectedClosurePaths[${index}]`;
-    if (typeof entry !== "string" || !isSourceRelativeUriV1(entry))
-      return { refusal: `${at} is not a source-relative POSIX path: ${shown(entry)}` };
-    if (seen.has(entry)) return { refusal: `${at} repeats ${shown(entry)}` };
-    seen.add(entry);
-    const file = tree.fileEntry(entry);
-    if (file === undefined)
-      return { refusal: `${at} is not a file of the source tree: ${shown(entry)}` };
-    if (!file.realpathContained)
-      return { refusal: `${at} resolves outside the source root: ${shown(entry)}` };
-  }
-  return { selection: Object.freeze([...(value as string[])]) };
 }
 
 function mustRead(tree: TrustLintTreeV1, rel: string): string {
@@ -181,8 +141,8 @@ export function runTrustLintV1(request: TrustLintRunRequestV1): TrustLintRunOutc
       `source tree could not be enumerated: ${error instanceof Error ? error.message : "unknown error"}`,
     );
   }
-  const selection = validateSelection(request.selectedClosurePaths, tree);
-  if ("refusal" in selection) return refused("subject-requirement-unmet", selection.refusal);
+  const selection = validateSelectedClosurePathsV1(request.selectedClosurePaths, tree);
+  if (!selection.ok) return refused("subject-requirement-unmet", selection.detail);
   const options = validateTrustLintDetectorOptionsV1(
     request.detectorOptions,
     tree,
@@ -260,3 +220,7 @@ export {
   scanMcpConfigSecretsV1,
   scanPlaintextSecretsV1,
 } from "./secrets.js";
+export {
+  type SelectedClosurePathsValidationV1,
+  validateSelectedClosurePathsV1,
+} from "./selection.js";
