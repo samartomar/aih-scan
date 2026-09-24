@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,17 +32,18 @@ import {
 } from "../capability/detector-capability-v1.js";
 import { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "../cisco/capture-v2.js";
 import { resolveHostExecutableV1 } from "../cli/host-executable.js";
-import {
-  assertSafeRelativePosixPathV1,
-  canonicalStrictJsonBytesV1,
-  codeUnitCompare,
-} from "../contract/strict-json-v1.js";
+import { assertSafeRelativePosixPathV1, codeUnitCompare } from "../contract/strict-json-v1.js";
 import {
   buildScanFindingsV1,
   digestBoundAnalyzerFindingsV1,
   projectAnalyzerSarifFindingsV1,
   type ScanFindingsV1,
 } from "../findings/scan-findings-v1.js";
+import {
+  SOURCE_OBSERVATION_SEAL_LIMITS_V1,
+  type SourceObservationSealV1,
+  sealSourceObservationV1,
+} from "../observation/source-observation-seal-v1.js";
 import { type SourceSealV2, sealSourceV2 } from "../observation/source-seal-v2.js";
 import {
   type DetectorOptionsV1,
@@ -96,10 +97,13 @@ const WHOLE_TREE_ANALYZERS: ReadonlySet<BaselineAnalyzerV1> = new Set(["semgrep"
 /** The shortest and longest whole-run budget a caller may set, in milliseconds. */
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 3_600_000;
-/** `SourceTreeV2` of a root with no entries, exactly as `SourceSealV2` would hash one. */
-const EMPTY_SOURCE_TREE_SHA256 = createHash("sha256")
-  .update(canonicalStrictJsonBytesV1({ protocol: "SourceTreeV2", entries: [] }))
-  .digest("hex");
+/**
+ * The seal a run takes: `SourceSealV2` for the OCI capture profile, whose candidate protocol
+ * carries it, and `SourceObservationSealV1` for every observation run.
+ */
+type RunSealV1 = SourceSealV2 | SourceObservationSealV1;
+const isFileEntry = (entry: RunSealV1["entries"][number]) =>
+  entry.kind === "file" || entry.kind === "file-link";
 
 export type RunDetectorRefusalReasonV1 =
   | "unknown-detector"
@@ -292,10 +296,12 @@ export type RunDetectorV1Result =
       findings: ScanFindingsV1;
       coverage: ScanCoverageV1;
       /**
-       * The source seal taken before and after the run. `null` only for an empty source
-       * root, which has no file to seal; its coverage then names the empty tree's digest.
+       * The source seal taken before and after the run: `SourceObservationSealV1` for an
+       * observation run (an empty root included), `SourceSealV2` for the OCI capture profile.
        */
-      sourceSeal: Readonly<{ before: SourceSealV2; after: SourceSealV2 }> | null;
+      sourceSeal:
+        | Readonly<{ before: SourceObservationSealV1; after: SourceObservationSealV1 }>
+        | Readonly<{ before: SourceSealV2; after: SourceSealV2 }>;
     }>;
 
 let producerRecord: RunDetectorProducerV1 | undefined;
@@ -424,15 +430,13 @@ function probePrerequisite(
 }
 
 function coverageRecord(input: {
-  readonly seal: SourceSealV2;
+  readonly seal: RunSealV1;
   readonly kind: ScanCoverageV1["kind"];
   readonly excludedPaths: readonly string[];
   /** Whether the analyzer was given the top-level `.git`; only a source-tree run asks. */
   readonly analyzesGitDirectory: boolean;
 }): ScanCoverageV1 {
-  const sealedFiles = input.seal.entries
-    .filter((entry) => entry.kind === "file")
-    .map((entry) => entry.path);
+  const sealedFiles = input.seal.entries.filter(isFileEntry).map((entry) => entry.path);
   const coveredPaths =
     input.kind === "source-tree"
       ? sealedFiles.filter((path) => input.analyzesGitDirectory || !path.startsWith(".git/"))
@@ -453,15 +457,6 @@ function coverageRecord(input: {
     uncoveredPaths: Object.freeze(uncoveredPaths),
   });
 }
-
-const EMPTY_COVERAGE: ScanCoverageV1 = Object.freeze({
-  kind: "source-tree" as const,
-  sha256: EMPTY_SOURCE_TREE_SHA256,
-  complete: true,
-  coveredPaths: Object.freeze([]),
-  excludedPaths: Object.freeze([]),
-  uncoveredPaths: Object.freeze([]),
-});
 
 function selectProfile(
   capability: DetectorCapabilityV1,
@@ -506,7 +501,7 @@ function selectProfile(
 
 function subjectRefusal(
   capability: DetectorCapabilityV1,
-  seal: SourceSealV2,
+  seal: RunSealV1,
   request: RunDetectorV1Request,
   profile: DetectorExecutionProfileV1,
 ): string | undefined {
@@ -530,7 +525,7 @@ function subjectRefusal(
   }
   if (request.subject.kind !== "skill-directory") return undefined;
   const topLevelSkill = seal.entries.some(
-    (entry) => entry.kind === "file" && entry.path === "SKILL.md",
+    (entry) => isFileEntry(entry) && entry.path === "SKILL.md",
   );
   if (!topLevelSkill) {
     // A tree of several skills is not one skill root. Say so, and how to shard it,
@@ -551,7 +546,7 @@ function subjectRefusal(
   return undefined;
 }
 
-function sameSeal(left: SourceSealV2, right: SourceSealV2): boolean {
+function sameSeal(left: RunSealV1, right: RunSealV1): boolean {
   return (
     left.sourceTreeSha256 === right.sourceTreeSha256 &&
     left.selectedClosureSha256 === right.selectedClosureSha256 &&
@@ -740,21 +735,6 @@ function probeStates(
   return { states: Object.freeze(states), ...(failure === undefined ? {} : { failure }) };
 }
 
-/**
- * `true` when the declared subject is an empty source root: an empty selection over a real,
- * non-linked directory that holds no entry at all. Anything else is sealed as usual.
- */
-function emptySourceRoot(sourceRoot: unknown, selectedClosurePaths: unknown): boolean {
-  if (typeof sourceRoot !== "string" || sourceRoot.length === 0) return false;
-  if (!Array.isArray(selectedClosurePaths) || selectedClosurePaths.length !== 0) return false;
-  try {
-    const stat = lstatSync(sourceRoot);
-    return stat.isDirectory() && !stat.isSymbolicLink() && readdirSync(sourceRoot).length === 0;
-  } catch {
-    return false;
-  }
-}
-
 /** Runs one detector, returning a refusal, a failure or a success. Never throws. */
 export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Result> {
   try {
@@ -870,8 +850,26 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     return refuse("subject-requirement-unmet", detail(error), capability);
   }
 
-  const empty = emptySourceRoot(subject.sourceRoot, subject.selectedClosurePaths);
-  let before: SourceSealV2 | null = null;
+  const oci = profile.evidence === "ScanCandidateV2";
+  let before: RunSealV1;
+  try {
+    before = oci
+      ? sealSourceV2({
+          sourceRoot: subject.sourceRoot,
+          selectedClosurePaths: subject.selectedClosurePaths,
+        })
+      : sealSourceObservationV1({
+          sourceRoot: subject.sourceRoot,
+          selectedClosurePaths: subject.selectedClosurePaths,
+        });
+  } catch (error) {
+    return refuse(
+      "subject-requirement-unmet",
+      `The declared subject could not be sealed: ${detail(error)}`,
+      capability,
+    );
+  }
+  const empty = before.entries.length === 0;
   if (empty) {
     if (capability.emptySource !== "completes")
       return refuse(
@@ -885,29 +883,13 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         "An empty source root has nothing to exclude; remove excludedPaths.",
         capability,
       );
-    const optionsSealRefusal = detectorOptionsSealRefusalV1(detectorOptions, []);
-    if (optionsSealRefusal !== undefined)
-      return refuse("detector-options-invalid", optionsSealRefusal, capability);
-  } else {
-    try {
-      before = sealSourceV2({
-        sourceRoot: subject.sourceRoot,
-        selectedClosurePaths: subject.selectedClosurePaths,
-      });
-    } catch (error) {
-      return refuse(
-        "subject-requirement-unmet",
-        `The declared subject could not be sealed: ${detail(error)}`,
-        capability,
-      );
-    }
-    const optionsSealRefusal = detectorOptionsSealRefusalV1(detectorOptions, before.entries);
-    if (optionsSealRefusal !== undefined)
-      return refuse("detector-options-invalid", optionsSealRefusal, capability);
-    const requirement = subjectRefusal(capability, before, input, profile);
-    if (requirement !== undefined)
-      return refuse("subject-requirement-unmet", requirement, capability);
   }
+  const optionsSealRefusal = detectorOptionsSealRefusalV1(detectorOptions, before.entries);
+  if (optionsSealRefusal !== undefined)
+    return refuse("detector-options-invalid", optionsSealRefusal, capability);
+  const requirement = subjectRefusal(capability, before, input, profile);
+  if (requirement !== undefined)
+    return refuse("subject-requirement-unmet", requirement, capability);
 
   const platform = capabilityPlatform();
   if (
@@ -929,15 +911,12 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   });
   const analyzerName = ANALYZER_BY_DETECTOR[capability.detectorId];
   const wholeTree = analyzerName !== undefined && WHOLE_TREE_ANALYZERS.has(analyzerName);
-  const coverage =
-    before === null
-      ? EMPTY_COVERAGE
-      : coverageRecord({
-          seal: before,
-          kind: profile.evidence === "ScanCandidateV2" ? "selected-closure" : "source-tree",
-          excludedPaths,
-          analyzesGitDirectory: wholeTree,
-        });
+  const coverage = coverageRecord({
+    seal: before,
+    kind: oci ? "selected-closure" : "source-tree",
+    excludedPaths,
+    analyzesGitDirectory: wholeTree,
+  });
   // Only the selected profile's prerequisites are probed, and only they gate the run.
   const probed = probeStates(profile.prerequisites, probe, env);
   const prerequisites = probed.states;
@@ -973,7 +952,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       new AnalyzerRunFailureV1("cancelled", "the run was cancelled before anything started"),
     );
 
-  if (profile.evidence === "ScanCandidateV2") {
+  if (oci) {
     const sealed = before as SourceSealV2;
     const material = input.ociCapture as NonNullable<RunDetectorV1Request["ociCapture"]>;
     let capture: CiscoCaptureV2;
@@ -1037,12 +1016,15 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       capability,
     );
 
+  const snapshotOptions = {
+    includeGitDirectory: wholeTree,
+    maxFileBytes: SOURCE_OBSERVATION_SEAL_LIMITS_V1.maxFileBytes,
+  };
   let snapshotRoot: string;
   try {
-    snapshotRoot =
-      before === null
-        ? mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"))
-        : createBaselineAnalyzerSnapshotV1(subject.sourceRoot, { includeGitDirectory: wholeTree });
+    snapshotRoot = empty
+      ? mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"))
+      : createBaselineAnalyzerSnapshotV1(subject.sourceRoot, snapshotOptions);
   } catch (error) {
     return failed("availability", error);
   }
@@ -1071,19 +1053,17 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     } catch (error) {
       return failed("output", error);
     }
-    let after: SourceSealV2 | null = null;
+    let after: SourceObservationSealV1;
     try {
-      if (before === null) {
-        if (readdirSync(snapshotRoot).length !== 0 || !emptySourceRoot(subject.sourceRoot, []))
+      if (empty) {
+        if (readdirSync(snapshotRoot).length !== 0)
           throw new TypeError("source changed during the run");
-      } else {
-        assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot, { includeGitDirectory: wholeTree });
-        after = sealSourceV2({
-          sourceRoot: subject.sourceRoot,
-          selectedClosurePaths: subject.selectedClosurePaths,
-        });
-        if (!sameSeal(before, after)) throw new TypeError("source changed during the run");
-      }
+      } else assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot, snapshotOptions);
+      after = sealSourceObservationV1({
+        sourceRoot: subject.sourceRoot,
+        selectedClosurePaths: subject.selectedClosurePaths,
+      });
+      if (!sameSeal(before, after)) throw new TypeError("source changed during the run");
     } catch (error) {
       return failed("coverage", error);
     }
@@ -1107,8 +1087,10 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
               },
               bytes: normalized.bytes,
               sealedFiles: new Map(
-                (before?.entries ?? []).flatMap((entry) =>
-                  entry.kind === "file" ? [[entry.path, entry.sha256] as const] : [],
+                before.entries.flatMap((entry) =>
+                  entry.kind === "file" || entry.kind === "file-link"
+                    ? [[entry.path, entry.sha256] as const]
+                    : [],
                 ),
               ),
             })
@@ -1141,7 +1123,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       }),
       findings,
       coverage,
-      sourceSeal: before === null || after === null ? null : Object.freeze({ before, after }),
+      sourceSeal: Object.freeze({ before: before as SourceObservationSealV1, after }),
     });
   })();
   try {

@@ -420,7 +420,21 @@ type SafeAnalyzerSourceSymlink = Readonly<{
  * batch receipts have always done; a single-detector run for an analyzer that scans the
  * whole tree (Semgrep, SkillSpector) copies it too.
  */
-export type BaselineAnalyzerSnapshotOptionsV1 = Readonly<{ includeGitDirectory?: boolean }>;
+export type BaselineAnalyzerSnapshotOptionsV1 = Readonly<{
+  includeGitDirectory?: boolean;
+  /**
+   * The largest single file the snapshot copies, at most the 256 MiB tree budget; 16 MiB
+   * (the batch receipts' bound) when absent.
+   */
+  maxFileBytes?: number;
+}>;
+
+function snapshotFileBound(options: BaselineAnalyzerSnapshotOptionsV1): number {
+  const bound = options.maxFileBytes ?? maxAnnexBytes;
+  if (!Number.isSafeInteger(bound) || bound < 0 || bound > maxSourceBytes)
+    fail("baseline source file bound");
+  return bound;
+}
 
 function topLevelNames(root: string, options: BaselineAnalyzerSnapshotOptionsV1): string[] {
   return readdirSync(root)
@@ -459,7 +473,7 @@ function inspectSafeAnalyzerSource(
       return;
     }
     if (!stat.isFile() || stat.nlink !== 1) fail("baseline source file shape");
-    if (stat.size > maxAnnexBytes || stat.size > maxSourceBytes - budget.bytes)
+    if (stat.size > snapshotFileBound(options) || stat.size > maxSourceBytes - budget.bytes)
       fail("baseline source byte bound");
     budget.bytes += stat.size;
     entries.set(path, "file");
@@ -489,7 +503,10 @@ function inspectSafeAnalyzerSource(
       fail("baseline source symbolic link target");
     return pathRelative === "" ? "directory" : entries.get(path);
   };
-  for (const [path, target] of symlinks) {
+  for (const [path, stored] of symlinks) {
+    // Windows stores a relative link target with its own separator; the check below is on
+    // the portable form, and the link is still copied with the target as stored.
+    const target = process.platform === "win32" ? stored.replaceAll("\\", "/") : stored;
     if (
       !target ||
       target.includes("\\") ||
@@ -510,7 +527,7 @@ function inspectSafeAnalyzerSource(
     if (targetType === undefined) fail("baseline source symbolic link target");
     if (targetType === "directory" && directoriesContainingSymlinks.has(targetPath))
       fail("baseline source symbolic link cycle");
-    safeSymlinks.set(path, { target, targetType });
+    safeSymlinks.set(path, { target: stored, targetType });
   }
   return safeSymlinks;
 }
@@ -560,7 +577,7 @@ function copyAnalyzerSource(
       return;
     }
     if (!before.isFile() || before.nlink !== 1) fail("baseline source file shape");
-    if (before.size > maxAnnexBytes || before.size > maxSourceBytes - budget.bytes)
+    if (before.size > snapshotFileBound(options) || before.size > maxSourceBytes - budget.bytes)
       fail("baseline source byte bound");
     const bytes = readBoundedSourceFile(from, before);
     budget.bytes += bytes.byteLength;

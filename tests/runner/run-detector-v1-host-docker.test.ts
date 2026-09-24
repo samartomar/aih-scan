@@ -416,6 +416,7 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 image identity (never 
     expect(outcome.outcome).toBe("succeeded");
     if (outcome.outcome !== "succeeded") return;
     expect(outcome.findings.findings).toEqual([]);
-    expect(outcome.sourceSeal).toBeNull();
+    expect(outcome.sourceSeal.before.protocol).toBe("SourceObservationSealV1");
+    expect(outcome.sourceSeal.before.entries).toEqual([]);
   });
 });

@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -350,6 +351,34 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
     }
   });
 
+  it("accepts an empty selection and contained file and directory links (C2a tree acceptance)", async () => {
+    const host = hostFixture();
+    const sourceRoot = temporary("links");
+    mkdirSync(join(sourceRoot, "docs"));
+    writeFileSync(join(sourceRoot, "docs", "a.md"), "alpha\n");
+    symlinkSync("docs/a.md", join(sourceRoot, "link.md"), "file");
+    symlinkSync("docs", join(sourceRoot, "docs-link"), "dir");
+    const calls: Call[] = [];
+
+    const outcome = await runDetectorV1({
+      ...semgrepRequest({
+        env: host.env,
+        runner: hostRunner(calls, host.python, async () => okay(sarif([]))),
+      }),
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: [] },
+    });
+
+    if (outcome.outcome === "failed")
+      throw new Error(`${outcome.failure.stage}: ${outcome.failure.detail}`);
+    expect(outcome.outcome).toBe("succeeded");
+    if (outcome.outcome !== "succeeded") return;
+    expect(outcome.sourceSeal.before.entries.map((entry) => `${entry.kind}:${entry.path}`)).toEqual(
+      ["directory:docs", "directory-link:docs-link", "file:docs/a.md", "file-link:link.md"],
+    );
+    expect(outcome.coverage.coveredPaths).toEqual(["docs/a.md", "link.md"]);
+    expect(outcome.coverage.complete).toBe(true);
+  });
+
   it("completes Semgrep on an empty source root, reporting Semgrep's own empty SARIF", async () => {
     const host = hostFixture();
     const empty = temporary("empty");
@@ -365,10 +394,14 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
 
     expect(outcome.outcome).toBe("succeeded");
     if (outcome.outcome !== "succeeded") return;
-    expect(outcome.sourceSeal).toBeNull();
+    expect(outcome.sourceSeal.before.protocol).toBe("SourceObservationSealV1");
+    expect(outcome.sourceSeal.before.entries).toEqual([]);
+    expect(outcome.sourceSeal.after.sealedSnapshotSha256).toBe(
+      outcome.sourceSeal.before.sealedSnapshotSha256,
+    );
     expect(outcome.coverage).toEqual({
       kind: "source-tree",
-      sha256: canonicalStrictJsonSha256V1({ protocol: "SourceTreeV2", entries: [] }),
+      sha256: canonicalStrictJsonSha256V1({ protocol: "SourceObservationTreeV1", entries: [] }),
       complete: true,
       coveredPaths: [],
       excludedPaths: [],
