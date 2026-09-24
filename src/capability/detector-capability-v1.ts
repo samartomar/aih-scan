@@ -204,16 +204,24 @@ export interface DetectorCapabilityV1 {
 
 const LINUX_AMD64: readonly DetectorPlatformV1[] = [{ os: "linux", architecture: "amd64" }];
 /**
- * Where the exact-pinned, build-free uv installs exist: every Semgrep, Cisco and
- * snyk-agent-scan dependency publishes a binary wheel for these hosts. macOS amd64 has none
- * for cryptography 50.0.0 (and Cisco's onnxruntime 1.27.0), and Windows arm64 none for
- * Semgrep itself or for snyk-agent-scan's cryptography 50.0.0.
+ * Where the exact-pinned, build-free uv installs exist: every Semgrep and Cisco dependency
+ * publishes a binary wheel for these hosts. macOS amd64 has none for cryptography 50.0.0
+ * (and Cisco's onnxruntime 1.27.0), and Windows arm64 none for Semgrep itself.
  */
 const HOST_UV_PLATFORMS: readonly DetectorPlatformV1[] = [
   { os: "darwin", architecture: "arm64" },
   { os: "linux", architecture: "amd64" },
   { os: "linux", architecture: "arm64" },
   { os: "windows", architecture: "amd64" },
+];
+/**
+ * snyk-agent-scan imports Python's POSIX-only `pwd` module on its scan path, so it cannot run
+ * on Windows; macOS amd64 lacks a binary wheel for its cryptography 50.0.0.
+ */
+const SNYK_PLATFORMS: readonly DetectorPlatformV1[] = [
+  { os: "darwin", architecture: "arm64" },
+  { os: "linux", architecture: "amd64" },
+  { os: "linux", architecture: "arm64" },
 ];
 /** litellm 1.93.0, in the cisco-mcp-scanner lock, publishes manylinux wheels only. */
 const MCP_SCANNER_PLATFORMS: readonly DetectorPlatformV1[] = [
@@ -772,7 +780,7 @@ const MCP_SCANNER_HOST_GATES: ProfileGates = {
   ],
 };
 const SNYK_HOST_GATES: ProfileGates = {
-  supportedPlatforms: HOST_UV_PLATFORMS,
+  supportedPlatforms: SNYK_PLATFORMS,
   prerequisites: [
     HOST_UV_PREREQUISITE,
     HOST_PYTHON_PREREQUISITE,

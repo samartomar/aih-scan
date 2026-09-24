@@ -36,7 +36,8 @@ const EVERY_PLATFORM = [
   "windows/amd64",
   "windows/arm64",
 ];
-const HOST_UV_PLATFORMS = ["darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64"];
+// snyk-agent-scan imports the POSIX-only pwd module: no Windows platform.
+const SNYK_HOST_PLATFORMS = ["darwin/arm64", "linux/amd64", "linux/arm64"];
 
 describe("B2 detector registration", () => {
   it("registers every detector Core delegates, in canonical order", () => {
@@ -109,6 +110,13 @@ describe("B2 detector registration", () => {
     ]);
   });
 
+  it("publishes snyk-agent-scan's host profile for POSIX hosts only: the analyzer imports pwd", () => {
+    const profile = resolveDetectorCapabilityV1("detector.snyk-agent-scan")?.executionProfiles[0];
+    expect(profile?.supportedPlatforms.map((entry) => `${entry.os}/${entry.architecture}`)).toEqual(
+      ["darwin/arm64", "linux/amd64", "linux/arm64"],
+    );
+  });
+
   it("registers detector.snyk-agent-scan with SNYK_TOKEN as a required prerequisite", () => {
     const capability = resolveDetectorCapabilityV1("detector.snyk-agent-scan");
     expect(capability).toMatchObject({
@@ -121,7 +129,7 @@ describe("B2 detector registration", () => {
     });
     expect(capability?.executionProfiles.map((entry) => entry.id)).toEqual(["host-process-uv-v1"]);
     const host = capability?.executionProfile;
-    expect(platforms(host)).toEqual(HOST_UV_PLATFORMS);
+    expect(platforms(host)).toEqual(SNYK_HOST_PLATFORMS);
     expect(
       host?.prerequisites.map((entry) => `${entry.kind}:${entry.id}:${entry.required}`),
     ).toEqual([

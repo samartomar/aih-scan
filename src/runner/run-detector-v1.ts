@@ -376,7 +376,7 @@ export function platformRefusal(
       ? capability.detectorId === "detector.cisco-mcp-scanner"
         ? "Its lock pins litellm 1.93.0, which publishes manylinux wheels only, and Scan never builds analyzer dependencies from source."
         : capability.detectorId === "detector.snyk-agent-scan"
-          ? "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 and Windows arm64 lack cryptography 50.0.0), and Scan never builds analyzer dependencies from source."
+          ? "snyk-agent-scan imports Python's POSIX-only pwd module, so it cannot run on Windows, and macOS amd64 lacks an exact-pinned cryptography 50.0.0 wheel, which Scan never builds from source."
           : "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 lacks cryptography 50.0.0, Windows arm64 lacks Semgrep), and Scan never builds analyzer dependencies from source."
       : profile.id === "docker-host-local-skillspector-v1"
         ? "Its Docker engine must run the linux/amd64 SkillSpector image, natively or emulated."
