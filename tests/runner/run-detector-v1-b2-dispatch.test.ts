@@ -502,6 +502,23 @@ describe("detector.snyk-agent-scan through runDetectorV1", () => {
   );
 
   it.skipIf(windows).each([
+    ["an analyzer error", { error: { message: "analysis failed", is_failure: true } }],
+    ["an empty report", {}],
+    ["malformed findings", { findings: [null, 42] }],
+  ] as const)(
+    "fails a report carrying %s at the output stage, never a clean result (S2e)",
+    async (_label, report) => {
+      const host = fakeHost();
+      const runner = uvHost([], host.python, async () => ok(JSON.stringify(report)));
+
+      const outcome = await runDetectorV1(snykRequest(skill(), { runner }));
+
+      expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+      expect(outcome.outcome === "failed" && outcome.failure.detail).toMatch(/^snyk-agent-scan /);
+    },
+  );
+
+  it.skipIf(windows).each([
     ["timeout", "timed-out"],
     ["abort", "cancelled"],
   ] as const)(

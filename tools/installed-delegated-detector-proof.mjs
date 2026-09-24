@@ -195,8 +195,9 @@ const child = join(consumer, "run-one.mjs");
 writeFileSync(
   child,
   `import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runCiscoShardV1, runDetectorV1 } from "@aihq/scan";
 const job = JSON.parse(readFileSync(0, "utf8"));
 const seen = new Set();
@@ -211,14 +212,42 @@ if (job.abortBeforeStart) controller.abort();
 else if (controller) setTimeout(() => controller.abort(), job.abortAfterMs);
 const env =
   job.snykEnv === "token" ? { SNYK_TOKEN: process.env.SNYK_TOKEN } : job.snykEnv === "none" ? {} : job.env;
+// A mocked Snyk case (S2e): uv and Python are fakes on a private PATH and the injected runner
+// answers the uv calls, then returns the canned snyk-agent-scan stdout with @ROOT@ replaced by
+// the scanned snapshot. Nothing reaches api.snyk.io.
+let runner;
+let fakeHome;
+if (job.fakeSnykStdout !== undefined) {
+  fakeHome = mkdtempSync(join(tmpdir(), "proof-fake-uv-"));
+  const bin = join(fakeHome, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "uv"), "fake uv");
+  chmodSync(join(bin, "uv"), 0o755);
+  const python = join(fakeHome, "python3.12");
+  writeFileSync(python, "fake python");
+  process.env.PATH = bin;
+  process.env.HOME = fakeHome;
+  process.env.XDG_CACHE_HOME = join(fakeHome, ".cache");
+  const line = String.fromCharCode(10);
+  const ok = (stdout, code = 0) => ({ code, stdout, stderr: "", truncated: false });
+  runner = async (argv) => {
+    if (argv[1] === "--version") return ok("uv 0.12.13 (0123456 2026-09-01 x86_64)");
+    if (argv[1] === "python" && argv[2] === "find") return ok(argv.includes("--show-version") ? "3.12.13" + line : python + line);
+    if (argv[1] === "sync") return ok("");
+    const scanned = argv[argv.indexOf("scan") + 1] ?? "";
+    return ok(job.fakeSnykStdout.split("@ROOT@").join(JSON.stringify(scanned).slice(1, -1)), job.fakeSnykExit ?? 0);
+  };
+}
 const request = {
   ...job.request,
   ...(controller ? { signal: controller.signal } : {}),
   ...(env === undefined ? {} : { env }),
+  ...(runner === undefined ? {} : { runner }),
 };
 const started = Date.now();
 const result = job.shard ? await runCiscoShardV1(request) : await runDetectorV1(request);
 clearInterval(watch);
+if (fakeHome !== undefined) rmSync(fakeHome, { recursive: true, force: true });
 const observation = result.evidence?.observation;
 const uris = (bytes) => [...new Set([...Buffer.from(bytes).toString("utf8").matchAll(/"uri":"([^"]*)"/g)].map((m) => m[1]))];
 process.stdout.write(JSON.stringify({
@@ -471,6 +500,25 @@ if (detectors.includes("snyk")) {
   } else {
     check("snyk without SNYK_TOKEN is refused prerequisite-missing, naming the variable, before anything runs", missingToken.outcome === "refused" && missingToken.reason === "prerequisite-missing" && /SNYK_TOKEN is not set/.test(missingToken.detail ?? ""), brief(missingToken));
     check("snyk env with another variable is refused detector-options-invalid", extraKey.outcome === "refused" && extraKey.reason === "detector-options-invalid", brief(extraKey));
+    // Mocked analyzer output through the installed runDetectorV1 (S2e): only a report that
+    // proves the root was analyzed succeeds; every error, empty or malformed report fails.
+    const mocked = (label, stdout, extra = {}) =>
+      run(`snyk mocked ${label}`, { ...job(refusalRoot), snykEnv: undefined, env: { SNYK_TOKEN: "synthetic-proof-token-not-a-secret" }, fakeSnykStdout: JSON.stringify(stdout), ...extra });
+    const analyzed = (entry) => ({ "@ROOT@": { client: null, path: "@ROOT@", servers: [{ name: "clean", server: { path: "@ROOT@", type: "skill" } }], issues: [], labels: [], error: null, ...entry } });
+    const mock = {
+      clean: mocked("clean (root analyzed, no issues)", analyzed({})),
+      reportError: mocked("report-level error", { error: { message: "analysis failed", is_failure: true } }),
+      empty: mocked("empty object", {}),
+      malformed: mocked("malformed findings", { findings: [null, 42] }),
+      quota: mocked("quota ScanError on the server", analyzed({ servers: [{ name: "clean", server: { path: "@ROOT@", type: "skill" }, error: { message: "HTTP 429 Too Many Requests", is_failure: true, category: "analysis_error" } }] })),
+      failureCode: mocked("X-code issue", analyzed({ issues: [{ code: "X007", message: "agent-scan failure" }] })),
+    };
+    for (const [key, record] of Object.entries(mock)) cases[`snykMock${key[0].toUpperCase()}${key.slice(1)}`] = record;
+    check("snyk mocked clean report that names the scanned root succeeds with zero findings", mock.clean.outcome === "succeeded" && mock.clean.findings.length === 0 && noSurvivors(mock.clean), brief(mock.clean));
+    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode"]) {
+      const record = mock[key];
+      check(`snyk mocked ${key} fails closed at the output stage, never a clean result`, record.outcome === "failed" && record.failure?.stage === "output" && /snyk-agent-scan/.test(record.failure?.detail ?? "") && noSurvivors(record), brief(record));
+    }
     if (snykToken === undefined || corpus === undefined) {
       unproven("snyk positive/clean/empty/timeout/cancel", snykToken === undefined ? "SNYK_TOKEN is not available to this proof run; real Snyk execution is not claimed" : "no --corpus: Snyk scans only the synthetic golden corpus, so no real Snyk scan ran");
     } else {
