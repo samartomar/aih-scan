@@ -262,7 +262,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/cli/residual-processes.ts",
-    line: 178,
+    line: 221,
     contains: "export async function sweepResidualProcessesV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },

@@ -256,7 +256,12 @@ describe("DetectorCapabilityV1", () => {
       /Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway/,
     );
     expect(containment).toMatch(/killed and the run fails closed/);
+    expect(containment).toMatch(/command line, inherited environment or working directory/);
     const notes = document?.notes.join(" ") ?? "";
+    expect(notes).toMatch(
+      /Residual limit on linux and darwin: a descendant that deliberately leaves the session \(setsid\) and also clears its environment and moves its working directory/,
+    );
+    expect(notes).toMatch(/linux-namespace-uv-v1 is the containment option on Linux/);
     expect(notes).toMatch(/not enforced/i);
     expect(notes).toMatch(/--offline/);
     expect(notes).toMatch(/persistent, Scan-owned uv cache/);

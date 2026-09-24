@@ -338,7 +338,8 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     containment: [
       "linux, darwin: every spawn leads its own process group; a timeout, an abort, an output cap or descendants outliving the leader send SIGTERM and then SIGKILL to the whole group",
       "windows: every spawn is created suspended inside a Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway; a timeout or an abort closes the job, and descendants outliving the leader are terminated with it",
-      "every OS: after the run, every process whose command line or image names the run's private directories is killed and the run fails closed",
+      "windows: after the run, every process whose command line or image names the run's private directories is killed and the run fails closed",
+      "linux, darwin: after the run, every process whose command line, inherited environment or working directory names the run's private directories is killed and the run fails closed",
     ],
     acquisition: [
       "sync",
@@ -371,6 +372,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest.",
       `${SARIF_NORMALIZATION_NOTE} The private snapshot root is removed, and Cisco's per-skill URIs are mapped through its JSON report.`,
       "An empty source root completes for detector.semgrep: Semgrep runs over an empty snapshot and reports its own empty SARIF.",
+      "Residual limit on linux and darwin: a descendant that deliberately leaves the session (setsid) and also clears its environment and moves its working directory out of the run carries nothing that ties it to the run, so neither the process group nor the residual sweep can find it and it may outlive the run. This profile does not contain a hostile analyzer; linux-namespace-uv-v1 is the containment option on Linux.",
     ],
   },
   {

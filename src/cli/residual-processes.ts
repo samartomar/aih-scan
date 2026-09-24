@@ -1,16 +1,23 @@
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { windowsJobSupervisorExecutableV1, windowsSystemRootV1 } from "./windows-job-supervisor.js";
 
 /**
- * Finds live processes whose command line (or, on Windows, executable path) contains one of
- * a run's unique private-directory names. Scan sweeps for them after every host-process
- * run: the containment (a Job Object on Windows, a process group on POSIX) should have left
- * none, so any survivor is killed and the run fails closed instead of claiming cleanup.
+ * Finds live processes tied to a run by one of its unique private-directory names. Scan sweeps
+ * for them after every host-process run: the containment (a Job Object on Windows, a process
+ * group on POSIX) should have left none, so any survivor is killed and the run fails closed
+ * instead of claiming cleanup.
  *
- * - Linux reads `/proc/<pid>/cmdline` and spawns nothing.
- * - macOS runs `/bin/ps -axww -o pid= -o args=`.
- * - Windows asks CIM (`Win32_Process`) through Windows PowerShell 5.1 under `%SystemRoot%`.
+ * - Linux matches `/proc/<pid>/cmdline`, the inherited environment `/proc/<pid>/environ` and
+ *   the working directory `/proc/<pid>/cwd`, and spawns nothing.
+ * - macOS matches the arguments and environment from `/bin/ps -axwwE -o pid= -o args=` and
+ *   the working directory from `/usr/sbin/lsof -a -d cwd`.
+ * - Windows asks CIM (`Win32_Process`) for the command line and executable path through
+ *   Windows PowerShell 5.1 under `%SystemRoot%`; the Job Object is its containment.
+ *
+ * Residual limit on POSIX: a descendant that leaves the session (setsid) and also clears its
+ * environment and moves its working directory out of the run carries no trace of the run and
+ * is not detectable. The Linux namespace profile is the containment option for that threat.
  *
  * Markers are matched case-insensitively on Windows and exactly elsewhere. A marker must be a
  * run-unique token such as an `mkdtemp` directory name, never a shared parent directory.
@@ -48,13 +55,28 @@ function linuxProcesses(markers: readonly string[]): LiveProcessV1[] {
     } catch {
       continue;
     }
-    if (command && markers.some((marker) => command.includes(marker)))
-      found.push(Object.freeze({ pid, command }));
+    // A process that exited since the listing, or belongs to another user, has no readable
+    // environment or working directory; it can then only match by its command line.
+    let environment = "";
+    try {
+      environment = readFileSync(`/proc/${entry}/environ`).toString("utf8");
+    } catch {}
+    let cwd = "";
+    try {
+      cwd = readlinkSync(`/proc/${entry}/cwd`);
+    } catch {}
+    if (markers.some((marker) => [command, environment, cwd].some((text) => text.includes(marker))))
+      found.push(Object.freeze({ pid, command: command || `[pid ${pid}] cwd ${cwd}` }));
   }
   return found;
 }
 
-function collect(executable: string, argv: readonly string[], env: Record<string, string>) {
+function collect(
+  executable: string,
+  argv: readonly string[],
+  env: Record<string, string>,
+  allowedCodes: readonly number[] = [0],
+) {
   return new Promise<string>((resolveOutput, reject) => {
     const child = spawn(executable, argv, {
       shell: false,
@@ -83,28 +105,49 @@ function collect(executable: string, argv: readonly string[], env: Record<string
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0 || size > MAX_SWEEP_OUTPUT_BYTES)
+      if (code === null || !allowedCodes.includes(code) || size > MAX_SWEEP_OUTPUT_BYTES)
         reject(new TypeError(`aih-scan residual process sweep: exit ${code ?? "signal"}`));
       else resolveOutput(Buffer.concat(chunks).toString("utf8"));
     });
   });
 }
 
+const DARWIN_SWEEP_ENV = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C" };
+
 async function darwinProcesses(markers: readonly string[]): Promise<LiveProcessV1[]> {
-  const output = await collect("/bin/ps", ["-axww", "-o", "pid=", "-o", "args="], {
-    PATH: "/usr/bin:/bin",
-    LANG: "C",
-  });
-  const found: LiveProcessV1[] = [];
+  // -E appends each process's environment to its arguments (for this user's processes).
+  const output = await collect(
+    "/bin/ps",
+    ["-axwwE", "-o", "pid=", "-o", "args="],
+    DARWIN_SWEEP_ENV,
+  );
+  const found = new Map<number, LiveProcessV1>();
   for (const line of output.split("\n")) {
     const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
     if (match === null) continue;
     const pid = Number(match[1]);
     const command = match[2] ?? "";
     if (pid !== process.pid && markers.some((marker) => command.includes(marker)))
-      found.push(Object.freeze({ pid, command }));
+      found.set(pid, Object.freeze({ pid, command }));
   }
-  return found;
+  // lsof exits 1 when it could not inspect some process (another user's); what it printed
+  // for the rest is still complete, so 1 is accepted and any other exit fails the sweep.
+  const cwdOutput = await collect(
+    "/usr/sbin/lsof",
+    ["-w", "-n", "-P", "-a", "-d", "cwd", "-F", "pn"],
+    DARWIN_SWEEP_ENV,
+    [0, 1],
+  );
+  let pid = 0;
+  for (const line of cwdOutput.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    else if (line.startsWith("n") && Number.isSafeInteger(pid) && pid > 0) {
+      const cwd = line.slice(1);
+      if (pid !== process.pid && !found.has(pid) && markers.some((marker) => cwd.includes(marker)))
+        found.set(pid, Object.freeze({ pid, command: `[pid ${pid}] cwd ${cwd}` }));
+    }
+  }
+  return [...found.values()];
 }
 
 const WINDOWS_SWEEP_SCRIPT = [
