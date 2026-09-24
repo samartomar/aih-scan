@@ -104,6 +104,102 @@ export function decodeStrictUtf8V1(bytes: Uint8Array, label: string): string {
 }
 
 const NUMBER = /-?(?:0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/y;
+
+/** S2i: how the double a JSON number text names would differ from the text's value. */
+export type StrictJsonNumberLossV1 = "overflow" | "underflow" | "rounded" | "negative-zero";
+
+/**
+ * S2i (review of S2h): the typed refusal of a JSON number text whose exact decimal value no
+ * double carries without loss, whatever its spelling. It is a `TypeError`, so every caller
+ * that maps a malformed analyzer text to a failure maps this one too.
+ */
+export class StrictJsonNumberErrorV1 extends TypeError {
+  readonly lexeme: string;
+  readonly loss: StrictJsonNumberLossV1;
+  constructor(message: string, lexeme: string, loss: StrictJsonNumberLossV1) {
+    super(message);
+    this.name = "StrictJsonNumberErrorV1";
+    this.lexeme = lexeme;
+    this.loss = loss;
+  }
+}
+
+/**
+ * The exact value of a decimal number text (a JSON lexeme, or a JavaScript number's own
+ * spelling): its sign, its significant digits without a leading or trailing zero (none for
+ * zero) and the power of ten they are scaled by. Every spelling of one value gives one decimal.
+ */
+type ExactDecimal = Readonly<{ negative: boolean; digits: string; exponent: number }>;
+
+function exactDecimal(text: string): ExactDecimal {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/u.exec(text);
+  if (match === null) throw new TypeError(`not a decimal number: ${text}`);
+  const [, sign, whole = "", fraction = "", scale = "0"] = match;
+  const all = `${whole}${fraction}`.replace(/^0+/u, "");
+  const digits = all.replace(/0+$/u, "");
+  const exponent =
+    digits === "" ? 0 : Number.parseInt(scale, 10) - fraction.length + (all.length - digits.length);
+  return { negative: sign === "-", digits, exponent };
+}
+
+const sameDecimal = (left: ExactDecimal, right: ExactDecimal) =>
+  left.negative === right.negative &&
+  left.digits === right.digits &&
+  left.exponent === right.exponent;
+
+/** The exact decimal value of a finite double that is not an integer. */
+function exactDecimalOfFraction(value: number): ExactDecimal {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  const bits = view.getBigUint64(0);
+  const biased = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & 0xfffffffffffffn;
+  // value = mantissa * 2^-shift = mantissa * 5^shift * 10^-shift, with shift > 0 here.
+  const mantissa = biased === 0 ? fraction : fraction | (1n << 52n);
+  const shift = 1075 - (biased === 0 ? 1 : biased);
+  const decimal = exactDecimal((mantissa * 5n ** BigInt(shift)).toString());
+  return { negative: value < 0, digits: decimal.digits, exponent: decimal.exponent - shift };
+}
+
+/**
+ * S2i (review of S2h): the one number policy of {@link parseStrictJsonV1}. It decides on the
+ * text's exact decimal value, never on its spelling (a fraction, an exponent, leading or
+ * trailing zeros), and accepts the double only when it carries that value without loss:
+ * - an integer value must be exactly the double (compared as a `BigInt`), so
+ *   9007199254740992 is accepted in every spelling and 9007199254740993 is refused in every
+ *   spelling, as is `1e23`, which no double holds;
+ * - any other value must be exactly the double, or the double's shortest round-trip decimal
+ *   (`0.1`), so re-serializing the parsed number names the value the text named;
+ * - overflow to infinity, a non-zero value underflowing to zero, and negative zero are
+ *   refused too.
+ * Returns the loss, or `undefined` when there is none.
+ */
+function numberLossV1(lexeme: string, value: number): StrictJsonNumberLossV1 | undefined {
+  // The common case: a plain integer of at most 15 digits is always exactly a double.
+  if (/^-?(?:0|[1-9]\d{0,14})$/u.test(lexeme)) return lexeme === "-0" ? "negative-zero" : undefined;
+  const decimal = exactDecimal(lexeme);
+  if (decimal.digits === "") return decimal.negative ? "negative-zero" : undefined;
+  if (!Number.isFinite(value)) return "overflow";
+  if (value === 0) return "underflow";
+  if (decimal.exponent >= 0) {
+    // An integer value: every integer of the safe range is exactly a double.
+    if (Number.isSafeInteger(value)) return undefined;
+    if (!Number.isInteger(value)) return "rounded";
+    const magnitude = BigInt(decimal.digits) * 10n ** BigInt(decimal.exponent);
+    return BigInt(value) === (decimal.negative ? -magnitude : magnitude) ? undefined : "rounded";
+  }
+  if (Number.isInteger(value)) return "rounded";
+  if (sameDecimal(decimal, exactDecimal(String(value)))) return undefined;
+  return sameDecimal(decimal, exactDecimalOfFraction(value)) ? undefined : "rounded";
+}
+
+const NUMBER_LOSS_V1: Readonly<Record<StrictJsonNumberLossV1, string>> = {
+  overflow: "a number beyond the double range",
+  underflow: "a non-zero number that underflows to zero",
+  rounded: "a number no double holds exactly",
+  "negative-zero": "negative zero",
+};
+
 const ESCAPES: Readonly<Record<string, string>> = {
   '"': '"',
   "\\": "\\",
@@ -121,9 +217,9 @@ const ESCAPES: Readonly<Record<string, string>> = {
  * `properties` could hide a failure or erase a forged key. This parser refuses, at any depth:
  * a repeated key (compared after unescaping); any byte outside the one JSON value (a BOM,
  * trailing data, a second value); whitespace other than space, tab, LF and CR; a control
- * character inside a string; an invalid escape; a number `JSON.parse` would change (overflow
- * to infinity, underflow of a non-zero literal to zero, an integer literal beyond the safe
- * integer range) or negative zero; malformed Unicode; nesting deeper than
+ * character inside a string; an invalid escape; a number no double carries without loss, in
+ * any spelling (S2i: {@link numberLossV1}, a typed {@link StrictJsonNumberErrorV1});
+ * malformed Unicode; nesting deeper than
  * {@link STRICT_JSON_MAX_DEPTH_V1}. A `__proto__` key is kept as an own data property, never a
  * prototype. Strings and keys must be NFC unless `requireNfc` is `false`.
  */
@@ -183,11 +279,15 @@ export function parseStrictJsonV1(
     if (match === null) return invalid("an unexpected character");
     const lexeme = match[0];
     const value = Number(lexeme);
-    if (!Number.isFinite(value)) return invalid("a number beyond the double range");
-    if (value === 0 && /[1-9]/.test(lexeme.split(/[eE]/)[0] ?? ""))
-      return invalid("a non-zero number that underflows to zero");
-    if (match[1] === undefined && match[2] === undefined && !Number.isSafeInteger(value))
-      return invalid("an integer beyond the safe integer range");
+    const loss = numberLossV1(lexeme, value);
+    if (loss !== undefined) {
+      const shown = lexeme.length > 64 ? `${lexeme.slice(0, 64)}…` : lexeme;
+      throw new StrictJsonNumberErrorV1(
+        `invalid JSON ${label}: ${NUMBER_LOSS_V1[loss]} (${shown}) at offset ${String(at)}`,
+        lexeme,
+        loss,
+      );
+    }
     at += lexeme.length;
     return value;
   };

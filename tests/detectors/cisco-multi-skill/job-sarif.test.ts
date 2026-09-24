@@ -269,6 +269,17 @@ describe.each(BOTH)("Cisco job SARIF completion evidence (%s)", (_label, execute
       /UTF-8/,
     );
   });
+
+  // S2i (review of S2h): a lossy number fails in every spelling, not only as a bare integer.
+  it("fails a job whose SARIF holds a number no double carries, however it is spelled", async () => {
+    const located = (line: string) =>
+      JSON.stringify(sarif([cleanRun([result("SKILL.md")])])).replace(
+        '"physicalLocation":{',
+        `"physicalLocation":{"region":{"startLine":${line}},`,
+      );
+    for (const line of ["9007199254740993", "9007199254740993e0", "9007199254740993.0", "-0"])
+      await failsWith(located(line), "output", /invalid JSON/);
+  });
 });
 
 describe.each(BOTH)("Cisco job uriBaseId resolution (%s)", (_label, execute) => {

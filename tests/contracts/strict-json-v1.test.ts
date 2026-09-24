@@ -8,6 +8,7 @@ import {
   deepFreezeStrictJsonV1,
   parseStrictJsonObjectV1,
   parseStrictJsonV1,
+  StrictJsonNumberErrorV1,
 } from "../../src/contract/strict-json-v1.js";
 
 describe("StrictJsonV1", () => {
@@ -142,7 +143,7 @@ describe("parseStrictJsonV1 and decodeStrictUtf8V1", () => {
     }
   });
 
-  it("rejects numbers JSON.parse would change: overflow, underflow and unsafe integers", () => {
+  it("rejects numbers JSON.parse would change: overflow, underflow and rounded integers", () => {
     for (const raw of [
       '{"a":1e999}',
       '{"a":-1e999}',
@@ -156,6 +157,102 @@ describe("parseStrictJsonV1 and decodeStrictUtf8V1", () => {
     expect(parseStrictJsonV1('{"a":9007199254740991,"b":-1.5e3,"c":0.1,"d":0}', "fixture")).toEqual(
       { a: 9007199254740991, b: -1500, c: 0.1, d: 0 },
     );
+  });
+
+  // S2i (review of S2h): one loss-aware policy for every spelling of a number. The decision
+  // depends on the text's exact decimal value only, never on whether it has a fraction or an
+  // exponent: 9007199254740993 is refused however it is written, and 9007199254740992, which a
+  // double holds exactly, is accepted however it is written.
+  describe("one loss-aware number policy for every spelling (S2i)", () => {
+    const parsed = (lexeme: string) =>
+      (parseStrictJsonV1(`{"n":${lexeme}}`, "fixture") as { n: number }).n;
+    const refusal = (lexeme: string) => {
+      try {
+        parsed(lexeme);
+      } catch (error) {
+        return error;
+      }
+      throw new Error(`${lexeme} was accepted`);
+    };
+
+    it("accepts every spelling of a value a double holds exactly", () => {
+      const exact: [string, number][] = [
+        ["9007199254740992", 2 ** 53],
+        ["-9007199254740992", -(2 ** 53)],
+        ["9007199254740992.0", 2 ** 53],
+        ["9007199254740992e0", 2 ** 53],
+        ["9.007199254740992e15", 2 ** 53],
+        ["90071992547409920E-1", 2 ** 53],
+        ["0.9007199254740992e+16", 2 ** 53],
+        ["1152921504606846976", 2 ** 60],
+        ["1.152921504606846976e18", 2 ** 60],
+        ["-1152921504606846976.000", -(2 ** 60)],
+        ["0.1e1", 1],
+        ["100e-2", 1],
+        ["0", 0],
+        ["0.0e7", 0],
+      ];
+      for (const [lexeme, value] of exact) expect(parsed(lexeme), lexeme).toBe(value);
+    });
+
+    it("accepts a fraction written as its double's shortest round-trip decimal, or exactly", () => {
+      const fractions: [string, number][] = [
+        ["0.1", 0.1],
+        ["0.10", 0.1],
+        ["1e-1", 0.1],
+        ["10E-2", 0.1],
+        ["-0.1", -0.1],
+        ["0.30000000000000004", 0.1 + 0.2],
+        ["0.1000000000000000055511151231257827021181583404541015625", 0.1],
+        ["5e-324", 5e-324],
+        ["2.2250738585072014e-308", 2.2250738585072014e-308],
+      ];
+      for (const [lexeme, value] of fractions) expect(parsed(lexeme), lexeme).toBe(value);
+    });
+
+    it("refuses every spelling of a value the double would round, with a typed failure", () => {
+      for (const lexeme of [
+        "9007199254740993",
+        "9007199254740993e0",
+        "9007199254740993.0",
+        "9007199254740993.000E+0",
+        "900719925474099.3e1",
+        "9.007199254740993e15",
+        "90071992547409930e-1",
+        "-9007199254740993",
+        "-9007199254740993e0",
+        "-9007199254740993.0",
+        "9007199254740992.5",
+        "12345678901234567890",
+        "12345678901234567000",
+        "1e23",
+        "0.3000000000000000444",
+        "1.7976931348623157e-308",
+        "3e-324",
+      ]) {
+        const error = refusal(lexeme);
+        expect(error, lexeme).toBeInstanceOf(StrictJsonNumberErrorV1);
+        expect(error, lexeme).toBeInstanceOf(TypeError);
+        expect(error, lexeme).toMatchObject({ lexeme, loss: "rounded" });
+      }
+    });
+
+    it("refuses overflow, underflow and negative zero in every spelling, typed", () => {
+      const refused: [string, string][] = [
+        ["1e999", "overflow"],
+        ["-1e999", "overflow"],
+        [`1${"0".repeat(400)}.0`, "overflow"],
+        ["1e-400", "underflow"],
+        ["-1e-400", "underflow"],
+        [`0.${"0".repeat(400)}1`, "underflow"],
+        ["-0", "negative-zero"],
+        ["-0.0", "negative-zero"],
+        ["-0e+1", "negative-zero"],
+        ["-0.000E-5", "negative-zero"],
+      ];
+      for (const [lexeme, loss] of refused)
+        expect(refusal(lexeme), lexeme).toMatchObject({ lexeme, loss });
+    });
   });
 
   it("keeps a __proto__ key as own data: it never erases a key or replaces the prototype", () => {
