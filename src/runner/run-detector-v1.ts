@@ -9,6 +9,7 @@ import {
   createBaselineAnalyzerSnapshotV1,
   normalizedObservation,
 } from "../baseline/batch-v1.js";
+import { ANALYZER_OUTPUT_READ_PREFIX_V1 } from "../baseline/bounded-output-read-v1.js";
 import {
   CISCO_FAILED_ANALYZERS_PREFIX_V1,
   CISCO_REPORT_PREFIX_V1,
@@ -441,6 +442,8 @@ export function failureStage(message: string): RunDetectorFailureStageV1 {
   )
     return "coverage";
   if (message.startsWith(CISCO_REPORT_PREFIX_V1)) return "output";
+  // U1j: an analyzer report file refused by the one bounded read is the analyzer's output.
+  if (message.startsWith(ANALYZER_OUTPUT_READ_PREFIX_V1)) return "output";
   if (message.includes("environment acquisition") || message.includes("image acquisition"))
     return "acquisition";
   if (

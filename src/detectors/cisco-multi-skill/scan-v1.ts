@@ -1,6 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import {
+  AnalyzerOutputReadErrorV1,
+  readBoundedAnalyzerOutputV1,
+} from "../../baseline/bounded-output-read-v1.js";
 import {
   CiscoAnalyzerFailureV1,
   ciscoSingleSkillReportV1,
@@ -266,14 +270,19 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         detail: boundedCiscoDetailV1(reason),
       });
     }
+    // U1j: both output files are read as bounded regular files (the analyzer-output cap).
     let raw: Buffer;
     try {
-      raw = readFileSync(output);
-    } catch {
+      raw = readBoundedAnalyzerOutputV1(output, "Cisco SARIF");
+    } catch (error) {
+      if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
       return Object.freeze({
         kind: "failed" as const,
         stage: "output" as const,
-        detail: "detector did not emit valid SARIF",
+        detail:
+          error.reason === "missing"
+            ? "detector did not emit valid SARIF"
+            : boundedCiscoDetailV1(`detector did not emit valid SARIF: ${error.message}`),
       });
     }
     const sarif = ciscoJobSarifV1(raw, request.root, request.skillDir);
@@ -284,18 +293,22 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         detail: boundedCiscoDetailV1(sarif.detail),
       });
     const skill = relative(request.root, request.skillDir).split(sep).join("/");
+    const label = `job ${skill === "" ? "." : skill}`;
     let reportBytes: Buffer;
     try {
-      reportBytes = readFileSync(jsonOutput);
-    } catch {
+      reportBytes = readBoundedAnalyzerOutputV1(jsonOutput, "Cisco JSON report");
+    } catch (error) {
+      if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
       return Object.freeze({
         kind: "failed" as const,
         stage: "output" as const,
-        detail: "detector did not emit its Cisco JSON report",
+        detail:
+          error.reason === "missing"
+            ? "detector did not emit its Cisco JSON report"
+            : boundedCiscoDetailV1(`Cisco JSON report of ${label} is unreadable: ${error.message}`),
       });
     }
     try {
-      const label = `job ${skill === "" ? "." : skill}`;
       const report = ciscoSingleSkillReportV1(reportBytes, label);
       // U1j (review of U1i, P1): the report is evidence only for the skill this job scanned.
       assertCiscoSingleSkillReportSkillV1(report, {

@@ -5,12 +5,15 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  readFileSync,
   rmSync,
   type Stats,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import {
+  AnalyzerOutputReadErrorV1,
+  readBoundedAnalyzerOutputV1,
+} from "../baseline/bounded-output-read-v1.js";
 import { ciscoSingleSkillReportV1 } from "../baseline/cisco-analyzer-failures-v1.js";
 import {
   assertCiscoSingleSkillAnalyzersCompleteV1,
@@ -31,7 +34,6 @@ import { type CiscoOciLayoutV1, isCiscoOciLayoutV1 } from "./oci-layout-v1.js";
 import { parseCiscoSarifWithIdentitiesV1 } from "./sarif-v1.js";
 
 const MAX_STDIO_BYTES = 64 * 1024;
-const MAX_SARIF_BYTES = 16 * 1024 * 1024;
 const TIMEOUT_MS = 120_000;
 const inputFields = [
   "protocol",
@@ -229,7 +231,8 @@ function readOwnedContainerId(path: string): string {
   const before = cidfileStats(path);
   let bytes: Buffer;
   try {
-    bytes = readFileSync(path);
+    // U1j: bounded like every file Scan reads back from the container run.
+    bytes = readBoundedAnalyzerOutputV1(path, "container ownership cidfile", 66);
   } catch {
     return fail("container ownership cidfile");
   }
@@ -244,25 +247,21 @@ function readOwnedContainerId(path: string): string {
 /** The files the scanner may leave in `/output`: its SARIF and (U1i, D30) its JSON report. */
 const OUTPUT_FILES: readonly string[] = ["result.json", "result.sarif"];
 
-/** One regular, unlinked, bounded UTF-8 output file; `label` names it in every failure. */
+/**
+ * One regular, unlinked, bounded UTF-8 output file; `label` names it in every failure. U1j:
+ * read by the one bounded analyzer-output read (the analyzer-output cap, never an unbounded
+ * read).
+ */
 function outputFile(path: string, name: string, label: string): Buffer {
-  const stat: Stats = (() => {
-    try {
-      return lstatSync(join(path, name));
-    } catch {
-      return fail(`${label} missing`);
-    }
-  })();
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.nlink > 1 ||
-    stat.size < 0 ||
-    stat.size > MAX_SARIF_BYTES
-  )
-    fail(`${label} invalid`);
-  const bytes = readFileSync(join(path, name));
-  if (bytes.length !== stat.size) fail(`${label} changed while reading`);
+  let bytes: Buffer;
+  try {
+    bytes = readBoundedAnalyzerOutputV1(join(path, name), label);
+  } catch (error) {
+    if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
+    return fail(
+      `${label} ${error.reason === "missing" ? "missing" : error.reason === "changed" ? "changed while reading" : "invalid"}`,
+    );
+  }
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
   return bytes;

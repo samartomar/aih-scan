@@ -855,4 +855,26 @@ describe.each(
       expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
     }
   });
+
+  // U1j: the job reads its SARIF and JSON report as bounded regular files (the one 16 MiB
+  // analyzer-output cap), so even well-formed output over the cap fails at output.
+  it("fails output for a job SARIF or JSON report over the analyzer-output cap (U1j)", async () => {
+    const pad = (value: unknown) => `${JSON.stringify(value)}${" ".repeat(16 * 1024 * 1024)}`;
+    for (const [alphaSarif, report, reason] of [
+      [
+        sarif([cleanRun()]),
+        (target: string) => pad(scanReport(target)),
+        /Cisco JSON report of job skills\/alpha is unreadable: aih-scan analyzer output: Cisco JSON report exceeds 16777216 bytes/,
+      ],
+      [
+        pad(sarif([cleanRun()])),
+        (target: string) => scanReport(target),
+        /detector did not emit valid SARIF: aih-scan analyzer output: Cisco SARIF exceeds 16777216 bytes/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(alphaSarif, report);
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
 });

@@ -628,6 +628,62 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
     }
   });
 
+  // U1j: the scan-all JSON report and SARIF are read as bounded regular files; one over the
+  // 16 MiB analyzer-output cap is refused, typed at output (it was classified execution).
+  it("fails output for a scan-all report over the analyzer-output cap (U1j)", async () => {
+    const host = hostFixture();
+    for (const [oversized, reason] of [
+      ["json", /Cisco JSON output exceeds 16777216 bytes/],
+      ["sarif", /Cisco SARIF output exceeds 16777216 bytes/],
+    ] as const) {
+      const runner = hostRunner([], host.python, async (argv) => {
+        const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
+        const pad = (text: Uint8Array | string, name: string) =>
+          name === oversized
+            ? `${Buffer.from(text).toString("utf8")}${" ".repeat(16 * 1024 * 1024)}`
+            : text;
+        writeFileSync(
+          argv[argv.indexOf("--output-json") + 1] ?? "",
+          pad(
+            canonicalStrictJsonBytesV1({
+              summary: { total_skills_scanned: 1 },
+              results: [{ skill_path: snapshot, findings: [] }],
+            }),
+            "json",
+          ),
+        );
+        writeFileSync(
+          argv[argv.indexOf("--output-sarif") + 1] ?? "",
+          pad(
+            canonicalStrictJsonBytesV1({
+              version: "2.1.0",
+              runs: [
+                {
+                  tool: { driver: { name: "skill-scanner" } },
+                  invocations: [{ executionSuccessful: true }],
+                  results: [],
+                },
+              ],
+            }),
+            "sarif",
+          ),
+        );
+        return okay("");
+      });
+      const sourceRoot = temporary("bounded");
+      writeFileSync(join(sourceRoot, "SKILL.md"), "---\nname: top\ndescription: top\n---\n# Top\n");
+      const outcome = await runDetectorV1({
+        detectorId: "detector.cisco",
+        executionProfileId: HOST_PROFILE,
+        subject: { kind: "skill-directory", sourceRoot, selectedClosurePaths: ["SKILL.md"] },
+        env: host.env,
+        runner,
+      });
+      expect(outcome, oversized).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+      if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
+    }
+  });
+
   describe("Cisco 2.1.0 normcase paths (owner decision D1)", () => {
     // skill-scanner 2.1.0 reports os.path.normcase paths: on Windows the whole resolved path,
     // directories included, is lowercased.

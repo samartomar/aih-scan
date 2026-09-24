@@ -40,6 +40,10 @@ import {
 } from "../detectors/sarif-completion-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
+import {
+  ANALYZER_OUTPUT_MAX_BYTES_V1,
+  readBoundedAnalyzerOutputV1,
+} from "./bounded-output-read-v1.js";
 import { assertCiscoScanAllSkillInventoryV1 } from "./cisco-report-skills-v1.js";
 import {
   assertCiscoScanAllAnalyzersCompleteV1,
@@ -71,7 +75,7 @@ export const HOST_PROCESS_UV_PYTHON_REQUEST_V1 = "3.12";
  */
 export const HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1 = 64;
 
-const maxOutputBytes = 16 * 1024 * 1024;
+const maxOutputBytes = ANALYZER_OUTPUT_MAX_BYTES_V1;
 const maxStderrBytes = 64 * 1024;
 const maxProjectBytes = 64 * 1024;
 const maxFailureDetailCharacters = 400;
@@ -1843,8 +1847,12 @@ async function semgrep(
   }
 }
 
+/**
+ * U1j: an analyzer's report file, read by the one bounded read every analyzer-output path
+ * uses (typed at output, the analyzer-output cap).
+ */
 function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
-  return readBoundedRegularFile(path, maxOutputBytes, label);
+  return readBoundedAnalyzerOutputV1(path, label);
 }
 
 /**
