@@ -48,6 +48,7 @@ import {
   BASELINE_BATCH_EXECUTION_PROFILES_V1,
   createBaselineAnalyzerExecutionV1,
 } from "./runtime-v1.js";
+import { sarifResultFilesV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
 
 export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "cisco"] as const;
 export type BaselineAnalyzerV1 = (typeof BASELINE_ANALYZERS_V1)[number];
@@ -849,15 +850,63 @@ function assertVersionNamesLock(
 }
 
 /**
+ * SI1 (review of S2k, P2): every location each result reaches, by U1g's one all-locations
+ * rule. The annex must already be in its source-relative normal form: normalizing it
+ * (`sourceRelativeSarifV1`, which resolves every `uriBaseId` through its run's
+ * `originalUriBaseIds` and resolves every artifact `index`, refusing a URI/index
+ * contradiction, a bad `parentIndex` chain or an unsafe path) must not change a byte, so a
+ * base, an absolute, `file:` or backslash URI is refused rather than certified in a form a
+ * consumer would read differently. Then every file each result reaches
+ * (`sarifResultFilesV1`: `locations[*]`, `relatedLocations`, code flows and the shared
+ * `threadFlowLocations` they reference, stacks, graphs and the run graphs they traverse,
+ * fixes, attachments, `analysisTarget` at its schema position only, every artifact named
+ * by index with its ancestry; never a property bag) must be a sealed file of the snapshot.
+ */
+function assertEveryResultLocation(
+  bytes: Buffer,
+  sealedFiles: ReadonlyMap<string, string>,
+  snapshotRoot: string,
+): void {
+  const log = parseStrictJsonObjectV1(bytes.toString("utf8"), "SARIF");
+  const normalized = sourceRelativeSarifV1(log, [snapshotRoot]).document;
+  if (!canonicalStrictJsonBytesV1(normalized).equals(bytes))
+    throw new TypeError(
+      "a location is not in source-relative normal form (a uriBaseId other than %SRCROOT%, an absolute, file: or backslash URI)",
+    );
+  const runs = Array.isArray(log.runs) ? log.runs : [];
+  runs.forEach((run, runIndex) => {
+    const results = (run as { results?: unknown }).results;
+    if (!Array.isArray(results)) return;
+    results.forEach((result, resultIndex) => {
+      for (const file of sarifResultFilesV1(result, run))
+        if (!sealedFiles.has(file))
+          throw new TypeError(
+            `run ${runIndex} result ${resultIndex} reaches ${JSON.stringify(file)}, which is not a sealed file of the snapshot`,
+          );
+    });
+  });
+}
+
+/**
  * S2k: the §1.4 location rules the delegated path applies to the same analyzers, through the
  * same projection: every result names a rule and a first location that is a sealed file of
- * the snapshot, by a safe source-relative POSIX path. A refusal publishes nothing.
+ * the snapshot, by a safe source-relative POSIX path. SI1: and every other location a result
+ * reaches passes the same rules ({@link assertEveryResultLocation}). A refusal publishes
+ * nothing.
  */
 function assertAnnexLocations(
   analyzerName: BaselineAnalyzerV1,
   observed: ReturnType<typeof normalizedObservation>,
   sealed: SourceObservationSealV1,
+  snapshotRoot: string,
 ): void {
+  const sealedFiles = new Map(
+    sealed.entries.flatMap((entry) =>
+      entry.kind === "file" || entry.kind === "file-link"
+        ? [[entry.path, entry.sha256] as const]
+        : [],
+    ),
+  );
   try {
     projectAnalyzerSarifFindingsV1({
       detectorId: BASELINE_DETECTOR_IDS_V1[analyzerName],
@@ -869,15 +918,10 @@ function assertAnnexLocations(
         byteLength: observed.bytes.byteLength,
       },
       bytes: observed.bytes,
-      sealedFiles: new Map(
-        sealed.entries.flatMap((entry) =>
-          entry.kind === "file" || entry.kind === "file-link"
-            ? [[entry.path, entry.sha256] as const]
-            : [],
-        ),
-      ),
+      sealedFiles,
       maxResults: maxAnnexResults,
     });
+    assertEveryResultLocation(observed.bytes, sealedFiles, snapshotRoot);
   } catch (error) {
     fail(
       `${analyzerName} SARIF fails the §1.4 location rules (output): ${error instanceof Error ? error.message : "SARIF"}`,
@@ -924,7 +968,7 @@ export async function executeBaselineVetBatchV1(
       // S2e: the analyzer's own completion proof, before anything is published from it.
       if (observed.mediaType === "application/sarif+json") {
         assertSarifCompletedV1(parseStrictJsonObjectV1(observed.bytes.toString("utf8"), "SARIF"));
-        assertAnnexLocations(analyzerName, observed, sealed);
+        assertAnnexLocations(analyzerName, observed, sealed, snapshotRoot);
       }
       ran.push({ analyzer: analyzerName, observed, executed });
     }

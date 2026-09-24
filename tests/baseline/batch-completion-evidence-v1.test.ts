@@ -879,3 +879,222 @@ describe("S2k: every annex SARIF passes the §1.4 location rules before it is ce
     expect(verifyBaselineVetReceiptV1(request, result)).toEqual({ kind: "complete" });
   });
 });
+
+type SarifJson = Record<string, unknown>;
+const at = (uri: string, extra: SarifJson = {}) => ({
+  physicalLocation: { artifactLocation: { uri, ...extra }, region: { startLine: 1 } },
+});
+const byIndex = (index: number) => ({
+  physicalLocation: { artifactLocation: { index }, region: { startLine: 1 } },
+});
+/** An otherwise successful analyzer SARIF holding one result, plus run-level members. */
+const resultSarif = (name: string, result: SarifJson, run: SarifJson = {}) =>
+  canonicalStrictJsonBytesV1({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name } },
+        results: [
+          {
+            ruleId: `${name}.rule`,
+            level: "warning",
+            message: { text: "finding" },
+            locations: [at("src/a.js")],
+            ...result,
+          },
+        ],
+        invocations: [{ executionSuccessful: true }],
+        ...run,
+      },
+    ],
+  });
+const flowAt = (location: SarifJson) => [{ threadFlows: [{ locations: [{ location }] }] }];
+
+describe("SI1 (review of S2k, P2): every location a result reaches passes before certification", () => {
+  /** Label, why it is refused, the result's own members, and run-level members. */
+  const refused: [string, RegExp, SarifJson, SarifJson][] = [];
+  const unsafe = /does not resolve to a safe path under the source root/;
+  const unsealed = /is not a sealed file of the snapshot/;
+  const notNormal = /not in source-relative normal form/;
+  for (const [what, uri, why] of [
+    ["an escaping path", "../../outside.js", unsafe],
+    ["an omitted directory-link alias path (D26)", "alias/a.js", unsealed],
+    ["an unsealed path", "src/missing.js", unsealed],
+    ["a backslash path", "src\\a.js", notNormal],
+    ["an absolute path", "/etc/passwd", /is outside the declared source root/],
+  ] as const)
+    refused.push(
+      [`locations[1] naming ${what}`, why, { locations: [at("src/a.js"), at(uri)] }, {}],
+      [`relatedLocations naming ${what}`, why, { relatedLocations: [at(uri)] }, {}],
+      [`a code-flow location naming ${what}`, why, { codeFlows: flowAt(at(uri)) }, {}],
+      // The reviewer's case: analysisTarget at its one schema position.
+      [`analysisTarget naming ${what}`, why, { analysisTarget: { uri } }, {}],
+      [
+        `a shared thread-flow location naming ${what}`,
+        why,
+        { codeFlows: [{ threadFlows: [{ locations: [{ index: 0 }] }] }] },
+        { threadFlowLocations: [{ location: at(uri) }] },
+      ],
+      [`a stack frame naming ${what}`, why, { stacks: [{ frames: [{ location: at(uri) }] }] }, {}],
+      [
+        `a fix naming ${what}`,
+        why,
+        {
+          fixes: [
+            {
+              artifactChanges: [
+                {
+                  artifactLocation: { uri },
+                  replacements: [{ deletedRegion: { startLine: 1 } }],
+                },
+              ],
+            },
+          ],
+        },
+        {},
+      ],
+      [
+        `a run graph node naming ${what}`,
+        why,
+        { graphTraversals: [{ runGraphIndex: 0 }] },
+        { graphs: [{ nodes: [{ id: "n", location: at(uri) }] }] },
+      ],
+      [
+        `an index-only secondary location whose artifact names ${what}`,
+        why,
+        { locations: [at("src/a.js"), byIndex(0)] },
+        { artifacts: [{ location: { uri } }] },
+      ],
+    );
+  refused.push(
+    [
+      "a first location whose uri contradicts its index",
+      /URI "src\/a\.js" and artifact index 0 \("SKILL\.md"\) disagree/,
+      { locations: [at("src/a.js", { index: 0 })] },
+      { artifacts: [{ location: { uri: "SKILL.md" } }] },
+    ],
+    [
+      "an index-only secondary location out of range",
+      /artifact index 3 resolves to no run artifact URI/,
+      { locations: [at("src/a.js"), byIndex(3)] },
+      { artifacts: [{ location: { uri: "SKILL.md" } }] },
+    ],
+    [
+      "an artifact whose parent is an escaping path",
+      unsafe,
+      { locations: [at("src/a.js"), byIndex(0)] },
+      {
+        artifacts: [
+          { location: { uri: "SKILL.md" }, parentIndex: 1 },
+          { location: { uri: "../x.zip" } },
+        ],
+      },
+    ],
+    [
+      "an artifact whose parent is an unsealed path",
+      unsealed,
+      { locations: [at("src/a.js"), byIndex(0)] },
+      {
+        artifacts: [
+          { location: { uri: "SKILL.md" }, parentIndex: 1 },
+          { location: { uri: "x.zip" } },
+        ],
+      },
+    ],
+    [
+      "a location under a base declared outside the source",
+      /is outside the declared source root/,
+      { locations: [at("src/a.js"), at("a.js", { uriBaseId: "OUT" })] },
+      { originalUriBaseIds: { OUT: { uri: "file:///tmp/" } } },
+    ],
+    [
+      "a location under a base declared inside the source",
+      notNormal,
+      { locations: [at("src/a.js"), at("a.js", { uriBaseId: "SRC" })] },
+      { originalUriBaseIds: { SRC: { uri: "src/", uriBaseId: "%SRCROOT%" } } },
+    ],
+    [
+      "an undeclared base",
+      /base NOPE is not declared in originalUriBaseIds/,
+      { locations: [at("src/a.js"), at("a.js", { uriBaseId: "NOPE" })] },
+      {},
+    ],
+  );
+
+  it.each(refused)("publishes nothing for %s", async (_label, why, result, run) => {
+    const { root } = vectorTree();
+    symlinkSync("src", join(root, "alias"), "dir");
+    for (const name of ["semgrep", "cisco", "skillspector"] as const) {
+      const attempt = executeBaselineVetBatchV1(requestOver(root), {
+        sourceRoot: root,
+        execute: fakeExecution({ [name]: () => ({ bytes: resultSarif(name, result, run) }) }),
+      });
+      await expect(attempt).rejects.toThrow(
+        new RegExp(`${name} SARIF fails the §1.4 location rules`),
+      );
+      await expect(attempt).rejects.toThrow(why);
+    }
+  });
+
+  it("certifies legitimate multi-location results and never reads a property bag", async () => {
+    const { root, request } = vectorTree();
+    const legitimate = (name: string) =>
+      resultSarif(
+        name,
+        {
+          locations: [at("src/a.js", { uriBaseId: "%SRCROOT%" }), at("SKILL.md"), byIndex(1)],
+          relatedLocations: [at("SKILL.md")],
+          analysisTarget: { uri: "src/a.js" },
+          codeFlows: [
+            { threadFlows: [{ locations: [{ location: at("SKILL.md") }, { index: 0 }] }] },
+          ],
+          stacks: [{ frames: [{ location: at("src/a.js") }] }],
+          graphTraversals: [{ runGraphIndex: 0 }],
+          fixes: [
+            {
+              artifactChanges: [
+                {
+                  artifactLocation: byIndex(0).physicalLocation.artifactLocation,
+                  replacements: [],
+                },
+              ],
+            },
+          ],
+          properties: { artifactLocation: { uri: "../../outside.js" }, analysisTarget: 7 },
+        },
+        {
+          artifacts: [
+            { location: { uri: "src/a.js", index: 0 } },
+            { location: { uri: "SKILL.md" }, properties: { uri: "/etc/passwd" } },
+          ],
+          threadFlowLocations: [{ location: byIndex(1) }],
+          graphs: [{ nodes: [{ id: "n", location: at("src/a.js") }] }],
+        },
+      );
+    const bytes = {
+      semgrep: legitimate("semgrep"),
+      cisco: legitimate("cisco"),
+      skillspector: legitimate("skillspector"),
+    };
+    const result = await executeBaselineVetBatchV1(request, {
+      sourceRoot: root,
+      execute: fakeExecution({
+        semgrep: () => ({ bytes: bytes.semgrep }),
+        cisco: () => ({ bytes: bytes.cisco }),
+        skillspector: () => ({ bytes: bytes.skillspector }),
+      }),
+    });
+    for (const name of ["semgrep", "cisco", "skillspector"] as const) {
+      const annex = annexOf(result, name);
+      const { properties: _completion, ...stored } = (
+        JSON.parse(annex.bytes.toString("utf8")) as { runs: SarifJson[] }
+      ).runs[0] as SarifJson;
+      const { properties: _given, ...given } = (
+        JSON.parse(Buffer.from(bytes[name]).toString("utf8")) as { runs: SarifJson[] }
+      ).runs[0] as SarifJson;
+      expect(stored.results).toEqual(given.results);
+      expect(evidenceOf(result, name)).toMatchObject({ subjectTreeSha256: VECTOR_SUBJECT_SHA256 });
+    }
+    expect(verifyBaselineVetReceiptV1(request, result)).toEqual({ kind: "complete" });
+  });
+});
