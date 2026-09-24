@@ -128,7 +128,10 @@ describe("runCiscoMcpScannerPlanV1 (parity: Core tests/trust/scan.test.ts ~4379)
 
     expect(await outcome).toEqual({
       status: "completed",
-      sarif: { version: "2.1.0", runs: [{ results: [] }] },
+      sarif: {
+        version: "2.1.0",
+        runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.2" } }, results: [] }],
+      },
     });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.argv).toEqual(

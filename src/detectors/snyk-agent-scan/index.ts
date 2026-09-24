@@ -102,9 +102,19 @@ export interface SnykAgentScanSarifResultV1 {
   ];
 }
 
+/** S2h (D16): SARIF 2.1.0 requires `tool.driver` on every run Scan builds. */
+const SNYK_AGENT_SCAN_TOOL_V1 = {
+  driver: { name: "snyk-agent-scan", version: SNYK_AGENT_SCAN_VERSION },
+} as const;
+
 export interface SnykAgentScanSarifV1 {
   readonly version: "2.1.0";
-  readonly runs: readonly [Readonly<{ results: readonly SnykAgentScanSarifResultV1[] }>];
+  readonly runs: readonly [
+    Readonly<{
+      tool: typeof SNYK_AGENT_SCAN_TOOL_V1;
+      results: readonly SnykAgentScanSarifResultV1[];
+    }>,
+  ];
 }
 
 /** C2a §5.3 failure stages: `execution` for spawn/exit shortfalls, `output` for stdout ones. */
@@ -687,7 +697,7 @@ export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentS
   });
   return deepFreezeStrictJsonV1({
     version: "2.1.0" as const,
-    runs: [{ results }],
+    runs: [{ tool: SNYK_AGENT_SCAN_TOOL_V1, results }],
   });
 }
 
@@ -761,7 +771,10 @@ function redactSarif(sarif: SnykAgentScanSarifV1, token: string | undefined): Sn
       ],
     };
   });
-  return deepFreezeStrictJsonV1({ version: "2.1.0" as const, runs: [{ results }] });
+  return deepFreezeStrictJsonV1({
+    version: "2.1.0" as const,
+    runs: [{ tool: SNYK_AGENT_SCAN_TOOL_V1, results }],
+  });
 }
 
 /**

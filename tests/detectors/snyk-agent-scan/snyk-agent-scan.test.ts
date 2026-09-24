@@ -451,7 +451,9 @@ describe("run outcomes", () => {
     expect(outcome.kind).toBe("completed");
     if (outcome.kind !== "completed") return;
     expect(outcome.sarif.runs[0]?.results).toEqual([]);
-    expect(outcome.sarifText).toBe('{"version":"2.1.0","runs":[{"results":[]}]}');
+    expect(outcome.sarifText).toBe(
+      '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"snyk-agent-scan","version":"0.5.17"}},"results":[]}]}',
+    );
   });
 
   // Ported from Core tests/trust/scan.test.ts ~3894-3916; C2a §5.3 stages it `output`.

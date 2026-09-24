@@ -280,9 +280,19 @@ export interface CiscoMcpScannerSarifResultV1 {
   ];
 }
 
+/** S2h (D16): SARIF 2.1.0 requires `tool.driver` on every run Scan builds. */
+const CISCO_MCP_SCANNER_TOOL_V1 = {
+  driver: { name: "mcp-scanner", version: CISCO_MCP_SCANNER_VERSION_V1 },
+} as const;
+
 export interface CiscoMcpScannerSarifV1 {
   readonly version: "2.1.0";
-  readonly runs: readonly [Readonly<{ results: readonly CiscoMcpScannerSarifResultV1[] }>];
+  readonly runs: readonly [
+    Readonly<{
+      tool: typeof CISCO_MCP_SCANNER_TOOL_V1;
+      results: readonly CiscoMcpScannerSarifResultV1[];
+    }>,
+  ];
 }
 
 function parseScannerJson(text: string): unknown[] {
@@ -430,7 +440,10 @@ export function parseCiscoMcpScannerSarifV1(
       fail("mcp-scanner marked a result unsafe without reporting a finding");
   }
 
-  return deepFreezeStrictJsonV1({ version: "2.1.0" as const, runs: [{ results }] });
+  return deepFreezeStrictJsonV1({
+    version: "2.1.0" as const,
+    runs: [{ tool: CISCO_MCP_SCANNER_TOOL_V1, results }],
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
       version: "2.1.0",
       runs: [
         {
+          tool: { driver: { name: "mcp-scanner", version: "4.8.2" } },
           results: [
             {
               ruleId: "tool-poisoning",
@@ -119,7 +120,10 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
       submitted([".mcp.json:local", ".mcp.json"]),
     );
 
-    expect(sarif).toEqual({ version: "2.1.0", runs: [{ results: [] }] });
+    expect(sarif).toEqual({
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.2" } }, results: [] }],
+    });
   });
 
   // S2f deviation from Core: Core named a positive total without threat names after its
@@ -515,7 +519,10 @@ describe("parseCiscoMcpScannerSarifV1 validates every summary before a zero tota
         },
         true,
       )(),
-    ).toEqual({ version: "2.1.0", runs: [{ results: [] }] });
+    ).toEqual({
+      version: "2.1.0",
+      runs: [{ tool: { driver: { name: "mcp-scanner", version: "4.8.2" } }, results: [] }],
+    });
     expect(
       parse({ severity: "HIGH", threat_names: ["PROMPT INJECTION"], total_findings: 3 }, false)()
         .runs[0]?.results,
