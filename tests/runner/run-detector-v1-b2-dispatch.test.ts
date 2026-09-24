@@ -739,7 +739,14 @@ describe("completion evidence v1 on the B2 detectors", () => {
           {
             status: "completed",
             is_safe: true,
-            findings: {},
+            findings: {
+              yara_analyzer: {
+                severity: "SAFE",
+                threat_names: [],
+                threat_summary: "No threats detected",
+                total_findings: 0,
+              },
+            },
             tool_name: ".mcp.json:safe",
             tool_description: "server",
             item_type: "tool",
