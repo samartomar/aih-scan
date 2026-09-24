@@ -14,16 +14,21 @@ import type {
  *
  * Windows PowerShell 5.1 (present on every supported Windows) compiles the small C# helper
  * below and runs it as a supervisor. The helper creates a Job Object with
- * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway flags, creates the analyzer
- * CREATE_SUSPENDED with the exact command line, the fixed environment block and the
- * supervisor's own standard handles, assigns it to the job, then resumes it. Every
- * descendant is created inside that job and cannot break away from it.
+ * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway flags, then creates the analyzer
+ * already inside that job (STARTUPINFOEX with PROC_THREAD_ATTRIBUTE_JOB_LIST,
+ * CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT) with the exact command line, the fixed
+ * environment block, NUL as stdin and the supervisor's stdout and stderr as the only
+ * inherited handles, then resumes it. Membership is part of process creation, so there is
+ * no moment at which the analyzer exists outside the job; every descendant is created
+ * inside it and cannot break away.
  *
  * - When the analyzer exits, the helper counts the job's live processes. Any process still
  *   running after a short grace period outlived its leader: the helper terminates the whole
  *   job and reports the residue, and the run fails closed.
- * - On timeout or abort Scan terminates the supervisor. Its job handle is the only one, so
- *   closing it kills the analyzer and every descendant (KILL_ON_JOB_CLOSE).
+ * - On timeout, abort or an output cap Scan closes the supervisor's stdin. The supervisor
+ *   terminates the job, waits for it to empty and reports the cancellation (it does the same
+ *   if Scan itself dies). Only if it has not exited after a bounded grace does Scan kill it;
+ *   its job handle is the only one, so that kills every job member (KILL_ON_JOB_CLOSE).
  *
  * libuv's own per-process job uses JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, so a grandchild of
  * a Node child is not in it; this job is what contains the tree.
@@ -31,8 +36,10 @@ import type {
 
 const SUPERVISOR_STATUS_PROTOCOL = "AihScanWindowsJobStatusV1";
 const RESIDUAL_GRACE_MS = 250;
+const SUPERVISOR_COOPERATIVE_GRACE_MS = 10_000;
 const SUPERVISOR_CLOSE_GRACE_MS = 10_000;
 const MAX_STATUS_BYTES = 64 * 1024;
+const MAX_PAUSE_AFTER_CREATE_MS = 60_000;
 
 const SUPERVISOR_CSHARP = String.raw`
 using System;
@@ -92,6 +99,13 @@ public static class AihScanWindowsJobSupervisorV1
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    struct StartupInfoEx
+    {
+        public StartupInfo StartupInfo;
+        public IntPtr lpAttributeList;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     struct ProcessInformation
     {
         public IntPtr hProcess, hThread;
@@ -107,17 +121,25 @@ public static class AihScanWindowsJobSupervisorV1
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int length, IntPtr returned);
     [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-    [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool TerminateJobObject(IntPtr job, uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processAttributes,
         IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string directory,
-        ref StartupInfo startup, out ProcessInformation information);
+        ref StartupInfoEx startup, out ProcessInformation information);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value,
+        IntPtr size, IntPtr previous, IntPtr returned);
+    [DllImport("kernel32.dll")]
+    static extern void DeleteProcThreadAttributeList(IntPtr list);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition,
+        uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool ReadFile(IntPtr file, byte[] buffer, uint toRead, out uint read, IntPtr overlapped);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern uint ResumeThread(IntPtr thread);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool TerminateProcess(IntPtr process, uint exitCode);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -137,6 +159,12 @@ public static class AihScanWindowsJobSupervisorV1
     const uint DieOnUnhandledException = 0x400;
     const uint CreateSuspended = 0x4;
     const uint CreateUnicodeEnvironment = 0x400;
+    const uint ExtendedStartupInfoPresent = 0x80000;
+    const int ProcThreadAttributeHandleList = 0x20002;
+    const int ProcThreadAttributeJobList = 0x2000D;
+    const uint GenericRead = 0x80000000;
+    const uint FileShareReadWrite = 0x3;
+    const uint OpenExisting = 3;
     const int UseStdHandles = 0x100;
     const int UseShowWindow = 0x1;
     const uint HandleFlagInherit = 0x1;
@@ -204,11 +232,11 @@ public static class AihScanWindowsJobSupervisorV1
     }
 
     public static int Run(string application, string commandLine, string directory, string[] environment,
-        string statusPath, int residualGraceMs)
+        string statusPath, int residualGraceMs, int pauseAfterCreateMs)
     {
         try
         {
-            return Supervise(application, commandLine, directory, environment ?? new string[0], statusPath, residualGraceMs);
+            return Supervise(application, commandLine, directory, environment ?? new string[0], statusPath, residualGraceMs, pauseAfterCreateMs);
         }
         catch (Exception error)
         {
@@ -217,8 +245,44 @@ public static class AihScanWindowsJobSupervisorV1
         }
     }
 
+    static int cancelled;
+
+    static bool Cancelled() { return Thread.VolatileRead(ref cancelled) != 0; }
+
+    static bool Usable(IntPtr handle) { return handle != IntPtr.Zero && handle != new IntPtr(-1); }
+
+    // Scan cancels by closing the supervisor's standard input; a Scan that dies closes it too.
+    // The watcher then terminates the job. It sets the flag first, so the main thread either
+    // sees the flag after creating the analyzer or the terminate comes after the creation.
+    static void WatchForCancellation(IntPtr job)
+    {
+        IntPtr input = GetStdHandle(-10);
+        var buffer = new byte[64];
+        uint read;
+        while (Usable(input) && ReadFile(input, buffer, (uint)buffer.Length, out read, IntPtr.Zero) && read > 0) { }
+        Interlocked.Exchange(ref cancelled, 1);
+        TerminateJobObject(job, 1);
+    }
+
+    static uint EndJob(IntPtr job)
+    {
+        TerminateJobObject(job, 1);
+        int spent = 0;
+        while (ActiveProcesses(job) > 0 && spent < 5000) { Thread.Sleep(10); spent += 10; }
+        return ActiveProcesses(job);
+    }
+
+    static int ReportCancelled(IntPtr job, string statusPath)
+    {
+        WriteStatus(statusPath, "{\"protocol\":\"AihScanWindowsJobStatusV1\",\"cancelled\":true,\"remainingProcesses\":" +
+            EndJob(job) + "}");
+        return 0;
+    }
+
+    // The job handle is never closed explicitly: the watcher may still terminate it, and the
+    // supervisor's exit closes it, which (KILL_ON_JOB_CLOSE) ends anything left in it.
     static int Supervise(string application, string commandLine, string directory, string[] environment,
-        string statusPath, int residualGraceMs)
+        string statusPath, int residualGraceMs, int pauseAfterCreateMs)
     {
         IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
         if (job == IntPtr.Zero) throw Failure("CreateJobObjectW", Marshal.GetLastWin32Error());
@@ -226,51 +290,93 @@ public static class AihScanWindowsJobSupervisorV1
         limits.Basic.LimitFlags = KillOnJobClose | DieOnUnhandledException;
         if (!SetInformationJobObject(job, 9, ref limits, Marshal.SizeOf(typeof(ExtendedLimit))))
             throw Failure("SetInformationJobObject", Marshal.GetLastWin32Error());
+        var watcher = new Thread(() => WatchForCancellation(job));
+        watcher.IsBackground = true;
+        watcher.Start();
+        if (Cancelled()) return ReportCancelled(job, statusPath);
 
         var sorted = new List<string>(environment);
         sorted.Sort(StringComparer.OrdinalIgnoreCase);
         var block = new StringBuilder();
         foreach (string entry in sorted) block.Append(entry).Append('\0');
         block.Append('\0');
+
+        // The analyzer reads NUL and writes to the supervisor's own stdout and stderr; those
+        // three are the only handles it inherits.
+        IntPtr nul = CreateFileW("NUL", GenericRead, FileShareReadWrite, IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
+        if (!Usable(nul)) throw Failure("CreateFileW(NUL)", Marshal.GetLastWin32Error());
+        var inherited = new List<IntPtr>();
+        foreach (IntPtr handle in new[] { nul, GetStdHandle(-11), GetStdHandle(-12) })
+        {
+            if (!Usable(handle) || inherited.Contains(handle)) continue;
+            if (!SetHandleInformation(handle, HandleFlagInherit, HandleFlagInherit))
+                throw Failure("SetHandleInformation", Marshal.GetLastWin32Error());
+            inherited.Add(handle);
+        }
+
+        var startup = new StartupInfoEx();
+        startup.StartupInfo.cb = Marshal.SizeOf(typeof(StartupInfoEx));
+        startup.StartupInfo.dwFlags = UseStdHandles | UseShowWindow;
+        startup.StartupInfo.wShowWindow = 0;
+        startup.StartupInfo.hStdInput = nul;
+        startup.StartupInfo.hStdOutput = GetStdHandle(-11);
+        startup.StartupInfo.hStdError = GetStdHandle(-12);
+
         IntPtr environmentBlock = Marshal.StringToHGlobalUni(block.ToString());
-
-        var startup = new StartupInfo();
-        startup.cb = Marshal.SizeOf(typeof(StartupInfo));
-        startup.dwFlags = UseStdHandles | UseShowWindow;
-        startup.wShowWindow = 0;
-        startup.hStdInput = GetStdHandle(-10);
-        startup.hStdOutput = GetStdHandle(-11);
-        startup.hStdError = GetStdHandle(-12);
-        foreach (IntPtr handle in new[] { startup.hStdInput, startup.hStdOutput, startup.hStdError })
-            if (handle != IntPtr.Zero && handle != new IntPtr(-1)) SetHandleInformation(handle, HandleFlagInherit, HandleFlagInherit);
-
+        IntPtr jobList = Marshal.AllocHGlobal(IntPtr.Size);
+        IntPtr handleList = Marshal.AllocHGlobal(IntPtr.Size * inherited.Count);
+        IntPtr attributeSize = IntPtr.Zero;
+        InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref attributeSize);
+        IntPtr attributes = Marshal.AllocHGlobal(attributeSize);
+        bool initialized = false;
         ProcessInformation information;
-        var line = new StringBuilder(commandLine);
         try
         {
+            if (!InitializeProcThreadAttributeList(attributes, 2, 0, ref attributeSize))
+                throw Failure("InitializeProcThreadAttributeList", Marshal.GetLastWin32Error());
+            initialized = true;
+            // PROC_THREAD_ATTRIBUTE_JOB_LIST: the analyzer is a member of the job from the
+            // moment it exists, so no cancellation or supervisor death can leave it outside.
+            Marshal.WriteIntPtr(jobList, job);
+            if (!UpdateProcThreadAttribute(attributes, 0, new IntPtr(ProcThreadAttributeJobList), jobList,
+                    new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                throw Failure("UpdateProcThreadAttribute(JOB_LIST)", Marshal.GetLastWin32Error());
+            for (int index = 0; index < inherited.Count; index++)
+                Marshal.WriteIntPtr(handleList, index * IntPtr.Size, inherited[index]);
+            if (!UpdateProcThreadAttribute(attributes, 0, new IntPtr(ProcThreadAttributeHandleList), handleList,
+                    new IntPtr(IntPtr.Size * inherited.Count), IntPtr.Zero, IntPtr.Zero))
+                throw Failure("UpdateProcThreadAttribute(HANDLE_LIST)", Marshal.GetLastWin32Error());
+            startup.lpAttributeList = attributes;
+            var line = new StringBuilder(commandLine);
             if (!CreateProcessW(application, line, IntPtr.Zero, IntPtr.Zero, true,
-                    CreateSuspended | CreateUnicodeEnvironment, environmentBlock, directory, ref startup, out information))
+                    CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent, environmentBlock,
+                    directory, ref startup, out information))
                 throw Failure("CreateProcessW", Marshal.GetLastWin32Error());
         }
-        finally { Marshal.FreeHGlobal(environmentBlock); }
-
-        if (!AssignProcessToJobObject(job, information.hProcess))
+        finally
         {
-            int error = Marshal.GetLastWin32Error();
-            TerminateProcess(information.hProcess, 1);
-            throw Failure("AssignProcessToJobObject", error);
+            if (initialized) DeleteProcThreadAttributeList(attributes);
+            Marshal.FreeHGlobal(attributes);
+            Marshal.FreeHGlobal(handleList);
+            Marshal.FreeHGlobal(jobList);
+            Marshal.FreeHGlobal(environmentBlock);
+            CloseHandle(nul);
         }
-        if (ResumeThread(information.hThread) == 0xFFFFFFFF)
+        if (pauseAfterCreateMs > 0) Thread.Sleep(pauseAfterCreateMs);
+
+        if (!Cancelled() && ResumeThread(information.hThread) == 0xFFFFFFFF && !Cancelled())
         {
             int error = Marshal.GetLastWin32Error();
-            TerminateJobObject(job, 1);
+            EndJob(job);
             throw Failure("ResumeThread", error);
         }
         CloseHandle(information.hThread);
+        if (Cancelled()) TerminateJobObject(job, 1);
         WaitForSingleObject(information.hProcess, Infinite);
         uint leaderExit;
         GetExitCodeProcess(information.hProcess, out leaderExit);
         CloseHandle(information.hProcess);
+        if (Cancelled()) return ReportCancelled(job, statusPath);
 
         uint active = ActiveProcesses(job);
         int waited = 0;
@@ -284,9 +390,7 @@ public static class AihScanWindowsJobSupervisorV1
         if (active > 0)
         {
             residualMembers = Members(job);
-            TerminateJobObject(job, 1);
-            int spent = 0;
-            while (ActiveProcesses(job) > 0 && spent < 5000) { Thread.Sleep(10); spent += 10; }
+            EndJob(job);
         }
         uint remaining = ActiveProcesses(job);
         var members = new StringBuilder("[");
@@ -300,7 +404,6 @@ public static class AihScanWindowsJobSupervisorV1
             "{\"protocol\":\"AihScanWindowsJobStatusV1\",\"leaderExitCode\":" + leaderExit +
             ",\"residualProcesses\":" + active + ",\"residualMembers\":" + members +
             ",\"remainingProcesses\":" + remaining + "}");
-        CloseHandle(job);
         return 0;
     }
 }
@@ -310,12 +413,15 @@ const SUPERVISOR_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
   "$spec = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AIH_SCAN_WINDOWS_JOB_SPEC)) | ConvertFrom-Json",
-  `Add-Type -TypeDefinition @'${SUPERVISOR_CSHARP}'@`,
-  "$code = [AihScanWindowsJobSupervisorV1]::Run([string]$spec.application, [string]$spec.commandLine, [string]$spec.directory, [string[]]$spec.environment, [string]$spec.statusPath, [int]$spec.residualGraceMs)",
+  "Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AIH_SCAN_WINDOWS_JOB_SOURCE)))",
+  "$code = [AihScanWindowsJobSupervisorV1]::Run([string]$spec.application, [string]$spec.commandLine, [string]$spec.directory, [string[]]$spec.environment, [string]$spec.statusPath, [int]$spec.residualGraceMs, [int]$spec.pauseAfterCreateMs)",
   "exit $code",
 ].join("\n");
 
 const ENCODED_SUPERVISOR_SCRIPT = Buffer.from(SUPERVISOR_SCRIPT, "utf16le").toString("base64");
+// The helper source travels in the environment: encoded into the command line it would
+// pass the 32,767-character limit.
+const ENCODED_SUPERVISOR_SOURCE = Buffer.from(SUPERVISOR_CSHARP, "utf8").toString("base64");
 
 /** The fixed supervisor argv, in the order Scan passes it. */
 export const WINDOWS_JOB_SUPERVISOR_ARGUMENTS_V1: readonly string[] = Object.freeze([
@@ -401,6 +507,7 @@ type SupervisorStatus =
       residualMembers: readonly string[];
       remainingProcesses: number;
     }>
+  | Readonly<{ cancelled: true; remainingProcesses: number }>
   | Readonly<{ error: string }>;
 
 function readStatus(path: string): SupervisorStatus | undefined {
@@ -412,6 +519,11 @@ function readStatus(path: string): SupervisorStatus | undefined {
   if (typeof parsed.error === "string") return Object.freeze({ error: parsed.error });
   const count = (value: unknown) =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (parsed.cancelled === true) {
+    const remainingProcesses = count(parsed.remainingProcesses);
+    if (remainingProcesses === undefined) fail("status fields");
+    return Object.freeze({ cancelled: true, remainingProcesses });
+  }
   const leaderExitCode = count(parsed.leaderExitCode);
   const residualProcesses = count(parsed.residualProcesses);
   const remainingProcesses = count(parsed.remainingProcesses);
@@ -433,6 +545,12 @@ function readStatus(path: string): SupervisorStatus | undefined {
 }
 
 /**
+ * Test seams, never set by Scan itself: `pauseAfterCreateMs` holds the supervisor between
+ * creating the suspended analyzer and resuming it, so a test can cancel or kill it there.
+ */
+export type WindowsJobSupervisorSeamsV1 = Readonly<{ pauseAfterCreateMs?: number }>;
+
+/**
  * Runs `argv` inside a fresh Job Object and returns once the whole tree is gone.
  *
  * `argv[0]` must be an absolute executable path: the supervisor passes it to
@@ -441,11 +559,19 @@ function readStatus(path: string): SupervisorStatus | undefined {
 export function runUnderWindowsJobV1(
   argv: readonly string[],
   options: ProcessRunnerOptions,
+  seams: WindowsJobSupervisorSeamsV1 = {},
 ): Promise<ProcessRunnerResult> {
   if (process.platform !== "win32") fail("requires a Windows host");
   const application = argv[0];
   if (application === undefined || !win32.isAbsolute(application))
     fail("the analyzer executable must be an absolute path");
+  const pauseAfterCreateMs = seams.pauseAfterCreateMs ?? 0;
+  if (
+    !Number.isSafeInteger(pauseAfterCreateMs) ||
+    pauseAfterCreateMs < 0 ||
+    pauseAfterCreateMs > MAX_PAUSE_AFTER_CREATE_MS
+  )
+    fail("pauseAfterCreateMs is not a whole number of milliseconds within bounds");
   const directory = options.cwd;
   if (directory === undefined || !win32.isAbsolute(directory))
     fail("the analyzer working directory must be an absolute path");
@@ -462,6 +588,7 @@ export function runUnderWindowsJobV1(
       environment,
       statusPath,
       residualGraceMs: RESIDUAL_GRACE_MS,
+      pauseAfterCreateMs,
     }),
     "utf8",
   ).toString("base64");
@@ -473,6 +600,7 @@ export function runUnderWindowsJobV1(
     TEMP: privateRoot,
     TMP: privateRoot,
     AIH_SCAN_WINDOWS_JOB_SPEC: spec,
+    AIH_SCAN_WINDOWS_JOB_SOURCE: ENCODED_SUPERVISOR_SOURCE,
   };
   return new Promise((resolveResult, reject) => {
     const cleanup = () => {
@@ -492,9 +620,11 @@ export function runUnderWindowsJobV1(
           windowsHide: true,
           cwd: privateRoot,
           env: supervisorEnvironment,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
         },
       );
+      // Closing stdin is the cancellation signal; the supervisor never reads data from it.
+      child.stdin?.on("error", () => undefined);
     } catch (error) {
       cleanup();
       reject(error);
@@ -507,12 +637,14 @@ export function runUnderWindowsJobV1(
     let termination: ProcessTerminationV1 | undefined;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => terminate("abort");
     const settle = (outcome: { result: ProcessRunnerResult } | { error: unknown }) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       if (closeTimer !== undefined) clearTimeout(closeTimer);
       options.signal?.removeEventListener("abort", onAbort);
       cleanup();
@@ -526,17 +658,21 @@ export function runUnderWindowsJobV1(
     function terminate(reason: ProcessTerminationV1): void {
       if (settled || termination !== undefined) return;
       termination = reason;
-      try {
-        child.kill();
-      } catch {
-        // The supervisor may already be gone; its job handle closed with it.
-      }
+      // Cooperative first: the supervisor terminates its job when its stdin closes.
+      child.stdin?.destroy();
+      killTimer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          // The supervisor may already be gone; its job handle closed with it.
+        }
+      }, SUPERVISOR_COOPERATIVE_GRACE_MS);
       closeTimer = setTimeout(
         () =>
           settle({
             result: { code: 1, ...output(), truncated: true, termination: "containment-failure" },
           }),
-        SUPERVISOR_CLOSE_GRACE_MS,
+        SUPERVISOR_COOPERATIVE_GRACE_MS + SUPERVISOR_CLOSE_GRACE_MS,
       );
     }
     timer = setTimeout(() => terminate("timeout"), options.timeoutMs);
@@ -557,7 +693,26 @@ export function runUnderWindowsJobV1(
     child.once("error", (error) => settle({ error }));
     child.once("close", () => {
       if (termination !== undefined) {
-        settle({ result: { code: 1, ...output(), truncated: true, termination } });
+        let remaining = 0;
+        try {
+          const status = readStatus(statusPath);
+          if (status !== undefined && "remainingProcesses" in status)
+            remaining = status.remainingProcesses;
+        } catch {
+          // A supervisor killed after its grace wrote no status; its job closed with it.
+        }
+        settle({
+          result:
+            remaining > 0
+              ? {
+                  code: 1,
+                  ...output(),
+                  truncated: true,
+                  termination: "containment-failure",
+                  containmentDetail: `${remaining} job process${remaining === 1 ? "" : "es"} survived termination`,
+                }
+              : { code: 1, ...output(), truncated: true, termination },
+        });
         return;
       }
       let status: SupervisorStatus | undefined;
@@ -575,12 +730,14 @@ export function runUnderWindowsJobV1(
         });
         return;
       }
-      if (status === undefined || "error" in status) {
+      if (status === undefined || "error" in status || "cancelled" in status) {
         const detail =
           status === undefined
             ? "the Windows job supervisor exited without a status record"
-            : `the Windows job supervisor could not run the analyzer: ${status.error}`;
-        if (status !== undefined && /CreateProcessW/u.test(status.error)) {
+            : "cancelled" in status
+              ? "the Windows job supervisor lost its stdin and ended the job unasked"
+              : `the Windows job supervisor could not run the analyzer: ${status.error}`;
+        if (status !== undefined && "error" in status && /CreateProcessW/u.test(status.error)) {
           settle({ error: new Error(`aih-scan: ${detail}`) });
           return;
         }

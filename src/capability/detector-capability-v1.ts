@@ -337,7 +337,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     image: null,
     containment: [
       "linux, darwin: every spawn leads its own process group; a timeout, an abort, an output cap or descendants outliving the leader send SIGTERM and then SIGKILL to the whole group",
-      "windows: every spawn is created suspended inside a Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway; a timeout or an abort closes the job, and descendants outliving the leader are terminated with it",
+      "windows: every spawn is created suspended inside a Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway, its membership part of process creation (PROC_THREAD_ATTRIBUTE_JOB_LIST); a timeout or an abort makes the supervisor terminate the job, the supervisor is killed (closing the job) only if it has not exited within a bounded grace, and descendants outliving the leader are terminated with the job",
       "windows: after the run, every process whose command line or image names the run's private directories is killed and the run fails closed",
       "linux, darwin: after the run, every process whose command line, inherited environment or working directory names the run's private directories is killed and the run fails closed",
     ],

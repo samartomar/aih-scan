@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -61,6 +61,34 @@ function options(extra: Partial<ProcessRunnerOptions> = {}): ProcessRunnerOption
 
 const settle = (milliseconds: number) =>
   new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+
+/** Polls until a live process names `id`; the supervisor creates the analyzer suspended. */
+async function created(id: string): Promise<number> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const [found] = await findProcessesReferencingV1([id]);
+    if (found !== undefined) return found.pid;
+    await settle(100);
+  }
+  throw new Error(`no process names ${id}`);
+}
+
+function parentPid(pid: number): number {
+  const result = spawnSync(
+    windowsJobSupervisorExecutableV1(),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  const parent = Number(result.stdout.trim());
+  if (result.status !== 0 || !Number.isSafeInteger(parent) || parent <= 0)
+    throw new Error(`no parent for ${pid}: ${result.stderr}`);
+  return parent;
+}
 
 describe("windowsCommandLineV1", () => {
   it("quotes exactly as the Microsoft C runtime reads arguments back", () => {
@@ -215,6 +243,78 @@ describe.runIf(onWindows)("Windows Job Object supervisor (real processes)", () =
       expect(await findProcessesReferencingV1([id])).toEqual([]);
     },
     REAL_TIMEOUT_MS,
+  );
+
+  it(
+    "cancelling after the analyzer is created but before it is resumed leaves no survivor",
+    async () => {
+      const id = marker("paused-abort");
+      const controller = new AbortController();
+      const running = runUnderWindowsJobV1(
+        [process.execPath, tree, "1", id, "wait", "attach"],
+        options({ signal: controller.signal }),
+        { pauseAfterCreateMs: 30_000 },
+      );
+      try {
+        await created(id);
+        controller.abort();
+        expect(await running).toMatchObject({ code: 1, truncated: true, termination: "abort" });
+        await settle(300);
+        expect(await findProcessesReferencingV1([id])).toEqual([]);
+      } finally {
+        await sweepResidualProcessesV1([id]);
+      }
+    },
+    REAL_TIMEOUT_MS,
+  );
+
+  it(
+    "a supervisor killed outright after creating the analyzer takes the analyzer with it",
+    async () => {
+      const id = marker("paused-kill");
+      const running = runUnderWindowsJobV1(
+        [process.execPath, tree, "1", id, "wait", "attach"],
+        options(),
+        { pauseAfterCreateMs: 30_000 },
+      );
+      try {
+        process.kill(parentPid(await created(id)));
+        expect((await running).code).toBe(1);
+        await settle(300);
+        expect(await findProcessesReferencingV1([id])).toEqual([]);
+      } finally {
+        await sweepResidualProcessesV1([id]);
+      }
+    },
+    REAL_TIMEOUT_MS,
+  );
+
+  it(
+    "cancellation at any point from spawn onwards leaves zero survivors (repeated)",
+    async () => {
+      const delays = [0, 0, 1, 5, 10, 25, 50, 100, 200, 350, 500, 750, 1_000, 1_500, 2_000, 3_000];
+      for (const [index, delay] of delays.entries()) {
+        const id = marker(`race${index}`);
+        const controller = new AbortController();
+        const running = runUnderWindowsJobV1(
+          [process.execPath, tree, "3", id, "wait", "detach"],
+          options({ signal: controller.signal }),
+        );
+        setTimeout(() => controller.abort(), delay);
+        try {
+          expect(await running, `abort after ${delay} ms`).toMatchObject({
+            code: 1,
+            truncated: true,
+            termination: "abort",
+          });
+          await settle(200);
+          expect(await findProcessesReferencingV1([id]), `abort after ${delay} ms`).toEqual([]);
+        } finally {
+          await sweepResidualProcessesV1([id]);
+        }
+      }
+    },
+    10 * REAL_TIMEOUT_MS,
   );
 
   it(

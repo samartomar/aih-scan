@@ -257,7 +257,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/cli/windows-job-supervisor.ts",
-    line: 441,
+    line: 559,
     contains: "export function runUnderWindowsJobV1",
   },
   {

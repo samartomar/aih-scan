@@ -256,6 +256,9 @@ describe("DetectorCapabilityV1", () => {
       /Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway/,
     );
     expect(containment).toMatch(/killed and the run fails closed/);
+    expect(containment).toMatch(
+      /membership part of process creation \(PROC_THREAD_ATTRIBUTE_JOB_LIST\)/,
+    );
     expect(containment).toMatch(/command line, inherited environment or working directory/);
     const notes = document?.notes.join(" ") ?? "";
     expect(notes).toMatch(
