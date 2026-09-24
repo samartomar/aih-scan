@@ -1,5 +1,16 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,6 +59,13 @@ const VECTOR_FILES = {
 /** subject-files-v1 over F = { SKILL.md, src/a.js }: the snapshot, top-level `.git` left out. */
 const VECTOR_SUBJECT_SHA256 = "6d8a18d0f8e75ac27da59b7ab2d95d40e6c7a9d514ee448212ee3d26ae9b8c3e";
 const VECTOR_COUNT = 2;
+
+/** subject-files-v1 by hand: `path NUL sha256-hex LF` over (path, bytes) in code-unit order. */
+function handSubject(files: readonly (readonly [string, string])[]) {
+  const ordered = [...files].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const framed = ordered.map(([path, text]) => `${path}\u0000${sha(text)}\n`).join("");
+  return { subjectTreeSha256: sha(Buffer.from(framed, "utf8")), analyzedFileCount: ordered.length };
+}
 
 const readLock = (project: string) =>
   sha(readFileSync(join("tools", "baseline-analyzers", project, "uv.lock")));
@@ -328,6 +346,104 @@ describe("baseline-vet completion evidence (D24)", () => {
     await expect(
       executeBaselineVetBatchV1(request, { sourceRoot: root, execute: fakeExecution(override) }),
     ).rejects.toThrow(message);
+  });
+});
+
+/** A request over the vector tree as it is now on disk (links included in the source digest). */
+function requestOver(root: string) {
+  return createBaselineVetRequestV1({
+    protocol: "BaselineVetRequestV1",
+    profile: "aih-baseline-v1",
+    source: {
+      id: "vector",
+      owner: "aihq",
+      repository: "vector",
+      pinnedCommit: "b".repeat(40),
+      treeSha256: hashSourceTreeV1(root).treeSha256,
+    },
+    components: [
+      {
+        id: "skill-vector",
+        content: "skill",
+        paths: ["SKILL.md", "src"],
+        treeSha256: hashComponentTreeV1(root, ["SKILL.md", "src"]).treeSha256,
+        analyzers: ["aih-native", "skillspector", "semgrep", "cisco"],
+      },
+    ],
+  });
+}
+
+const evidenceOf = (result: BatchResult, name: string) =>
+  (
+    (JSON.parse(annexOf(result, name).bytes.toString("utf8")) as SarifShape).runs[0]?.invocations[0]
+      ?.properties as { aihScanCompletionV1: Record<string, unknown> }
+  ).aihScanCompletionV1;
+
+describe("D26: no analyzer snapshot recreates a directory link", () => {
+  it("omits a sibling directory link, so F is exactly the files the analyzer received", async () => {
+    const { root } = vectorTree();
+    symlinkSync("src", join(root, "alias"), "dir");
+    const request = requestOver(root);
+    const seen: string[] = [];
+    const result = await executeBaselineVetBatchV1(request, {
+      sourceRoot: root,
+      execute: fakeExecution({
+        semgrep: (sourceRoot) => {
+          seen.push(...readdirSync(sourceRoot).sort());
+          expect(existsSync(join(sourceRoot, "alias"))).toBe(false);
+          return {};
+        },
+      }),
+    });
+    expect(seen).toEqual(["SKILL.md", "src"]);
+    // F = { SKILL.md, src/a.js }: the alias contributes nothing and was never shown.
+    const expected = handSubject([
+      ["SKILL.md", VECTOR_FILES["SKILL.md"]],
+      ["src/a.js", VECTOR_FILES["src/a.js"]],
+    ]);
+    expect(expected).toEqual({
+      subjectTreeSha256: VECTOR_SUBJECT_SHA256,
+      analyzedFileCount: VECTOR_COUNT,
+    });
+    for (const name of ["semgrep", "skillspector", "cisco"])
+      expect(evidenceOf(result, name)).toMatchObject(expected);
+    expect(verifyBaselineVetReceiptV1(request, result)).toEqual({ kind: "complete" });
+  });
+
+  it("keeps an in-root file link keyed by its link path and hashed over its target", async () => {
+    const { root } = vectorTree();
+    symlinkSync("SKILL.md", join(root, "AGENTS.md"), "file");
+    const request = requestOver(root);
+    const result = await executeBaselineVetBatchV1(request, {
+      sourceRoot: root,
+      execute: fakeExecution({
+        semgrep: (sourceRoot) => {
+          expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
+          expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("SKILL.md");
+          return {};
+        },
+      }),
+    });
+    expect(evidenceOf(result, "semgrep")).toMatchObject(
+      handSubject([
+        ["AGENTS.md", VECTOR_FILES["SKILL.md"]],
+        ["SKILL.md", VECTOR_FILES["SKILL.md"]],
+        ["src/a.js", VECTOR_FILES["src/a.js"]],
+      ]),
+    );
+  });
+
+  it("refuses a source whose directory link changed after the request was bound", async () => {
+    const { root } = vectorTree();
+    mkdirSync(join(root, "lib"));
+    writeFileSync(join(root, "lib", "b.js"), "console.log(2);\n", "utf8");
+    symlinkSync("src", join(root, "alias"), "dir");
+    const request = requestOver(root);
+    rmSync(join(root, "alias"));
+    symlinkSync("lib", join(root, "alias"), "dir");
+    await expect(
+      executeBaselineVetBatchV1(request, { sourceRoot: root, execute: fakeExecution() }),
+    ).rejects.toThrow(/baseline source digest mismatch/);
   });
 });
 

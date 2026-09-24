@@ -189,7 +189,7 @@ describe("BaselineVetRequestV1", () => {
 });
 
 describe("baseline batch execution", () => {
-  it("preserves safe relative source symlinks to files and directories outside components", async () => {
+  it("preserves safe relative file symlinks and omits directory symlinks outside components (D26)", async () => {
     const { root, request } = fixture();
     writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
     mkdirSync(join(root, "shared"));
@@ -208,9 +208,10 @@ describe("baseline batch execution", () => {
       expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("CLAUDE.md");
       expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toBe("# Shared guidance\n");
-      expect(lstatSync(join(sourceRoot, "shared-link")).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(join(sourceRoot, "shared-link"))).toBe("shared");
-      expect(readFileSync(join(sourceRoot, "shared-link", "README.md"), "utf8")).toBe(
+      // D26: the directory link is bound by the source digest but never recreated; its target
+      // is analyzed at its real path.
+      expect(existsSync(join(sourceRoot, "shared-link"))).toBe(false);
+      expect(readFileSync(join(sourceRoot, "shared", "README.md"), "utf8")).toBe(
         "# Shared directory\n",
       );
       return analyzer === "aih-native"

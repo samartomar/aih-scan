@@ -389,8 +389,13 @@ export function normalizedObservation(
   };
 }
 
-function sourceAndComponentsMatch(request: BaselineVetRequestV1, sourceRoot: string): void {
-  const source = hashSourceTreeV1(sourceRoot);
+/**
+ * The snapshot, with the directory links it left out put back as links (D26), must hash to the
+ * request's source digest; every component must hash to its own.
+ */
+function sourceAndComponentsMatch(request: BaselineVetRequestV1, snapshot: AnalyzerSnapshot): void {
+  const sourceRoot = snapshot.root;
+  const source = hashSourceTreeV1(sourceRoot, snapshot.omittedDirectoryLinks);
   if (source.treeSha256 !== request.source.treeSha256) fail("baseline source digest mismatch");
   for (const component of request.components) {
     const current = hashComponentTreeV1(sourceRoot, component.paths);
@@ -453,11 +458,12 @@ export type BaselineAnalyzerSnapshotOptionsV1 = Readonly<{
   /**
    * Which symbolic links the snapshot accepts. `"relative"` (the default, the batch
    * receipts' rule) accepts a relative target that resolves through real directories inside
-   * the root and recreates the link. `"observation"` accepts exactly what
+   * the root and recreates a file link as the same link. `"observation"` accepts exactly what
    * `SourceObservationSealV1` accepts, any link whose real target is inside the root
    * (absolute targets and chains included): a file link becomes a regular file holding the
-   * target's bytes at the link path, and a directory link, which the seal records but does
-   * not traverse, is not copied. An observation snapshot then holds no link at all.
+   * target's bytes at the link path. An observation snapshot then holds no link at all.
+   * Under either rule a directory link (D26) is recorded but never recreated: no analyzer
+   * snapshot holds one, so its in-root target is analyzed only at its real path.
    */
   links?: "relative" | "observation";
 }>;
@@ -613,11 +619,15 @@ function inspectSafeAnalyzerSource(
   return safeSymlinks;
 }
 
+/**
+ * Copies the source into the snapshot and returns the directory links it left out (D26), by
+ * source-relative POSIX path with their stored targets.
+ */
 function copyAnalyzerSource(
   source: string,
   snapshot: string,
   options: BaselineAnalyzerSnapshotOptionsV1 = {},
-): void {
+): ReadonlyMap<string, string> {
   const rootBefore = lstatSync(source);
   if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink())
     fail("baseline source directory shape");
@@ -630,6 +640,7 @@ function copyAnalyzerSource(
   )
     fail("baseline source directory replacement");
   const budget = { entries: 0, bytes: 0 };
+  const omittedDirectoryLinks = new Map<string, string>();
   const copy = (from: string, to: string): void => {
     const before = lstatSync(from);
     budget.entries += 1;
@@ -645,12 +656,16 @@ function copyAnalyzerSource(
         !sameIdentity(before, after)
       )
         fail("baseline source symbolic link replacement");
-      if (expected.rule === "relative") {
-        symlinkSync(target, to, expected.targetType === "directory" ? "dir" : "file");
+      // D26: a directory link is recorded (by the seal, and by the source digest through the
+      // omitted links) and never recreated; its in-root target is analyzed at its real path.
+      if (expected.targetType === "directory") {
+        omittedDirectoryLinks.set(relative(source, from).split(sep).join("/"), target);
         return;
       }
-      // Recorded by the seal and not traversed, so the analyzer is not shown it.
-      if (expected.targetType === "directory") return;
+      if (expected.rule === "relative") {
+        symlinkSync(target, to, "file");
+        return;
+      }
       if (realpathSync.native(from) !== expected.real)
         fail("baseline source symbolic link replacement");
       const targetStat = lstatSync(expected.real);
@@ -687,6 +702,7 @@ function copyAnalyzerSource(
   )
     fail("baseline source directory replacement");
   if (budget.entries === 0) fail("baseline source has no content");
+  return omittedDirectoryLinks;
 }
 
 /** A snapshot taken under the observation rule holds no link; one taken as relative, safe ones. */
@@ -711,6 +727,19 @@ export function createBaselineAnalyzerSnapshotV1(
   sourceRoot: string,
   options: BaselineAnalyzerSnapshotOptionsV1 = {},
 ): string {
+  return snapshotAnalyzerSource(sourceRoot, options).root;
+}
+
+/** A snapshot and the directory links it left out (D26), which the source digest still binds. */
+type AnalyzerSnapshot = Readonly<{
+  root: string;
+  omittedDirectoryLinks: ReadonlyMap<string, string>;
+}>;
+
+function snapshotAnalyzerSource(
+  sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1,
+): AnalyzerSnapshot {
   const source = resolve(sourceRoot);
   const snapshot = mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"));
   try {
@@ -719,9 +748,9 @@ export function createBaselineAnalyzerSnapshotV1(
     // Windows ACLs are platform-managed; mkdtemp remains the private creation boundary.
   }
   try {
-    copyAnalyzerSource(source, snapshot, options);
+    const omittedDirectoryLinks = copyAnalyzerSource(source, snapshot, options);
     assertSafeAnalyzerSnapshot(snapshot, options);
-    return snapshot;
+    return { root: snapshot, omittedDirectoryLinks };
   } catch (error) {
     rmSync(snapshot, { recursive: true, force: true });
     throw error;
@@ -736,13 +765,16 @@ export function assertBaselineAnalyzerSnapshotUnchangedV1(
   assertSafeAnalyzerSnapshot(snapshotRoot, options);
 }
 
-function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {
-  const snapshot = createBaselineAnalyzerSnapshotV1(sourceRoot);
+function createAnalyzerSnapshot(
+  request: BaselineVetRequestV1,
+  sourceRoot: string,
+): AnalyzerSnapshot {
+  const snapshot = snapshotAnalyzerSource(sourceRoot, {});
   try {
     sourceAndComponentsMatch(request, snapshot);
     return snapshot;
   } catch (error) {
-    rmSync(snapshot, { recursive: true, force: true });
+    rmSync(snapshot.root, { recursive: true, force: true });
     throw error;
   }
 }
@@ -783,7 +815,8 @@ export async function executeBaselineVetBatchV1(
 ): Promise<BaselineVetBatchResultV1> {
   canonicalBaselineVetRequestV1Bytes(request);
   const execute = runtime.execute ?? createBaselineAnalyzerExecutionV1();
-  const snapshotRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
+  const snapshot = createAnalyzerSnapshot(request, runtime.sourceRoot);
+  const snapshotRoot = snapshot.root;
   const selected = analyzerOrder(request.components.flatMap((component) => component.analyzers));
   const observations: z.infer<typeof observation>[] = [];
   const annexArtifacts: BaselineVetAnnexArtifactV1[] = [];
@@ -814,9 +847,9 @@ export async function executeBaselineVetBatchV1(
       )
     )
       fail("baseline analyzer snapshot changed during the run");
-    sourceAndComponentsMatch(request, snapshotRoot);
-    const reobservedRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
-    rmSync(reobservedRoot, { recursive: true, force: true });
+    sourceAndComponentsMatch(request, snapshot);
+    const reobserved = createAnalyzerSnapshot(request, runtime.sourceRoot);
+    rmSync(reobserved.root, { recursive: true, force: true });
     // C2a §1.6 (D24): only now, every proof passed, does each SARIF run name the files of the
     // snapshot the analyzer received, under the lock of the profile that ran.
     for (const { analyzer: analyzerName, observed, executed } of ran) {
