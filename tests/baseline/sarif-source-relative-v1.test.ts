@@ -107,6 +107,100 @@ describe("sourceRelativeSarifV1", () => {
     );
   });
 
+  const based = (
+    baseIds: Record<string, unknown> | undefined,
+    uri: string,
+    uriBaseId: string,
+  ): Record<string, unknown> => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "x" } },
+        ...(baseIds === undefined ? {} : { originalUriBaseIds: baseIds }),
+        results: [
+          {
+            ruleId: "r",
+            message: { text: "m" },
+            locations: [{ physicalLocation: { artifactLocation: { uri, uriBaseId } } }],
+          },
+        ],
+      },
+    ],
+  });
+  const artifactLocation = (document: Record<string, unknown>) =>
+    (
+      document.runs as {
+        results: { locations: { physicalLocation: { artifactLocation: unknown } }[] }[];
+      }[]
+    )[0]?.results[0]?.locations[0]?.physicalLocation.artifactLocation;
+
+  it("refuses a relative URI whose declared base lies outside the source root", () => {
+    expect(() =>
+      sourceRelativeSarifV1(
+        based({ EXTERNAL: { uri: "file:///outside/" } }, "SKILL.md", "EXTERNAL"),
+        ["/scan"],
+      ),
+    ).toThrow(/outside the declared source root/);
+    expect(() =>
+      sourceRelativeSarifV1(
+        based({ "%SRCROOT%": { uri: "file:///outside/" } }, "SKILL.md", "%SRCROOT%"),
+        ["/scan"],
+      ),
+    ).toThrow(/outside the declared source root/);
+  });
+
+  it("refuses an undeclared base other than %SRCROOT%, a base cycle and a malformed base", () => {
+    expect(() => sourceRelativeSarifV1(based(undefined, "SKILL.md", "NOPE"), ["/scan"])).toThrow(
+      /base NOPE/,
+    );
+    expect(() =>
+      sourceRelativeSarifV1(
+        based({ A: { uri: "a/", uriBaseId: "B" }, B: { uri: "b/", uriBaseId: "A" } }, "x.md", "A"),
+        ["/scan"],
+      ),
+    ).toThrow(/base A/);
+    expect(() =>
+      sourceRelativeSarifV1(based({ REL: { uri: "sub/" } }, "x.md", "REL"), ["/scan"]),
+    ).toThrow(/base REL/);
+    expect(() =>
+      sourceRelativeSarifV1(based({ BAD: { uri: 7 } }, "x.md", "BAD"), ["/scan"]),
+    ).toThrow(/base BAD/);
+  });
+
+  it("resolves declared and chained bases inside the root, then drops the obsolete references", () => {
+    const direct = sourceRelativeSarifV1(
+      based({ SRC: { uri: "file:///scan/skills/" } }, "x/SKILL.md", "SRC"),
+      ["/scan"],
+    );
+    expect(artifactLocation(direct.document)).toEqual({ uri: "skills/x/SKILL.md" });
+
+    const chained = sourceRelativeSarifV1(
+      based(
+        { ROOT: { uri: "file:///C:/Scan/" }, SKILLS: { uri: "skills/", uriBaseId: "ROOT" } },
+        "a.md",
+        "SKILLS",
+      ),
+      ["C:\\scan"],
+    );
+    expect(artifactLocation(chained.document)).toEqual({ uri: "skills/a.md" });
+
+    // An undeclared %SRCROOT% means the root the analyzer was given, and still does.
+    const conventional = sourceRelativeSarifV1(based(undefined, "SKILL.md", "%SRCROOT%"), [
+      "/scan",
+    ]);
+    expect(artifactLocation(conventional.document)).toEqual({
+      uri: "SKILL.md",
+      uriBaseId: "%SRCROOT%",
+    });
+    // A base cannot move an absolute URI, which is checked on its own.
+    expect(() =>
+      sourceRelativeSarifV1(
+        based({ SRC: { uri: "file:///scan/" } }, "file:///outside/x.md", "SRC"),
+        ["/scan"],
+      ),
+    ).toThrow(/outside the declared source root/);
+  });
+
   it("does not modify the document it was given", () => {
     const document = sarif(result("/aih/source/a.md"));
     const before = JSON.stringify(document);

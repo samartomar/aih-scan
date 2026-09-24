@@ -10,8 +10,10 @@ import { assertSafeRelativePosixPathV1 } from "../contract/strict-json-v1.js";
  * backslashes, and possibly in either the 8.3 short or the long spelling). None of those
  * locate anything for a consumer, so every artifact URI is rewritten against the roots the
  * analyzer was given. A URI that is outside every root, escapes with `..`, names the root
- * itself or cannot be decoded is refused, never guessed. `originalUriBaseIds` entries are
- * removed, because they could only describe the private root.
+ * itself or cannot be decoded is refused, never guessed. A `uriBaseId` is resolved through
+ * its run's `originalUriBaseIds` before the URI is related to the root, so a base outside
+ * the root (or an unknown base) fails closed; afterwards the maps are removed, because they
+ * could only describe the private root, and every reference to a removed base goes with them.
  *
  * The rewritten document, not the analyzer's raw bytes, is what the observation's annex
  * digest is taken over; the profile documents say so.
@@ -115,38 +117,137 @@ function artifactLocations(document: Json): Record<string, Json>[] {
   return found;
 }
 
-function removeBaseUris(document: Json): number {
-  let removed = 0;
-  if (isRecord(document) && Array.isArray(document.runs))
-    for (const run of document.runs)
-      if (isRecord(run) && "originalUriBaseIds" in run) {
-        delete run.originalUriBaseIds;
-        removed += 1;
-      }
-  return removed;
+/** The analyzer's conventional name for the root it was given; it may go undeclared. */
+const SOURCE_ROOT_BASE_ID = "%SRCROOT%";
+
+/** Where a `uriBaseId` points: an absolute path, or a path relative to the source root. */
+type Base = Readonly<{ absolute: string }> | Readonly<{ underRoot: string }>;
+
+function isAbsoluteLocation(uri: string): boolean {
+  const path = decodedPath(uri).replaceAll("\\", "/");
+  return path.startsWith("/") || /^[A-Za-z]:\//u.test(path);
 }
 
-/** Rewrites every artifact URI of `document` relative to one of `sourceRoots`. */
+function joined(base: Base, uri: string): string {
+  const reference = uri.startsWith("./") ? uri.slice(2) : uri;
+  return "absolute" in base ? `${base.absolute}${reference}` : `${base.underRoot}${reference}`;
+}
+
+/**
+ * Resolves a run's `uriBaseId`s through its `originalUriBaseIds`, following chained bases.
+ * An undeclared `%SRCROOT%` is the root the analyzer was given; any other undeclared id, a
+ * cycle, a base without a directory URI (ending in `/`) or a relative base naming no base of
+ * its own is refused. Whether the resolved location lies inside the source root is decided
+ * afterwards, for the joined URI.
+ */
+function baseResolver(declared: Json | undefined): (id: string) => Base {
+  if (declared !== undefined && !isRecord(declared)) fail("originalUriBaseIds is not an object");
+  const resolved = new Map<string, Base>();
+  const resolve = (id: string, seen: readonly string[]): Base => {
+    const known = resolved.get(id);
+    if (known !== undefined) return known;
+    if (seen.includes(id)) fail(`base ${id} refers back to itself`);
+    const entry = declared !== undefined && Object.hasOwn(declared, id) ? declared[id] : undefined;
+    let base: Base;
+    if (entry === undefined) {
+      if (id !== SOURCE_ROOT_BASE_ID) fail(`base ${id} is not declared in originalUriBaseIds`);
+      base = { underRoot: "" };
+    } else {
+      if (!isRecord(entry) || typeof entry.uri !== "string" || !entry.uri.endsWith("/"))
+        fail(`base ${id} has no directory URI`);
+      const uri = entry.uri;
+      if (uri.includes("\0")) fail(`base ${id} holds a NUL character`);
+      if (/^[A-Za-z][A-Za-z0-9+.-]+:/u.test(uri) && !/^file:/iu.test(uri))
+        fail(`base ${id} is not a file location`);
+      if (isAbsoluteLocation(uri)) base = { absolute: decodedPath(uri).replaceAll("\\", "/") };
+      else if (entry.uriBaseId === undefined) fail(`base ${id} is relative and names no base`);
+      else if (typeof entry.uriBaseId !== "string") fail(`base ${id} names a malformed base`);
+      else {
+        const parent = resolve(entry.uriBaseId, [...seen, id]);
+        base =
+          "absolute" in parent
+            ? { absolute: joined(parent, uri) }
+            : { underRoot: joined(parent, uri) };
+      }
+    }
+    resolved.set(id, base);
+    return base;
+  };
+  return (id) => resolve(id, []);
+}
+
+type Normalization = { rewritten: number; removedBaseUris: number };
+
+function normalizeScope(
+  scope: Json,
+  declared: Json | undefined,
+  candidates: readonly Root[],
+  settled: ReadonlySet<object>,
+  counts: Normalization,
+): void {
+  const base = baseResolver(declared);
+  for (const location of artifactLocations(scope)) {
+    const baseId = location.uriBaseId;
+    if (baseId !== undefined && typeof baseId !== "string")
+      fail("an artifact uriBaseId is not a string");
+    if ("uri" in location) {
+      const uri = location.uri;
+      if (typeof uri !== "string") fail("an artifact URI is not a string");
+      if (!settled.has(location)) {
+        const target =
+          baseId === undefined || isAbsoluteLocation(uri) ? uri : joined(base(baseId), uri);
+        location.uri = relativeTo(target, candidates);
+      }
+      counts.rewritten += 1;
+    } else if (baseId !== undefined) base(baseId);
+    // Every URI is now relative to the declared source root, which is what an undeclared
+    // %SRCROOT% names; a reference to any other (removed) base is obsolete.
+    if (baseId !== undefined && baseId !== SOURCE_ROOT_BASE_ID) delete location.uriBaseId;
+  }
+}
+
+function normalize(
+  document: Record<string, unknown>,
+  sourceRoots: readonly string[],
+  settled: ReadonlySet<object> = new Set(),
+  copy: Json = clone(document),
+): SourceRelativeSarifV1 {
+  const candidates = roots(sourceRoots);
+  const counts: Normalization = { rewritten: 0, removedBaseUris: 0 };
+  if (isRecord(copy)) {
+    const { runs, ...rest } = copy;
+    if (Array.isArray(runs))
+      for (const run of runs) {
+        if (!isRecord(run)) {
+          normalizeScope(run, undefined, candidates, settled, counts);
+          continue;
+        }
+        normalizeScope(run, run.originalUriBaseIds, candidates, settled, counts);
+        if ("originalUriBaseIds" in run) {
+          delete run.originalUriBaseIds;
+          counts.removedBaseUris += 1;
+        }
+      }
+    else if (runs !== undefined) normalizeScope(runs, undefined, candidates, settled, counts);
+    normalizeScope(rest, undefined, candidates, settled, counts);
+  }
+  return Object.freeze({
+    document: copy as Record<string, unknown>,
+    rewritten: counts.rewritten,
+    removedBaseUris: counts.removedBaseUris,
+  });
+}
+
+/**
+ * Rewrites every artifact URI of `document` relative to one of `sourceRoots`, resolving each
+ * `uriBaseId` through its run's `originalUriBaseIds` first, so a base outside the source root
+ * fails closed instead of being discarded.
+ */
 export function sourceRelativeSarifV1(
   document: Record<string, unknown>,
   sourceRoots: readonly string[],
 ): SourceRelativeSarifV1 {
-  const candidates = roots(sourceRoots);
-  const copy = clone(document);
-  const removedBaseUris = removeBaseUris(copy);
-  let rewritten = 0;
-  for (const location of artifactLocations(copy)) {
-    if (!("uri" in location)) continue;
-    const uri = location.uri;
-    if (typeof uri !== "string") fail("an artifact URI is not a string");
-    location.uri = relativeTo(uri, candidates);
-    rewritten += 1;
-  }
-  return Object.freeze({
-    document: copy as Record<string, unknown>,
-    rewritten,
-    removedBaseUris,
-  });
+  return normalize(document, sourceRoots);
 }
 
 type CiscoFinding = Readonly<{ skill: string; ruleId: string; file: string; line: number | null }>;
@@ -217,6 +318,8 @@ export function ciscoSourceRelativeSarifV1(
   const copy = clone(sarif);
   if (!isRecord(copy) || !Array.isArray(copy.runs)) ciscoFail("the SARIF log holds no runs");
   const results: Record<string, Json>[] = [];
+  // Result locations this mapper settles from the JSON report; their bases are not re-applied.
+  const settled = new Set<object>();
   for (const run of copy.runs) {
     if (!isRecord(run)) ciscoFail("a SARIF run is malformed");
     if (run.results === undefined) continue;
@@ -258,8 +361,8 @@ export function ciscoSourceRelativeSarifV1(
       if (!isRecord(target) || typeof target.uri !== "string") continue;
       const relative = relativeTo(target.uri, [], false);
       target.uri = finding.skill === "" ? relative : `${finding.skill}/${relative}`;
+      settled.add(target);
     }
   });
-  const normalized = sourceRelativeSarifV1(copy as Record<string, unknown>, sourceRoots);
-  return normalized;
+  return normalize(copy, sourceRoots, settled, copy);
 }
