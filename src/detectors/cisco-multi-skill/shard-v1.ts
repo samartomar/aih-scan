@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { bindCiscoSarifToSealedFilesV1 } from "../../baseline/cisco-sealed-case-binding-v1.js";
+import {
+  sarifDetachedArtifactLocationsV1,
+  sarifResultArtifactLocationsV1,
+} from "../../baseline/sarif-source-relative-v1.js";
 import { UnrepresentableSourcePathErrorV1 } from "../../observation/source-entry-name-v1.js";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
 import { attachScanCompletionV1, scanCompletionEvidenceV1 } from "../completion-evidence-v1.js";
@@ -193,21 +197,6 @@ function artifactTargetV1(
 }
 
 /**
- * Every `artifactLocation` (and a result's `analysisTarget`, which is one) inside a value,
- * depth first, never inside a `properties` bag: that is the analyzer's own data.
- */
-function nestedArtifactLocationsV1(value: unknown, found: unknown[] = []): unknown[] {
-  if (Array.isArray(value)) for (const item of value) nestedArtifactLocationsV1(item, found);
-  else if (isRecordV1(value))
-    for (const [key, child] of Object.entries(value)) {
-      if (key === "properties") continue;
-      if (key === "artifactLocation" || key === "analysisTarget") found.push(child);
-      else nestedArtifactLocationsV1(child, found);
-    }
-  return found;
-}
-
-/**
  * S2g (review of U1d): the tree hashes prove a job's input did not change, not that its
  * results name files it analyzed. Every result of the job's normalized SARIF must carry at
  * least one location, and every one of its `locations` must name, by `uri`, a file of the
@@ -238,17 +227,14 @@ function unboundShardResultV1(
   for (const run of log.runs ?? []) {
     const record = run as Record<string, unknown>;
     for (const shared of ["threadFlowLocations", "graphs"])
-      for (const artifactLocation of nestedArtifactLocationsV1(record[shared])) {
+      for (const artifactLocation of sarifDetachedArtifactLocationsV1(record[shared] ?? [])) {
         const problem = unbound(`SARIF run ${shared}`, artifactLocation, record.artifacts);
         if (problem !== undefined) return problem;
       }
     for (const result of run.results ?? []) {
-      const {
-        locations: rawLocations,
-        analysisTarget,
-        ...rest
-      } = result as Record<string, unknown>;
+      const { locations: rawLocations, analysisTarget } = result as Record<string, unknown>;
       const locations = Array.isArray(rawLocations) ? rawLocations : [];
+      const primary = new Set(locations.map(locationArtifactV1));
       if (locations.length === 0)
         return `SARIF result ${index} names no sealed file of the job (no location)`;
       for (const location of locations) {
@@ -266,7 +252,10 @@ function unboundShardResultV1(
         );
         if (problem !== undefined) return problem;
       }
-      for (const artifactLocation of nestedArtifactLocationsV1(rest)) {
+      // U1g: the one enumeration every normalizer uses: never a property bag, and an
+      // analysis target only at result.analysisTarget.
+      for (const artifactLocation of sarifResultArtifactLocationsV1(result)) {
+        if (primary.has(artifactLocation) || artifactLocation === analysisTarget) continue;
         const problem = unbound(
           `SARIF result ${index} related location`,
           artifactLocation,

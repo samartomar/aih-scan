@@ -450,3 +450,39 @@ describe.each(BOTH)("Cisco job analysisTarget normalization (%s)", (label, execu
     }
   });
 });
+
+// U1g (review of S2i, P2): only `result.analysisTarget` is an analysis target. A property
+// bag is the analyzer's own data: it never fails a job and is never rewritten.
+describe.each(BOTH)("Cisco job property bags (%s)", (_label, execute) => {
+  const bag = () => ({
+    analysisTarget: { uri: "SKILL.md" },
+    artifactLocation: { uri: "SKILL.md" },
+    escaping: { analysisTarget: { uri: "../example" } },
+  });
+
+  it("completes and keeps every property bag exactly as the analyzer wrote it", async () => {
+    const outcome = await execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([
+              {
+                ...cleanRun([{ ...result("SKILL.md"), properties: bag() }]),
+                properties: bag(),
+              },
+            ])
+          : sarif([cleanRun()]),
+      ),
+    );
+    if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
+    const text =
+      "outputs" in outcome
+        ? Buffer.from(outcome.outputs[0]?.sarif ?? new Uint8Array()).toString("utf8")
+        : outcome.sarifText;
+    const log = JSON.parse(text) as {
+      runs: { properties: unknown; results: { properties: unknown }[] }[];
+    };
+    const alpha = log.runs.find((run) => run.results.length > 0);
+    expect(alpha?.properties).toEqual(bag());
+    expect(alpha?.results[0]?.properties).toEqual(bag());
+  });
+});

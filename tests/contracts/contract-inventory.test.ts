@@ -257,12 +257,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 312,
+    line: 362,
     contains: "export function sourceRelativeSarifV1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 459,
+    line: 509,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {

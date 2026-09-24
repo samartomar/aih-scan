@@ -140,12 +140,33 @@ function directoryScope(path: readonly (string | number)[]): boolean {
 }
 
 /**
- * Every SARIF `artifactLocation`, every result's `analysisTarget` (an artifact location
- * too, S2i), and every run artifact's `location`, in the document.
- * With `run`, the document is one SARIF run, and the locations its notifications and run
- * artifacts hold may name directories ({@link directoryScope}); otherwise none may.
+ * What a value handed to {@link artifactLocations} is: one SARIF run, one result, or
+ * anything else (a log's other members, a run's shared `threadFlowLocations` or `graphs`).
  */
-function artifactLocations(document: Json, run = false): FoundLocation[] {
+type LocationScope = "run" | "result" | "detached";
+
+/**
+ * Whether the property at `path` (ending in `analysisTarget`) is a result's own analysis
+ * target, its only schema position (U1g, review of S2i P2).
+ */
+function resultTargetPosition(path: readonly (string | number)[], scope: LocationScope): boolean {
+  if (scope === "result") return path.length === 1;
+  return (
+    scope === "run" && path.length === 3 && path[0] === "results" && typeof path[1] === "number"
+  );
+}
+
+/**
+ * Every SARIF `artifactLocation`, a result's `analysisTarget` (an artifact location too,
+ * S2i), and every run artifact's `location`, in `document`.
+ * U1g (review of S2i, P2): `analysisTarget` is recognized only at `result.analysisTarget`,
+ * its one schema position, and nothing inside a `properties` bag is ever visited: a property
+ * bag is the analyzer's own data, never normalized, rewritten or refused. An
+ * `artifactLocation` or result `analysisTarget` that is not an object fails closed.
+ * In a `run` scope, the locations its notifications and run artifacts hold may name
+ * directories ({@link directoryScope}); otherwise none may.
+ */
+function artifactLocations(document: Json, scope: LocationScope): FoundLocation[] {
   const found: FoundLocation[] = [];
   // `key` names the property holding `value`; `owner` names the nearest property above it,
   // so an entry of `artifacts: [{ location }]` sees its location with owner "artifacts".
@@ -161,18 +182,47 @@ function artifactLocations(document: Json, run = false): FoundLocation[] {
       });
       return;
     }
-    if (!isRecord(value)) return;
-    if (
-      key === "artifactLocation" ||
-      key === "analysisTarget" ||
-      (key === "location" && owner === "artifacts")
-    )
-      found.push({ location: value, directory: run && directoryScope(path) });
+    const located =
+      key === "artifactLocation" || (key === "analysisTarget" && resultTargetPosition(path, scope));
+    if (!isRecord(value)) {
+      if (located) fail(`${key} is not an object`);
+      return;
+    }
+    if (located || (key === "location" && owner === "artifacts"))
+      found.push({ location: value, directory: scope === "run" && directoryScope(path) });
     for (const [childKey, child] of Object.entries(value))
-      visit(child, childKey, key ?? owner, [...path, childKey]);
+      if (childKey !== "properties") visit(child, childKey, key ?? owner, [...path, childKey]);
   };
   visit(document, undefined, undefined, []);
   return found;
+}
+
+/**
+ * U1g: every artifact location inside one SARIF result by the rules of the source-relative
+ * normalization ({@link artifactLocations}): its `locations`, related locations, code flows,
+ * stacks, fixes, attachments, its `analysisTarget` (only at that position), never a property
+ * bag. The shard binding and the win32 D1 binder enumerate exactly these. Throws `TypeError`
+ * on an artifact location that is not an object.
+ */
+export function sarifResultArtifactLocationsV1(result: unknown): Record<string, unknown>[] {
+  return artifactLocations(result as Json, "result").map(({ location }) => location);
+}
+
+/**
+ * U1g: every artifact location of one SARIF run, results and run artifacts included, by the
+ * same rules ({@link artifactLocations}). Throws `TypeError` like
+ * {@link sarifResultArtifactLocationsV1}.
+ */
+export function sarifRunArtifactLocationsV1(run: unknown): Record<string, unknown>[] {
+  return artifactLocations(run as Json, "run").map(({ location }) => location);
+}
+
+/**
+ * U1g: every artifact location inside a value that is neither a run nor a result (a run's
+ * shared `threadFlowLocations` or `graphs`); no `analysisTarget` is one there.
+ */
+export function sarifDetachedArtifactLocationsV1(value: unknown): Record<string, unknown>[] {
+  return artifactLocations(value as Json, "detached").map(({ location }) => location);
 }
 
 /** The analyzer's conventional name for the root it was given; it may go undeclared. */
@@ -252,7 +302,7 @@ function normalizeScope(
   run = false,
 ): void {
   const base = baseResolver(declared);
-  for (const { location, directory } of artifactLocations(scope, run)) {
+  for (const { location, directory } of artifactLocations(scope, run ? "run" : "detached")) {
     const baseId = location.uriBaseId;
     if (baseId !== undefined && typeof baseId !== "string")
       fail("an artifact uriBaseId is not a string");
@@ -342,7 +392,7 @@ export function rewriteSarifRunLocationsV1(
 ): void {
   const candidates = roots(sourceRoots);
   const base = baseResolver(run.originalUriBaseIds as Json | undefined);
-  for (const { location, directory } of artifactLocations(run as Json, true)) {
+  for (const { location, directory } of artifactLocations(run as Json, "run")) {
     const baseId = location.uriBaseId;
     if (baseId !== undefined && typeof baseId !== "string")
       fail("an artifact uriBaseId is not a string");
@@ -508,7 +558,7 @@ export function ciscoSourceRelativeSarifV1(
     // Every other location inside the result (further locations, related locations, code
     // flows, the analysis target, S2i) is relative to the same skill directory (U1e review
     // P2), never to the root.
-    for (const { location: target } of artifactLocations(result)) {
+    for (const { location: target } of artifactLocations(result, "result")) {
       if (typeof target.uri !== "string") continue;
       target.uri =
         target === artifact
@@ -522,7 +572,7 @@ export function ciscoSourceRelativeSarifV1(
   // an absolute URI or one under a base that resolves inside the source root stays.
   for (const run of copy.runs as Record<string, Json>[]) {
     const base = baseResolver(run.originalUriBaseIds);
-    for (const { location } of artifactLocations(run, true)) {
+    for (const { location } of artifactLocations(run, "run")) {
       if (settled.has(location) || typeof location.uri !== "string") continue;
       const baseId = location.uriBaseId;
       if (isAbsoluteLocation(location.uri) && baseId === undefined) continue;

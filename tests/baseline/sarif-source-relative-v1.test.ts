@@ -712,3 +712,92 @@ describe("analysisTarget is normalized like every other artifact location (S2i)"
     expect(() => ciscoSourceRelativeSarifV1(escaping, report, ["/scan"])).toThrow(/Cisco/);
   });
 });
+
+// U1g (review of S2i, P2): `analysisTarget` is an artifact location only at its schema
+// position, `result.analysisTarget`; a property bag is the analyzer's own data and is never
+// normalized or rewritten, whatever keys it holds.
+describe("property bags and analysisTarget outside its schema position (U1g)", () => {
+  const bag = () => ({
+    analysisTarget: { uri: "../example" },
+    artifactLocation: { uri: "/elsewhere/x.md" },
+    nested: [{ physicalLocation: { artifactLocation: { uri: "SKILL.md" } } }],
+  });
+
+  it("leaves result, run and log property bags untouched on a host run", () => {
+    const document = {
+      version: "2.1.0",
+      properties: bag(),
+      runs: [
+        {
+          tool: { driver: { name: "x", properties: bag() } },
+          properties: bag(),
+          results: [{ ...result("/scan/SKILL.md"), properties: bag() }],
+        },
+      ],
+    };
+    const normalized = sourceRelativeSarifV1(document, ["/scan"]).document as typeof document;
+    expect(uris(normalized)).toEqual(["SKILL.md"]);
+    expect(normalized.properties).toEqual(bag());
+    expect(normalized.runs[0]?.properties).toEqual(bag());
+    expect(normalized.runs[0]?.tool.driver.properties).toEqual(bag());
+    expect(normalized.runs[0]?.results[0]?.properties).toEqual(bag());
+  });
+
+  it("treats an analysisTarget key anywhere but result.analysisTarget as ordinary data", () => {
+    const document = sarif({
+      ...result("/scan/SKILL.md"),
+      relatedLocations: [
+        {
+          physicalLocation: { artifactLocation: { uri: "/scan/guide.md" } },
+          analysisTarget: { uri: "../not-a-location" },
+        },
+      ],
+    });
+    const normalized = sourceRelativeSarifV1(document, ["/scan"]).document as {
+      runs: { results: { relatedLocations: Record<string, unknown>[] }[] }[];
+    };
+    expect(normalized.runs[0]?.results[0]?.relatedLocations[0]).toEqual({
+      physicalLocation: { artifactLocation: { uri: "guide.md" } },
+      analysisTarget: { uri: "../not-a-location" },
+    });
+  });
+
+  it("never rewrites a Cisco scan-all property bag", () => {
+    const document = {
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "skill-scanner" } },
+          results: [
+            {
+              ruleId: "R",
+              message: { text: "R" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "SKILL.md" },
+                    region: { startLine: 1 },
+                  },
+                },
+              ],
+              properties: bag(),
+            },
+          ],
+        },
+      ],
+    };
+    const report = {
+      results: [
+        {
+          skill_path: "/scan/skills/a",
+          findings: [{ rule_id: "R", file_path: "SKILL.md", line_number: 1 }],
+        },
+      ],
+    };
+    const normalized = ciscoSourceRelativeSarifV1(document, report, ["/scan"]).document as {
+      runs: { results: { properties: unknown }[] }[];
+    };
+    expect(uris(normalized)).toEqual(["skills/a/SKILL.md"]);
+    expect(normalized.runs[0]?.results[0]?.properties).toEqual(bag());
+  });
+});
