@@ -321,7 +321,7 @@ export type RunDetectorV1Result =
 
 let producerRecord: RunDetectorProducerV1 | undefined;
 
-function producer(): RunDetectorProducerV1 {
+export function producer(): RunDetectorProducerV1 {
   if (producerRecord !== undefined) return producerRecord;
   let version: string | null = null;
   try {
@@ -346,7 +346,7 @@ function host(): { os: NodeJS.Platform; architecture: string } {
   return Object.freeze({ os: process.platform, architecture: process.arch });
 }
 
-function capabilityPlatform(): DetectorPlatformV1 | undefined {
+export function capabilityPlatform(): DetectorPlatformV1 | undefined {
   const os =
     process.platform === "linux"
       ? "linux"
@@ -362,7 +362,7 @@ function capabilityPlatform(): DetectorPlatformV1 | undefined {
 }
 
 /** Why this host cannot run the selected profile; decided before any probe or spawn. */
-function platformRefusal(
+export function platformRefusal(
   capability: DetectorCapabilityV1,
   profile: DetectorExecutionProfileV1,
 ): string {
@@ -399,7 +399,7 @@ function refuse(
   });
 }
 
-function failureStage(message: string): RunDetectorFailureStageV1 {
+export function failureStage(message: string): RunDetectorFailureStageV1 {
   if (message.includes("environment acquisition") || message.includes("image acquisition"))
     return "acquisition";
   if (
@@ -588,7 +588,7 @@ function thrownMessage(error: unknown): string | undefined {
   return undefined;
 }
 
-function detail(error: unknown): string {
+export function detail(error: unknown): string {
   return boundedDiagnosticDetailV1(thrownMessage(error) ?? "unknown failure");
 }
 
@@ -627,7 +627,7 @@ function valueKind(value: unknown): string {
  * Checks the snapshotted fields that select or configure the execution profile, before
  * any of them is interpolated or handed on. Malformed values are refused, never coerced.
  */
-function executionFieldRefusal(
+export function executionFieldRefusal(
   capability: DetectorCapabilityV1,
   input: Readonly<Record<string, unknown>>,
 ): string | undefined {
@@ -719,7 +719,7 @@ function snapshotRequest(request: Record<string, unknown>): FieldSnapshot {
  * outside the three states stops probing: that prerequisite and every later one stay
  * `not-probed`, so nothing is claimed, and the reason is returned for an availability failure.
  */
-function probeStates(
+export function probeStates(
   declared: readonly DetectorPrerequisiteV1[],
   probe: unknown,
   env: Readonly<NodeJS.ProcessEnv>,

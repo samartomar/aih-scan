@@ -64,6 +64,7 @@ describe("Strict V2 public boundary", () => {
       "resolveBaselineVetDiscoveryV1",
       "resolveDetectorCapabilityV1",
       "resolveDetectorExecutionProfileDocumentV1",
+      "runCiscoShardV1",
       "runDetectorV1",
       "sealSourceV2",
       "signBaselineVetBundleV1",

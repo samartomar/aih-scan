@@ -90,6 +90,7 @@ const publicV2Exports = [
   "resolveBaselineVetDiscoveryV1",
   "resolveDetectorCapabilityV1",
   "resolveDetectorExecutionProfileDocumentV1",
+  "runCiscoShardV1",
   "runDetectorV1",
   "sealSourceV2",
   "signBaselineVetBundleV1",

@@ -193,6 +193,16 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
+    path: "src/runner/run-cisco-shard-v1.ts",
+    line: 142,
+    contains: "export async function runCiscoShardV1",
+  },
+  {
+    path: "src/runner/run-cisco-shard-v1.ts",
+    line: 52,
+    contains: "export type RunCiscoShardV1Result",
+  },
+  {
     path: "src/runner/run-detector-v1.ts",
     line: 146,
     contains: "export type RunDetectorFailureCauseV1",

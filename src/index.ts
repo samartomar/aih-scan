@@ -106,6 +106,13 @@ export type {
   TrustLintDetectorOptionsV1,
 } from "./runner/detector-options-v1.js";
 export {
+  type CiscoShardJobSarifOutputV1,
+  type CiscoShardJobV1,
+  type RunCiscoShardRefusalReasonV1,
+  type RunCiscoShardV1Result,
+  runCiscoShardV1,
+} from "./runner/run-cisco-shard-v1.js";
+export {
   type BaselineAnalyzerObservationV1,
   type DetectorAvailabilityV1Result,
   type DetectorPrerequisiteStateV1,

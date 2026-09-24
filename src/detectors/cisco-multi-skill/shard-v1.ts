@@ -148,7 +148,7 @@ class CiscoShardJobFailureV1 extends Error {
 }
 
 /** Boundary shape validation of a shard run request; never throws. */
-function validateCiscoShardRunRequestV1(request: CiscoShardRunRequestV1): string | undefined {
+function validateCiscoShardRunRequestV1(request: CiscoShardPreflightRequestV1): string | undefined {
   if (typeof request.sourceRoot !== "string" || request.sourceRoot.length === 0) {
     return "sourceRoot must be a non-empty path";
   }
@@ -199,6 +199,94 @@ function validateCiscoShardRunRequestV1(request: CiscoShardRunRequestV1): string
   return undefined;
 }
 
+/** The shard request fields its preflight reads; it never runs a process. */
+export type CiscoShardPreflightRequestV1 = Pick<
+  CiscoShardRunRequestV1,
+  "sourceRoot" | "jobs" | "expected" | "concurrency" | "analyzerProject"
+>;
+
+/** A shard that may run: its pinned root and proven lock, or the outcome that stops it. */
+export type CiscoShardPreflightV1 =
+  | Readonly<{ ok: true; safeRoot: string; lockSha256: string; analyzerProject: string }>
+  | Readonly<{ ok: false; outcome: CiscoShardRunOutcomeV1 }>;
+
+/**
+ * Everything a shard proves before its first spawn (C2a §3.7): the request shape, the
+ * analyzer lock against `expected.lockSha256`, and every job path as a contained directory
+ * holding a `SKILL.md`. A runtime calls it before acquiring the analyzer, so a request the
+ * shard would refuse never starts one.
+ */
+export function preflightCiscoShardV1(
+  request: CiscoShardPreflightRequestV1,
+): CiscoShardPreflightV1 {
+  const stop = (outcome: CiscoShardRunOutcomeV1) => Object.freeze({ ok: false as const, outcome });
+  const invalid = validateCiscoShardRunRequestV1(request);
+  if (invalid !== undefined) return stop(refusedShardRunV1("shard-request-invalid", invalid));
+  const analyzerProject = request.analyzerProject ?? CISCO_MULTI_SKILL_SCANNER_PROJECT_V1;
+  let localLockSha256: string;
+  try {
+    localLockSha256 = ciscoSkillScannerLockSha256V1(analyzerProject);
+  } catch (error) {
+    return stop(
+      failedShardRunV1(
+        "acquisition",
+        boundedCiscoDetailV1(
+          error instanceof Error ? error.message : "the bundled analyzer uv.lock is unreadable",
+        ),
+      ),
+    );
+  }
+  if (localLockSha256 !== request.expected.lockSha256) {
+    return stop(
+      refusedShardRunV1(
+        "analyzer-lock-mismatch",
+        `Cisco shard analyzer lock does not match the expected identity: ${localLockSha256}`,
+      ),
+    );
+  }
+  let safeRoot: string;
+  try {
+    safeRoot = realpathSync(request.sourceRoot);
+  } catch {
+    return stop(
+      refusedShardRunV1("shard-request-invalid", "sourceRoot must be a readable directory"),
+    );
+  }
+  for (const job of request.jobs) {
+    // Every job path is a real directory chain inside the root: a linked
+    // ancestor would pass the component hash and escape the declared source.
+    const resolved = resolveContainedCiscoJobDirectoryV1(safeRoot, job.path);
+    if (!resolved.ok) {
+      return stop(
+        refusedShardRunV1(
+          "shard-request-invalid",
+          `Cisco shard job path ${ciscoJobDirectoryProblemTextV1(resolved.problem)}: ${job.path}`,
+        ),
+      );
+    }
+    let holdsSkill = false;
+    try {
+      holdsSkill = statSync(join(resolved.skillDir, "SKILL.md")).isFile();
+    } catch {
+      holdsSkill = false;
+    }
+    if (!holdsSkill) {
+      return stop(
+        refusedShardRunV1(
+          "shard-request-invalid",
+          `Cisco shard job path holds no SKILL.md: ${job.path}`,
+        ),
+      );
+    }
+  }
+  return Object.freeze({
+    ok: true as const,
+    safeRoot,
+    lockSha256: localLockSha256,
+    analyzerProject,
+  });
+}
+
 /**
  * One shard's execution behind Core's future `runCiscoShardV1` (C2a §3.7).
  * The request is validated at the boundary (safe POSIX job paths each holding
@@ -216,55 +304,10 @@ function validateCiscoShardRunRequestV1(request: CiscoShardRunRequestV1): string
 export async function runCiscoShardV1(
   request: CiscoShardRunRequestV1,
 ): Promise<CiscoShardRunOutcomeV1> {
-  const invalid = validateCiscoShardRunRequestV1(request);
-  if (invalid !== undefined) return refusedShardRunV1("shard-request-invalid", invalid);
-  const analyzerProject = request.analyzerProject ?? CISCO_MULTI_SKILL_SCANNER_PROJECT_V1;
-  let localLockSha256: string;
-  try {
-    localLockSha256 = ciscoSkillScannerLockSha256V1(analyzerProject);
-  } catch (error) {
-    return failedShardRunV1(
-      "acquisition",
-      boundedCiscoDetailV1(
-        error instanceof Error ? error.message : "the bundled analyzer uv.lock is unreadable",
-      ),
-    );
-  }
-  if (localLockSha256 !== request.expected.lockSha256) {
-    return refusedShardRunV1(
-      "analyzer-lock-mismatch",
-      `Cisco shard analyzer lock does not match the expected identity: ${localLockSha256}`,
-    );
-  }
-  let safeRoot: string;
-  try {
-    safeRoot = realpathSync(request.sourceRoot);
-  } catch {
-    return refusedShardRunV1("shard-request-invalid", "sourceRoot must be a readable directory");
-  }
-  for (const job of request.jobs) {
-    // Every job path is a real directory chain inside the root: a linked
-    // ancestor would pass the component hash and escape the declared source.
-    const resolved = resolveContainedCiscoJobDirectoryV1(safeRoot, job.path);
-    if (!resolved.ok) {
-      return refusedShardRunV1(
-        "shard-request-invalid",
-        `Cisco shard job path ${ciscoJobDirectoryProblemTextV1(resolved.problem)}: ${job.path}`,
-      );
-    }
-    let holdsSkill = false;
-    try {
-      holdsSkill = statSync(join(resolved.skillDir, "SKILL.md")).isFile();
-    } catch {
-      holdsSkill = false;
-    }
-    if (!holdsSkill) {
-      return refusedShardRunV1(
-        "shard-request-invalid",
-        `Cisco shard job path holds no SKILL.md: ${job.path}`,
-      );
-    }
-  }
+  const preflight = preflightCiscoShardV1(request);
+  if (!preflight.ok) return preflight.outcome;
+  const { safeRoot, analyzerProject } = preflight;
+  const localLockSha256 = preflight.lockSha256;
   const jobPaths = request.jobs.map((job) => job.path);
   const sealJobs = (when: string): string | CiscoShardRunOutcomeV1 => {
     try {
