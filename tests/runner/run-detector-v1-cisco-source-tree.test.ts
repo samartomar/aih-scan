@@ -215,21 +215,62 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(lock?.sha256);
   });
 
-  it("fails at output when a job's result names a file that is not sealed", async () => {
-    // Cisco 2.1.0 on Windows names SKILL.md as "skill.md" (its path check returns
-    // os.path.normcase of the resolved path). Only the SKILL.md spelling is sealed; the
-    // result is not reported with an unavailable location, as an engine finding may be.
+  // Cisco 2.1.0 names SKILL.md as "skill.md" (its path check returns os.path.normcase of the
+  // resolved path, which lowercases on Windows). Only the SKILL.md spelling is sealed.
+  it.runIf(windows)(
+    "binds a job's normcased skill.md to the sealed SKILL.md and keeps its real name on win32",
+    async () => {
+      const host = hostEnv();
+      const outcome = await runDetectorV1(
+        request(skillsTree(), host.env, {
+          runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, "skill.md"),
+        }),
+      );
+
+      expect(outcome.outcome).toBe("succeeded");
+      if (outcome.outcome !== "succeeded") return;
+      expect(
+        outcome.findings.findings.map((finding) =>
+          finding.location.state === "present" ? finding.location.value.path : null,
+        ),
+      ).toEqual(SKILLS.map((skill) => `skills/${skill}/SKILL.md`));
+      if (outcome.evidence.kind !== "baseline-analyzer-observation-v1") return;
+      const text = Buffer.from(outcome.evidence.observation.bytes).toString("utf8");
+      expect(text).not.toContain("skill.md");
+    },
+  );
+
+  it.skipIf(windows)(
+    "fails at output off win32 when a job's result names skill.md for the sealed SKILL.md",
+    async () => {
+      // The result is not reported with an unavailable location, as an engine finding may be.
+      const host = hostEnv();
+      const outcome = await runDetectorV1(
+        request(skillsTree(), host.env, {
+          runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, "skill.md"),
+        }),
+      );
+
+      expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+      if (outcome.outcome !== "failed") return;
+      expect(outcome.failure.detail).toContain(
+        "skills/a/skill.md, which is not a sealed source file",
+      );
+    },
+  );
+
+  it("fails at output when a job's lowercased result matches no sealed file", async () => {
     const host = hostEnv();
     const outcome = await runDetectorV1(
       request(skillsTree(), host.env, {
-        runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, "skill.md"),
+        runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, "missing.md"),
       }),
     );
 
     expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
     if (outcome.outcome !== "failed") return;
     expect(outcome.failure.detail).toContain(
-      "skills/a/skill.md, which is not a sealed source file",
+      "skills/a/missing.md, which is not a sealed source file",
     );
   });
 

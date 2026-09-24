@@ -9,6 +9,7 @@ import {
   createBaselineAnalyzerSnapshotV1,
   normalizedObservation,
 } from "../baseline/batch-v1.js";
+import { bindCiscoSarifToSealedFilesV1 } from "../baseline/cisco-sealed-case-binding-v1.js";
 import {
   type AnalyzerFailureCauseV1,
   AnalyzerRunFailureV1,
@@ -37,6 +38,7 @@ import {
   assertSafeRelativePosixPathV1,
   canonicalStrictJsonBytesV1,
   codeUnitCompare,
+  parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
 import { validateSnykAgentScanRequestEnvV1 } from "../detectors/snyk-agent-scan/index.js";
 import {
@@ -1169,6 +1171,36 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     } catch (error) {
       return failed("coverage", error);
     }
+    const sealedFiles = new Map(
+      before.entries.flatMap((entry) =>
+        entry.kind === "file" || entry.kind === "file-link"
+          ? [[entry.path, entry.sha256] as const]
+          : [],
+      ),
+    );
+    // Owner decision D1: Cisco 2.1.0 reports os.path.normcase paths, lowercased on Windows.
+    // There, and only there, each is bound to the unique sealed file equal ignoring case and
+    // carries that file's real name in the SARIF itself; no match still fails below.
+    if (
+      analyzer === "cisco" &&
+      normalized.mediaType === "application/sarif+json" &&
+      process.platform === "win32"
+    ) {
+      try {
+        const bound = bindCiscoSarifToSealedFilesV1(
+          parseStrictJsonObjectV1(normalized.bytes.toString("utf8"), "Cisco SARIF"),
+          sealedFiles.keys(),
+          process.platform,
+        );
+        if (bound.rebound > 0)
+          normalized = {
+            ...normalized,
+            bytes: Buffer.from(canonicalStrictJsonBytesV1(bound.document)),
+          };
+      } catch (error) {
+        return failed("output", error);
+      }
+    }
     const annex = Object.freeze({
       path: `annex/${analyzer}.json`,
       sha256: createHash("sha256").update(normalized.bytes).digest("hex"),
@@ -1188,13 +1220,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
                 byteLength: annex.byteLength,
               },
               bytes: normalized.bytes,
-              sealedFiles: new Map(
-                before.entries.flatMap((entry) =>
-                  entry.kind === "file" || entry.kind === "file-link"
-                    ? [[entry.path, entry.sha256] as const]
-                    : [],
-                ),
-              ),
+              sealedFiles,
               // Engine SARIF may name no file (a whole-tree finding, a fallback URI). Cisco's
               // source-tree jobs are skill-scanner SARIF and stay bound like its directory run.
               ...(engineAnalyzer === undefined || engineAnalyzer === "cisco-source-tree"
