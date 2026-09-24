@@ -31,7 +31,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const ALL = ["trust-lint", "binding-gate", "cisco-source-tree", "cisco-shard", "mcp-scanner", "snyk", "skillspector"];
@@ -74,6 +73,12 @@ mkdirSync(work, { recursive: true });
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const windows = process.platform === "win32";
 const HOST = "host-process-uv-v1";
+// Every child gets a private temporary directory (S2e): another process on this host that runs
+// Scan shares the system one, and its aihs-/aihj- directories and processes would otherwise be
+// counted as this run's leftovers and survivors. Keep --work short on Windows (MAX_PATH).
+const privateTmp = join(work, "t");
+mkdirSync(privateTmp);
+for (const name of windows ? ["TEMP", "TMP"] : ["TMPDIR"]) baseEnv[name] = privateTmp;
 
 function npmCli() {
   const candidates = [
@@ -303,7 +308,7 @@ function processesNaming(markers) {
   return (listed.stdout ?? "").split(/\r?\n/).filter(Boolean);
 }
 const PRIVATE = /^(aihs-|aih-scan-baseline-source-|aih-scan-docker-config-|aihj-)/;
-const leftovers = () => readdirSync(tmpdir()).filter((name) => PRIVATE.test(name));
+const leftovers = () => readdirSync(privateTmp).filter((name) => PRIVATE.test(name));
 const before = new Set(leftovers());
 
 function run(label, job) {
@@ -582,7 +587,7 @@ const report = {
   format: "aih-installed-delegated-detector-proof",
   version: 1,
   generatedAt: new Date().toISOString(),
-  host: { platform: process.platform, arch: process.arch, node: process.version, tmpdir: realpathSync.native(tmpdir()) },
+  host: { platform: process.platform, arch: process.arch, node: process.version, tmpdir: realpathSync.native(privateTmp) },
   input: { tarball: scanTgz, sha256: sha256(readFileSync(scanTgz)), name: installed.name, version: installed.version },
   detectors,
   snykTokenAvailable: snykToken !== undefined,
