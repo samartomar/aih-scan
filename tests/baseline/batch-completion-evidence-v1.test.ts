@@ -41,7 +41,8 @@ import { batchAnalyzerVersion } from "./batch-version-support.js";
 /**
  * D24 [Scan: S2j]: every baseline-vet SARIF annex carries completion evidence v1 (C2a §1.6)
  * over the analyzer snapshot, which never holds a top-level `.git`. The digests below are
- * computed by hand with node:crypto, never with Scan's own subject code.
+ * computed by hand with node:crypto, never with Scan's own subject code; one test
+ * recomputes F, every per-file digest, the framing and the count from VECTOR_FILES.
  */
 
 const temporaryDirectories: string[] = [];
@@ -163,6 +164,69 @@ describe("baseline-vet completion evidence (D24)", () => {
     expect(BASELINE_BATCH_EXECUTION_PROFILES_V1).toEqual(DEFAULT_PROFILE);
     for (const [analyzer, id] of Object.entries(DEFAULT_PROFILE))
       expect(resolveDetectorCapabilityV1(`detector.${analyzer}`)?.executionProfile.id).toBe(id);
+  });
+
+  it("recomputes the hand vector from VECTOR_FILES with plain node:crypto (S2k)", async () => {
+    // Per-file sha256 over the UTF-8 bytes, independently of any Scan code.
+    const digest = (text: string) =>
+      createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+    const perFile = Object.fromEntries(
+      Object.entries(VECTOR_FILES).map(([path, text]) => [path, digest(text)]),
+    ) as Record<keyof typeof VECTOR_FILES, string>;
+    expect(perFile).toEqual({
+      ".git/HEAD": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80",
+      "SKILL.md": "2a3cb456826f8ff1a424458ac35b9ee95dec2892dc111ed2a64909f02d826b21",
+      "src/a.js": "b603d946eb2b396ca4ecf65c223daff659dbe6f1cfeac235b7c61d3ba6964cae",
+    });
+    // F: top-level .git left out, UTF-16 code-unit order; framing UTF-8(path) 00 hex 0A.
+    const frame = (paths: readonly (keyof typeof VECTOR_FILES)[]) => {
+      const ordered = [...paths].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+      const bytes = Buffer.concat(
+        ordered.map((path) =>
+          Buffer.concat([
+            Buffer.from(path, "utf8"),
+            Buffer.from([0x00]),
+            Buffer.from(perFile[path], "ascii"),
+            Buffer.from([0x0a]),
+          ]),
+        ),
+      );
+      return { ordered, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+    };
+    const all = Object.keys(VECTOR_FILES) as (keyof typeof VECTOR_FILES)[];
+    const baseline = frame(
+      all.filter((path: string) => path !== ".git" && !path.startsWith(".git/")),
+    );
+    expect(baseline.ordered).toEqual(["SKILL.md", "src/a.js"]);
+    expect(baseline.bytes.toString("utf8")).toBe(
+      `SKILL.md ${perFile["SKILL.md"]}
+src/a.js ${perFile["src/a.js"]}
+`,
+    );
+    expect(baseline.sha256).toBe(VECTOR_SUBJECT_SHA256);
+    expect(baseline.ordered.length).toBe(VECTOR_COUNT);
+    // The delegated Semgrep/SkillSpector contrast, top-level .git included.
+    const delegated = frame(all);
+    expect([delegated.sha256, delegated.ordered.length]).toEqual([
+      "97c4ab9cc9b887bd70d66a8be8c5d6c51bd3e9df93c87d5d13f9d3a0b4651796",
+      3,
+    ]);
+    // And the annexes the batch writes carry exactly the recomputed value.
+    const { root, request } = vectorTree();
+    const result = await executeBaselineVetBatchV1(request, {
+      sourceRoot: root,
+      execute: fakeExecution(),
+    });
+    for (const name of ["semgrep", "skillspector", "cisco"]) {
+      const log = JSON.parse(annexOf(result, name).bytes.toString("utf8")) as SarifShape;
+      expect(
+        (log.runs[0]?.invocations[0]?.properties as Record<string, Record<string, unknown>>)
+          .aihScanCompletionV1,
+      ).toMatchObject({
+        subjectTreeSha256: baseline.sha256,
+        analyzedFileCount: baseline.ordered.length,
+      });
+    }
   });
 
   it("writes the hand-vector subject into every SARIF annex, never into the native one", async () => {
