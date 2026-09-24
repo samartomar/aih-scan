@@ -310,12 +310,17 @@ interface RecordedSnykGoldenCaseV1 {
 }
 
 /**
- * Recorded Core outcomes Scan deliberately does not reproduce (S2e, the owner principle):
- * Core completes `{"findings":[]}` as clean, but an empty finding array proves no analysis
- * of the root, so Scan fails it. Recorded for C2a §5.3 as "[Scan: S2e]".
+ * Recorded Core outcomes Scan deliberately does not reproduce (the owner principle):
+ * - S2e: Core completes `{"findings":[]}` as clean, but an empty finding array proves no
+ *   analysis of the root, so Scan fails it;
+ * - S2f: Core's synthetic inventory report lists its skill server without the
+ *   ServerSignature that 0.5.17 records for every inspected server, so nothing proves the
+ *   server was analyzed and Scan fails it.
+ * Recorded for C2a §5.3 as "[Scan: S2e]" and "[Scan: S2f]".
  */
 const SNYK_FAIL_CLOSED_DEVIATIONS_V1: Readonly<Record<string, RegExp>> = {
   "snyk-clean-exit-0": /^snyk-agent-scan JSON shows no analysis of the scanned root; /,
+  "snyk-inventory-report": /^snyk-agent-scan JSON shows no analysis of the scanned root; exit 1,/,
 };
 
 describe("snyk-agent-scan parity (recorded outputs, C2a §5)", () => {

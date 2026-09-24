@@ -44,6 +44,33 @@ function write(relativePath: string, content: string): string {
   return absolute;
 }
 
+/**
+ * A ServerScanResult for a skill that snyk-agent-scan 0.5.17 inspected and analyzed: the
+ * SkillServer config and the ServerSignature `skill_client.py` builds (`metadata` is an MCP
+ * InitializeResult, then the entity lists), with no ScanError.
+ */
+function analyzedSkillServer(path: string, extra: Record<string, unknown> = {}) {
+  return {
+    name: "clean",
+    config_path: null,
+    server: { path, type: "skill" },
+    signature: {
+      metadata: {
+        protocolVersion: "built-in",
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "clean", version: "skills" },
+        instructions: "Clean skill",
+      },
+      prompts: [{ name: "clean", description: "# Clean" }],
+      resources: [],
+      resource_templates: [],
+      tools: [],
+    },
+    error: null,
+    ...extra,
+  };
+}
+
 interface RecordedCall {
   argv: readonly string[];
   env?: NodeJS.ProcessEnv;
@@ -268,12 +295,7 @@ describe("run outcomes", () => {
             reference: [0, 0],
           },
         ],
-        servers: [
-          {
-            name: "clean",
-            server: { path: join(root, "skills", "clean", "SKILL.md"), type: "skill" },
-          },
-        ],
+        servers: [analyzedSkillServer(join(root, "skills", "clean", "SKILL.md"))],
       },
     };
     const { run, calls } = snykRunner(report);
@@ -410,9 +432,7 @@ describe("run outcomes", () => {
         [root]: {
           client: root,
           path: root,
-          servers: [
-            { name: "clean", server: { path: join(root, "skills", "clean") }, error: null },
-          ],
+          servers: [analyzedSkillServer(join(root, "skills", "clean"))],
           issues: [],
           labels: [],
           error: null,
@@ -655,31 +675,34 @@ describe("parser report shapes and finding projection", () => {
   it("recovers the artifact path from the server reference index", () => {
     write("skills/clean/SKILL.md", "# Clean\n");
     const direct = join(root, "skills", "clean", "SKILL.md");
-    const uri = (issue: Record<string, unknown>, pathResult: Record<string, unknown>) =>
+    const uri = (issue: Record<string, unknown>, servers: unknown[]) =>
       parseSnykAgentScanSarifV1(
         JSON.stringify({
           [root]: {
-            servers: [],
-            ...pathResult,
-            issues: [{ code: "E001", message: "m", ...issue }],
+            path: root,
+            servers,
+            issues: [{ code: "E001", message: "m", reference: null, ...issue }],
           },
         }),
         root,
       ).runs[0]?.results[0]?.locations[0]?.physicalLocation.artifactLocation.uri;
 
-    const servers = [{ server: { path: direct, type: "skill" } }];
-    expect(uri({ reference: [0, 0] }, { servers })).toBe("skills/clean/SKILL.md");
-    expect(uri({ file: "other/listed.md", reference: [0, 0] }, { servers })).toBe(
-      "other/listed.md",
-    );
-    expect(uri({ reference: [0] }, { servers: [{ config_path: direct }] })).toBe(
-      "skills/clean/SKILL.md",
-    );
-    expect(uri({ reference: [1, 0] }, { servers })).toBe(".");
-    expect(uri({ reference: ["0"] }, { servers, path: "configs/mcp.json" })).toBe(
-      "configs/mcp.json",
-    );
-    expect(uri({}, { path: "configs/mcp.json" })).toBe("configs/mcp.json");
+    const servers = [analyzedSkillServer(direct)];
+    expect(uri({ reference: [0, 0] }, servers)).toBe("skills/clean/SKILL.md");
+    expect(uri({ file: "other/listed.md", reference: [0, 0] }, servers)).toBe("other/listed.md");
+    // A stdio MCP server has no path of its own: its config file locates the issue.
+    const stdio = analyzedSkillServer(direct, {
+      server: { command: "node", args: [], type: "stdio" },
+      config_path: direct,
+    });
+    expect(uri({ reference: [0, null] }, [stdio])).toBe("skills/clean/SKILL.md");
+    // A global issue (`reference: null`) is located at the entry's own path, the root.
+    expect(uri({}, servers)).toBe(".");
+    // S2f: a reference that is malformed or points nowhere fails instead of falling back.
+    for (const reference of [[1, 0], ["0"], [0]])
+      expect(() => uri({ reference }, servers)).toThrow(
+        "snyk-agent-scan JSON carries a malformed finding",
+      );
   });
 
   it("normalizes hostile or absolute artifact URIs as Core does", () => {
@@ -1064,13 +1087,7 @@ describe("fail-closed analysis evidence (S2e)", () => {
       detail: `${message}; exit ${code}, stdout ${Buffer.byteLength(stdout)} bytes, stderr 0 bytes`,
     });
   };
-  const skillServer = () => ({
-    name: "clean",
-    config_path: null,
-    server: { path: join(root, "skills", "clean"), type: "skill" },
-    signature: { metadata: {}, tools: [] },
-    error: null,
-  });
+  const skillServer = () => analyzedSkillServer(join(root, "skills", "clean"));
   const pathResult = (extra: Record<string, unknown> = {}) => ({
     client: root,
     path: root,
@@ -1228,16 +1245,6 @@ describe("fail-closed analysis evidence (S2e)", () => {
     // Discovery ran on the root and found nothing to send: the analyzer's own statement.
     const nothing = await scanned(JSON.stringify({ [root]: pathResult({ servers: [] }) }));
     expect(nothing).toMatchObject({ kind: "completed" });
-
-    // A non-failure ScanError (a missing candidate config) beside analyzed servers is kept.
-    const partial = await scanned(
-      JSON.stringify({
-        [root]: pathResult({
-          error: { message: "not found", is_failure: false, category: "file_not_found" },
-        }),
-      }),
-    );
-    expect(partial).toMatchObject({ kind: "completed" });
   });
 
   it("accepts the root SKILL.md form: the entry names the parent, the server the root", async () => {
@@ -1252,5 +1259,197 @@ describe("fail-closed analysis evidence (S2e)", () => {
       }),
     );
     expect(outcome).toMatchObject({ kind: "completed" });
+  });
+});
+
+// S2f (review of S2e): every ServerScanResult is validated against snyk-agent-scan 0.5.17's
+// models (`agent_scan/models.py`, `inspect.py`), and only records that prove analysis count.
+// A server proves analysis when it carries its server config and the ServerSignature that
+// inspection produced (`metadata` InitializeResult plus the entity lists) and no ScanError;
+// a non-failure ScanError note on an entry or a server means it was not analyzed. Only an
+// existing path, resolved by realpath, can name the scanned root.
+describe("server records must prove analysis (S2f)", () => {
+  const scanned = (stdout: string, code = 0) =>
+    runSnykAgentScanRequestV1(
+      fakeRunner((argv) => (argv.includes("scan") ? { code, stdout, stderr: "" } : undefined)).run,
+      {
+        platform: "linux",
+        tree: root,
+        hostEnv: {},
+        requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      },
+    );
+  const failedWith = async (report: unknown, message: string, code = 0) => {
+    const stdout = JSON.stringify(report);
+    const outcome = await scanned(stdout, code);
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: `${message}; exit ${code}, stdout ${Buffer.byteLength(stdout)} bytes, stderr 0 bytes`,
+    });
+  };
+  const completed = async (report: unknown, code = 0) => {
+    const outcome = await scanned(JSON.stringify(report), code);
+    expect(outcome).toMatchObject({ kind: "completed" });
+    return outcome;
+  };
+  const skillPath = () => join(root, "skills", "clean");
+  const server = (extra: Record<string, unknown> = {}) => analyzedSkillServer(skillPath(), extra);
+  const entry = (key: string, extra: Record<string, unknown> = {}) => ({
+    [key]: {
+      client: key,
+      path: key,
+      servers: [server()],
+      issues: [],
+      labels: [],
+      error: null,
+      ...extra,
+    },
+  });
+  const note = {
+    message: "File or folder not found",
+    is_failure: false,
+    category: "file_not_found",
+  };
+  const NO_ANALYSIS = "snyk-agent-scan JSON shows no analysis of the scanned root";
+  const MALFORMED = "snyk-agent-scan JSON carries a malformed finding";
+  const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
+
+  beforeAll(() => {
+    write("skills/clean/SKILL.md", "# Clean\n");
+  });
+
+  it("fails the reviewer's malformed server record beside a file_not_found note", async () => {
+    const reviewer = {
+      issues: [],
+      servers: [{}],
+      error: { is_failure: false, category: "file_not_found" },
+    };
+    await failedWith({ [root]: reviewer }, MALFORMED_ENTRY);
+    await failedWith({ [root]: { ...reviewer, path: root } }, MALFORMED_ENTRY);
+    await failedWith(entry(root, { servers: [{}], error: note }), MALFORMED_ENTRY);
+  });
+
+  it("fails an entry carrying a non-failure note whatever its servers say", async () => {
+    await failedWith(entry(root, { error: note }), NO_ANALYSIS);
+    await failedWith(
+      entry(root, {
+        error: { ...note, category: "unknown_config" },
+        servers: [server(), server()],
+      }),
+      NO_ANALYSIS,
+    );
+  });
+
+  it("fails a server that was recorded but never inspected or analyzed", async () => {
+    await failedWith(entry(root, { servers: [server({ signature: null })] }), NO_ANALYSIS);
+    const { signature: _signature, ...unsigned } = server();
+    await failedWith(entry(root, { servers: [unsigned] }), NO_ANALYSIS);
+    await failedWith(entry(root, { servers: [server(), server({ error: note })] }), NO_ANALYSIS);
+    await failedWith(
+      entry(root, { servers: [server({ signature: null, error: note })] }),
+      NO_ANALYSIS,
+    );
+  });
+
+  it("fails server records that do not match the 0.5.17 ServerScanResult model", async () => {
+    const { signature } = server();
+    const malformed: Record<string, unknown>[] = [
+      { signature, error: null },
+      server({ server: null }),
+      server({ server: {} }),
+      server({ server: { path: 42, type: "skill" } }),
+      server({ server: { path: skillPath(), type: "stdio" } }),
+      server({ server: { command: 7, args: [] } }),
+      server({ server: { url: "https://mcp.example", type: "skill" } }),
+      server({ name: 42 }),
+      server({ config_path: {} }),
+      server({ signature: {} }),
+      server({ signature: { ...signature, metadata: {} } }),
+      server({
+        signature: { ...signature, metadata: { ...signature.metadata, serverInfo: null } },
+      }),
+      server({
+        signature: { ...signature, metadata: { ...signature.metadata, protocolVersion: 1 } },
+      }),
+      server({ signature: { ...signature, tools: "none" } }),
+      server({ signature: { ...signature, prompts: [null] } }),
+    ];
+    for (const record of malformed)
+      await failedWith(entry(root, { servers: [record] }), MALFORMED_ENTRY);
+  });
+
+  it("fails scan-path entries that do not match the 0.5.17 ScanPathResult model", async () => {
+    const clean = entry(root)[root];
+    await failedWith({ [root]: { ...clean, path: undefined } }, MALFORMED_ENTRY);
+    await failedWith({ [root]: { ...clean, path: join(root, "skills") } }, MALFORMED_ENTRY);
+    await failedWith({ [root]: { ...clean, client: 42 } }, MALFORMED_ENTRY);
+    await failedWith({ [root]: { ...clean, labels: "none" } }, MALFORMED_ENTRY);
+    await failedWith({ [root]: { ...clean, servers: "none" } }, MALFORMED_ENTRY);
+  });
+
+  it("fails issues whose reference or extra data is malformed or points nowhere", async () => {
+    const issue = (extra: Record<string, unknown>) => ({ code: "E004", message: "m", ...extra });
+    for (const bad of [
+      issue({ reference: undefined }),
+      issue({ reference: [0] }),
+      issue({ reference: ["0", 0] }),
+      issue({ reference: [-1, null] }),
+      issue({ reference: [0, 0.5] }),
+      issue({ reference: [1, null] }),
+      issue({ reference: [0, 1] }),
+      issue({ reference: [0, 0, 0] }),
+      issue({ reference: null, extra_data: "context" }),
+    ])
+      await failedWith(entry(root, { issues: [bad] }), MALFORMED, 1);
+  });
+
+  it("does not count a path that does not exist as naming the scanned root", async () => {
+    const ghost = join(root, "ghost");
+    await failedWith(
+      entry(ghost, { servers: [analyzedSkillServer(join(ghost, "skill"))] }),
+      NO_ANALYSIS,
+    );
+    await failedWith(entry(ghost, { servers: [] }), NO_ANALYSIS);
+    await failedWith(
+      entry(join(tmpdir(), "aih-scan-snyk-absent-parent"), {
+        servers: [analyzedSkillServer(join(root, "ghost-skill"))],
+      }),
+      NO_ANALYSIS,
+    );
+  });
+
+  it("keeps the no-analysis detail on exit 1 when the report carries issues", async () => {
+    await failedWith(
+      entry(root, {
+        servers: [server({ signature: null })],
+        issues: [{ code: "E004", message: "m", reference: [0, null] }],
+      }),
+      NO_ANALYSIS,
+      1,
+    );
+  });
+
+  it("accepts an empty discovery only for the root's own entry", async () => {
+    await failedWith(entry(join(root, "skills"), { servers: [] }), NO_ANALYSIS);
+    await completed(entry(root, { servers: [] }));
+  });
+
+  it("completes only when every server was analyzed and an existing path names the root", async () => {
+    await completed(entry(root));
+    await completed(entry(root, { servers: [server(), server({ config_path: skillPath() })] }));
+    const referenced = await completed(
+      entry(root, {
+        issues: [{ code: "E004", message: "m", reference: [0, 0], extra_data: { seen: true } }],
+      }),
+      1,
+    );
+    const location =
+      referenced.kind === "completed"
+        ? referenced.sarif.runs[0]?.results[0]?.locations[0]?.physicalLocation
+        : undefined;
+    expect(location?.artifactLocation.uri).toBe("skills/clean");
+    const parent = dirname(root);
+    await completed(entry(parent, { client: root, servers: [analyzedSkillServer(root)] }));
   });
 });

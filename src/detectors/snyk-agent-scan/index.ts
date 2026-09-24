@@ -21,7 +21,9 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  *   owner principle): zero findings completes only when a scan-path entry proves the root
  *   was analyzed; an empty object or empty finding array, any failure ScanError at report,
  *   entry or server level, an agent-scan X-code issue, and any malformed entry or finding
- *   fail at stage `output`;
+ *   fail at stage `output`. S2f: every entry, server and issue must match the 0.5.17
+ *   models, every server must carry the ServerSignature that proves it was analyzed, a
+ *   non-failure ScanError note means not analyzed, and only an existing path names the root;
  * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
  *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
  *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
@@ -313,6 +315,15 @@ const MALFORMED_FINDING = "snyk-agent-scan JSON carries a malformed finding";
 const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
 const NO_FINDINGS_ARRAY = "snyk-agent-scan JSON did not include a findings array";
 
+/**
+ * NO_ANALYSIS for a report that carries findings: an exit 1 keeps this detail instead of
+ * Core's "exited 1 without findings", which would misstate it.
+ */
+class NoAnalysisWithFindingsError extends TypeError {}
+
+const noAnalysis = (findings: number): TypeError =>
+  findings > 0 ? new NoAnalysisWithFindingsError(NO_ANALYSIS) : new TypeError(NO_ANALYSIS);
+
 /** agent-scan's own failure codes (`FAILURE_CATEGORY_TO_CODE`), never an analysis finding. */
 const FAILURE_CODE = /^X\d{3}$/;
 
@@ -337,25 +348,111 @@ function carriesFailure(record: Record<string, unknown>): boolean {
   return record.isFailure !== undefined && record.isFailure !== false;
 }
 
-/** A path inside the tree, or the tree itself; relative or scheme-less text never counts. */
-function namesTreePath(raw: unknown, tree: string): boolean {
+/** The realpath of an existing path, or undefined: a path that does not resolve names nothing. */
+function existingRealpath(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * An existing path inside the tree, or the tree itself (only the tree itself when `exact`),
+ * both resolved by realpath; relative, scheme-less or missing paths never count.
+ */
+function namesTreePath(raw: unknown, tree: string, exact = false): boolean {
   if (typeof raw !== "string") return false;
   const stripped = raw.replace(/^file:\/\//, "");
   if (!isAbsolute(stripped)) return false;
-  const rel = relative(realpathIfExists(tree), realpathIfExists(stripped));
+  const base = existingRealpath(tree);
+  const target = existingRealpath(stripped);
+  if (base === undefined || target === undefined) return false;
+  const rel = relative(base, target);
+  if (exact) return rel === "";
   return rel === "" || (!isAbsolute(rel) && !toPosix(rel).split("/").includes(".."));
 }
 
 function serverNamesTree(server: Record<string, unknown>, tree: string): boolean {
-  const nested = isRecord(server.server) ? server.server : {};
-  return [
-    server.config_path,
-    server.configPath,
-    server.path,
-    nested.path,
-    nested.config_path,
-    nested.configPath,
-  ].some((value) => namesTreePath(value, tree));
+  const nested = server.server as Record<string, unknown>;
+  return [server.config_path, nested.path].some((value) => namesTreePath(value, tree));
+}
+
+const isOptionalString = (value: unknown): boolean =>
+  value === undefined || value === null || typeof value === "string";
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/**
+ * `ServerScanResult.server`, one of 0.5.17's StdioServer (`command`), RemoteServer (`url`)
+ * or SkillServer (`path`), with the `type` its model allows.
+ */
+function isServerConfig(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const typed = (...allowed: string[]) =>
+    value.type === undefined || value.type === null || allowed.includes(value.type as string);
+  if (value.command !== undefined) return typeof value.command === "string" && typed("stdio");
+  if (value.url !== undefined) return typeof value.url === "string" && typed("sse", "http");
+  return typeof value.path === "string" && typed("skill");
+}
+
+const SIGNATURE_ENTITY_KEYS = ["prompts", "resources", "resource_templates", "tools"] as const;
+
+/**
+ * The entity count of a 0.5.17 `ServerSignature` (what inspection produced): `metadata` is an
+ * MCP InitializeResult (`protocolVersion`, `capabilities`, `serverInfo.name`) and each entity
+ * list, when present, is a list of objects. Anything else is malformed.
+ */
+function signatureEntityCount(signature: unknown): number {
+  if (!isRecord(signature) || !isRecord(signature.metadata)) throw new TypeError(MALFORMED_ENTRY);
+  const metadata = signature.metadata;
+  if (
+    typeof metadata.protocolVersion !== "string" ||
+    !isRecord(metadata.capabilities) ||
+    !isRecord(metadata.serverInfo) ||
+    typeof metadata.serverInfo.name !== "string"
+  )
+    throw new TypeError(MALFORMED_ENTRY);
+  let count = 0;
+  for (const key of SIGNATURE_ENTITY_KEYS) {
+    const entities = signature[key];
+    if (entities === undefined) continue;
+    if (!Array.isArray(entities) || !entities.every(isRecord)) throw new TypeError(MALFORMED_ENTRY);
+    count += entities.length;
+  }
+  return count;
+}
+
+/**
+ * A 0.5.17 `ServerScanResult`, validated whole: its entity count when it proves analysis (a
+ * ServerSignature and no ScanError), `undefined` when it was not analyzed (no signature —
+ * recorded but not inspected — or a non-failure ScanError note). A failure ScanError is an
+ * analyzer error; a record off the model is malformed.
+ */
+function analyzedServerEntities(server: unknown): number | undefined {
+  if (
+    !isRecord(server) ||
+    !isServerConfig(server.server) ||
+    !isOptionalString(server.name) ||
+    !isOptionalString(server.config_path)
+  )
+    throw new TypeError(MALFORMED_ENTRY);
+  const error = errorKind(server.error);
+  if (error === "failure" || carriesFailure(server)) throw new TypeError(ANALYZER_ERROR);
+  const signed = server.signature !== undefined && server.signature !== null;
+  const entities = signed ? signatureEntityCount(server.signature) : undefined;
+  return error === "note" ? undefined : entities;
+}
+
+/** 0.5.17's `Issue.reference`: null, or `[server_index, entity_index | null]` that exists. */
+function validIssueReference(reference: unknown, entityCounts: readonly number[]): boolean {
+  if (reference === null) return true;
+  if (!Array.isArray(reference) || reference.length !== 2) return false;
+  const [serverIndex, entityIndex] = reference;
+  if (!isNonNegativeInteger(serverIndex) || serverIndex >= entityCounts.length) return false;
+  if (entityIndex === null) return true;
+  return isNonNegativeInteger(entityIndex) && entityIndex < (entityCounts[serverIndex] ?? 0);
 }
 
 /**
@@ -373,30 +470,33 @@ function validatedFinding(value: unknown): Record<string, unknown> {
 /**
  * The findings of a `{<scanPath>: ScanPathResult}` report (snyk-agent-scan 0.5.17's
  * `--json` output, keyed by `ScanPathResult.path`). Every entry, server and issue is
- * validated, never skipped: a failure ScanError anywhere or an X-code issue is an analyzer
- * error; `servers: null`, or a non-failure ScanError with nothing discovered, means that
- * entry was not analyzed. The scanned root must be named by an entry key or a server path
- * (a root holding SKILL.md is reported under its parent, with the root as the skill's
- * path), or nothing proves the root was analyzed.
+ * validated against the 0.5.17 models, never skipped: a failure ScanError anywhere or an
+ * X-code issue is an analyzer error. Only records that prove analysis count: an entry with
+ * `servers: null` or a non-failure ScanError note, or any server without a ServerSignature
+ * or with a note, means part of the report was not analyzed. The root is proven analyzed by
+ * an existing path, resolved by realpath: an entry key or an analyzed server's path naming
+ * the root or a path inside it (a root holding SKILL.md is reported under its parent, with
+ * the root as the skill's path), or the root's own entry reporting that discovery found
+ * nothing (`servers: []`).
  */
 function scanPathFindings(
   report: Record<string, unknown>,
   tree: string,
 ): Record<string, unknown>[] {
-  const findings: Record<string, unknown>[] = [];
-  let namesRoot = false;
-  for (const [scanPath, entry] of Object.entries(report)) {
-    if (!isRecord(entry) || !Array.isArray(entry.issues)) throw new TypeError(MALFORMED_ENTRY);
+  const entries = Object.entries(report).map(([scanPath, entry]) => {
+    if (!isRecord(entry)) throw new TypeError(MALFORMED_ENTRY);
     const error = errorKind(entry.error);
     if (error === "failure" || carriesFailure(entry)) throw new TypeError(ANALYZER_ERROR);
-    if (!Array.isArray(entry.servers)) throw new TypeError(NO_ANALYSIS);
-    if (error === "note" && entry.servers.length === 0) throw new TypeError(NO_ANALYSIS);
-    if (namesTreePath(scanPath, tree)) namesRoot = true;
-    for (const server of entry.servers) {
-      if (!isRecord(server)) throw new TypeError(MALFORMED_ENTRY);
-      if (carriesFailure(server)) throw new TypeError(ANALYZER_ERROR);
-      if (serverNamesTree(server, tree)) namesRoot = true;
-    }
+    if (
+      entry.path !== scanPath ||
+      !Array.isArray(entry.issues) ||
+      !isOptionalString(entry.client) ||
+      (entry.labels !== undefined && !Array.isArray(entry.labels)) ||
+      (entry.servers !== undefined && entry.servers !== null && !Array.isArray(entry.servers))
+    )
+      throw new TypeError(MALFORMED_ENTRY);
+    const servers = Array.isArray(entry.servers) ? entry.servers : undefined;
+    const entityCounts = (servers ?? []).map(analyzedServerEntities);
     for (const issue of entry.issues) {
       if (!isRecord(issue)) throw new TypeError(MALFORMED_FINDING);
       const code = issue.code;
@@ -404,10 +504,32 @@ function scanPathFindings(
         throw new TypeError(MALFORMED_FINDING);
       if (FAILURE_CODE.test(code.trim()) || carriesFailure(issue))
         throw new TypeError(ANALYZER_ERROR);
+    }
+    const analyzed = servers !== undefined && error === "none" && !entityCounts.includes(undefined);
+    const issues = entry.issues as Record<string, unknown>[];
+    return { scanPath, entry, issues, servers: servers ?? [], entityCounts, analyzed };
+  });
+  if (!entries.every((item) => item.analyzed))
+    throw noAnalysis(entries.reduce((count, item) => count + item.issues.length, 0));
+
+  const findings: Record<string, unknown>[] = [];
+  let namesRoot = false;
+  for (const { scanPath, entry, issues, servers, entityCounts } of entries) {
+    if (servers.length === 0 ? namesTreePath(scanPath, tree, true) : namesTreePath(scanPath, tree))
+      namesRoot = true;
+    if ((servers as Record<string, unknown>[]).some((server) => serverNamesTree(server, tree)))
+      namesRoot = true;
+    for (const issue of issues) {
+      const extra = issue.extra_data;
+      if (
+        !validIssueReference(issue.reference, entityCounts as number[]) ||
+        (extra !== undefined && extra !== null && !isRecord(extra))
+      )
+        throw new TypeError(MALFORMED_FINDING);
       findings.push({ ...issue, path: snykScanPathIssueUri(scanPath, entry, issue) });
     }
   }
-  if (!namesRoot) throw new TypeError(NO_ANALYSIS);
+  if (!namesRoot) throw noAnalysis(findings.length);
   return findings;
 }
 
@@ -675,7 +797,9 @@ async function executeSnykAgentScanPlanV1(
     // An exit 1 whose report proves nothing keeps Core's exit-1 message (§5.3).
     const message =
       error instanceof TypeError && SNYK_OUTPUT_MESSAGES.has(error.message)
-        ? scan.code === 1 && error.message === NO_ANALYSIS
+        ? scan.code === 1 &&
+          error.message === NO_ANALYSIS &&
+          !(error instanceof NoAnalysisWithFindingsError)
           ? "snyk-agent-scan exited 1 without findings"
           : error.message
         : "invalid snyk-agent-scan JSON";

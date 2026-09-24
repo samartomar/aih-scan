@@ -509,18 +509,26 @@ if (detectors.includes("snyk")) {
     // proves the root was analyzed succeeds; every error, empty or malformed report fails.
     const mocked = (label, stdout, extra = {}) =>
       run(`snyk mocked ${label}`, { ...job(refusalRoot), snykEnv: undefined, env: { SNYK_TOKEN: "synthetic-proof-token-not-a-secret" }, fakeSnykStdout: JSON.stringify(stdout), ...extra });
-    const analyzed = (entry) => ({ "@ROOT@": { client: null, path: "@ROOT@", servers: [{ name: "clean", server: { path: "@ROOT@", type: "skill" } }], issues: [], labels: [], error: null, ...entry } });
+    // S2f: a server proves analysis only with the ServerSignature 0.5.17 records for it.
+    const signature = { metadata: { protocolVersion: "built-in", capabilities: {}, serverInfo: { name: "clean", version: "skills" } }, prompts: [{ name: "clean", description: "skill" }], resources: [], resource_templates: [], tools: [] };
+    const skill = (extra = {}) => ({ name: "clean", config_path: null, server: { path: "@ROOT@", type: "skill" }, signature, error: null, ...extra });
+    const note = { message: "File or folder not found", is_failure: false, category: "file_not_found" };
+    const analyzed = (entry) => ({ "@ROOT@": { client: null, path: "@ROOT@", servers: [skill()], issues: [], labels: [], error: null, ...entry } });
     const mock = {
       clean: mocked("clean (root analyzed, no issues)", analyzed({})),
       reportError: mocked("report-level error", { error: { message: "analysis failed", is_failure: true } }),
       empty: mocked("empty object", {}),
       malformed: mocked("malformed findings", { findings: [null, 42] }),
-      quota: mocked("quota ScanError on the server", analyzed({ servers: [{ name: "clean", server: { path: "@ROOT@", type: "skill" }, error: { message: "HTTP 429 Too Many Requests", is_failure: true, category: "analysis_error" } }] })),
+      quota: mocked("quota ScanError on the server", analyzed({ servers: [skill({ signature: null, error: { message: "HTTP 429 Too Many Requests", is_failure: true, category: "analysis_error" } })] })),
+      malformedServer: mocked("malformed server beside a file_not_found note", { "@ROOT@": { issues: [], servers: [{}], error: { is_failure: false, category: "file_not_found" } } }),
+      entryNote: mocked("entry note beside an analyzed server", analyzed({ error: note })),
+      unsigned: mocked("server recorded but never inspected", analyzed({ servers: [skill({ signature: null })] })),
+      missingPath: mocked("keys and server paths that do not exist", { "@ROOT@/ghost": { client: null, path: "@ROOT@/ghost", servers: [skill({ server: { path: "@ROOT@/ghost/skill", type: "skill" } })], issues: [], labels: [], error: null } }),
       failureCode: mocked("X-code issue", analyzed({ issues: [{ code: "X007", message: "agent-scan failure" }] })),
     };
     for (const [key, record] of Object.entries(mock)) cases[`snykMock${key[0].toUpperCase()}${key.slice(1)}`] = record;
     check("snyk mocked clean report that names the scanned root succeeds with zero findings", mock.clean.outcome === "succeeded" && mock.clean.findings.length === 0 && noSurvivors(mock.clean), brief(mock.clean));
-    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode"]) {
+    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "malformedServer", "entryNote", "unsigned", "missingPath"]) {
       const record = mock[key];
       check(`snyk mocked ${key} fails closed at the output stage, never a clean result`, record.outcome === "failed" && record.failure?.stage === "output" && /snyk-agent-scan/.test(record.failure?.detail ?? "") && noSurvivors(record), brief(record));
     }
