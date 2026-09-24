@@ -29,6 +29,47 @@ const stageOf = (document: unknown): string | undefined => {
   }
 };
 
+// S2f sweep: a result's locations are location objects, never skipped by a later rewrite.
+describe("SARIF completion: result locations", () => {
+  const withLocations = (locations: unknown) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "analyzer" } },
+        results: [{ ruleId: "R", message: { text: "m" }, locations }],
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
+  });
+
+  it("fails a location that is not a location object at output", () => {
+    for (const locations of [
+      [null],
+      [42],
+      ["SKILL.md"],
+      [[]],
+      [{ physicalLocation: "SKILL.md" }],
+      [{ physicalLocation: { artifactLocation: "SKILL.md" } }],
+      [{ physicalLocation: { artifactLocation: { uri: 42 } } }],
+      [{ physicalLocation: { artifactLocation: { uri: "a.md" } } }, null],
+    ])
+      expect(stageOf(withLocations(locations))).toBe("output: run 0 result 0 is malformed");
+  });
+
+  it("keeps physical, logical-only and URI-less locations", () => {
+    expect(
+      stageOf(
+        withLocations([
+          { physicalLocation: { artifactLocation: { uri: "a.md" }, region: { startLine: 1 } } },
+          { logicalLocations: [{ name: "f" }] },
+          { physicalLocation: { artifactLocation: { index: 0 } } },
+          {},
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+});
+
 describe.each([
   "toolExecutionNotifications",
   "toolConfigurationNotifications",

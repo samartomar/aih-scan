@@ -8,7 +8,9 @@
  *
  * - `output`: another version; no runs; a run that is not an object, names no tool driver or
  *   holds no results array; a result that is not an object or whose `locations` is not an
- *   array; a run without invocations; a notification list that is not an array; a malformed
+ *   array of location objects (S2f: a `physicalLocation` and its `artifactLocation`, when
+ *   present, are objects, and the artifact `uri`, when present, a string); a run without
+ *   invocations; a notification list that is not an array; a malformed
  *   notification (S2f): not an object, a `level` that is not one of SARIF 2.1.0's
  *   none/note/warning/error, or a `message` that is not a message object (`text` or `id`,
  *   each a string, optional string `markdown`, optional string-array `arguments`).
@@ -31,6 +33,17 @@ export class SarifCompletionErrorV1 extends TypeError {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A SARIF 2.1.0 location object, as far as Scan reads one: physical location and URI. */
+function isLocation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const physical = value.physicalLocation;
+  if (physical === undefined) return true;
+  if (!isRecord(physical)) return false;
+  const artifact = physical.artifactLocation;
+  if (artifact === undefined) return true;
+  return isRecord(artifact) && (artifact.uri === undefined || typeof artifact.uri === "string");
 }
 
 function problem(stage: SarifCompletionStageV1, detail: string): never {
@@ -89,7 +102,11 @@ export function assertSarifCompletedV1(
     const results = run.results;
     if (!Array.isArray(results)) problem("output", `${where} holds no results array`);
     results.forEach((result: unknown, resultIndex) => {
-      if (!isRecord(result) || (result.locations !== undefined && !Array.isArray(result.locations)))
+      const locations = isRecord(result) ? result.locations : undefined;
+      if (
+        !isRecord(result) ||
+        (locations !== undefined && (!Array.isArray(locations) || !locations.every(isLocation)))
+      )
         problem("output", `${where} result ${resultIndex} is malformed`);
     });
     const invocations = run.invocations;

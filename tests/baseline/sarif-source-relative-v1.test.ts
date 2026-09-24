@@ -320,6 +320,15 @@ describe("ciscoSourceRelativeSarifV1", () => {
     expect(() => ciscoSourceRelativeSarifV1(document, json, [root])).toThrow(/Cisco/);
   });
 
+  // S2f sweep: a run without a results list is never skipped, even beside a run that has one.
+  it("fails a run that holds no results list instead of skipping it", () => {
+    const document = cisco(["R", "SKILL.md", 1]);
+    const withBare = { ...document, runs: [...document.runs, { tool: document.runs[0]?.tool }] };
+    expect(() =>
+      ciscoSourceRelativeSarifV1(withBare, report([root, [["R", "SKILL.md", 1]]]), [root]),
+    ).toThrow(/Cisco.*results list is malformed/);
+  });
+
   const basedCisco = (
     baseIds: Record<string, unknown> | undefined,
     uri: string,

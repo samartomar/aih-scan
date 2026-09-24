@@ -407,7 +407,7 @@ export function ciscoSourceRelativeSarifV1(
   const settled = new Set<object>();
   for (const run of copy.runs) {
     if (!isRecord(run)) ciscoFail("a SARIF run is malformed");
-    if (run.results === undefined) continue;
+    // A run without a results list is never skipped (S2f): it proves no analysis.
     if (!Array.isArray(run.results)) ciscoFail("a SARIF results list is malformed");
     let base: (id: string) => Base;
     try {
