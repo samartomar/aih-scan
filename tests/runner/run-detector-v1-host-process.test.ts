@@ -1,8 +1,11 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -377,6 +380,56 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
     );
     expect(outcome.coverage.coveredPaths).toEqual(["docs/a.md", "link.md"]);
     expect(outcome.coverage.complete).toBe(true);
+  });
+
+  it("snapshots absolute and chained contained links as the seal records them (C2a tree acceptance)", async () => {
+    const host = hostFixture();
+    const sourceRoot = temporary("abs-links");
+    mkdirSync(join(sourceRoot, "docs"));
+    writeFileSync(join(sourceRoot, "docs", "a.md"), "alpha\n");
+    symlinkSync(join(sourceRoot, "docs", "a.md"), join(sourceRoot, "absolute.md"), "file");
+    symlinkSync("absolute.md", join(sourceRoot, "chained.md"), "file");
+    symlinkSync(join(sourceRoot, "docs"), join(sourceRoot, "docs-absolute"), "dir");
+    const calls: Call[] = [];
+    let seen: Record<string, string> | undefined;
+
+    const outcome = await runDetectorV1({
+      ...semgrepRequest({
+        env: host.env,
+        runner: hostRunner(calls, host.python, async (argv) => {
+          const snapshot = argv.at(-1) ?? "";
+          seen = {};
+          for (const name of readdirSync(snapshot).sort()) {
+            const stat = lstatSync(join(snapshot, name));
+            seen[name] = stat.isSymbolicLink()
+              ? "symlink"
+              : stat.isDirectory()
+                ? "directory"
+                : readFileSync(join(snapshot, name), "utf8");
+          }
+          return okay(sarif([]));
+        }),
+      }),
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: ["chained.md"] },
+    });
+
+    if (outcome.outcome === "failed")
+      throw new Error(`${outcome.failure.stage}: ${outcome.failure.detail}`);
+    expect(outcome.outcome).toBe("succeeded");
+    if (outcome.outcome !== "succeeded") return;
+    expect(outcome.sourceSeal.before.entries.map((entry) => `${entry.kind}:${entry.path}`)).toEqual(
+      [
+        "file-link:absolute.md",
+        "file-link:chained.md",
+        "directory:docs",
+        "directory-link:docs-absolute",
+        "file:docs/a.md",
+      ],
+    );
+    // File links hold their target's bytes at the link path; a directory link is recorded by
+    // the seal but not traversed, so the analyzer is not shown it.
+    expect(seen).toEqual({ "absolute.md": "alpha\n", "chained.md": "alpha\n", docs: "directory" });
+    expect(outcome.coverage.coveredPaths).toEqual(["absolute.md", "chained.md", "docs/a.md"]);
   });
 
   it("completes Semgrep on an empty source root, reporting Semgrep's own empty SARIF", async () => {

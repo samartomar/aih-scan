@@ -1019,6 +1019,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   const snapshotOptions = {
     includeGitDirectory: wholeTree,
     maxFileBytes: SOURCE_OBSERVATION_SEAL_LIMITS_V1.maxFileBytes,
+    links: "observation" as const,
   };
   let snapshotRoot: string;
   try {

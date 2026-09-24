@@ -93,12 +93,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 74,
+    line: 76,
     contains: 'protocol: z.literal("BaselineVetRequestV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 111,
+    line: 113,
     contains: 'protocol: z.literal("BaselineVetReceiptV1")',
   },
   {
@@ -184,12 +184,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1190,
+    line: 1191,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1149,
+    line: 1150,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
@@ -337,7 +337,7 @@ const BOUNDS: readonly Readonly<{
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 38,
+    line: 40,
     contains: "maxAnnexBytes = 16 * 1024 * 1024",
     phrase: "16 MiB per annex",
   },
