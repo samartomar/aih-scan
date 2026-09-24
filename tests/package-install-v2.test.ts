@@ -78,6 +78,7 @@ const publicV2Exports = [
   "parseBaselineVetRequestV1Json",
   "parseDetectorRegistrationV1Json",
   "parseScanResultRecordV1",
+  "probeDetectorAvailabilityV1",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
   "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
