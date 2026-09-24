@@ -2127,12 +2127,41 @@ export function createBaselineAnalyzerRunV1(
   };
 }
 
+/**
+ * The profile the batch runs each analyzer under: its detector capability's default, the
+ * hardened one. The batch names it, so its completion evidence names that profile's lock.
+ */
+export const BASELINE_BATCH_EXECUTION_PROFILES_V1: Readonly<
+  Record<BaselineAnalyzerV1, BaselineExecutionProfileIdV1>
+> = Object.freeze({
+  "aih-native": "in-process-native-v1",
+  skillspector: "docker-hardened-skillspector-v1",
+  semgrep: "linux-namespace-uv-v1",
+  cisco: "linux-namespace-uv-v1",
+});
+
 export function createBaselineAnalyzerExecutionV1(
   options: {
     readonly runner?: BaselineProcessRunnerV1;
     readonly env?: Readonly<NodeJS.ProcessEnv>;
   } = {},
 ): BaselineAnalyzerExecutionV1 {
-  const run = createBaselineAnalyzerRunV1(options);
-  return ({ analyzer, sourceRoot }) => run({ analyzer, sourceRoot });
+  const runs = new Map(
+    [...new Set(Object.values(BASELINE_BATCH_EXECUTION_PROFILES_V1))].map((executionProfileId) => [
+      executionProfileId,
+      createBaselineAnalyzerRunV1({ ...options, executionProfileId }),
+    ]),
+  );
+  return async ({ analyzer, sourceRoot }) => {
+    const executionProfileId = BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer];
+    const run = runs.get(executionProfileId);
+    if (run === undefined) fail(`no baseline execution profile for ${analyzer}`);
+    const observed = await run({ analyzer, sourceRoot });
+    return {
+      mediaType: observed.mediaType,
+      bytes: observed.bytes,
+      analyzerVersion: observed.analyzerVersion,
+      executionProfileId,
+    };
+  };
 }

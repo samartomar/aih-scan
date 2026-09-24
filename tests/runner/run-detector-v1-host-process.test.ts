@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -394,6 +395,39 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
     );
     expect(outcome.coverage.coveredPaths).toEqual(["docs/a.md", "link.md"]);
     expect(outcome.coverage.complete).toBe(true);
+  });
+
+  it("omits a sibling directory link from the snapshot, so F is exactly what Semgrep received (D26)", async () => {
+    const host = hostFixture();
+    const sourceRoot = temporary("dir-link");
+    mkdirSync(join(sourceRoot, "src"));
+    writeFileSync(join(sourceRoot, "src", "a.js"), "console.log(1);\n");
+    symlinkSync("src", join(sourceRoot, "alias"), "dir");
+    const calls: Call[] = [];
+    let seen: string[] | undefined;
+
+    const outcome = await runDetectorV1({
+      ...semgrepRequest({
+        env: host.env,
+        runner: hostRunner(calls, host.python, async (argv) => {
+          seen = readdirSync(argv.at(-1) ?? "").sort();
+          return okay(sarif([]));
+        }),
+      }),
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: [] },
+    });
+
+    expect(seen).toEqual(["src"]);
+    if (outcome.outcome !== "succeeded") throw new Error(outcome.outcome);
+    // The seal still records the link; the evidence is F = { src/a.js }, computed by hand.
+    expect(outcome.sourceSeal.before.entries.map((entry) => `${entry.kind}:${entry.path}`)).toEqual(
+      ["directory-link:alias", "directory:src", "file:src/a.js"],
+    );
+    const digest = createHash("sha256").update("console.log(1);\n").digest("hex");
+    expect(completionOfObservationV1(outcome)).toMatchObject({
+      subjectTreeSha256: createHash("sha256").update(`src/a.js\u0000${digest}\n`).digest("hex"),
+      analyzedFileCount: 1,
+    });
   });
 
   it("snapshots absolute and chained contained links as the seal records them (C2a tree acceptance)", async () => {

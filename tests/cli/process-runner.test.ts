@@ -379,6 +379,9 @@ describe("aih-scan bin", () => {
       ],
       { cwd: process.cwd(), stdio: "pipe" },
     );
+    // The published package ships tools/baseline-analyzers next to dist (package.json
+    // "files"); the CLI reads its analyzer locks when it loads (D24 completion evidence).
+    symlinkSync(resolve("tools"), join(directory, "tools"), "junction");
     const binPath = join(directory, "aih-scan");
     symlinkSync(join(outputDirectory, "cli.js"), binPath, "file");
 

@@ -11,8 +11,10 @@ import {
   readBaselineVetBundleV1,
   writeBaselineVetBundleV1,
 } from "../../src/baseline/bundle-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./batch-version-support.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -58,14 +60,22 @@ describe("BaselineVetBundleV1", () => {
                 files: [],
               }),
               analyzerVersion: "native.0123456789ab",
+              executionProfileId: "in-process-native-v1",
             }
           : {
               mediaType: "application/sarif+json",
               bytes: canonicalStrictJsonBytesV1({
                 version: "2.1.0",
-                runs: [{ tool: { driver: { name: analyzer } }, results: [] }],
+                runs: [
+                  {
+                    tool: { driver: { name: analyzer } },
+                    results: [],
+                    invocations: [{ executionSuccessful: true }],
+                  },
+                ],
               }),
-              analyzerVersion: `${analyzer}.0123456789ab`,
+              analyzerVersion: batchAnalyzerVersion(analyzer),
+              executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             },
     });
     const output = join(parent, "bundle");

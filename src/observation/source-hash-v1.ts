@@ -85,7 +85,15 @@ export function hashComponentTreeV1(
     ),
   };
 }
-export function hashSourceTreeV1(sourceRoot: string): SourceTreeHashV1 {
+/**
+ * `omittedDirectoryLinks` (D26) names, by source-relative POSIX path, the directory links an
+ * analyzer snapshot left out, with the target each had in the source. They are hashed as the
+ * source's own links, so a snapshot and the source it was taken from have one digest.
+ */
+export function hashSourceTreeV1(
+  sourceRoot: string,
+  omittedDirectoryLinks: ReadonlyMap<string, string> = new Map(),
+): SourceTreeHashV1 {
   const root = rootOf(sourceRoot);
   const entries = new Map<string, Entry>();
   const visit = (path: string) => {
@@ -109,8 +117,20 @@ export function hashSourceTreeV1(sourceRoot: string): SourceTreeHashV1 {
   const names = readSourceEntryNamesV1(root, "")
     .filter((x) => x !== ".git")
     .sort(codeUnitCompare);
-  if (!names.length) fail("source tree has no content");
+  if (!names.length && !omittedDirectoryLinks.size) fail("source tree has no content");
   for (const name of names) visit(resolve(root, name));
+  for (const [path, target] of omittedDirectoryLinks) {
+    const parent = posix.dirname(path);
+    if (
+      declared(path) !== path ||
+      path === ".git" ||
+      path.startsWith(".git/") ||
+      entries.has(path) ||
+      (parent !== "." && entries.get(parent)?.type !== "directory")
+    )
+      fail(`omitted directory link is not a free source path: ${path}`);
+    entries.set(path, { type: "symlink", path, target });
+  }
   const ordered = [...entries.values()].sort((a, b) => codeUnitCompare(a.path, b.path));
   return {
     treeSha256: createHash("sha256").update(JSON.stringify(ordered)).digest("hex"),
