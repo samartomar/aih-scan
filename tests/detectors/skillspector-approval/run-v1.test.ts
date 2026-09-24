@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  checkSkillspectorAvailableV1,
+  checkLocalSkillspectorAvailableV1,
   parseSkillspectorSarifLogV1,
-  resolveVerifiedSkillspectorImageV1,
+  resolveLocalSkillspectorImageV1,
   runSkillspectorScanV1,
   SKILLSPECTOR_IMAGE_DIGEST_V1,
   SKILLSPECTOR_IMAGE_TAG_V1,
-  SKILLSPECTOR_SOURCE_REVISION_V1,
   type SkillspectorRunnerV1,
   type SkillspectorRunOptionsV1,
   type SkillspectorRunResultV1,
@@ -15,12 +14,15 @@ import {
 /**
  * Ported from Core's `tests/trust/scan.test.ts` SkillSpector execution cases
  * (lines 1276-1454 and 1556-1636) plus the availability probe behaviour of
- * `resolveVerifiedSkillspectorImage`. Core asserted through its trust-scan
- * pipeline; here the identical fake-runner inputs drive the engine directly and
- * assert identical reasons, argv, timeouts and cleanup behaviour.
+ * `resolveVerifiedSkillspectorImage`, then extended to the C2a §6 typed
+ * surface: prerequisite refusals (§6.1), `acceptedImageDigests` validation
+ * (§6.2), the bind-mount pre-spawn refusal and `/scan/` URI rewriting (§6.3).
+ * Core asserted through its trust-scan pipeline; here the identical
+ * fake-runner inputs drive the engine directly and assert identical reasons,
+ * argv, timeouts and cleanup behaviour.
  */
 
-const EMPTY_SARIF = { runs: [] };
+const EMPTY_SARIF = { version: "2.1.0", runs: [{ results: [] }] };
 const TREE = "/tmp/scan-root";
 
 type Handler = (
@@ -54,104 +56,7 @@ function successfulSkillspector(
   return undefined;
 }
 
-describe("resolveVerifiedSkillspectorImageV1", () => {
-  it("reports Docker unavailable on a spawn error, as Core does", async () => {
-    const missing = fakeRunner((argv) =>
-      argv[0] === "docker" ? { code: 127, stderr: "not found", spawnError: true } : undefined,
-    );
-
-    const result = await resolveVerifiedSkillspectorImageV1(missing, "linux", {}, 30_000);
-
-    expect(result).toEqual({ reason: "Docker is unavailable (not found)" });
-    expect(await checkSkillspectorAvailableV1(missing, "linux", {})).toBe(
-      "Docker is unavailable (not found)",
-    );
-  });
-
-  it("reports a failed docker --version with its exit summary", async () => {
-    const failing = fakeRunner((argv) =>
-      argv[0] === "docker" && argv[1] === "--version" ? { code: 1 } : undefined,
-    );
-
-    const result = await resolveVerifiedSkillspectorImageV1(failing, "linux", {}, 30_000);
-
-    expect(result).toEqual({ reason: "docker --version failed (exit 1)" });
-  });
-
-  it("reports an uninspectable pinned image", async () => {
-    const failing = fakeRunner((argv) => {
-      if (argv[0] !== "docker") return undefined;
-      if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
-      if (argv[1] === "image" && argv[2] === "inspect") {
-        return { code: 1, stderr: "Error: No such image" };
-      }
-      return undefined;
-    });
-
-    const result = await resolveVerifiedSkillspectorImageV1(failing, "linux", {}, 30_000);
-
-    expect(result).toEqual({
-      reason: `sandbox image ${SKILLSPECTOR_IMAGE_TAG_V1} could not be inspected (Error: No such image)`,
-    });
-  });
-
-  it("rejects a self-labeled SkillSpector image whose digest is not allowlisted", async () => {
-    // Ported from Core scan.test.ts:1307-1351. OCI labels are never consulted.
-    const dockerRuns: string[][] = [];
-    const detector = fakeRunner((argv) => {
-      if (argv[0] !== "docker") return undefined;
-      if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
-      if (argv[1] === "image" && argv[2] === "inspect") {
-        return {
-          code: 0,
-          stdout: JSON.stringify({
-            Id: `sha256:${"b".repeat(64)}`,
-            Config: {
-              Labels: {
-                "org.opencontainers.image.revision": SKILLSPECTOR_SOURCE_REVISION_V1,
-              },
-            },
-          }),
-        };
-      }
-      if (argv[1] === "run") {
-        dockerRuns.push([...argv]);
-        return { code: 0, stdout: JSON.stringify(EMPTY_SARIF) };
-      }
-      return undefined;
-    });
-
-    const result = await resolveVerifiedSkillspectorImageV1(detector, "linux", {}, 30_000);
-
-    expect(result).toEqual({
-      reason: `sandbox image ${SKILLSPECTOR_IMAGE_TAG_V1} could not verify expected image digest ${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
-    });
-    expect(dockerRuns).toEqual([]);
-  });
-
-  it("names the org-policy approved local digest route when approvals exist", async () => {
-    const detector = fakeRunner((argv) => {
-      if (argv[0] !== "docker") return undefined;
-      if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
-      if (argv[1] === "image" && argv[2] === "inspect") {
-        return { code: 0, stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}` }) };
-      }
-      return undefined;
-    });
-
-    const result = await resolveVerifiedSkillspectorImageV1(detector, "linux", {}, 30_000, [
-      {
-        imageTag: SKILLSPECTOR_IMAGE_TAG_V1,
-        imageDigest: `sha256:${"c".repeat(64)}`,
-        sourceRevision: SKILLSPECTOR_SOURCE_REVISION_V1,
-      },
-    ]);
-
-    expect(result).toEqual({
-      reason: `sandbox image ${SKILLSPECTOR_IMAGE_TAG_V1} could not verify expected image digest ${SKILLSPECTOR_IMAGE_DIGEST_V1} or an org-policy approved local digest`,
-    });
-  });
-
+describe("resolveLocalSkillspectorImageV1 (C2a §6.1 typed prerequisite refusals)", () => {
   it("scrubs the probe environment and bounds the probe timeout", async () => {
     const seen: Array<{ argv: readonly string[]; options?: SkillspectorRunOptionsV1 }> = [];
     const detector: SkillspectorRunnerV1 = async (argv, options) => {
@@ -161,7 +66,7 @@ describe("resolveVerifiedSkillspectorImageV1", () => {
       return { code: 0, stdout: "", stderr: "", ...result };
     };
 
-    await resolveVerifiedSkillspectorImageV1(
+    await resolveLocalSkillspectorImageV1(
       detector,
       "linux",
       {
@@ -183,6 +88,111 @@ describe("resolveVerifiedSkillspectorImageV1", () => {
         XDG_RUNTIME_DIR: "/run/user/1000",
       });
     }
+  });
+
+  it("refuses with the docker prerequisite when the client is missing", async () => {
+    const missing = fakeRunner((argv) =>
+      argv[0] === "docker" ? { code: 127, stderr: "not found", spawnError: true } : undefined,
+    );
+
+    const result = await resolveLocalSkillspectorImageV1(missing, "linux", {}, 30_000);
+
+    expect(result).toEqual({
+      status: "refused",
+      refusal: {
+        reason: "prerequisite-missing",
+        prerequisite: "docker",
+        detail: "Docker is unavailable (not found)",
+      },
+    });
+    expect(await checkLocalSkillspectorAvailableV1(missing, "linux", {})).toEqual({
+      reason: "prerequisite-missing",
+      prerequisite: "docker",
+      detail: "Docker is unavailable (not found)",
+    });
+  });
+
+  it("refuses with the container-image prerequisite when the pinned tag is absent", async () => {
+    const failing = fakeRunner((argv) => {
+      if (argv[0] !== "docker") return undefined;
+      if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
+      if (argv[1] === "image" && argv[2] === "inspect") {
+        return { code: 1, stderr: "Error: No such image" };
+      }
+      return undefined;
+    });
+
+    const result = await resolveLocalSkillspectorImageV1(failing, "linux", {}, 30_000);
+
+    expect(result).toEqual({
+      status: "refused",
+      refusal: {
+        reason: "prerequisite-missing",
+        prerequisite: "container-image",
+        detail: `sandbox image ${SKILLSPECTOR_IMAGE_TAG_V1} could not be inspected (Error: No such image)`,
+      },
+    });
+  });
+
+  it("refuses a digest mismatch naming the pinned digest", async () => {
+    const detector = fakeRunner((argv) => {
+      if (argv[0] !== "docker") return undefined;
+      if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
+      if (argv[1] === "image" && argv[2] === "inspect") {
+        return { code: 0, stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}` }) };
+      }
+      return undefined;
+    });
+
+    const result = await resolveLocalSkillspectorImageV1(detector, "linux", {}, 30_000);
+
+    expect(result).toEqual({
+      status: "refused",
+      refusal: {
+        reason: "prerequisite-missing",
+        prerequisite: "container-image",
+        detail: `sandbox image ${SKILLSPECTOR_IMAGE_TAG_V1} could not verify expected image digest ${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
+      },
+    });
+  });
+
+  it("resolves the pinned image and records a pinned admission", async () => {
+    const result = await resolveLocalSkillspectorImageV1(
+      fakeRunner(successfulSkillspector),
+      "linux",
+      {},
+      30_000,
+    );
+
+    expect(result).toEqual({
+      status: "resolved",
+      match: {
+        reference: SKILLSPECTOR_IMAGE_DIGEST_V1,
+        digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+        acceptance: "pinned",
+      },
+    });
+  });
+
+  it("admits a caller-accepted digest and records it as caller-accepted", async () => {
+    const callerDigest = `sha256:${"b".repeat(64)}`;
+    const detector = fakeRunner((argv) => {
+      if (argv[0] !== "docker") return undefined;
+      if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
+      if (argv[1] === "image" && argv[2] === "inspect") {
+        return { code: 0, stdout: JSON.stringify({ Id: callerDigest }) };
+      }
+      return undefined;
+    });
+
+    const result = await resolveLocalSkillspectorImageV1(detector, "linux", {}, 30_000, [
+      callerDigest,
+    ]);
+
+    expect(result).toEqual({
+      status: "resolved",
+      match: { reference: callerDigest, digest: callerDigest, acceptance: "caller-accepted" },
+    });
   });
 });
 
@@ -208,7 +218,15 @@ describe("runSkillspectorScanV1", () => {
       tree: TREE,
     });
 
-    expect(outcome).toMatchObject({ ok: true, sarif: JSON.stringify(EMPTY_SARIF) });
+    expect(outcome).toMatchObject({
+      status: "succeeded",
+      sarifText: JSON.stringify(EMPTY_SARIF),
+      image: {
+        reference: SKILLSPECTOR_IMAGE_DIGEST_V1,
+        digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+        acceptance: "pinned",
+      },
+    });
     expect(seenDockerRuns).toHaveLength(1);
     expect(seenDockerTimeouts).toEqual([900_000]);
     expect(seenDockerRuns[0]).toContain(SKILLSPECTOR_IMAGE_DIGEST_V1);
@@ -245,29 +263,27 @@ describe("runSkillspectorScanV1", () => {
       tree: TREE,
     });
 
-    expect(outcome).toMatchObject({ ok: true, image: ghcrRepoDigest });
+    expect(outcome).toMatchObject({
+      status: "succeeded",
+      image: {
+        reference: ghcrRepoDigest,
+        digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+        acceptance: "pinned",
+      },
+    });
     expect(seenDockerRuns[0]).toContain(ghcrRepoDigest);
   });
 
-  it("accepts an org-policy approved local SkillSpector digest", async () => {
-    // Ported from Core scan.test.ts:1353-1401.
-    const approvedLocalDigest = `sha256:${"b".repeat(64)}`;
+  it("accepts a caller-accepted local digest (C2a §6.1/§6.2)", async () => {
+    // Ported from Core scan.test.ts:1353-1401; C2a has Core pre-filter org policy
+    // into acceptedImageDigests, so the engine consumes the digest list directly.
+    const acceptedDigest = `sha256:${"b".repeat(64)}`;
     const dockerRuns: string[][] = [];
     const detector = fakeRunner((argv) => {
       if (argv[0] !== "docker") return undefined;
       if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
       if (argv[1] === "image" && argv[2] === "inspect") {
-        return {
-          code: 0,
-          stdout: JSON.stringify({
-            Id: approvedLocalDigest,
-            Config: {
-              Labels: {
-                "org.opencontainers.image.revision": SKILLSPECTOR_SOURCE_REVISION_V1,
-              },
-            },
-          }),
-        };
+        return { code: 0, stdout: JSON.stringify({ Id: acceptedDigest }) };
       }
       if (argv[1] === "run") {
         dockerRuns.push([...argv]);
@@ -281,29 +297,25 @@ describe("runSkillspectorScanV1", () => {
       platform: "linux",
       env: {},
       tree: TREE,
-      approvedImages: [
-        {
-          imageTag: SKILLSPECTOR_IMAGE_TAG_V1,
-          imageDigest: approvedLocalDigest,
-          sourceRevision: SKILLSPECTOR_SOURCE_REVISION_V1,
-        },
-      ],
+      acceptedImageDigests: [acceptedDigest],
     });
 
-    expect(outcome).toMatchObject({ ok: true, image: approvedLocalDigest });
+    expect(outcome).toMatchObject({
+      status: "succeeded",
+      image: { reference: acceptedDigest, digest: acceptedDigest, acceptance: "caller-accepted" },
+    });
     expect(dockerRuns).toHaveLength(1);
-    expect(dockerRuns[0]).toContain(approvedLocalDigest);
+    expect(dockerRuns[0]).toContain(acceptedDigest);
   });
 
-  it("rejects an org-policy approved local SkillSpector digest for another source revision", async () => {
+  it("refuses an unlisted local digest before any container runs", async () => {
     // Ported from Core scan.test.ts:1403-1454: no container ever runs.
-    const approvedLocalDigest = `sha256:${"b".repeat(64)}`;
     const dockerRuns: string[][] = [];
     const detector = fakeRunner((argv) => {
       if (argv[0] !== "docker") return undefined;
       if (argv[1] === "--version") return { code: 0, stdout: "Docker version 27\n" };
       if (argv[1] === "image" && argv[2] === "inspect") {
-        return { code: 0, stdout: JSON.stringify({ Id: approvedLocalDigest }) };
+        return { code: 0, stdout: JSON.stringify({ Id: `sha256:${"b".repeat(64)}` }) };
       }
       if (argv[1] === "run") {
         dockerRuns.push([...argv]);
@@ -317,27 +329,76 @@ describe("runSkillspectorScanV1", () => {
       platform: "linux",
       env: {},
       tree: TREE,
-      approvedImages: [
-        {
-          imageTag: SKILLSPECTOR_IMAGE_TAG_V1,
-          imageDigest: approvedLocalDigest,
-          sourceRevision: "a".repeat(40),
-        },
-      ],
+      acceptedImageDigests: [`sha256:${"c".repeat(64)}`],
     });
 
     expect(outcome).toEqual({
-      ok: false,
-      failure: {
-        stage: "availability",
+      status: "refused",
+      refusal: {
+        reason: "prerequisite-missing",
+        prerequisite: "container-image",
         detail: `sandbox image ${SKILLSPECTOR_IMAGE_TAG_V1} could not verify expected image digest ${SKILLSPECTOR_IMAGE_DIGEST_V1} or an org-policy approved local digest`,
       },
     });
     expect(dockerRuns).toEqual([]);
   });
 
+  it("refuses malformed acceptedImageDigests before any probe (C2a §6.2)", async () => {
+    const calls: string[][] = [];
+    const detector: SkillspectorRunnerV1 = async (argv) => {
+      calls.push([...argv]);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    for (const acceptedImageDigests of [
+      ["not-a-digest"],
+      [SKILLSPECTOR_IMAGE_DIGEST_V1.toUpperCase()],
+      [`sha256:${"b".repeat(64)}`, `sha256:${"b".repeat(64)}`],
+      Array.from({ length: 17 }, (_, index) => `sha256:${String(index).padStart(64, "0")}`),
+    ]) {
+      const outcome = await runSkillspectorScanV1({
+        run: detector,
+        platform: "linux",
+        env: {},
+        tree: TREE,
+        acceptedImageDigests,
+      });
+      expect(outcome.status).toBe("refused");
+      if (outcome.status !== "refused") return;
+      expect(outcome.refusal.reason).toBe("execution-profile-unavailable");
+      expect(outcome.refusal.detail).toContain("acceptedImageDigests");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("refuses a comma or control character in the bind-mount source before spawning (C2a §6.3)", async () => {
+    const calls: string[][] = [];
+    const detector: SkillspectorRunnerV1 = async (argv) => {
+      calls.push([...argv]);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    for (const tree of ["/tmp/with,comma", "/tmp/with\nnewline"]) {
+      const outcome = await runSkillspectorScanV1({
+        run: detector,
+        platform: "linux",
+        env: {},
+        tree,
+      });
+      expect(outcome).toEqual({
+        status: "refused",
+        refusal: {
+          reason: "subject-requirement-unmet",
+          detail: "unsupported Docker bind mount source path: comma/control characters",
+        },
+      });
+    }
+    expect(calls).toEqual([]);
+  });
+
   it("force-removes the bounded SkillSpector container after a scanner timeout", async () => {
-    // Ported from Core scan.test.ts:1556-1599.
+    // Ported from Core scan.test.ts:1556-1599; a timeout or abort reaches the
+    // engine as a spawnError from the runner seam (§6.3 cleanup rule).
     let containerName = "";
     const cleanupRuns: string[][] = [];
     const detector = fakeRunner((argv) => {
@@ -367,7 +428,7 @@ describe("runSkillspectorScanV1", () => {
     expect(containerName).toMatch(/^aih-skillspector-[0-9a-f-]{36}$/);
     expect(cleanupRuns).toEqual([["docker", "rm", "--force", "--volumes", containerName]]);
     expect(outcome).toEqual({
-      ok: false,
+      status: "failed",
       failure: { stage: "execution", detail: "process timed out after 900000ms" },
     });
   });
@@ -396,7 +457,7 @@ describe("runSkillspectorScanV1", () => {
       ["docker", "rm", "--force", "--volumes", "aih-skillspector-fixed"],
     ]);
     expect(outcome).toEqual({
-      ok: false,
+      status: "failed",
       failure: { stage: "execution", detail: "detector exit 0" },
     });
   });
@@ -417,7 +478,7 @@ describe("runSkillspectorScanV1", () => {
     });
 
     expect(outcome).toEqual({
-      ok: false,
+      status: "failed",
       failure: {
         stage: "execution",
         detail: "process timed out; container cleanup failed: No such container",
@@ -433,10 +494,11 @@ describe("runSkillspectorScanV1", () => {
       "execution",
       `detector exit 2: ${JSON.stringify(EMPTY_SARIF)}`,
     ],
+    [1, "not SARIF", "output", "detector did not emit valid SARIF"],
   ] as const)("rejects SkillSpector output outside the finding-exit SARIF contract (exit %i)", async (code, stdout, stage, expectedDetail) => {
-    // Ported from Core scan.test.ts:1601-1636. Core's third case
-    // (exit 1, "not SARIF") fails downstream SARIF parsing; here the run
-    // returns the stdout and parseSkillspectorSarifLogV1 rejects it below.
+    // Ported from Core scan.test.ts:1601-1636. The C2a engine emits the final
+    // observation bytes, so the SARIF shape gate Core applied downstream
+    // ("detector did not emit valid SARIF") is an output-stage failure here.
     const detector = fakeRunner((argv) => {
       if (argv[0] !== "docker") return undefined;
       if (argv[1] === "run") return { code, stdout };
@@ -450,13 +512,58 @@ describe("runSkillspectorScanV1", () => {
       tree: TREE,
     });
 
-    expect(outcome).toEqual({ ok: false, failure: { stage, detail: expectedDetail } });
+    expect(outcome).toEqual({ status: "failed", failure: { stage, detail: expectedDetail } });
   });
 
-  it("returns finding-exit stdout verbatim; the SARIF shape gate rejects non-SARIF", async () => {
+  it("completes an empty tree with zero results (C2a §6.3)", async () => {
+    const outcome = await runSkillspectorScanV1({
+      run: fakeRunner(successfulSkillspector),
+      platform: "linux",
+      env: {},
+      tree: TREE,
+    });
+
+    expect(outcome.status).toBe("succeeded");
+    if (outcome.status !== "succeeded") return;
+    expect(outcome.sarif.runs).toHaveLength(1);
+    expect(JSON.parse(outcome.sarifText)).toEqual(EMPTY_SARIF);
+    expect(Object.isFrozen(outcome.sarif)).toBe(true);
+  });
+
+  it("rewrites /scan/ artifact URIs source-relative and falls back unsafe ones (C2a §6.3)", async () => {
+    const containerSarif = {
+      version: "2.1.0",
+      runs: [
+        {
+          results: [
+            {
+              ruleId: "sc4",
+              locations: [
+                { physicalLocation: { artifactLocation: { uri: "/scan/dist/bundle.js" } } },
+              ],
+            },
+            {
+              ruleId: "yr4",
+              locations: [{ physicalLocation: { artifactLocation: { uri: "scan/SKILL.md" } } }],
+            },
+            {
+              ruleId: "hostile",
+              locations: [
+                { physicalLocation: { artifactLocation: { uri: "/scan/../escape.md" } } },
+              ],
+            },
+            {
+              ruleId: "absolute",
+              locations: [{ physicalLocation: { artifactLocation: { uri: "/etc/passwd" } } }],
+            },
+            { ruleId: "missing", locations: [{ physicalLocation: { artifactLocation: {} } }] },
+          ],
+        },
+      ],
+    };
     const detector = fakeRunner((argv) => {
       if (argv[0] !== "docker") return undefined;
-      if (argv[1] === "run") return { code: 1, stdout: "not SARIF" };
+      if (argv[1] === "run") return { code: 1, stdout: JSON.stringify(containerSarif) };
       return successfulSkillspector(argv);
     });
 
@@ -467,8 +574,25 @@ describe("runSkillspectorScanV1", () => {
       tree: TREE,
     });
 
-    expect(outcome).toMatchObject({ ok: true, sarif: "not SARIF" });
-    if (outcome.ok) expect(parseSkillspectorSarifLogV1(outcome.sarif)).toBeUndefined();
+    expect(outcome.status).toBe("succeeded");
+    if (outcome.status !== "succeeded") return;
+    const uris = (
+      outcome.sarif.runs[0] as {
+        results: Array<{
+          locations: Array<{ physicalLocation: { artifactLocation: { uri?: string } } }>;
+        }>;
+      }
+    ).results.map((result) => result.locations[0]?.physicalLocation.artifactLocation.uri);
+    expect(uris).toEqual([
+      "dist/bundle.js",
+      "SKILL.md",
+      "skillspector.sarif",
+      "skillspector.sarif",
+      "skillspector.sarif",
+    ]);
+    expect(JSON.parse(outcome.sarifText).runs[0].results[0].locations[0]).toEqual({
+      physicalLocation: { artifactLocation: { uri: "dist/bundle.js" } },
+    });
   });
 });
 

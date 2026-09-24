@@ -55,6 +55,15 @@ function hasUnsupportedMountSourceCharV1(value: string): boolean {
   });
 }
 
+/**
+ * Whether a bind-mount source path is representable at all (C2a §6.3: a comma
+ * or control character is refused before spawning). Exported so the run layer
+ * can refuse with a typed outcome instead of catching the argv builder's throw.
+ */
+export function hasUnsupportedDockerMountSourceCharV1(value: string): boolean {
+  return hasUnsupportedMountSourceCharV1(value);
+}
+
 /** A Docker bind-mount specification; rejects paths a mount spec cannot represent. */
 export function skillspectorDockerBindMountArgV1(source: string, target: string): string {
   if (hasUnsupportedMountSourceCharV1(source)) {
