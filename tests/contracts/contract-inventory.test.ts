@@ -199,17 +199,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/cisco-report-skills-v1.ts",
-    line: 88,
+    line: 89,
     contains: "export function assertCiscoSingleSkillReportSkillV1",
   },
   {
     path: "src/baseline/cisco-report-skills-v1.ts",
-    line: 125,
+    line: 126,
     contains: "export function assertCiscoScanAllSkillInventoryV1",
   },
   {
     path: "src/baseline/cisco-report-skills-v1.ts",
-    line: 205,
+    line: 177,
     contains: "export function assertCiscoSingleSkillAnalyzersCompleteV1",
   },
   {
@@ -224,7 +224,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 967,
+    line: 1123,
     contains: "export function assertCiscoScanAllAnalyzersCompleteV1",
   },
   {
@@ -292,7 +292,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 812,
+    line: 815,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {

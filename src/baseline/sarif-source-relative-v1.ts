@@ -654,6 +654,8 @@ export function rewriteSarifRunLocationsV1(
 }
 
 type CiscoFinding = Readonly<{
+  /** The index of the reporting skill's entry in the JSON report's `results`. */
+  entry: number;
   skill: string;
   ruleId: string;
   /** `null` for a skill-level finding (`"file_path": null`, D28): the skill's own SKILL.md. */
@@ -674,7 +676,7 @@ function ciscoFindings(
   const results = report.results;
   if (!Array.isArray(results)) ciscoFail("the JSON report holds no results list");
   const findings: CiscoFinding[] = [];
-  for (const entry of results) {
+  for (const [index, entry] of results.entries()) {
     if (!isRecord(entry) || typeof entry.skill_path !== "string" || !Array.isArray(entry.findings))
       ciscoFail("a JSON report skill entry is malformed");
     let skill: string;
@@ -711,6 +713,7 @@ function ciscoFindings(
           ciscoFail(`finding path ${JSON.stringify(finding.file_path)} is not a relative path`);
         }
       findings.push({
+        entry: index,
         skill,
         ruleId: finding.rule_id,
         file,
@@ -865,6 +868,23 @@ export function ciscoSourceRelativeSarifV1(
       return fingerprint === undefined ? [] : [identityKey(result.ruleId, fingerprint)];
     }),
   );
+  // U1k (review of U1j, P2): the same identities counted in each reporting skill (results are
+  // paired with findings by position, so a result belongs to its finding's skill).
+  const skillKey = (entry: number, ruleId: unknown, id: unknown) =>
+    JSON.stringify([entry, ruleId, id]);
+  const jsonInSkill = count(
+    findings.flatMap(({ entry, ruleId, id }) =>
+      id === undefined ? [] : [skillKey(entry, ruleId, id)],
+    ),
+  );
+  const sarifInSkill = count(
+    results.flatMap(({ result }, index) => {
+      const fingerprint = fingerprintOf(result);
+      return fingerprint === undefined
+        ? []
+        : [skillKey((findings[index] as CiscoFinding).entry, result.ruleId, fingerprint)];
+    }),
+  );
   results.forEach(({ result, base }, index) => {
     const finding = findings[index] as CiscoFinding;
     const locations = result.locations;
@@ -893,6 +913,31 @@ export function ciscoSourceRelativeSarifV1(
       ciscoFail(
         `SARIF result ${index} (${String(result.ruleId)} ${identity}:${String(line)}) does not match JSON finding ${index} (${finding.ruleId} ${expected}:${String(finding.line)})`,
       );
+    // U1k (review of U1j, P2): Cisco gives every finding its D28 identity on both sides (JSON
+    // `id`, SARIF `fingerprints.primaryLocationLineHash`), so a paired result must carry its
+    // finding's identity, or both none; same-shaped results (rule, file and line alike) can
+    // no longer be reordered or substituted. A skill-level finding was checked by D28 above.
+    const fingerprint = fingerprintOf(result);
+    if (finding.file !== null && fingerprint !== finding.id)
+      ciscoFail(
+        `SARIF result ${index} (${String(result.ruleId)}, ${String(fingerprint)}) does not carry the identity of JSON finding ${index} (${finding.ruleId}, ${String(finding.id)})`,
+      );
+    // U1k: a SKILL_LOAD_FALLBACK_USED finding, whatever its file_path, pairs by an identity
+    // unique in its skill on both sides, as a job's or the OCI capture's does (a job report is
+    // one skill). Real Cisco repeats the fallback identity across skills, so it is not counted
+    // across the report.
+    if (finding.ruleId === CISCO_SKILL_LOAD_FALLBACK_RULE_V1) {
+      const named = `(${finding.ruleId}, ${String(finding.id)})`;
+      if (finding.id === undefined)
+        ciscoFail(`JSON ${finding.ruleId} finding ${index} has no string id`);
+      const key = skillKey(finding.entry, finding.ruleId, finding.id);
+      const jsonCount = jsonInSkill.get(key) ?? 0;
+      const sarifCount = sarifInSkill.get(key) ?? 0;
+      if (jsonCount !== 1 || sarifCount !== 1)
+        ciscoFail(
+          `${finding.ruleId} identity ${named} of JSON finding ${index} is not unique in the reporting skill ${finding.skill === "" ? "." : finding.skill} (JSON ${jsonCount}, SARIF ${sarifCount})`,
+        );
+    }
     // Every other location inside the result (further locations, related locations, code
     // flows, the analysis target, S2i) is relative to the same skill directory (U1e review
     // P2), never to the root.
@@ -955,14 +1000,125 @@ export function ciscoSourceRelativeSarifV1(
 }
 
 /**
+ * One SARIF result as the fallback pairing reads it (U1j): its rule, its D28 identity
+ * fingerprint (`fingerprints.primaryLocationLineHash`) and its first location's
+ * source-relative URI. Kept before any projection drops the fingerprint.
+ */
+export type CiscoSarifResultIdentityV1 = Readonly<{
+  ruleId: unknown;
+  fingerprint: unknown;
+  uri: unknown;
+}>;
+
+/** {@link CiscoSarifResultIdentityV1} of every result of a source-relative SARIF log, in order. */
+export function ciscoSarifResultIdentitiesV1(log: unknown): CiscoSarifResultIdentityV1[] {
+  const runs = isRecord(log) && Array.isArray(log.runs) ? log.runs : [];
+  return runs.flatMap((run: unknown) =>
+    (isRecord(run) && Array.isArray(run.results) ? run.results : []).map((result: unknown) => {
+      const value = isRecord(result) ? result : {};
+      const fingerprints = isRecord(value.fingerprints) ? value.fingerprints : {};
+      const locations = Array.isArray(value.locations) ? value.locations : [];
+      const physical = isRecord(locations[0]) ? locations[0].physicalLocation : undefined;
+      const artifact = isRecord(physical) ? physical.artifactLocation : undefined;
+      return {
+        ruleId: value.ruleId,
+        fingerprint: fingerprints.primaryLocationLineHash,
+        uri: isRecord(artifact) ? artifact.uri : undefined,
+      };
+    }),
+  );
+}
+
+/** How one skill's SKILL_LOAD_FALLBACK_USED findings pair ({@link ciscoFallbackPairingV1}). */
+export type CiscoFallbackPairingV1 = Readonly<{
+  fallbackFindings: number;
+  fallbackCounterparts: number;
+  fallbackDetail?: string;
+}>;
+
+/**
+ * The one fallback pairing (U1j for a job and the OCI capture; U1k for each `scan-all` skill):
+ * each JSON SKILL_LOAD_FALLBACK_USED finding of one skill counts only with the one SARIF
+ * result of that skill paired with it by the D28 identity, JSON `(rule_id, id)` = SARIF
+ * `(ruleId, fingerprints.primaryLocationLineHash)`, unique among the skill's JSON findings and
+ * among its SARIF results, and located in `skill`. A rule-name match or a position is not a
+ * counterpart: an unrelated SARIF fallback result, a finding with no string id, one identity
+ * carried by several JSON findings (so they would share one SARIF result) or by several SARIF
+ * results, or a counterpart outside the skill leaves the finding unpaired, with the first
+ * reason in `fallbackDetail`.
+ */
+export function ciscoFallbackPairingV1(
+  findings: readonly unknown[],
+  sarifResults: readonly CiscoSarifResultIdentityV1[],
+  skill: string,
+): CiscoFallbackPairingV1 {
+  const records = findings.filter(isRecord);
+  const key = (ruleId: unknown, id: unknown) => JSON.stringify([ruleId, id]);
+  const count = (keys: readonly string[]) => {
+    const counts = new Map<string, number>();
+    for (const entry of keys) counts.set(entry, (counts.get(entry) ?? 0) + 1);
+    return counts;
+  };
+  const json = count(
+    records.flatMap((finding) =>
+      typeof finding.id === "string" ? [key(finding.rule_id, finding.id)] : [],
+    ),
+  );
+  const sarif = count(
+    sarifResults.flatMap((result) =>
+      typeof result.fingerprint === "string" ? [key(result.ruleId, result.fingerprint)] : [],
+    ),
+  );
+  const rule = CISCO_SKILL_LOAD_FALLBACK_RULE_V1;
+  let fallbackFindings = 0;
+  let fallbackCounterparts = 0;
+  let fallbackDetail: string | undefined;
+  for (const finding of records) {
+    if (finding.rule_id !== rule) continue;
+    fallbackFindings += 1;
+    const named = `(${rule}, ${String(finding.id)})`;
+    if (typeof finding.id !== "string") {
+      fallbackDetail ??= `its ${rule} finding has no string id, so no SARIF counterpart`;
+      continue;
+    }
+    const identity = key(rule, finding.id);
+    const jsonCount = json.get(identity) ?? 0;
+    const sarifCount = sarif.get(identity) ?? 0;
+    if (sarifCount === 0) {
+      fallbackDetail ??= `its ${rule} finding ${named} has no SARIF counterpart in that skill`;
+      continue;
+    }
+    if (jsonCount !== 1 || sarifCount !== 1) {
+      fallbackDetail ??= `its ${rule} identity ${named} is not unique across the paired reports (JSON ${jsonCount}, SARIF ${sarifCount})`;
+      continue;
+    }
+    const counterpart = sarifResults.find(
+      (result) => key(result.ruleId, result.fingerprint) === identity,
+    );
+    const uri = counterpart?.uri;
+    if (typeof uri !== "string" || !sarifPathInsideDirectoryV1(skill, uri)) {
+      fallbackDetail ??= `its ${rule} finding ${named}: its SARIF counterpart names ${JSON.stringify(uri)}, which is not in that skill`;
+      continue;
+    }
+    fallbackCounterparts += 1;
+  }
+  return fallbackDetail === undefined
+    ? { fallbackFindings, fallbackCounterparts }
+    : { fallbackFindings, fallbackCounterparts, fallbackDetail };
+}
+
+/**
  * U1i, coordinator decision D30 (revised 20:58Z): Cisco `scan-all` is complete only when every
  * `analyzers_failed` entry of its JSON report is the documented `skill_loader` fallback
  * (`assertCiscoAnalyzersCompleteV1`). The report lists them per skill, under `results[i]`; an
- * entry at the report's top level names no skill and is never the fallback. A skill's
- * SKILL_LOAD_FALLBACK_USED finding counts only with its counterpart: the SARIF result paired
- * with it by position in `normalized`, the document {@link ciscoSourceRelativeSarifV1} returned
- * for the same reports, which must carry that rule and lie in the same skill. A malformed
+ * entry at the report's top level names no skill and is never the fallback. A malformed
  * `analyzers_failed` fails at `output` before any skill is judged.
+ *
+ * U1k (review of U1j, P2): a skill's SKILL_LOAD_FALLBACK_USED finding counts only with its
+ * identity counterpart ({@link ciscoFallbackPairingV1}, the rule jobs and the OCI capture use)
+ * among that skill's part of `normalized` (the document {@link ciscoSourceRelativeSarifV1}
+ * returned for the same reports, whose results follow the findings skill by skill), never
+ * with the result that merely sits at its position.
  */
 export function assertCiscoScanAllAnalyzersCompleteV1(
   report: Record<string, unknown>,
@@ -972,10 +1128,7 @@ export function assertCiscoScanAllAnalyzersCompleteV1(
   const candidates = roots(sourceRoots);
   const results = report.results;
   if (!Array.isArray(results)) ciscoFail("the JSON report holds no results list");
-  const runs = Array.isArray(normalized.runs) ? (normalized.runs as Json[]) : [];
-  const sarifResults = runs.flatMap((run) =>
-    isRecord(run) && Array.isArray(run.results) ? run.results : [],
-  );
+  const sarifResults = ciscoSarifResultIdentitiesV1(normalized);
   const skills: CiscoSkillAnalyzersV1[] = [
     {
       label: "at the report's top level",
@@ -995,31 +1148,13 @@ export function assertCiscoScanAllAnalyzersCompleteV1(
       ciscoFail(`skill path ${JSON.stringify(entry.skill_path)} is outside the source root`);
     }
     const failed = ciscoFailedAnalyzersV1(entry.analyzers_failed, `results[${index}]`);
-    let fallbackFindings = 0;
-    let fallbackCounterparts = 0;
-    for (const finding of entry.findings) {
-      const paired = sarifResults[position];
-      position += 1;
-      if (!isRecord(finding) || finding.rule_id !== CISCO_SKILL_LOAD_FALLBACK_RULE_V1) continue;
-      fallbackFindings += 1;
-      const locations = isRecord(paired) ? paired.locations : undefined;
-      const first = Array.isArray(locations) ? locations[0] : undefined;
-      const physical = isRecord(first) ? first.physicalLocation : undefined;
-      const artifact = isRecord(physical) ? physical.artifactLocation : undefined;
-      const uri = isRecord(artifact) ? artifact.uri : undefined;
-      if (
-        isRecord(paired) &&
-        paired.ruleId === CISCO_SKILL_LOAD_FALLBACK_RULE_V1 &&
-        typeof uri === "string" &&
-        sarifPathInsideDirectoryV1(skill, uri)
-      )
-        fallbackCounterparts += 1;
-    }
+    // The skill's own part of the SARIF: the results paired with its findings.
+    const part = sarifResults.slice(position, position + entry.findings.length);
+    position += entry.findings.length;
     skills.push({
       label: `in ${ciscoSkillLabelV1(skill)}`,
       failed,
-      fallbackFindings,
-      fallbackCounterparts,
+      ...ciscoFallbackPairingV1(entry.findings, part, skill),
     });
   });
   assertCiscoAnalyzersCompleteV1(skills);
