@@ -1,4 +1,5 @@
 import { relative } from "node:path";
+import { rewriteSarifRunLocationsV1 } from "../../baseline/sarif-source-relative-v1.js";
 import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
 import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 
@@ -17,7 +18,9 @@ import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
  *
  * Unlike Core's `parseSarifLog`, which required only a `runs` array, a job's
  * SARIF must prove the job completed (S2e): version 2.1.0, at least one run,
- * each with a tool driver, a results array and successful invocations.
+ * each with a tool driver, a results array and successful invocations. Every
+ * location's `uriBaseId` is resolved before any prefix is applied, with the
+ * baseline's base rules, so a base outside the root fails the job.
  */
 
 export interface CiscoSarifArtifactLocationV1 {
@@ -182,8 +185,14 @@ export function prefixSafeCiscoUriV1(prefix: string, raw: unknown): unknown {
 
 /**
  * One job's SARIF as evidence: validated for completion ({@link validatedCiscoJobSarifV1}),
- * every invocation's `startTimeUtc`/`endTimeUtc` removed, and every result artifact URI
- * prefixed by the job's source-relative directory. The returned log is deeply frozen. The
+ * every invocation's `startTimeUtc`/`endTimeUtc` removed, and every artifact location of
+ * every run rewritten source-relative. Each location's `uriBaseId` is resolved first, with
+ * the base rules of the baseline's SARIF normalization (`rewriteSarifRunLocationsV1`): an
+ * undeclared, cyclic or malformed base, or one that resolves outside the source root, fails
+ * the job at stage `output`; a base inside the root yields a URI relative to the root; a URI
+ * under the analyzer's own `%SRCROOT%` (the job directory) is prefixed with the job's
+ * source-relative directory ({@link prefixSafeCiscoUriV1}, C2a §3.4). Obsolete base
+ * references and `originalUriBaseIds` are removed. The returned log is deeply frozen. The
  * source-tree scan and the shard both take each job's SARIF through here.
  */
 export function ciscoJobSarifV1(
@@ -200,40 +209,33 @@ export function ciscoJobSarifV1(
     throw error;
   }
   const prefix = toPosixV1(relative(root, skillRoot));
-  const log: CiscoSarifLogV1 = deepFreezeStrictJsonV1({
-    ...parsed,
-    runs: (parsed.runs as CiscoSarifRunV1[]).map((run) => ({
-      ...run,
-      invocations: run.invocations?.map((invocation) => {
+  // The validated document is a fresh parse, so it is rewritten in place and then frozen.
+  const runs = parsed.runs as Array<Record<string, unknown> & { invocations: unknown[] }>;
+  try {
+    for (const run of runs) {
+      run.invocations = run.invocations.map((invocation) => {
         const {
           startTimeUtc: _startTimeUtc,
           endTimeUtc: _endTimeUtc,
           ...stableInvocation
-        } = invocation;
+        } = invocation as Record<string, unknown>;
         return stableInvocation;
-      }),
-      results: run.results?.map((result) => ({
-        ...result,
-        locations: result.locations?.map((location) => ({
-          ...location,
-          physicalLocation:
-            location.physicalLocation === undefined
-              ? undefined
-              : {
-                  ...location.physicalLocation,
-                  artifactLocation: {
-                    ...location.physicalLocation.artifactLocation,
-                    uri: prefixSafeCiscoUriV1(
-                      prefix,
-                      location.physicalLocation.artifactLocation?.uri,
-                    ),
-                  },
-                },
-        })),
-      })),
-    })),
+      });
+      rewriteSarifRunLocationsV1(run, [root], (target) =>
+        prefixSafeCiscoUriV1(target.kind === "source-relative" ? "" : prefix, target.uri),
+      );
+    }
+  } catch (error) {
+    return Object.freeze({
+      ok: false as const,
+      stage: "output" as const,
+      detail: `detector SARIF location: ${error instanceof Error ? error.message : "unresolvable"}`,
+    });
+  }
+  return Object.freeze({
+    ok: true as const,
+    log: deepFreezeStrictJsonV1(parsed) as CiscoSarifLogV1,
   });
-  return Object.freeze({ ok: true as const, log });
 }
 
 /**

@@ -257,6 +257,53 @@ export function sourceRelativeSarifV1(
   return normalize(document, sourceRoots);
 }
 
+/** Where one artifact location of a run points once its `uriBaseId` is resolved. */
+export type SarifLocationTargetV1 =
+  /** No base, the analyzer's own `%SRCROOT%` (or a chain rooted there), or an absolute URI. */
+  | Readonly<{ kind: "analyzer-relative"; uri: unknown }>
+  /** A base resolving to an absolute location inside the source root, related to it. */
+  | Readonly<{ kind: "source-relative"; uri: string }>;
+
+/**
+ * Rewrites every artifact location of one SARIF run in place (the run must be a mutable
+ * JSON value) under the base rules {@link sourceRelativeSarifV1} applies: each `uriBaseId`
+ * is resolved through the run's `originalUriBaseIds`, following chains, and an undeclared
+ * id other than `%SRCROOT%`, a cycle or a malformed base throws, even on a location without
+ * a URI. A relative URI under a base resolving to an absolute location is related to
+ * `sourceRoots` (a location outside them throws) and handed to `rewrite` as
+ * `source-relative`; every other URI goes as `analyzer-relative`, joined to its base chain
+ * when that chain is rooted at the analyzer's own `%SRCROOT%`. Afterwards every reference to
+ * a base other than `%SRCROOT%` and the run's `originalUriBaseIds` are removed, so no stale
+ * base survives the rewrite. Throws `TypeError`.
+ */
+export function rewriteSarifRunLocationsV1(
+  run: Record<string, unknown>,
+  sourceRoots: readonly string[],
+  rewrite: (target: SarifLocationTargetV1) => unknown,
+): void {
+  const candidates = roots(sourceRoots);
+  const base = baseResolver(run.originalUriBaseIds as Json | undefined);
+  for (const location of artifactLocations(run as Json)) {
+    const baseId = location.uriBaseId;
+    if (baseId !== undefined && typeof baseId !== "string")
+      fail("an artifact uriBaseId is not a string");
+    const resolved = baseId === undefined ? undefined : base(baseId);
+    if ("uri" in location) {
+      const uri: unknown = location.uri;
+      let target: SarifLocationTargetV1;
+      if (resolved === undefined) target = { kind: "analyzer-relative", uri };
+      else if (typeof uri !== "string") fail("an artifact URI is not a string");
+      else if (isAbsoluteLocation(uri)) target = { kind: "analyzer-relative", uri };
+      else if ("absolute" in resolved)
+        target = { kind: "source-relative", uri: relativeTo(joined(resolved, uri), candidates) };
+      else target = { kind: "analyzer-relative", uri: joined(resolved, uri) };
+      location.uri = rewrite(target) as Json;
+    }
+    if (baseId !== undefined && baseId !== SOURCE_ROOT_BASE_ID) delete location.uriBaseId;
+  }
+  delete run.originalUriBaseIds;
+}
+
 type CiscoFinding = Readonly<{ skill: string; ruleId: string; file: string; line: number | null }>;
 
 function ciscoFail(message: string): never {

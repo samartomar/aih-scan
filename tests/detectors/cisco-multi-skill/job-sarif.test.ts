@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
@@ -202,5 +203,105 @@ describe.each(BOTH)("Cisco job SARIF completion evidence (%s)", (_label, execute
   it("keeps a complete job's SARIF", async () => {
     const outcome = await execute(runner(() => sarif([cleanRun([result("SKILL.md")])])));
     expect(outcome.kind).toBe("completed");
+  });
+});
+
+describe.each(BOTH)("Cisco job uriBaseId resolution (%s)", (_label, execute) => {
+  const failsWith = async (run: Record<string, unknown>, detail: RegExp) => {
+    const outcome = await execute(
+      runner((name) => (name === "alpha" ? sarif([run]) : sarif([cleanRun()]))),
+    );
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(detail);
+  };
+
+  const uris = async (run: Record<string, unknown>) => {
+    const outcome = await execute(
+      runner((name) => (name === "alpha" ? sarif([run]) : sarif([cleanRun()]))),
+    );
+    if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
+    const texts =
+      "outputs" in outcome
+        ? outcome.outputs.map((output) => Buffer.from(output.sarif).toString("utf8"))
+        : [outcome.sarifText];
+    const runs = texts.flatMap((text) => (JSON.parse(text) as { runs: unknown[] }).runs);
+    return runs[0] as {
+      originalUriBaseIds?: unknown;
+      results: Array<{
+        locations: Array<{ physicalLocation: { artifactLocation: Record<string, unknown> } }>;
+        relatedLocations?: Array<{
+          physicalLocation: { artifactLocation: Record<string, unknown> };
+        }>;
+      }>;
+    };
+  };
+
+  it("fails a base that resolves outside the source root (reviewer reproduction)", async () => {
+    await failsWith(
+      {
+        ...cleanRun([result("SKILL.md", { uriBaseId: "OUT" })]),
+        originalUriBaseIds: { OUT: { uri: "file:///outside/" } },
+      },
+      /outside the declared source root/,
+    );
+  });
+
+  it("fails an undeclared or malformed base", async () => {
+    await failsWith(cleanRun([result("SKILL.md", { uriBaseId: "NOPE" })]), /not declared/);
+    await failsWith(
+      {
+        ...cleanRun([result("SKILL.md", { uriBaseId: "LOOP" })]),
+        originalUriBaseIds: { LOOP: { uri: "a/", uriBaseId: "LOOP" } },
+      },
+      /refers back to itself/,
+    );
+    await failsWith(cleanRun([result("SKILL.md", { uriBaseId: 7 })]), /uriBaseId is not a string/);
+  });
+
+  it("validates bases on every location, not only the first", async () => {
+    await failsWith(
+      {
+        ...cleanRun([
+          {
+            ...result("SKILL.md"),
+            relatedLocations: [
+              { physicalLocation: { artifactLocation: { uri: "x.md", uriBaseId: "OUT" } } },
+            ],
+          },
+        ]),
+        originalUriBaseIds: { OUT: { uri: "file:///outside/" } },
+      },
+      /outside the declared source root/,
+    );
+  });
+
+  it("relates an absolute base inside the root, then drops the base references", async () => {
+    const jobDir = `${pathToFileURL(join(root, "skills", "alpha")).href}/`;
+    const run = await uris({
+      ...cleanRun([
+        {
+          ...result("SKILL.md", { uriBaseId: "JOB" }),
+          relatedLocations: [
+            { physicalLocation: { artifactLocation: { uri: "docs/x.md", uriBaseId: "DOCS" } } },
+          ],
+        },
+      ]),
+      originalUriBaseIds: { JOB: { uri: jobDir }, DOCS: { uri: "notes/", uriBaseId: "%SRCROOT%" } },
+    });
+    expect(run.originalUriBaseIds).toBeUndefined();
+    expect(run.results[0]?.locations[0]?.physicalLocation.artifactLocation).toEqual({
+      uri: "skills/alpha/SKILL.md",
+    });
+    expect(run.results[0]?.relatedLocations?.[0]?.physicalLocation.artifactLocation).toEqual({
+      uri: "skills/alpha/notes/docs/x.md",
+    });
+  });
+
+  it("keeps the analyzer's %SRCROOT% reference on a prefixed URI", async () => {
+    const run = await uris(cleanRun([result("SKILL.md", { uriBaseId: "%SRCROOT%" })]));
+    expect(run.results[0]?.locations[0]?.physicalLocation.artifactLocation).toEqual({
+      uri: "skills/alpha/SKILL.md",
+      uriBaseId: "%SRCROOT%",
+    });
   });
 });
