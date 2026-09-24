@@ -19,6 +19,9 @@ describe("skillspectorDockerRunArgvV1", () => {
     ).toEqual([
       "docker",
       "run",
+      // C2a §6.1 never-pull: a missing image is a failure, never a registry pull.
+      "--pull",
+      "never",
       "--rm",
       "--name",
       expect.stringMatching(/^aih-skillspector-[0-9a-f-]{36}$/),

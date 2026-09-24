@@ -263,7 +263,13 @@ describe("skillspector parity (win32-x64 transcripts, C2a §6)", () => {
                 ? scan
                 : undefined;
           if (call === undefined) return { code: 0, stdout: "", stderr: "" };
-          expect(placeholdered(argv, root, "\u0000")).toEqual([...call.argv]);
+          // Deliberate deviation from legacy Core: the local profile adds
+          // `--pull never` after `run` (C2a §6.1 never-pull; review finding P2).
+          const expected =
+            call === scan
+              ? [...call.argv.slice(0, 2), "--pull", "never", ...call.argv.slice(2)]
+              : [...call.argv];
+          expect(placeholdered(argv, root, "\u0000")).toEqual(expected);
           return {
             code: call.code,
             stdout: call.stdout,

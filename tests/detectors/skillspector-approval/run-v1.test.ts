@@ -232,6 +232,9 @@ describe("runSkillspectorScanV1", () => {
     expect(seenDockerRuns[0]).toContain(SKILLSPECTOR_IMAGE_DIGEST_V1);
     expect(seenDockerRuns[0]).not.toContain(SKILLSPECTOR_IMAGE_TAG_V1);
     expect(seenDockerRuns[0]).not.toContain("pull");
+    // C2a §6.1: the local profile never pulls, even if the admitted image
+    // disappears between inspection and execution.
+    expect(seenDockerRuns[0]?.slice(0, 4)).toEqual(["docker", "run", "--pull", "never"]);
   });
 
   it("runs the full repo@digest reference when only RepoDigests proved the image", async () => {
