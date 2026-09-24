@@ -26,6 +26,7 @@ import {
   type SnykAgentScanRunnerV1,
   validateSnykAgentScanRequestEnvV1,
 } from "../../../src/detectors/snyk-agent-scan/index.js";
+import { strictJsonHostileTextsV1 } from "../../support/strict-json-hostile.js";
 
 let root: string;
 
@@ -1825,5 +1826,35 @@ describe("server records must prove analysis (S2f)", () => {
       NO_ANALYSIS,
     );
     await failedWith(entry(root, { servers: [stdio(dirname(root))] }), NO_ANALYSIS);
+  });
+});
+
+// U1g: snyk-agent-scan 0.6.x's ScanResponse is read only through the one strict parser: a
+// repeated key, a number no double holds, and a number token beyond the bound are each
+// refused before any record is read.
+describe("snyk-agent-scan 0.6.x strict analyzer output (U1g)", () => {
+  const tree = mkdtempSync(join(tmpdir(), "aih-snyk-strict-"));
+  afterAll(() => rmSync(tree, { recursive: true, force: true }));
+  const response = () =>
+    JSON.stringify({
+      scan_path_responses: [
+        {
+          client: tree,
+          path: "~/display/path",
+          server_risks: [],
+          skill_risks: [
+            { name: "alpha", files: [{ name: "SKILL.md", type: "instruction" }], risk_indexes: {} },
+          ],
+        },
+      ],
+    });
+
+  it.each(
+    strictJsonHostileTextsV1(response()),
+  )("refuses a response holding %s", (_label, hostile) => {
+    expect(parseSnykAgentScanSarifV1(response(), tree).runs[0]?.results).toEqual([]);
+    expect(() => parseSnykAgentScanSarifV1(hostile, tree)).toThrow(
+      "snyk-agent-scan did not emit parseable JSON",
+    );
   });
 });

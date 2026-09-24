@@ -11,6 +11,7 @@ import {
 import { runCiscoSourceTreeScanV1 } from "../../../src/detectors/cisco-multi-skill/scan-v1.js";
 import { runCiscoShardV1 } from "../../../src/detectors/cisco-multi-skill/shard-v1.js";
 import { hashComponentTreeV1 } from "../../../src/observation/source-hash-v1.js";
+import { strictJsonHostileTextsV1 } from "../../support/strict-json-hostile.js";
 
 // S2e: a Cisco job's SARIF is evidence only when it proves the job completed. Real
 // skill-scanner 2.0.14 output (the linux-x64 parity transcripts) is always
@@ -523,5 +524,20 @@ describe.each(BOTH)("Cisco job artifact indices (%s)", (_label, execute) => {
       { location: { uri: "SKILL.md" } },
     ]);
     expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});
+
+// U1g: every Cisco 2.1.0 source-tree or shard job's SARIF is read only through the one strict
+// parser; each of its refusals fails the job at output.
+describe.each(BOTH)("Cisco job strict analyzer output (%s, U1g)", (_label, execute) => {
+  const valid = JSON.stringify(sarif([cleanRun([result("SKILL.md")])]));
+  it.each(
+    strictJsonHostileTextsV1(valid),
+  )("fails a job whose SARIF holds %s", async (_name, hostile, reason) => {
+    const outcome = await execute(
+      runner((name) => (name === "alpha" ? hostile : sarif([cleanRun()]))),
+    );
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCiscoMcpScannerSarifV1 } from "../../../src/detectors/cisco-mcp-scanner/index.js";
+import { strictJsonHostileTextsV1 } from "../../support/strict-json-hostile.js";
 
 /**
  * Parity with Core's `mcpScannerSarif` (`src/trust/detectors.ts` ~1351-1441):
@@ -559,5 +560,35 @@ describe("parseCiscoMcpScannerSarifV1 never substitutes a fallback URI (S2g)", (
     expect(() =>
       parseCiscoMcpScannerSarifV1(JSON.stringify(report), submitted(["t", uri])),
     ).toThrow("mcp-scanner tool config path is not a safe source-relative URI");
+  });
+});
+
+// U1g: mcp-scanner 4.8.4's JSON is read only through the one strict parser: a repeated key,
+// a number no double holds, and a number token beyond the bound are each refused.
+describe("parseCiscoMcpScannerSarifV1 strict analyzer output (U1g)", () => {
+  const clean = JSON.stringify([
+    {
+      status: "completed",
+      is_safe: true,
+      findings: {
+        yara_analyzer: {
+          severity: "SAFE",
+          threat_names: [],
+          threat_summary: "No threats detected",
+          total_findings: 0,
+        },
+      },
+      tool_name: ".mcp.json:local",
+      tool_description: "local fixture",
+      item_type: "tool",
+    },
+  ]);
+  const tools = () => submitted([".mcp.json:local", ".mcp.json"]);
+
+  it.each(strictJsonHostileTextsV1(clean))("refuses JSON holding %s", (_label, hostile) => {
+    expect(parseCiscoMcpScannerSarifV1(clean, tools()).runs[0]?.results).toEqual([]);
+    expect(() => parseCiscoMcpScannerSarifV1(hostile, tools())).toThrow(
+      /duplicate JSON object key|mcp-scanner did not emit parseable JSON/,
+    );
   });
 });

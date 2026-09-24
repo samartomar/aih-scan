@@ -11,6 +11,7 @@ import {
 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import { strictJsonHostileTextsV1 } from "../support/strict-json-hostile.js";
 import {
   completionOfObservationV1,
   diskFilesV1,
@@ -542,5 +543,20 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 completion evidence v1
     });
 
     expect(completionOfObservationV1(outcome)).toMatchObject({ analyzedFileCount: 0 });
+  });
+});
+
+// U1g: SkillSpector v2.12.0's SARIF is read only through the one strict parser; each of its
+// refusals fails the run at output.
+describe("runDetectorV1 docker-host-local-skillspector-v1 strict analyzer output (U1g)", () => {
+  const text = sarif;
+  it.each(
+    strictJsonHostileTextsV1(text),
+  )("fails SARIF holding %s at output", async (_label, hostile, reason) => {
+    const outcome = await runDetectorV1(
+      request({ env: hostFixture().env, runner: dockerRunner([], async () => okay(hostile)) }),
+    );
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
   });
 });

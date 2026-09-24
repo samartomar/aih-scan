@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canonicalCiscoSarifV1Bytes, parseCiscoSarifV1 } from "../../src/cisco/sarif-v1.js";
+import { strictJsonHostileTextsV1 } from "../support/strict-json-hostile.js";
 
 /**
  * Exact reporter contract from Cisco skill-scanner 2.0.13, wheel SHA-256
@@ -451,5 +452,15 @@ describe("Cisco SARIF V1 projection", () => {
     ];
     for (const value of cases)
       expect(() => parseCiscoSarifV1(text({ ...validSarif, runs: [value] }))).toThrow();
+  });
+});
+
+// U1g: the OCI profile's Cisco 2.1.0 SARIF is read only through the one strict parser.
+describe("parseCiscoSarifV1 strict analyzer output (U1g)", () => {
+  it.each(
+    strictJsonHostileTextsV1(text(validSarif)),
+  )("refuses SARIF holding %s", (_label, hostile, reason) => {
+    expect(parseCiscoSarifV1(text(validSarif))).toBeDefined();
+    expect(() => parseCiscoSarifV1(hostile)).toThrow(reason);
   });
 });
