@@ -56,8 +56,7 @@ function sarif(runs: unknown[]) {
 /** The version gate passes; each job writes `perJob(<job dir basename>)`. */
 function runner(perJob: (name: string) => unknown, delays?: Record<string, number>) {
   const run: CiscoMultiSkillRunnerV1 = async (argv) => {
-    if (argv.includes("--version"))
-      return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
+    if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
     const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
     const output = argv[argv.indexOf("--output-sarif") + 1];
     if (output === undefined) return { code: 2, stdout: "", stderr: "no output path" };

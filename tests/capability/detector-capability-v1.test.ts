@@ -341,7 +341,7 @@ describe("DetectorCapabilityV1", () => {
     const hardened = resolveDetectorExecutionProfileDocumentV1("docker-hardened-skillspector-v1");
     expect(hostDocker?.containment).toEqual(["--pull", "never", ...(hardened?.containment ?? [])]);
     expect(hostDocker?.image).toBe(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1);
-    expect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1).toBe("skillspector:aih-2d198ab910ad");
+    expect(SKILLSPECTOR_LOCAL_IMAGE_TAG_V1).toBe("skillspector:aih-c7958a3268d9");
     expect(hostDocker?.network).toBe("none");
     expect(hostDocker?.acquisition).toEqual([]);
     expect(hostDocker?.notes.join(" ")).toMatch(/never pulls/);

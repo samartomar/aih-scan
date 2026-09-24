@@ -41,15 +41,15 @@ import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1
 import { ciscoSourceRelativeSarifV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
 
 export const SKILLSPECTOR_IMAGE_V1 =
-  "ghcr.io/samartomar/skillspector@sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
-export const SKILLSPECTOR_SOURCE_REVISION_V1 = "2d198ab910add401cad658d1087e7c7ba24fd640";
+  "ghcr.io/samartomar/skillspector@sha256:efe47bd7e073064426541381c8cb284162086950748424d1b4633788a2275bc6";
+export const SKILLSPECTOR_SOURCE_REVISION_V1 = "c7958a3268d9498644b22edb75d0f051bbc8cbfc";
 export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
-  "sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
+  "sha256:efe47bd7e073064426541381c8cb284162086950748424d1b4633788a2275bc6";
 /**
  * The local tag Core documents for its SkillSpector image (docs/security/skillspector.md).
  * `docker-host-local-skillspector-v1` inspects only this tag and never pulls.
  */
-export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 = "skillspector:aih-2d198ab910ad";
+export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 = "skillspector:aih-c7958a3268d9";
 export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.1.0";
 export const SEMGREP_VERSION_V1 = "1.178.0";
 /** The interpreter the Linux namespace profile binds; the host profile discovers its own. */

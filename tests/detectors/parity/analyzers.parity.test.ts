@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 } from "../../../src/baseline/runtime-v1.js";
 import {
   deriveCiscoMcpToolsV1,
   planCiscoMcpScannerRequestV1,
@@ -257,6 +258,14 @@ describe("skillspector parity (win32-x64 transcripts, C2a §6)", () => {
       const scan = transcript.calls.find((call) => call.argv[1] === "run");
       if (scan === undefined) throw new Error("no recorded docker run");
       const containerName = scan.argv[scan.argv.indexOf("--name") + 1] ?? "";
+      // The transcripts were recorded against Core's 2d198ab9 image. Since the pin moved to
+      // v2.12.0 (c7958a32), the replay inspects the current local tag and admits the
+      // recorded image only as a caller-accepted digest: it checks the argv shape and the
+      // SARIF projection, never that the recorded image is the pinned one.
+      const recordedTag = inspect?.argv[inspect.argv.indexOf("inspect") + 1] ?? "";
+      const recordedId = (JSON.parse(inspect?.stdout ?? "{}") as { Id?: string }).Id ?? "";
+      const rebase = (argv: readonly string[]) =>
+        argv.map((arg) => (arg === recordedTag ? SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 : arg));
 
       const outcome = await runSkillspectorScanV1({
         run: async (argv) => {
@@ -273,7 +282,7 @@ describe("skillspector parity (win32-x64 transcripts, C2a §6)", () => {
           const expected =
             call === scan
               ? [...call.argv.slice(0, 2), "--pull", "never", ...call.argv.slice(2)]
-              : [...call.argv];
+              : rebase(call.argv);
           expect(placeholdered(argv, root, "\u0000")).toEqual(expected);
           return {
             code: call.code,
@@ -287,11 +296,12 @@ describe("skillspector parity (win32-x64 transcripts, C2a §6)", () => {
         env: HOST_ENV,
         tree: root,
         containerName,
+        acceptedImageDigests: [recordedId],
       });
 
       expect(golden.outcome).toBe("completed");
       if (outcome.status !== "succeeded") throw new Error(JSON.stringify(outcome));
-      expect(outcome.image.acceptance).toBe("pinned");
+      expect(outcome.image.acceptance).toBe("caller-accepted");
       expect(occurrences(outcome.sarif as SarifLike)).toEqual(
         goldenOccurrences(golden.rawOccurrences),
       );

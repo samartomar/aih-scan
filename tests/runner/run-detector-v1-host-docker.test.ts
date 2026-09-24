@@ -12,7 +12,7 @@ import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
 
 const PROFILE = "docker-host-local-skillspector-v1";
-const LOCAL_TAG = "skillspector:aih-2d198ab910ad";
+const LOCAL_TAG = "skillspector:aih-c7958a3268d9";
 const windows = process.platform === "win32";
 const hostOs = windows ? "windows" : process.platform === "darwin" ? "darwin" : "linux";
 const temporaryDirectories: string[] = [];
