@@ -16,8 +16,14 @@ const LAYER_MEDIA_TYPES = new Set([
   "application/vnd.oci.image.layer.v1.tar",
   "application/vnd.oci.image.layer.v1.tar+gzip",
 ]);
-const MAX_FILE_BYTES = 128 * 1024 * 1024;
-const MAX_LAYOUT_BYTES = 512 * 1024 * 1024;
+// Measured on the Cisco 2.1.0 candidate (tools/cisco-oci-candidate, linux/amd64, buildkit
+// v0.30.0, gzip layers): the one venv layer is 144,783,569 bytes (138.1 MiB; 2.1.0 ships
+// compiled wheels such as litellm, onnxruntime, yara-x and numpy) and the whole layout is
+// 190,230,536 bytes (181.4 MiB). Each bound is the measured value plus a stated margin:
+// 144 MiB per file (+5.9 MiB, 4%) and 192 MiB per layout (+10.6 MiB, 6%). A larger image is a
+// reviewed change of these two numbers, never a removed bound.
+const MAX_FILE_BYTES = 144 * 1024 * 1024;
+const MAX_LAYOUT_BYTES = 192 * 1024 * 1024;
 const MAX_ROOT_ENTRIES = 128;
 const SIZE_BUCKETS_MIB = [1, 32, 64, 128, 256, 512, 1024];
 const METADATA_KEY_ORDER = [

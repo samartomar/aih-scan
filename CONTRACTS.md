@@ -145,6 +145,17 @@ without those bytes every field except the occurrence fingerprint and its multip
 `unavailable`. An empty findings list is never reported as "nothing was found": the gaps
 say why the list is empty.
 
+## Cisco OCI candidate size bound
+
+`tools/verify-cisco-oci-candidate.mjs` refuses a candidate OCI layout with any file over
+144 MiB or a layout over 192 MiB in total. These are measured values plus a stated margin:
+the Cisco 2.1.0 candidate (linux/amd64, buildkit v0.30.0, gzip layers) has one venv layer of
+144,783,569 bytes (138.1 MiB, because 2.1.0 ships compiled wheels) and a layout of
+190,230,536 bytes (181.4 MiB), so the margins are 5.9 MiB and 10.6 MiB. The candidate keeps a
+single copy of the environment: the final stage extracts the builder's tar through a bind
+mount, so the tar itself is never a layer. A larger image changes these two numbers in a
+reviewed commit; the bound is never removed.
+
 ## The reproducibility rule
 
 Every compatibility run records the exact tarball sha256 of each package it tested, the

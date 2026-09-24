@@ -10,7 +10,6 @@ RUN tar --sort=name --mtime=@1785167267 -cf /runtime-venv.tar .venv
 
 FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134
 WORKDIR /runtime
-COPY --from=builder /runtime-venv.tar /runtime-venv.tar
-RUN tar -xf /runtime-venv.tar && rm /runtime-venv.tar
+RUN --mount=type=bind,from=builder,source=/runtime-venv.tar,target=/runtime-venv.tar tar -xf /runtime-venv.tar
 USER 65532:65532
 ENTRYPOINT ["/runtime/.venv/bin/skill-scanner"]

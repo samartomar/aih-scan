@@ -47,6 +47,12 @@ describe("Cisco OCI candidate build context", () => {
     expect(dockerfile).not.toMatch(
       /ADD\s+https?:|curl\b|pip install\s+uv\b|latest|credential|policy/i,
     );
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf("\nFROM "));
+    // One copy of the environment: the tar is bind-mounted from the builder, never a layer.
+    expect(runtimeStage).not.toMatch(/^(COPY|ADD)\b/m);
+    expect(runtimeStage).toContain(
+      "RUN --mount=type=bind,from=builder,source=/runtime-venv.tar,target=/runtime-venv.tar tar -xf /runtime-venv.tar\n",
+    );
     expect(read("uv.lock")).toMatch(
       /cisco-ai-skill-scanner[\s\S]*2\.1\.0[\s\S]*c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e/i,
     );
