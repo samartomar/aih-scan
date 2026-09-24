@@ -193,6 +193,73 @@ describe("validateCiscoMcpScannerDetectorOptionsV1 (C2a §4.1, validated as §2.
   });
 });
 
+describe("validateCiscoMcpScannerDetectorOptionsV1 shares trust-lint's §2.1 path rules", () => {
+  // One validator for both detectors: Core's discovery order (root first,
+  // then each selected SKILL.md directory in localeCompare order, names in
+  // Core's incoming order) and assertSafeRelativePosixPathV1 semantics.
+  function tree(): { root: string; selectedClosurePaths: string[] } {
+    const root = fixture();
+    for (const dir of ["a", "a-b", "odd%41", "skills/x"]) write(root, `${dir}/SKILL.md`, "# S\n");
+    for (const path of [
+      ".mcp.json",
+      "mcp.json",
+      "a/.mcp.json",
+      "a-b/.mcp.json",
+      "odd%41/.mcp.json",
+      "skills/x/.mcp.json",
+      "skills/x/mcp.json",
+    ]) {
+      write(root, path, serverConfig());
+    }
+    return {
+      root,
+      selectedClosurePaths: ["a-b/SKILL.md", "a/SKILL.md", "odd%41/SKILL.md", "skills/x/SKILL.md"],
+    };
+  }
+
+  it("accepts paths in Core's discovery order", () => {
+    const request = tree();
+    const mcpConfigPaths = [
+      ".mcp.json",
+      "mcp.json",
+      "a/.mcp.json",
+      "a-b/.mcp.json",
+      "skills/x/.mcp.json",
+      "skills/x/mcp.json",
+    ];
+    expect(validateCiscoMcpScannerDetectorOptionsV1({ mcpConfigPaths }, request)).toEqual({
+      ok: true,
+      mcpConfigPaths,
+    });
+  });
+
+  it.each([
+    [["mcp.json", ".mcp.json"]],
+    [["skills/x/.mcp.json", ".mcp.json"]],
+    [["a-b/.mcp.json", "a/.mcp.json"]],
+    [["skills/x/mcp.json", "skills/x/.mcp.json"]],
+  ])("refuses paths out of Core's discovery order: %j", (mcpConfigPaths) => {
+    const outcome = validateCiscoMcpScannerDetectorOptionsV1({ mcpConfigPaths }, tree());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.refusal.reason).toBe("detector-options-invalid");
+    expect(outcome.refusal.detail).toContain("discovery order");
+  });
+
+  it.each([
+    ["odd%41/.mcp.json"],
+    ["sk\u0001/.mcp.json"],
+  ])("refuses a path assertSafeRelativePosixPathV1 rejects: %j", (path) => {
+    const outcome = validateCiscoMcpScannerDetectorOptionsV1({ mcpConfigPaths: [path] }, tree());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.refusal.reason).toBe("detector-options-invalid");
+    expect(outcome.refusal.detail).toContain("safe source-relative POSIX path");
+    // The refusal is bounded and free of control characters (§8.4).
+    expect(/[\p{C}]/u.test(outcome.refusal.detail)).toBe(false);
+  });
+});
+
 describe("deriveCiscoMcpToolsV1 (C2a §4.2, verbatim from Core mcpStaticTools)", () => {
   it("consumes exactly the declared paths, in declared order, never discovered ones", () => {
     const root = fixture();

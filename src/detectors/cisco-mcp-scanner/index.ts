@@ -7,6 +7,11 @@ import {
   assertWellFormedNfcV1,
   deepFreezeStrictJsonV1,
 } from "../../contract/strict-json-v1.js";
+import {
+  MAX_MCP_CONFIG_PATHS_V1,
+  mcpConfigPathsProblemV1,
+  visibleOptionsDetailV1,
+} from "../mcp-config-paths-v1.js";
 
 /**
  * Scan detector engine `detector.cisco-mcp-scanner`: the Cisco AI Defense
@@ -26,9 +31,10 @@ import {
  *   `detectorOptions: { mcpConfigPaths: string[] }`; applicability is Core's
  *   decision (Core sends no request when the list is empty), but the engine
  *   still validates. {@link planCiscoMcpScannerRequestV1} validates the options
- *   exactly as C2a §2.1 (unique source-relative POSIX paths from Core's
- *   config-name set, order significant, a nonexistent path refused, a
- *   directory or symlink accepted) and returns a typed refusal
+ *   with the one C2a §2.1 validator shared with trust-lint (safe unique
+ *   source-relative POSIX paths from Core's config-name set in Core's
+ *   discovery order, a nonexistent path refused, a directory or symlink
+ *   accepted) and returns a typed refusal
  *   (`detector-options-invalid`) instead of throwing.
  * - §4.2: {@link deriveCiscoMcpToolsV1} derives tools from the declared paths
  *   in declared order, verbatim from Core's `mcpStaticTools`: a read/parse
@@ -75,7 +81,7 @@ export const MCP_CONFIG_FILE_NAMES_V1: readonly string[] = Object.freeze([
 ]);
 
 /** C2a §2.1: at most this many caller-declared MCP config paths per request. */
-export const MCP_DECLARED_CONFIG_PATHS_MAX_V1 = 1024;
+export const MCP_DECLARED_CONFIG_PATHS_MAX_V1 = MAX_MCP_CONFIG_PATHS_V1;
 const MAX_TOOLS = 4096;
 const MAX_STDOUT_BYTES = 16 * 1024 * 1024;
 const MAX_THREATS_PER_ANALYZER = 4096;
@@ -554,50 +560,15 @@ export interface CiscoMcpScannerRefusalV1 {
   readonly detail: string;
 }
 
-/** C2a §2.1 artifact-URI rule: a source-relative POSIX path, nothing else. */
-function isSourceRelativePosixPathV1(path: string): boolean {
-  if (path.length === 0 || path.includes("\\")) return false;
-  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path)) return false;
-  return !path
-    .split("/")
-    .some((segment) => segment.length === 0 || segment === "." || segment === "..");
-}
-
-/** Directories holding a `SKILL.md` in Core's declared selection (`""` is the root). */
-function selectedSkillDirsV1(selectedClosurePaths: readonly string[]): ReadonlySet<string> {
-  const dirs = new Set<string>();
-  for (const path of selectedClosurePaths) {
-    const slash = path.lastIndexOf("/");
-    if ((slash < 0 ? path : path.slice(slash + 1)) !== "SKILL.md") continue;
-    dirs.add(slash < 0 ? "" : path.slice(0, slash));
-  }
-  return dirs;
-}
-
-/**
- * Whether `path` is one of Core's incoming MCP config names at the root or
- * under a directory holding a selected `SKILL.md` (C2a §2.1). Multi-segment
- * names (`.cursor/mcp.json`) match as a whole, never as a bare `mcp.json`
- * suffix.
- */
-function isCoreMcpConfigPathV1(path: string, skillDirs: ReadonlySet<string>): boolean {
-  for (const name of MCP_CONFIG_FILE_NAMES_V1) {
-    if (path === name) return true;
-    if (path.endsWith(`/${name}`)) {
-      const dir = path.slice(0, path.length - name.length - 1);
-      if (skillDirs.has(dir)) return true;
-    }
-  }
-  return false;
-}
-
 /**
  * C2a §4.1 options validation, exactly as §2.1: `detectorOptions` must be a
- * plain object with exactly the key `mcpConfigPaths`, holding 0-1024 unique
- * source-relative POSIX paths from Core's config-name set that exist in the
- * sealed tree (a directory or symlink is accepted; only a missing path is
- * refused). Order is significant and is preserved verbatim. Never throws.
+ * plain object with exactly the key `mcpConfigPaths`, whose value passes the
+ * one §2.1 path validator shared with `detector.aih-trust-lint`
+ * ({@link mcpConfigPathsProblemV1}: 0-1024 unique paths with
+ * `assertSafeRelativePosixPathV1` semantics, from Core's incoming config-name
+ * set at the root or under a selected SKILL.md directory, in Core's discovery
+ * order, present in the sealed tree — a directory or symlink is accepted).
+ * The accepted order is preserved verbatim. Never throws.
  */
 export function validateCiscoMcpScannerDetectorOptionsV1(
   detectorOptions: unknown,
@@ -608,7 +579,10 @@ export function validateCiscoMcpScannerDetectorOptionsV1(
   const invalid = (detail: string) =>
     Object.freeze({
       ok: false as const,
-      refusal: Object.freeze({ reason: "detector-options-invalid" as const, detail }),
+      refusal: Object.freeze({
+        reason: "detector-options-invalid" as const,
+        detail: visibleOptionsDetailV1(detail),
+      }),
     });
   if (!isRecord(detectorOptions))
     return invalid("detectorOptions must be an object with exactly the key mcpConfigPaths.");
@@ -618,37 +592,17 @@ export function validateCiscoMcpScannerDetectorOptionsV1(
       `detectorOptions must have exactly the key mcpConfigPaths; got ${JSON.stringify(keys)}.`,
     );
   const value: unknown = detectorOptions.mcpConfigPaths;
-  if (!Array.isArray(value))
-    return invalid(
-      "detectorOptions.mcpConfigPaths must be an array of source-relative POSIX paths.",
-    );
-  if (value.length > MCP_DECLARED_CONFIG_PATHS_MAX_V1)
-    return invalid(
-      `detectorOptions.mcpConfigPaths names ${value.length} paths; at most ${MCP_DECLARED_CONFIG_PATHS_MAX_V1} are accepted.`,
-    );
-  const skillDirs = selectedSkillDirsV1(request.selectedClosurePaths);
-  const seen = new Set<string>();
-  const paths: string[] = [];
-  for (const [index, entry] of value.entries()) {
-    if (typeof entry !== "string" || !isSourceRelativePosixPathV1(entry))
-      return invalid(
-        `detectorOptions.mcpConfigPaths[${index}] is not a source-relative POSIX path: ${JSON.stringify(entry)}.`,
-      );
-    if (seen.has(entry))
-      return invalid(`detectorOptions.mcpConfigPaths[${index}] repeats ${JSON.stringify(entry)}.`);
-    seen.add(entry);
-    if (!isCoreMcpConfigPathV1(entry, skillDirs))
-      return invalid(
-        `detectorOptions.mcpConfigPaths[${index}] is not one of Core's incoming MCP config names at the root or under a selected SKILL.md directory: ${JSON.stringify(entry)}.`,
-      );
-    const stats = lstatSync(join(request.root, ...entry.split("/")), { throwIfNoEntry: false });
-    if (stats === undefined)
-      return invalid(
-        `detectorOptions.mcpConfigPaths[${index}] does not exist in the sealed tree: ${JSON.stringify(entry)}.`,
-      );
-    paths.push(entry);
-  }
-  return Object.freeze({ ok: true as const, mcpConfigPaths: Object.freeze(paths) });
+  const problem = mcpConfigPathsProblemV1(
+    value,
+    request.selectedClosurePaths,
+    (path) =>
+      lstatSync(join(request.root, ...path.split("/")), { throwIfNoEntry: false }) !== undefined,
+  );
+  if (problem !== undefined) return invalid(problem);
+  return Object.freeze({
+    ok: true as const,
+    mcpConfigPaths: Object.freeze([...(value as readonly string[])]),
+  });
 }
 
 export type CiscoMcpToolsDerivationV1 =
