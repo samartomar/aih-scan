@@ -722,7 +722,11 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
       writeFileSync(join(root, "skills", "a", "GUIDE.md"), "# skill guide\n");
       return root;
     };
-    const ciscoOver = (sourceRoot: string, env: Record<string, string>, runner: BaselineProcessRunnerV1) =>
+    const ciscoOver = (
+      sourceRoot: string,
+      env: Record<string, string>,
+      runner: BaselineProcessRunnerV1,
+    ) =>
       runDetectorV1({
         detectorId: "detector.cisco",
         executionProfileId: HOST_PROFILE,

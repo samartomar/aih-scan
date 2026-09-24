@@ -281,24 +281,26 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
 
   // U1e review P1: an unsafe original URI fails at output before any substitution or case
   // binding, so it can never bind to a sealed file such as a root-level CISCO.SARIF.
-  it.each(["../outside.md", "/etc/passwd", "C:/Windows/win.ini", "cisco.sarif/../../x"])(
-    "fails at output on the unsafe original URI %s beside a sealed CISCO.SARIF",
-    async (uri) => {
-      const host = hostEnv();
-      const tree = skillsTree();
-      writeFileSync(join(tree, "CISCO.SARIF"), "{}\n");
-      const outcome = await runDetectorV1(
-        request(tree, host.env, {
-          runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, uri),
-        }),
-      );
+  it.each([
+    "../outside.md",
+    "/etc/passwd",
+    "C:/Windows/win.ini",
+    "cisco.sarif/../../x",
+  ])("fails at output on the unsafe original URI %s beside a sealed CISCO.SARIF", async (uri) => {
+    const host = hostEnv();
+    const tree = skillsTree();
+    writeFileSync(join(tree, "CISCO.SARIF"), "{}\n");
+    const outcome = await runDetectorV1(
+      request(tree, host.env, {
+        runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, uri),
+      }),
+    );
 
-      expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
-      if (outcome.outcome !== "failed") return;
-      expect(outcome.failure.detail).toContain("not a safe source-relative artifact URI");
-      expect("findings" in outcome).toBe(false);
-    },
-  );
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome !== "failed") return;
+    expect(outcome.failure.detail).toContain("not a safe source-relative artifact URI");
+    expect("findings" in outcome).toBe(false);
+  });
 
   it("reports the lowest-index failing job and no partial SARIF", async () => {
     const host = hostEnv();
