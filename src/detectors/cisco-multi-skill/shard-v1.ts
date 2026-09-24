@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { bindCiscoSarifToSealedFilesV1 } from "../../baseline/cisco-sealed-case-binding-v1.js";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
 import { attachScanCompletionV1, scanCompletionEvidenceV1 } from "../completion-evidence-v1.js";
 import {
@@ -163,8 +164,9 @@ function locationUriV1(location: unknown): unknown {
  * S2g (review of U1d): the tree hashes prove a job's input did not change, not that its
  * results name files it analyzed. Every result of the job's normalized SARIF must carry at
  * least one location, every one of its `locations` must name a file of the job's own sealed
- * inventory (exact, case-sensitive, root-relative), and so must every related location that
- * names a file. Returns why a result is unbound, or `undefined` when all are bound.
+ * inventory (exact, case-sensitive, root-relative; on Windows after owner decision D1 bound a
+ * normcased path to its unique sealed file), and so must every related location that names a
+ * file. Returns why a result is unbound, or `undefined` when all are bound.
  */
 function unboundShardResultV1(
   log: CiscoSarifLogV1,
@@ -418,10 +420,27 @@ export async function runCiscoShardV1(
         if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
           throw new CiscoShardJobFailureV1("coverage", `source changed during scan: ${job.path}`);
         }
-        const unbound = unboundShardResultV1(
-          outcome.log,
-          new Set(sealed.files.map((file) => file.path)),
-        );
+        const sealedPaths = sealed.files.map((file) => file.path);
+        // Owner decision D1: Cisco 2.1.0 reports os.path.normcase paths, lowercased on Windows.
+        // There, and only there, a job result binds to the unique file of the job's own sealed
+        // inventory equal ignoring case, and the job's SARIF carries that file's real name
+        // before it is hashed; several matches fail the job here, none fails just below.
+        let bound: CiscoSarifLogV1;
+        try {
+          bound = bindCiscoSarifToSealedFilesV1(
+            outcome.log as unknown as Record<string, unknown>,
+            sealedPaths,
+            request.platform === "windows" ? "win32" : request.platform,
+          ).document as unknown as CiscoSarifLogV1;
+        } catch (error) {
+          throw new CiscoShardJobFailureV1(
+            "output",
+            boundedCiscoDetailV1(
+              `Cisco shard job ${job.path}: ${error instanceof Error ? error.message : "ambiguous path"}`,
+            ),
+          );
+        }
+        const unbound = unboundShardResultV1(bound, new Set(sealedPaths));
         if (unbound !== undefined) {
           throw new CiscoShardJobFailureV1(
             "output",
@@ -433,7 +452,7 @@ export async function runCiscoShardV1(
         let sarif: Uint8Array;
         try {
           const log = attachScanCompletionV1(
-            JSON.parse(JSON.stringify(outcome.log)),
+            bound,
             scanCompletionEvidenceV1({
               detectorId: "detector.cisco",
               files: sealed.files.map((file) => ({ path: file.path, sha256: file.sha256 })),

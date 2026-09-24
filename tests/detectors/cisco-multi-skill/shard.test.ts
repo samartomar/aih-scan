@@ -66,6 +66,8 @@ function scanningRunner(hooks?: {
   locations?: (target: string) => unknown[] | undefined;
   /** S2g: extra run properties, such as `originalUriBaseIds`. */
   run?: (target: string) => Record<string, unknown>;
+  /** U1f: extra result properties, such as `relatedLocations`. */
+  result?: (target: string) => Record<string, unknown>;
 }): CiscoMultiSkillRunnerV1 {
   let scanCount = 0;
   return async (argv) => {
@@ -96,6 +98,7 @@ function scanningRunner(hooks?: {
                 ruleId: "fixture",
                 message: { text: heading },
                 ...fixtureLocations(hooks?.locations, target),
+                ...(hooks?.result?.(target) ?? {}),
               },
             ],
             ...(hooks?.run?.(target) ?? {}),
@@ -184,11 +187,12 @@ describe("runCiscoShardV1", () => {
       expected?: { analyzerVersion: string; lockSha256: string };
       concurrency?: number;
       run?: CiscoMultiSkillRunnerV1;
+      platform?: "linux" | "windows";
     },
   ) {
     return {
       run: overrides?.run ?? scanningRunner(),
-      platform: "linux" as const,
+      platform: overrides?.platform ?? ("linux" as const),
       env: {},
       sourceRoot: root,
       jobs: overrides?.jobs ?? shardRequestJobs(root),
@@ -702,6 +706,126 @@ describe("runCiscoShardV1", () => {
         /skills\/beta\/gone\.md/,
       );
       await failsAtOutput(root, { locations: () => at("gone.md") }, /skills\/alpha\/gone\.md/);
+    });
+
+    // Owner decision D1: on win32 only, a job result that is not exactly a sealed file of the
+    // job binds to the UNIQUE sealed file of that job equal ignoring case, and the job's SARIF
+    // carries the real name before it is hashed; none or several fail at output.
+    describe("owner decision D1 on win32", () => {
+      const caseSensitiveDirectory = (root: string): boolean => {
+        writeFileSync(join(root, "probe"), "a", "utf8");
+        writeFileSync(join(root, "PROBE"), "b", "utf8");
+        const distinct = readFileSync(join(root, "probe"), "utf8") === "a";
+        rmSync(join(root, "probe"), { force: true });
+        rmSync(join(root, "PROBE"), { force: true });
+        return distinct;
+      };
+
+      it("binds a normcased skill.md to the job's sealed SKILL.md and hashes the real name", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-d1-");
+        skill(root, join("Skills", "Alpha"), "# alpha\n");
+        writeFileSync(join(root, "Skills", "Alpha", "Guide.md"), "# guide\n", "utf8");
+        const outcome = await runCiscoShardV1(
+          shardRequest(root, {
+            platform: "windows",
+            run: scanningRunner({
+              locations: () => [
+                {
+                  physicalLocation: { artifactLocation: { uri: "skill.md" } },
+                },
+              ],
+            }),
+          }),
+        );
+
+        expect(outcome.kind).toBe("completed");
+        if (outcome.kind !== "completed") return;
+        const [output] = outcome.outputs;
+        const text = Buffer.from(output?.sarif ?? new Uint8Array()).toString("utf8");
+        expect(text).toContain('"uri":"Skills/Alpha/SKILL.md"');
+        expect(text).not.toContain("skill.md");
+        expect(output?.sha256).toBe(
+          createHash("sha256")
+            .update(output?.sarif ?? new Uint8Array())
+            .digest("hex"),
+        );
+        expect(completionOfLogV1(JSON.parse(text))).toMatchObject({ analyzedFileCount: 2 });
+      });
+
+      it("binds related locations of the job too", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-d1-");
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        writeFileSync(join(root, "skills", "alpha", "Guide.md"), "# guide\n", "utf8");
+        const outcome = await runCiscoShardV1(
+          shardRequest(root, {
+            platform: "windows",
+            run: scanningRunner({
+              locations: () => [
+                {
+                  physicalLocation: { artifactLocation: { uri: "skill.md" } },
+                },
+              ],
+              result: () => ({
+                relatedLocations: [{ physicalLocation: { artifactLocation: { uri: "guide.md" } } }],
+              }),
+            }),
+          }),
+        );
+
+        expect(outcome.kind).toBe("completed");
+        if (outcome.kind !== "completed") return;
+        const text = Buffer.from(outcome.outputs[0]?.sarif ?? new Uint8Array()).toString("utf8");
+        expect(text).toContain('"uri":"skills/alpha/Guide.md"');
+        expect(text).toContain('"uri":"skills/alpha/SKILL.md"');
+      });
+
+      it("still fails a lowercased name that matches no sealed file of the job", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-d1-");
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        skill(root, join("skills", "beta"), "# beta\n");
+        writeFileSync(join(root, "skills", "beta", "notes.md"), "# notes\n", "utf8");
+        const outcome = await runCiscoShardV1(
+          shardRequest(root, {
+            platform: "windows",
+            run: scanningRunner({ locations: () => at("NOTES.md") }),
+          }),
+        );
+        // alpha holds no notes.md: its own inventory is the only one it may bind to.
+        expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+        expect(outcome).not.toHaveProperty("outputs");
+        if (outcome.kind === "failed")
+          expect(outcome.detail).toMatch(/skills\/alpha: .*skills\/alpha\/NOTES\.md/);
+      });
+
+      it("fails at output, lowest index first, when a name matches several sealed files", async (context) => {
+        const root = fixtureRoot("aih-cisco-shard-v1-d1-");
+        if (!caseSensitiveDirectory(root)) context.skip();
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        skill(root, join("skills", "beta"), "# beta\n");
+        for (const job of ["alpha", "beta"]) {
+          writeFileSync(join(root, "skills", job, "Guide.md"), "# a\n", "utf8");
+          writeFileSync(join(root, "skills", job, "GUIDE.md"), "# b\n", "utf8");
+        }
+        const outcome = await runCiscoShardV1(
+          shardRequest(root, {
+            platform: "windows",
+            run: scanningRunner({ locations: () => at("guide.md") }),
+          }),
+        );
+        expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+        expect(outcome).not.toHaveProperty("outputs");
+        if (outcome.kind === "failed")
+          expect(outcome.detail).toMatch(/skills\/alpha: .*matches 2 sealed files ignoring case/);
+      });
+
+      it("stays strict off win32", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-d1-");
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        const outcome = await runCiscoShardV1(
+          shardRequest(root, { run: scanningRunner({ locations: () => at("skill.md") }) }),
+        );
+        expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      });
     });
 
     it("completes when every result names a sealed file of its own job", async () => {
