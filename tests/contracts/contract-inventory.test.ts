@@ -199,17 +199,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/cisco-report-skills-v1.ts",
-    line: 84,
+    line: 88,
     contains: "export function assertCiscoSingleSkillReportSkillV1",
   },
   {
     path: "src/baseline/cisco-report-skills-v1.ts",
-    line: 119,
+    line: 125,
     contains: "export function assertCiscoScanAllSkillInventoryV1",
   },
   {
     path: "src/baseline/cisco-report-skills-v1.ts",
-    line: 199,
+    line: 205,
     contains: "export function assertCiscoSingleSkillAnalyzersCompleteV1",
   },
   {

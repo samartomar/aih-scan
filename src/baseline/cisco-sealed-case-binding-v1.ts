@@ -17,8 +17,11 @@ import {
  * exactly a sealed file is bound to the UNIQUE sealed file whose whole source-relative path
  * is equal ignoring case, and the sealed file's real name replaces the reported one. No
  * match leaves the path as reported, so the caller's sealed-file check fails it at `output`
- * as before; more than one match fails here. An exact match always wins. On every other
- * platform nothing is rebound.
+ * as before; more than one match fails here. U1k (review of U1j, P2): D1 binds a unique match
+ * only, so more than one match fails even when the path spells one of them exactly (Cisco
+ * normcases every path on Windows, so its spelling cannot tell case-variant twins apart); an
+ * exact spelling with no case-variant twin is its own unique match. On every other platform
+ * nothing is rebound, and case-variant twins stay distinct.
  *
  * "Equal ignoring case" is `a.toLowerCase() === b.toLowerCase()` over both whole paths, code
  * unit for code unit: the locale-independent Unicode default lowercase mapping (full
@@ -47,12 +50,13 @@ export function ciscoSealedPathBinderV1(
     else matches.push(path);
   }
   return (path) => {
-    if (sealed.has(path)) return path;
     try {
       assertSafeRelativePosixPathV1(path, "Cisco result path");
     } catch {
       return path;
     }
+    // U1k (review of U1j, P2): ambiguity is decided before any spelling is accepted, the
+    // exact one included (a sealed path is always its own unique match otherwise).
     const matches = byFold.get(path.toLowerCase()) ?? [];
     if (matches.length > 1)
       throw new TypeError(

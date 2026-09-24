@@ -93,6 +93,50 @@ describe("the single-skill report names the scanned skill (U1j)", () => {
     });
   });
 
+  // U1k (review of U1j, P2): D1 binds only a unique match among the run's skills, so a job
+  // whose skill has a case-variant twin in the run cannot bind its report, even when the
+  // report spells the job's own directory exactly; off win32 the twins stay distinct.
+  it("refuses a case-twin skill's report on win32, even spelled exactly (U1k)", () => {
+    const twin = (skillPath: string, skill: string, platform: NodeJS.Platform) =>
+      failureOf(() =>
+        assertCiscoSingleSkillReportSkillV1(report(skillPath), {
+          label: `job ${skill}`,
+          sourceRoots: ["C:/scan"],
+          skill,
+          skills: ["skills/A", "skills/a"],
+          platform,
+        }),
+      );
+    for (const [skillPath, skill] of [
+      ["C:\\scan\\skills\\A", "skills/A"],
+      ["C:\\scan\\skills\\a", "skills/a"],
+      ["c:\\scan\\skills\\a", "skills/A"],
+    ] as const)
+      expect(twin(skillPath, skill, "win32"), skillPath).toEqual({
+        stage: "output",
+        message: expect.stringMatching(/matches 2 sealed files ignoring case$/),
+      });
+    expect(twin("C:\\scan\\skills\\A", "skills/A", "linux")).toBeUndefined();
+    expect(twin("C:\\scan\\skills\\a", "skills/a", "linux")).toBeUndefined();
+    expect(twin("C:\\scan\\skills\\a", "skills/A", "linux")).toMatchObject({ stage: "output" });
+  });
+
+  it("still binds a unique match among the run's skills on win32 (U1k)", () => {
+    for (const skillPath of ["C:\\scan\\skills\\A", "c:\\scan\\skills\\a"])
+      expect(
+        failureOf(() =>
+          assertCiscoSingleSkillReportSkillV1(report(skillPath), {
+            label: "job skills/A",
+            sourceRoots: ["C:/scan"],
+            skill: "skills/A",
+            skills: ["skills/A", "skills/b"],
+            platform: "win32",
+          }),
+        ),
+        skillPath,
+      ).toBeUndefined();
+  });
+
   it("refuses a report holding several results, which is not a single-skill report", () => {
     expect(
       failureOf(() =>
@@ -193,6 +237,28 @@ describe("the scan-all report lists every expected skill exactly once (U1j)", ()
       stage: "coverage",
       message: expect.stringMatching(/missing Skills\/Nested; not expected skills\/nested$/),
     });
+  });
+
+  // U1k (review of U1j, P2): expected skills "A" and "a" are equal ignoring case, so on win32
+  // neither spelling binds (D1 unique only), not even the exact one; off win32 both are
+  // distinct skills and the report is complete.
+  it("refuses case-variant twin skills on win32, even with exact spellings (U1k)", () => {
+    const twins = scanAll(["C:\\scan\\skills\\A", "C:\\scan\\skills\\a"]);
+    expect(inventory(twins, ["skills/A", "skills/a"], ["C:/scan"], "win32")).toEqual({
+      stage: "output",
+      message: expect.stringMatching(
+        /results\[0\] skill path .*: aih-scan Cisco SARIF: skills\/A\/SKILL\.md matches 2 sealed files ignoring case$/,
+      ),
+    });
+    expect(inventory(twins, ["skills/A", "skills/a"], ["C:/scan"], "linux")).toBeUndefined();
+    expect(
+      inventory(
+        scanAll(["C:\\scan\\skills\\A", "c:\\scan\\skills\\b"]),
+        ["skills/A", "skills/B"],
+        ["C:/scan"],
+        "win32",
+      ),
+    ).toBeUndefined();
   });
 
   it("is classified coverage by the runner", () => {

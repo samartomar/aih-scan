@@ -878,3 +878,57 @@ describe.each(
     }
   });
 });
+
+// U1k (review of U1j, P2): owner decision D1 binds only a unique match among the run's skill
+// directories. On a windows run two skills equal ignoring case cannot bind their job reports,
+// not even the exact spellings; elsewhere the twins are distinct skills. Twin directories need
+// a case-sensitive file system, so this runs on Linux only.
+describe.runIf(process.platform === "linux")("Cisco job report D1 uniqueness (U1k)", () => {
+  const twins = ["skills/Twin", "skills/twin"];
+  const withTwins = () => {
+    for (const path of twins) {
+      mkdirSync(join(root, path), { recursive: true });
+      writeFileSync(join(root, path, "SKILL.md"), `# ${path}\n`, "utf8");
+    }
+  };
+  const twinTree = (platform: "windows" | "linux") =>
+    runCiscoSourceTreeScanV1({
+      run: runner(() => sarif([cleanRun()])),
+      platform,
+      env: {},
+      sourceRoot: root,
+      selectedClosurePaths: twins.map((path) => `${path}/SKILL.md`),
+      detectorOptions: { concurrency: 1 },
+    });
+  const twinShard = (platform: "windows" | "linux") => {
+    const lock = createHash("sha256")
+      .update(readFileSync(join(CISCO_MULTI_SKILL_SCANNER_PROJECT_V1, "uv.lock")))
+      .digest("hex");
+    return runCiscoShardV1({
+      run: runner(() => sarif([cleanRun()])),
+      platform,
+      env: {},
+      sourceRoot: root,
+      jobs: twins.map((path) => ({
+        id: createHash("sha256").update(path).digest("hex"),
+        path,
+        inputSha256: hashComponentTreeV1(root, [path]).treeSha256,
+      })),
+      expected: { analyzerVersion: "2.1.0", lockSha256: lock },
+      concurrency: 1,
+    });
+  };
+
+  it.each([
+    ["source-tree", twinTree],
+    ["shard", twinShard],
+  ] as const)("refuses case-twin skills' exactly spelled reports on windows (%s)", async (_label, execute) => {
+    withTwins();
+    const outcome = await execute("windows");
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+      /Cisco JSON report of job skills\/[Tt]win skill path .*: aih-scan Cisco SARIF: skills\/[Tt]win\/SKILL\.md matches 2 sealed files ignoring case/,
+    );
+    expect(await execute("linux")).toMatchObject({ kind: "completed" });
+  });
+});

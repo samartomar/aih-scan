@@ -51,10 +51,29 @@ describe("Cisco sealed-file case binding on win32", () => {
     expect(bind("skills/injected/docs/guide.md")).toBe("Skills/Injected/Docs/Guide.MD");
   });
 
-  it("keeps an exact match even when another sealed file differs only in case", () => {
+  // U1k (review of U1j, P2): owner decision D1 binds only a UNIQUE match. When two sealed
+  // files are equal ignoring case, even an exact spelling of one is refused: on win32 Cisco
+  // normcases every path, so its spelling cannot say which of the two it scanned.
+  it("refuses even an exact spelling when another sealed file differs only in case (U1k)", () => {
     const bind = ciscoSealedPathBinderV1(["skills/a/SKILL.md", "skills/a/skill.md"], "win32");
-    expect(bind("skills/a/SKILL.md")).toBe("skills/a/SKILL.md");
-    expect(bind("skills/a/skill.md")).toBe("skills/a/skill.md");
+    expect(() => bind("skills/a/SKILL.md")).toThrow(
+      "skills/a/SKILL.md matches 2 sealed files ignoring case",
+    );
+    expect(() => bind("skills/a/skill.md")).toThrow(
+      "skills/a/skill.md matches 2 sealed files ignoring case",
+    );
+    const skills = ciscoSealedPathBinderV1(["skills/A/SKILL.md", "skills/a/SKILL.md"], "win32");
+    expect(() => skills("skills/A/SKILL.md")).toThrow("matches 2 sealed files ignoring case");
+    expect(() => skills("skills/a/SKILL.md")).toThrow("matches 2 sealed files ignoring case");
+  });
+
+  it("still binds a unique exact match (U1k)", () => {
+    const bind = ciscoSealedPathBinderV1(
+      ["skills/A/SKILL.md", "skills/b/SKILL.md", "skills/b/guide.md"],
+      "win32",
+    );
+    expect(bind("skills/A/SKILL.md")).toBe("skills/A/SKILL.md");
+    expect(bind("skills/b/guide.md")).toBe("skills/b/guide.md");
   });
 
   it("fails when two sealed files differ only in case", () => {
@@ -103,6 +122,14 @@ describe("Cisco sealed-file case binding on win32", () => {
         "win32",
       ),
     ).toThrow("matches 2 sealed files ignoring case");
+    // U1k: an exact spelling of one of two case-variant sealed files is ambiguous too.
+    expect(() =>
+      bindCiscoSarifToSealedFilesV1(
+        sarif("skills/a/SKILL.md"),
+        ["skills/a/SKILL.md", "skills/a/Skill.md"],
+        "win32",
+      ),
+    ).toThrow("skills/a/SKILL.md matches 2 sealed files ignoring case");
   });
 
   it("leaves an unsafe URI for the projection to refuse", () => {
@@ -129,6 +156,10 @@ describe("Cisco sealed-file case binding off win32", () => {
           platform,
         ),
       ).not.toThrow();
+      // U1k: case-variant twins stay distinct off win32; each exact spelling is itself.
+      const twins = ciscoSealedPathBinderV1(["skills/A/SKILL.md", "skills/a/SKILL.md"], platform);
+      expect(twins("skills/A/SKILL.md")).toBe("skills/A/SKILL.md");
+      expect(twins("skills/a/SKILL.md")).toBe("skills/a/SKILL.md");
     });
   }
 });

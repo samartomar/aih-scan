@@ -80,6 +80,10 @@ export function ciscoReportSkillDirectoryV1(
  * child, the root or a path outside the source root fails at `output`, before the report's
  * `analyzers_failed` is read, so a failure-free report of a sibling can never stand in for
  * the scanned skill's own.
+ *
+ * U1k (review of U1j, P2): D1 binds only a unique match among `skills`, the run's skill
+ * directories (default: this job's own), so on win32 a job whose skill has a case-variant twin
+ * in the run fails at `output` whatever the report spells, the job's exact directory included.
  */
 export function assertCiscoSingleSkillReportSkillV1(
   report: Record<string, unknown>,
@@ -87,12 +91,14 @@ export function assertCiscoSingleSkillReportSkillV1(
     label: string;
     sourceRoots: readonly string[];
     skill: string;
+    /** The run's source-relative skill directories, D1's candidates; `skill` is always one. */
+    skills?: readonly string[];
     platform: NodeJS.Platform;
   }>,
 ): void {
   const named = ciscoReportSkillDirectoryV1(report.skill_path, `of ${context.label}`, {
     sourceRoots: context.sourceRoots,
-    expected: [context.skill],
+    expected: [...new Set([context.skill, ...(context.skills ?? [])])],
     platform: context.platform,
   });
   if (named !== context.skill)

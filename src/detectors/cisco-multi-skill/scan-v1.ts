@@ -83,6 +83,12 @@ export interface CiscoSkillDirectoryScanRequestV1 {
   readonly root: string;
   /** Absolute skill directory; also the scan's working directory. */
   readonly skillDir: string;
+  /**
+   * U1k: the run's source-relative skill directories (`""` for the root), the candidates owner
+   * decision D1 binds the job's JSON report among (a unique match only); defaults to this
+   * job's own directory.
+   */
+  readonly skills?: readonly string[];
   readonly analyzerProject?: string;
 }
 
@@ -315,6 +321,7 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         label,
         sourceRoots: [request.root],
         skill,
+        ...(request.skills === undefined ? {} : { skills: request.skills }),
         platform: request.platform === "windows" ? "win32" : request.platform,
       });
       assertCiscoSingleSkillAnalyzersCompleteV1(
@@ -461,6 +468,8 @@ export async function runCiscoSourceTreeScanV1(
       env: request.env,
       root: request.sourceRoot,
       skillDir: job.skillDir,
+      // U1k: every job's report binds among all of the run's skill directories (D1).
+      skills: jobs.map((entry) => entry.path),
       ...(request.analyzerProject === undefined
         ? {}
         : { analyzerProject: request.analyzerProject }),

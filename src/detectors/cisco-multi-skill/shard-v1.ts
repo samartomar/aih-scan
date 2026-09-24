@@ -391,6 +391,8 @@ export async function runCiscoShardV1(
           env: request.env,
           root: safeRoot,
           skillDir,
+          // U1k: every job's report binds among all of the shard's job directories (D1).
+          skills: request.jobs.map((entry) => entry.path),
           analyzerProject,
         });
         if (outcome.kind === "failed") {
