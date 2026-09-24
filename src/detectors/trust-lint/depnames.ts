@@ -160,34 +160,6 @@ function directDependencyNames(pkg: Record<string, unknown>): string[] {
   return [...names].sort((a, b) => a.localeCompare(b));
 }
 
-function normalizeScope(scope: string): string | undefined {
-  const trimmed = scope.trim();
-  if (trimmed.length === 0) return undefined;
-  const prefixed = trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-  return prefixed.toLowerCase();
-}
-
-function addScopes(scopes: Set<string>, values: readonly string[]): void {
-  for (const value of values) {
-    const normalized = normalizeScope(value);
-    if (normalized !== undefined) scopes.add(normalized);
-  }
-}
-
-/**
- * The env-only half of Core's `resolveInternalScopes`: normalize the
- * comma-separated `AIH_TRUST_INTERNAL_SCOPES` value. Core additionally unions
- * org-policy `trust.internalScopes`; that policy read stays in Core, whose
- * runtime passes the resolved union in as `internalScopes`.
- */
-export function internalScopesFromEnvV1(
-  env: Readonly<Record<string, string | undefined>>,
-): string[] {
-  const scopes = new Set<string>();
-  addScopes(scopes, (env.AIH_TRUST_INTERNAL_SCOPES ?? "").split(","));
-  return [...scopes].sort((a, b) => a.localeCompare(b));
-}
-
 function scopeOfPackage(name: string): string | undefined {
   if (!name.startsWith("@")) return undefined;
   const slash = name.indexOf("/");
@@ -395,21 +367,25 @@ function scanPackageJson(
   return { checks, declaresDependencies: dependencySpecs.length > 0 };
 }
 
-/** Port of Core's `scanTrustDependencyNames` over the tree seam. */
+/**
+ * Port of Core's `scanTrustDependencyNames` over the tree seam (C2a §2.2(3)):
+ * per SELECTED `package.json` in selection order; the missing-lockfile check
+ * looks for a lockfile name in the SELECTION; a co-located
+ * `package-lock.json` / `npm-shrinkwrap.json` is read from the tree to
+ * suppress integrity-bound entries.
+ */
 export function scanTrustDependencyNamesV1(
   tree: TrustLintTreeV1,
+  selection: readonly string[],
   internalScopes: readonly string[],
 ): TrustLintFindingV1[] {
-  const scopes = new Set(
-    internalScopes.map((scope) => normalizeScope(scope)).filter((scope) => scope !== undefined),
-  );
+  // Already normalized by Core and validated at the options boundary (§2.1).
+  const scopes = new Set(internalScopes);
   const checks: TrustLintFindingV1[] = [];
   const occurrences = new Map<string, number>();
   let firstPackageWithDependencies: { rel: string; source: string } | undefined;
-  for (const entry of tree.matching(
-    (candidate) => packageBaseName(candidate.relativePath) === "package.json",
-  )) {
-    const rel = entry.relativePath;
+  for (const rel of selection) {
+    if (packageBaseName(rel) !== "package.json") continue;
     const source = tree.readText(rel);
     if (source === undefined) throw new TypeError(`trust-lint: unreadable package manifest ${rel}`);
     const result = scanPackageJson(
@@ -424,14 +400,7 @@ export function scanTrustDependencyNamesV1(
       firstPackageWithDependencies = { rel, source };
     }
   }
-  let hasLockfile = false;
-  for (const entry of tree.matching((candidate) =>
-    LOCKFILE_NAMES.has(packageBaseName(candidate.relativePath)),
-  )) {
-    void entry;
-    hasLockfile = true;
-    break;
-  }
+  const hasLockfile = selection.some((rel) => LOCKFILE_NAMES.has(packageBaseName(rel)));
   if (firstPackageWithDependencies !== undefined && !hasLockfile) {
     const { rel, source } = firstPackageWithDependencies;
     checks.push(

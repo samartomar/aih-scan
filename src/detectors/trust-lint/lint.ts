@@ -495,6 +495,22 @@ function pathParts(path: string): string[] {
     .filter((part) => part.length > 0);
 }
 
+const ROOT_TRUST_DOC_NAMES = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md"]);
+
+/**
+ * Port of Core's `shouldScanTrustDoc` (`src/trust/scan.ts`): `SKILL.md`
+ * anywhere, a root-level `AGENTS.md` / `CLAUDE.md` / `GEMINI.md`, or any
+ * `*.md` file.
+ */
+export function shouldScanTrustDocV1(rel: string): boolean {
+  const parts = rel.split("/");
+  const name = parts.at(-1) ?? "";
+  if (name === "SKILL.md") return true;
+  if (parts.length === 1 && ROOT_TRUST_DOC_NAMES.has(name)) return true;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && name.slice(dot).toLowerCase() === ".md";
+}
+
 export function isStrictUnicodeSurfaceV1(path: string): boolean {
   const parts = pathParts(path);
   const name = parts.at(-1) ?? "";

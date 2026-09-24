@@ -4,10 +4,11 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTrustLintTreeV1 } from "../../../src/detectors/trust-lint/inventory.js";
 import { scanTrustManifestsV1 } from "../../../src/detectors/trust-lint/manifest.js";
+import { coreSelectionV1 } from "./support.js";
 
 /**
  * Parity port of Core's `tests/trust/manifest.test.ts` against
- * `scanTrustManifestsV1(buildTrustLintTreeV1(dir))`. Identical fixtures and
+ * `scanTrustManifestsV1(tree, selection)` (the selection being Core's trust inventory of the fixture tree). Identical fixtures and
  * asserted outputs; only the wiring changed.
  */
 let dir: string;
@@ -27,7 +28,8 @@ function write(rel: string, content: string): void {
 }
 
 function scan() {
-  return scanTrustManifestsV1(buildTrustLintTreeV1(dir));
+  const tree = buildTrustLintTreeV1(dir);
+  return scanTrustManifestsV1(tree, coreSelectionV1(tree));
 }
 
 function codes(): string[] {

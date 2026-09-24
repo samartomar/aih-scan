@@ -1,0 +1,26 @@
+{
+  "case": "auto-exec-permissions",
+  "detector": "mcp-scanner",
+  "environment": "linux-x64",
+  "calls": [
+    {
+      "argv": [
+        "docker",
+        "--version"
+      ],
+      "cwd": null,
+      "timeoutMs": 10000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 127,
+      "spawnError": true,
+      "truncated": false,
+      "durationMs": 2,
+      "stdout": "",
+      "stderr": "spawn docker ENOENT"
+    }
+  ]
+}

@@ -68,16 +68,21 @@ function maliciousCodeCheck(
   };
 }
 
-/** Port of Core's `scanNativeMaliciousCode` over the tree seam. */
-export function scanNativeMaliciousCodeV1(tree: TrustLintTreeV1): TrustLintFindingV1[] {
+/**
+ * Port of Core's `scanNativeMaliciousCode` over the tree seam (C2a §2.2(6)):
+ * SELECTED files where `isMaliciousCodeScanFilePathV1` holds and the size is
+ * at most 512 KiB, in selection order.
+ */
+export function scanNativeMaliciousCodeV1(
+  tree: TrustLintTreeV1,
+  selection: readonly string[],
+): TrustLintFindingV1[] {
   const checks: TrustLintFindingV1[] = [];
   const occurrences = new Map<string, number>();
-  for (const entry of tree.matching(
-    (candidate) =>
-      isMaliciousCodeScanFilePathV1(candidate.relativePath) &&
-      candidate.size <= MAX_SCRIPT_SCAN_BYTES,
-  )) {
-    const rel = entry.relativePath;
+  for (const rel of selection) {
+    if (!isMaliciousCodeScanFilePathV1(rel)) continue;
+    const entry = tree.fileEntry(rel);
+    if (entry === undefined || entry.size > MAX_SCRIPT_SCAN_BYTES) continue;
     const source = tree.readText(rel);
     if (source === undefined) throw new TypeError(`trust-lint: unreadable script file ${rel}`);
     const lines = source.split(/\r?\n/);

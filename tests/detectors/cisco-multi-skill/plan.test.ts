@@ -1,15 +1,15 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
-  type CiscoSkillInventoryEntryV1,
   ciscoSkillScannerRunArgvV1,
   ciscoSkillScannerVersionArgvV1,
-  collectCiscoSkillDirsV1,
+  planCiscoSourceTreeJobsV1,
   resolveCiscoScanConcurrencyV1,
   scrubCiscoScanEnvV1,
+  validateCiscoDetectorOptionsV1,
 } from "../../../src/detectors/cisco-multi-skill/plan-v1.js";
 
 // Parity tests for the planning half of Core's `detector.cisco` multi-skill
@@ -32,27 +32,6 @@ function skill(rel: string, body: string): void {
   const root = join(dir, rel);
   mkdirSync(root, { recursive: true });
   writeFileSync(join(root, "SKILL.md"), body, "utf8");
-}
-
-function toPosix(path: string): string {
-  return path.replace(/\\/g, "/");
-}
-
-function inventoryOf(absolutePaths: readonly string[]): {
-  matching(
-    predicate: (entry: CiscoSkillInventoryEntryV1) => boolean,
-  ): Iterable<CiscoSkillInventoryEntryV1>;
-} {
-  const entries = absolutePaths.map((absolutePath) => ({
-    absolutePath,
-    relativePath: toPosix(relative(dir, absolutePath)),
-    size: 1,
-  }));
-  return {
-    *matching(predicate: (entry: CiscoSkillInventoryEntryV1) => boolean) {
-      for (const entry of entries) if (predicate(entry)) yield entry;
-    },
-  };
 }
 
 describe("cisco multi-skill argv planning", () => {
@@ -158,74 +137,107 @@ describe("scrubCiscoScanEnvV1", () => {
   });
 });
 
-describe("collectCiscoSkillDirsV1", () => {
-  it("lists every SKILL.md directory, nested ones included, skip dirs excluded", () => {
-    skill("skills/a", "# A\n");
-    skill("skills/b", "# B\n");
-    skill("deep/nested/c", "# C\n");
-    for (const skipped of [
-      "node_modules/pkg",
-      "dist/built",
-      "coverage/report",
-      "vendor/lib",
-      ".git/hooks",
-      ".hg/store",
-      ".svn/entries",
-      ".aih/cache",
-    ]) {
-      skill(skipped, "# Skipped\n");
-    }
-
-    const dirs = collectCiscoSkillDirsV1(dir).map((entry) => toPosix(relative(dir, entry)));
-
-    expect(dirs).toEqual(["deep/nested/c", "skills/a", "skills/b"]);
-  });
-
-  it("includes the root itself when the root holds a SKILL.md, sorted first", () => {
-    skill("skills/a", "# A\n");
-    writeFileSync(join(dir, "SKILL.md"), "# Root\n", "utf8");
-
-    const dirs = collectCiscoSkillDirsV1(dir);
-
-    expect(dirs[0]).toBe(resolve(dir));
-    expect(dirs.map((entry) => toPosix(relative(dir, entry)))).toEqual(["", "skills/a"]);
-  });
-
-  it("takes candidates only from a supplied inventory, skip-dir names included", () => {
-    // The inventory is authoritative: Core applies the walk's skip dirs only in
-    // the filesystem fallback, so an inventory entry under node_modules counts.
-    skill("skills/a", "# A\n");
-    skill("node_modules/pkg", "# Pkg\n");
-    const inventory = inventoryOf([join(dir, "node_modules", "pkg", "SKILL.md")]);
-
-    const dirs = collectCiscoSkillDirsV1(dir, inventory);
-
-    expect(dirs.map((entry) => toPosix(relative(dir, entry)))).toEqual(["node_modules/pkg"]);
-  });
-
-  it("ignores inventory entries whose basename is not SKILL.md", () => {
-    skill("skills/a", "# A\n");
-    const inventory = inventoryOf([
-      join(dir, "skills", "a", "SKILL.md"),
-      join(dir, "skills", "a", "notes.txt"),
+describe("planCiscoSourceTreeJobsV1", () => {
+  // C2a §3.1: jobs are the dirname of every SELECTED SKILL.md, deduplicated
+  // and sorted with Core's localeCompare collation (decision 7); the tree is
+  // never walked.
+  it("plans one job per selected SKILL.md directory, deduplicated and localeCompare-sorted", () => {
+    const jobs = planCiscoSourceTreeJobsV1(dir, [
+      "skills/b/SKILL.md",
+      "docs/readme.md",
+      "skills/b/nested/SKILL.md",
+      "SKILL.md",
+      "skills/a/SKILL.md",
+      "skills/b/notes.txt",
     ]);
 
-    const dirs = collectCiscoSkillDirsV1(dir, inventory);
-
-    expect(dirs.map((entry) => toPosix(relative(dir, entry)))).toEqual(["skills/a"]);
-  });
-
-  it("sorts by source-relative POSIX path with Core's localeCompare order", () => {
-    skill("skills/skill-2", "# 2\n");
-    skill("skills/skill-10", "# 10\n");
-    skill("alpha", "# A\n");
-
-    const dirs = collectCiscoSkillDirsV1(dir).map((entry) => toPosix(relative(dir, entry)));
-
-    expect(dirs).toEqual(
-      ["alpha", "skills/skill-2", "skills/skill-10"].sort((left, right) =>
+    expect(jobs.map((job) => job.path)).toEqual(
+      ["", "skills/a", "skills/b", "skills/b/nested"].sort((left, right) =>
         left.localeCompare(right),
       ),
     );
+  });
+
+  it("treats nested skill directories as separate jobs", () => {
+    const jobs = planCiscoSourceTreeJobsV1(dir, [
+      "skills/beta/SKILL.md",
+      "skills/beta/nested/gamma/SKILL.md",
+    ]);
+
+    expect(jobs.map((job) => job.path)).toEqual(["skills/beta", "skills/beta/nested/gamma"]);
+  });
+
+  it("gives a root-level SKILL.md the empty prefix and the root as its directory", () => {
+    const jobs = planCiscoSourceTreeJobsV1(dir, ["SKILL.md"]);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.path).toBe("");
+    expect(jobs[0]?.skillDir).toBe(dir);
+  });
+
+  it("resolves job directories under the source root", () => {
+    const jobs = planCiscoSourceTreeJobsV1(dir, ["skills/a/SKILL.md"]);
+
+    expect(jobs[0]?.skillDir).toBe(join(dir, "skills", "a"));
+  });
+
+  it("plans jobs from the selection alone, never from walking the tree", () => {
+    // Skills exist on disk but are not selected: no jobs. A selected path
+    // under a skip directory IS a job, because the selection is Core's
+    // declaration of the subject (C2a §3.6).
+    skill("skills/on-disk", "# On disk\n");
+    skill("node_modules/pkg", "# Pkg\n");
+
+    expect(planCiscoSourceTreeJobsV1(dir, [])).toEqual([]);
+    expect(
+      planCiscoSourceTreeJobsV1(dir, ["node_modules/pkg/SKILL.md"]).map((job) => job.path),
+    ).toEqual(["node_modules/pkg"]);
+  });
+});
+
+describe("validateCiscoDetectorOptionsV1", () => {
+  // C2a §3.3: Core clamps AIH_CISCO_SCAN_CONCURRENCY before sending; Scan
+  // validates the received integer 1..64 and refuses unknown keys, never
+  // throwing on bad input.
+  it.each([
+    [undefined, 4],
+    [{}, 4],
+    [{ concurrency: 1 }, 1],
+    [{ concurrency: 6 }, 6],
+    [{ concurrency: 64 }, 64],
+  ])("accepts %j with concurrency %i", (value, expected) => {
+    const validated = validateCiscoDetectorOptionsV1(value);
+
+    expect(validated).toEqual({ ok: true, concurrency: expected });
+  });
+
+  it.each([
+    [null],
+    [["concurrency"]],
+    ["concurrency"],
+    [4],
+    [{ concurrency: 0 }],
+    [{ concurrency: 65 }],
+    [{ concurrency: 1.5 }],
+    [{ concurrency: "4" }],
+    [{ concurrency: Number.MAX_SAFE_INTEGER }],
+    [{ concurrency: 4, extra: true }],
+    [{ unknown: 1 }],
+  ])("refuses %j with a typed detector-options-invalid result", (value) => {
+    const validated = validateCiscoDetectorOptionsV1(value);
+
+    expect(validated.ok).toBe(false);
+    if (!validated.ok) {
+      expect(validated.reason).toBe("detector-options-invalid");
+      expect(validated.detail.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses objects with a custom prototype", () => {
+    const validated = validateCiscoDetectorOptionsV1(
+      Object.assign(Object.create({ infected: true }), { concurrency: 4 }),
+    );
+
+    expect(validated).toMatchObject({ ok: false, reason: "detector-options-invalid" });
   });
 });

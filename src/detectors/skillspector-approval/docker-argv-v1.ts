@@ -6,7 +6,8 @@ import { SKILLSPECTOR_IMAGE_TAG_V1 } from "./image-identity-v1.js";
  * Core's `src/trust/detectors.ts` (`skillspectorDockerRunArgv`, the cleanup
  * argv) with Core's `dockerBindMountArg` and `execArgv` inlined so the module
  * stands alone. No function here spawns anything; the runtime supplies the
- * runner.
+ * runner. One deliberate deviation from Core: the run argv carries
+ * `--pull never` after `run` (C2a §6.1 never-pull local profile).
  *
  * `docker` is not one of the Windows `.cmd` shims, so `execArgvV1` leaves every
  * argv below unchanged on every platform; the shim logic is retained so the
@@ -55,6 +56,15 @@ function hasUnsupportedMountSourceCharV1(value: string): boolean {
   });
 }
 
+/**
+ * Whether a bind-mount source path is representable at all (C2a §6.3: a comma
+ * or control character is refused before spawning). Exported so the run layer
+ * can refuse with a typed outcome instead of catching the argv builder's throw.
+ */
+export function hasUnsupportedDockerMountSourceCharV1(value: string): boolean {
+  return hasUnsupportedMountSourceCharV1(value);
+}
+
 /** A Docker bind-mount specification; rejects paths a mount spec cannot represent. */
 export function skillspectorDockerBindMountArgV1(source: string, target: string): string {
   if (hasUnsupportedMountSourceCharV1(source)) {
@@ -88,6 +98,10 @@ export function skillspectorDockerRunArgvV1(
   return execArgvV1(platform, [
     "docker",
     "run",
+    // C2a §6.1 never-pull: an admitted image that disappears before the run is
+    // a failure, never a registry pull (`--network none` does not stop the daemon).
+    "--pull",
+    "never",
     "--rm",
     "--name",
     containerName,

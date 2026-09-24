@@ -1,88 +1,47 @@
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
+import {
+  ciscoJobDirectoryProblemTextV1,
+  resolveContainedCiscoJobDirectoryV1,
+} from "./job-dir-v1.js";
 import {
   CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
   type CiscoMultiSkillPlatformV1,
   type CiscoMultiSkillRunnerV1,
-  resolveCiscoScanConcurrencyV1,
 } from "./plan-v1.js";
-import { checkCiscoSkillScannerAvailableV1, scanCiscoSkillDirectoryV1 } from "./scan-v1.js";
+import {
+  boundedCiscoDetailV1,
+  type CiscoScanFailureStageV1,
+  mapConcurrentStableV1,
+  probeCiscoSkillScannerV1,
+  scanCiscoSkillDirectoryOutcomeV1,
+} from "./scan-v1.js";
 
 /**
- * Execution side of Core's exact-source Cisco shards, ported
- * behaviour-for-behaviour from `runCiscoSourceShard`,
- * `verifyCiscoShardSource` and the async shard run loop in Core's
- * `src/trust/detectors.ts` and `src/trust/cisco-shards.ts`
- * (`buildCiscoShardResultAsync`).
+ * Execution of one exact-source Cisco shard for Core's baseline vet (C2a
+ * §3.7), ported behaviour-for-behaviour from the execution half of Core's
+ * `runCiscoSourceShard` (`src/trust/detectors.ts`): the local analyzer
+ * `uv.lock` is proven against the expected identity, the expected analyzer
+ * version is checked by the version gate, and every job's input identity is
+ * re-proven before the shard, around each job's scan, and after the shard.
  *
- * A shard runner re-proves everything it relies on: the manifest's own digest,
- * the source tree and every job input hash (before the run, around each job's
- * scan, and after the run), the local analyzer `uv.lock` against the manifest,
- * and the analyzer version the manifest names. Evidence digests use Core's
- * exact canonicalization so Core's retained join accepts these results.
- *
- * Shard MANIFEST construction and shard JOIN stay in Core and are not here.
- * This module never spawns a process; the runtime supplies the runner seam.
+ * Shard MANIFEST construction, evidence digests and the shard JOIN stay in
+ * Core and are not here. This module never spawns a process; the runtime
+ * supplies the runner seam.
  */
 
-export interface CiscoShardJobInputV1 {
+/** One shard job as Core's manifest lists it. */
+export interface CiscoShardJobV1 {
+  readonly id: string;
   /** POSIX path to the exact skill directory within the pinned source tree. */
   readonly path: string;
-  /** Digest of the complete scanner input projection for this job. */
+  /** Core's component-tree digest of the job's input. */
   readonly inputSha256: string;
-}
-
-export interface CiscoShardJobV1 extends CiscoShardJobInputV1 {
-  readonly id: string;
-}
-
-export interface CiscoShardManifestV1 {
-  readonly schemaVersion: 1;
-  readonly qualificationId: string;
-  readonly manifestSha256: string;
-  readonly source: {
-    readonly id: string;
-    readonly pinnedSha: string;
-    readonly treeSha256: string;
-  };
-  readonly analyzer: {
-    readonly name: "cisco";
-    readonly version: string;
-    readonly lockSha256: string;
-  };
-  readonly policy: {
-    readonly version: string;
-    readonly profile: string;
-  };
-  readonly jobs: readonly CiscoShardJobV1[];
-  readonly shards: readonly {
-    readonly id: string;
-    readonly jobs: readonly CiscoShardJobV1[];
-  }[];
-}
-
-export interface CiscoShardOutputV1 {
-  readonly jobId: string;
-  readonly path: string;
-  readonly inputSha256: string;
-  readonly evidenceSha256: string;
-  readonly evidence: unknown;
-}
-
-export interface CiscoShardResultV1 {
-  readonly schemaVersion: 1;
-  readonly manifestSha256: string;
-  readonly qualificationId: string;
-  readonly shardId: string;
-  readonly analyzer: CiscoShardManifestV1["analyzer"];
-  readonly outputs: readonly CiscoShardOutputV1[];
 }
 
 const SHA256_V1 = /^[0-9a-f]{64}$/;
-const GIT_SHA_V1 = /^[0-9a-f]{40}$/;
 const MAX_SHARD_JOBS_V1 = 4096;
 const MAX_SHARD_TEXT_V1 = 1024;
 
@@ -98,260 +57,303 @@ function isSafeShardPathV1(value: string): boolean {
   );
 }
 
-const sha256TextV1 = z.string().regex(SHA256_V1);
-const shardJobSchemaV1 = z.strictObject({
-  id: sha256TextV1,
-  path: z
-    .string()
-    .min(1)
-    .max(MAX_SHARD_TEXT_V1)
-    .refine(isSafeShardPathV1, { message: "must be a safe POSIX source-relative path" }),
-  inputSha256: sha256TextV1,
-});
-const shardManifestSchemaV1 = z.strictObject({
-  schemaVersion: z.literal(1),
-  qualificationId: sha256TextV1,
-  manifestSha256: sha256TextV1,
-  source: z.strictObject({
-    id: z.string().min(1).max(MAX_SHARD_TEXT_V1),
-    pinnedSha: z.string().regex(GIT_SHA_V1),
-    treeSha256: sha256TextV1,
-  }),
-  analyzer: z.strictObject({
-    name: z.literal("cisco"),
-    version: z.string().min(1).max(MAX_SHARD_TEXT_V1),
-    lockSha256: sha256TextV1,
-  }),
-  policy: z.strictObject({
-    version: z.string().min(1).max(MAX_SHARD_TEXT_V1),
-    profile: z.string().min(1).max(MAX_SHARD_TEXT_V1),
-  }),
-  jobs: z.array(shardJobSchemaV1).min(1).max(MAX_SHARD_JOBS_V1),
-  shards: z
-    .array(
-      z.strictObject({
-        id: z.string().min(1).max(MAX_SHARD_TEXT_V1),
-        jobs: z.array(shardJobSchemaV1).max(MAX_SHARD_JOBS_V1),
-      }),
-    )
-    .min(1)
-    .max(MAX_SHARD_JOBS_V1),
-});
-
 /**
- * Boundary validation for a manifest received from Core, as plain data. The
- * digest self-consistency check is not repeated here; it runs again inside
- * {@link runCiscoShardJobsV1}, exactly where Core performs it.
+ * sha256 of the bundled analyzer project's `uv.lock` — the digest a profile's
+ * future `analyzerLock` publishes and the value a shard request's
+ * `expected.lockSha256` must equal (C2a §3.7).
  */
-export function parseCiscoShardManifestV1(value: unknown): CiscoShardManifestV1 {
-  const parsed = shardManifestSchemaV1.safeParse(value);
-  if (!parsed.success) {
-    throw new TypeError(
-      `invalid Cisco shard manifest V1: ${parsed.error.issues[0]?.message ?? "schema"}`,
-    );
-  }
-  return parsed.data as CiscoShardManifestV1;
-}
-
-function canonicalShardValueV1(value: unknown, seen = new Set<object>()): unknown {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean" ||
-    (typeof value === "number" && Number.isFinite(value))
-  ) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) throw new Error("Cisco shard evidence must not contain cycles");
-    seen.add(value);
-    const output = value.map((entry) => canonicalShardValueV1(entry, seen));
-    seen.delete(value);
-    return output;
-  }
-  if (typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (seen.has(record)) throw new Error("Cisco shard evidence must not contain cycles");
-    seen.add(record);
-    const output: Record<string, unknown> = {};
-    // Core orders evidence keys with `localeCompare`, not code units; the
-    // evidence digest must match Core's join byte-for-byte, so this ordering
-    // is mirrored exactly rather than swapped for `codeUnitCompare`.
-    for (const key of Object.keys(record).sort((left, right) => left.localeCompare(right))) {
-      const entry = record[key];
-      if (entry === undefined) continue;
-      output[key] = canonicalShardValueV1(entry, seen);
-    }
-    seen.delete(record);
-    return output;
-  }
-  throw new Error(`Cisco shard evidence contains unsupported ${typeof value} value`);
-}
-
-/** Core's canonical shard JSON: sorted keys, `undefined` values skipped. */
-export function canonicalCiscoShardJsonV1(value: unknown): string {
-  return JSON.stringify(canonicalShardValueV1(value));
-}
-
-/** sha256 hex of {@link canonicalCiscoShardJsonV1}, as Core computes it. */
-export function ciscoShardSha256V1(value: unknown): string {
-  return createHash("sha256").update(canonicalCiscoShardJsonV1(value), "utf8").digest("hex");
-}
-
-function computedManifestSha256V1(manifest: CiscoShardManifestV1): string {
-  const { manifestSha256: _manifestSha256, ...unsigned } = manifest;
-  return ciscoShardSha256V1(unsigned);
+export function ciscoSkillScannerLockSha256V1(
+  project: string = CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
+): string {
+  return createHash("sha256")
+    .update(readFileSync(join(project, "uv.lock")))
+    .digest("hex");
 }
 
 /**
- * The async shard run loop, ported from Core's `buildCiscoShardResultAsync`:
- * the manifest digest is re-verified, the shard id must be one the manifest
- * declares, worker concurrency is bounded to 1..64, and on any failure no new
- * job starts, in-flight jobs are awaited, and the lowest-index failure is
- * thrown. Outputs land in the shard's job order, each evidence value digest-
- * bound with Core's canonicalization.
+ * The shard execution request behind Core's future `runCiscoShardV1` export
+ * (C2a §3.7): one shard's jobs in manifest order, the manifest's expected
+ * analyzer identity, and the caller's worker bound. The execution profile id
+ * and its echo are B2 wiring and deliberately not part of this engine seam.
  */
-export async function runCiscoShardJobsV1(
-  manifest: CiscoShardManifestV1,
-  requestedShardId: string,
-  evidenceFor: (job: CiscoShardJobV1) => Promise<unknown>,
-  concurrency = 1,
-): Promise<CiscoShardResultV1> {
-  if (computedManifestSha256V1(manifest) !== manifest.manifestSha256) {
-    throw new Error("Cisco shard manifest identity does not match its contents");
-  }
-  const shard = manifest.shards.find((candidate) => candidate.id === requestedShardId);
-  if (shard === undefined) throw new Error(`unexpected Cisco shard id: ${requestedShardId}`);
-  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 64) {
-    throw new Error("Cisco shard worker concurrency must be an integer from 1 through 64");
-  }
-  const outputs = new Array<CiscoShardOutputV1>(shard.jobs.length);
-  let nextIndex = 0;
-  let stopped = false;
-  const failures: Array<{ index: number; error: unknown }> = [];
-  const workers = Array.from(
-    { length: Math.min(concurrency, shard.jobs.length) },
-    async (): Promise<void> => {
-      while (!stopped && nextIndex < shard.jobs.length) {
-        const index = nextIndex++;
-        const job = shard.jobs[index];
-        if (job === undefined) throw new Error(`Cisco shard job ${index} is missing`);
-        try {
-          const evidence = await evidenceFor(job);
-          outputs[index] = Object.freeze({
-            jobId: job.id,
-            path: job.path,
-            inputSha256: job.inputSha256,
-            evidenceSha256: ciscoShardSha256V1(evidence),
-            evidence,
-          });
-        } catch (error) {
-          failures.push({ index, error });
-          stopped = true;
-        }
-      }
-    },
-  );
-  await Promise.all(workers);
-  const firstFailure = failures.sort((left, right) => left.index - right.index)[0];
-  if (firstFailure !== undefined) throw firstFailure.error;
-  return Object.freeze({
-    schemaVersion: 1 as const,
-    manifestSha256: manifest.manifestSha256,
-    qualificationId: manifest.qualificationId,
-    shardId: shard.id,
-    analyzer: manifest.analyzer,
-    outputs: Object.freeze(outputs),
-  });
-}
-
-/**
- * Re-proves the exact source identity the manifest pins: the tree hash over
- * all job paths, then each job's own input hash. Ported from Core's
- * `verifyCiscoShardSource`.
- */
-export function verifyCiscoShardSourceV1(root: string, manifest: CiscoShardManifestV1): void {
-  const paths = manifest.jobs.map((job) => job.path);
-  const sourceTree = hashComponentTreeV1(root, paths);
-  if (sourceTree.treeSha256 !== manifest.source.treeSha256) {
-    throw new Error("Cisco shard source tree does not match the exact manifest identity");
-  }
-  for (const job of manifest.jobs) {
-    if (hashComponentTreeV1(root, [job.path]).treeSha256 !== job.inputSha256) {
-      throw new Error(`Cisco shard input identity changed: ${job.path}`);
-    }
-  }
-}
-
-export interface CiscoSourceShardRunOptionsV1 {
+export interface CiscoShardRunRequestV1 {
   readonly run: CiscoMultiSkillRunnerV1;
   readonly platform: CiscoMultiSkillPlatformV1;
   readonly env: NodeJS.ProcessEnv;
-  /** Overrides `AIH_CISCO_SCAN_CONCURRENCY` when set; bounded to 1..64. */
-  readonly concurrency?: number;
+  /** The pinned baseline source root. */
+  readonly sourceRoot: string;
+  /** The shard's jobs, in manifest order. */
+  readonly jobs: readonly CiscoShardJobV1[];
+  /** The manifest's analyzer identity (`version` may carry a `+` suffix). */
+  readonly expected: { readonly analyzerVersion: string; readonly lockSha256: string };
+  /** Worker bound, Core's `resolveCiscoScanConcurrency` result: 1..64. */
+  readonly concurrency: number;
   /** Analyzer lock project override (tests); defaults to the bundled project. */
   readonly analyzerProject?: string;
 }
 
+/** One job's output: the §3.4-adjusted SARIF bytes and their plain sha256. */
+export interface CiscoShardJobSarifOutputV1 {
+  readonly jobId: string;
+  readonly path: string;
+  readonly inputSha256: string;
+  readonly sarif: Uint8Array;
+  /** sha256 hex over `sarif`. */
+  readonly sha256: string;
+}
+
+/** Refusal reasons the shard runner can return before anything runs. */
+export type CiscoShardRunRefusalReasonV1 = "shard-request-invalid" | "analyzer-lock-mismatch";
+
+/** Failure stages of a shard run: the §3.5 stages plus source `coverage`. */
+export type CiscoShardRunFailureStageV1 = CiscoScanFailureStageV1 | "coverage";
+
+/** Typed outcome of one shard's execution (C2a §3.7); it never throws. */
+export type CiscoShardRunOutcomeV1 = Readonly<
+  | {
+      kind: "completed";
+      /** The verified analyzer identity; `version` is before any `+` suffix. */
+      analyzer: { readonly version: string; readonly lockSha256: string };
+      /** Per-job outputs in the shard's job order. */
+      outputs: readonly CiscoShardJobSarifOutputV1[];
+      /** Tree seals over all job paths, taken at the start and the end. */
+      sourceSeal: { readonly before: string; readonly after: string };
+    }
+  | { kind: "refused"; reason: CiscoShardRunRefusalReasonV1; detail: string }
+  | { kind: "failed"; stage: CiscoShardRunFailureStageV1; detail: string }
+>;
+
+function refusedShardRunV1(
+  reason: CiscoShardRunRefusalReasonV1,
+  detail: string,
+): CiscoShardRunOutcomeV1 {
+  return Object.freeze({ kind: "refused" as const, reason, detail });
+}
+
+function failedShardRunV1(
+  stage: CiscoShardRunFailureStageV1,
+  detail: string,
+): CiscoShardRunOutcomeV1 {
+  return Object.freeze({ kind: "failed" as const, stage, detail });
+}
+
+/** One failing shard job's stage and detail, carried through the drain. */
+class CiscoShardJobFailureV1 extends Error {
+  readonly stage: CiscoShardRunFailureStageV1;
+  constructor(stage: CiscoShardRunFailureStageV1, detail: string) {
+    super(detail);
+    this.name = "CiscoShardJobFailureV1";
+    this.stage = stage;
+  }
+}
+
+/** Boundary shape validation of a shard run request; never throws. */
+function validateCiscoShardRunRequestV1(request: CiscoShardRunRequestV1): string | undefined {
+  if (typeof request.sourceRoot !== "string" || request.sourceRoot.length === 0) {
+    return "sourceRoot must be a non-empty path";
+  }
+  if (!Array.isArray(request.jobs) || request.jobs.length === 0) {
+    return "a shard run requires at least one job";
+  }
+  if (request.jobs.length > MAX_SHARD_JOBS_V1) {
+    return `a shard run accepts at most ${MAX_SHARD_JOBS_V1} jobs`;
+  }
+  const ids = new Set<string>();
+  for (const job of request.jobs) {
+    if (typeof job.id !== "string" || job.id.length === 0 || job.id.length > MAX_SHARD_TEXT_V1) {
+      return "every job id must be a non-empty bounded string";
+    }
+    if (ids.has(job.id)) return `duplicate shard job id: ${job.id}`;
+    ids.add(job.id);
+    if (
+      typeof job.path !== "string" ||
+      job.path.length > MAX_SHARD_TEXT_V1 ||
+      !isSafeShardPathV1(job.path)
+    ) {
+      return `job path must be a safe POSIX source-relative path: ${String(job.path)}`;
+    }
+    if (typeof job.inputSha256 !== "string" || !SHA256_V1.test(job.inputSha256)) {
+      return `job inputSha256 must be a sha256 hex digest: ${job.path}`;
+    }
+  }
+  const expected = request.expected;
+  if (
+    typeof expected !== "object" ||
+    expected === null ||
+    typeof expected.analyzerVersion !== "string" ||
+    expected.analyzerVersion.length === 0 ||
+    expected.analyzerVersion.length > MAX_SHARD_TEXT_V1
+  ) {
+    return "expected.analyzerVersion must be a non-empty bounded string";
+  }
+  if (typeof expected.lockSha256 !== "string" || !SHA256_V1.test(expected.lockSha256)) {
+    return "expected.lockSha256 must be a sha256 hex digest";
+  }
+  if (
+    !Number.isSafeInteger(request.concurrency) ||
+    request.concurrency < 1 ||
+    request.concurrency > 64
+  ) {
+    return "shard worker concurrency must be an integer from 1 through 64";
+  }
+  return undefined;
+}
+
 /**
- * One source shard's execution, ported from Core's `runCiscoSourceShard`:
- * verify the source tree and job inputs against the manifest, prove the local
- * analyzer `uv.lock` equals the manifest's, take the expected analyzer version
- * from the manifest (build metadata after `+` dropped), probe availability,
- * then run this shard's jobs — re-checking each job's input hash immediately
- * before and after its scan — and verify the whole source tree once more
- * before returning.
+ * One shard's execution behind Core's future `runCiscoShardV1` (C2a §3.7).
+ * The request is validated at the boundary (safe POSIX job paths each holding
+ * a `SKILL.md`, unique job ids, 1..64 concurrency); the bundled `uv.lock`
+ * digest must equal `expected.lockSha256` or the request is refused before
+ * anything runs; the expected analyzer version before any `+` suffix is
+ * checked against the version gate (§3.2). Every job path is sealed at the
+ * start and the end of the shard, and each job's input identity is re-proven
+ * immediately before and after its scan (as Core's `runCiscoSourceShard` did);
+ * any difference fails with stage `coverage` ("source changed"). Jobs run with
+ * §3.2–§3.4 semantics at the given concurrency in stable job order; on any
+ * failure no new job starts, in-flight jobs drain, the lowest-index failure is
+ * reported and no partial output is returned.
  */
-export async function runCiscoSourceShardV1(
-  root: string,
-  manifest: CiscoShardManifestV1,
-  shardId: string,
-  options: CiscoSourceShardRunOptionsV1,
-): Promise<CiscoShardResultV1> {
-  const safeRoot = realpathSync(root);
-  verifyCiscoShardSourceV1(safeRoot, manifest);
-  const expectedVersion = manifest.analyzer.version.split("+", 1)[0] ?? manifest.analyzer.version;
-  const analyzerProject = options.analyzerProject ?? CISCO_MULTI_SKILL_SCANNER_PROJECT_V1;
-  const localLockSha256 = createHash("sha256")
-    .update(readFileSync(join(analyzerProject, "uv.lock")))
-    .digest("hex");
-  if (localLockSha256 !== manifest.analyzer.lockSha256) {
-    throw new Error(
-      `Cisco shard analyzer lock does not match manifest identity: ${localLockSha256}`,
+export async function runCiscoShardV1(
+  request: CiscoShardRunRequestV1,
+): Promise<CiscoShardRunOutcomeV1> {
+  const invalid = validateCiscoShardRunRequestV1(request);
+  if (invalid !== undefined) return refusedShardRunV1("shard-request-invalid", invalid);
+  const analyzerProject = request.analyzerProject ?? CISCO_MULTI_SKILL_SCANNER_PROJECT_V1;
+  let localLockSha256: string;
+  try {
+    localLockSha256 = ciscoSkillScannerLockSha256V1(analyzerProject);
+  } catch (error) {
+    return failedShardRunV1(
+      "acquisition",
+      boundedCiscoDetailV1(
+        error instanceof Error ? error.message : "the bundled analyzer uv.lock is unreadable",
+      ),
     );
   }
-  const unavailable = await checkCiscoSkillScannerAvailableV1({
-    run: options.run,
-    platform: options.platform,
-    env: options.env,
+  if (localLockSha256 !== request.expected.lockSha256) {
+    return refusedShardRunV1(
+      "analyzer-lock-mismatch",
+      `Cisco shard analyzer lock does not match the expected identity: ${localLockSha256}`,
+    );
+  }
+  let safeRoot: string;
+  try {
+    safeRoot = realpathSync(request.sourceRoot);
+  } catch {
+    return refusedShardRunV1("shard-request-invalid", "sourceRoot must be a readable directory");
+  }
+  for (const job of request.jobs) {
+    // Every job path is a real directory chain inside the root: a linked
+    // ancestor would pass the component hash and escape the declared source.
+    const resolved = resolveContainedCiscoJobDirectoryV1(safeRoot, job.path);
+    if (!resolved.ok) {
+      return refusedShardRunV1(
+        "shard-request-invalid",
+        `Cisco shard job path ${ciscoJobDirectoryProblemTextV1(resolved.problem)}: ${job.path}`,
+      );
+    }
+    let holdsSkill = false;
+    try {
+      holdsSkill = statSync(join(resolved.skillDir, "SKILL.md")).isFile();
+    } catch {
+      holdsSkill = false;
+    }
+    if (!holdsSkill) {
+      return refusedShardRunV1(
+        "shard-request-invalid",
+        `Cisco shard job path holds no SKILL.md: ${job.path}`,
+      );
+    }
+  }
+  const jobPaths = request.jobs.map((job) => job.path);
+  const sealJobs = (when: string): string | CiscoShardRunOutcomeV1 => {
+    try {
+      const seal = hashComponentTreeV1(safeRoot, jobPaths).treeSha256;
+      for (const job of request.jobs) {
+        if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
+          return failedShardRunV1(
+            "coverage",
+            `source changed ${when}: ${job.path} no longer matches its declared input identity`,
+          );
+        }
+      }
+      return seal;
+    } catch (error) {
+      return failedShardRunV1(
+        "coverage",
+        boundedCiscoDetailV1(error instanceof Error ? error.message : `source changed ${when}`),
+      );
+    }
+  };
+  const before = sealJobs("before the shard");
+  if (typeof before !== "string") return before;
+  const expectedVersion =
+    request.expected.analyzerVersion.split("+", 1)[0] ?? request.expected.analyzerVersion;
+  const probe = await probeCiscoSkillScannerV1({
+    run: request.run,
+    platform: request.platform,
+    env: request.env,
     expectedVersion,
     analyzerProject,
   });
-  if (unavailable !== undefined)
-    throw new Error(`Cisco shard analyzer unavailable: ${unavailable}`);
-  const result = await runCiscoShardJobsV1(
-    manifest,
-    shardId,
-    async (job) => {
-      const skillDir = join(safeRoot, ...job.path.split("/"));
-      if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
-        throw new Error(`Cisco shard input identity changed before scan: ${job.path}`);
-      }
-      const sarif = await scanCiscoSkillDirectoryV1({
-        run: options.run,
-        platform: options.platform,
-        env: options.env,
-        root: safeRoot,
-        skillDir,
-        analyzerProject,
-      });
-      if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
-        throw new Error(`Cisco shard input identity changed during scan: ${job.path}`);
-      }
-      return sarif;
-    },
-    options.concurrency ?? resolveCiscoScanConcurrencyV1(options.env),
-  );
-  verifyCiscoShardSourceV1(safeRoot, manifest);
-  return result;
+  if (probe.kind !== "available") return failedShardRunV1(probe.stage, probe.detail);
+  let outputs: CiscoShardJobSarifOutputV1[];
+  try {
+    outputs = await mapConcurrentStableV1(
+      request.jobs,
+      request.concurrency,
+      async (job): Promise<CiscoShardJobSarifOutputV1> => {
+        const resolved = resolveContainedCiscoJobDirectoryV1(safeRoot, job.path);
+        if (!resolved.ok) {
+          throw new CiscoShardJobFailureV1("coverage", `source changed before scan: ${job.path}`);
+        }
+        const skillDir = resolved.skillDir;
+        if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
+          throw new CiscoShardJobFailureV1("coverage", `source changed before scan: ${job.path}`);
+        }
+        const outcome = await scanCiscoSkillDirectoryOutcomeV1({
+          run: request.run,
+          platform: request.platform,
+          env: request.env,
+          root: safeRoot,
+          skillDir,
+          analyzerProject,
+        });
+        if (outcome.kind === "failed") {
+          throw new CiscoShardJobFailureV1(outcome.stage, outcome.detail);
+        }
+        if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
+          throw new CiscoShardJobFailureV1("coverage", `source changed during scan: ${job.path}`);
+        }
+        const sarif: Uint8Array = Buffer.from(JSON.stringify(outcome.log), "utf8");
+        return Object.freeze({
+          jobId: job.id,
+          path: job.path,
+          inputSha256: job.inputSha256,
+          sarif,
+          sha256: createHash("sha256").update(sarif).digest("hex"),
+        });
+      },
+    );
+  } catch (error) {
+    if (error instanceof CiscoShardJobFailureV1) {
+      // The per-job boundary already bounded and encoded this detail.
+      return failedShardRunV1(error.stage, error.message);
+    }
+    return failedShardRunV1(
+      "execution",
+      boundedCiscoDetailV1(error instanceof Error ? error.message : "Cisco shard job failed"),
+    );
+  }
+  const after = sealJobs("after the shard");
+  if (typeof after !== "string") return after;
+  if (after !== before) {
+    return failedShardRunV1("coverage", "source changed during the shard");
+  }
+  return Object.freeze({
+    kind: "completed" as const,
+    analyzer: Object.freeze({ version: expectedVersion, lockSha256: localLockSha256 }),
+    outputs: Object.freeze(outputs),
+    sourceSeal: Object.freeze({ before, after }),
+  });
 }

@@ -32,14 +32,19 @@ function isEnvFile(name: string): boolean {
 }
 
 /**
- * Port of Core's `scanSecrets` over the tree seam: `.env` files shallow plus
- * one level deep, and a credential directory named `secrets/` at the repo
- * ROOT only. Nested directories named `secrets` are code, not secret stores.
+ * Port of Core's `scanSecrets` over the tree seam (C2a §2.2(4)): `.env`
+ * files shallow plus one level deep — the walk covers the whole tree, skip
+ * directories INCLUDED — and a credential directory named `secrets/` at the
+ * repo ROOT only. Nested directories named `secrets` are code, not secret
+ * stores. Paths are sorted in code-unit order, like Core's `Array#sort`.
+ * Symlinked `.env` files / `secrets` directories are never flagged: Core's
+ * `inspectContainedPath` reports any symlink as unsafe, not present.
  */
 export function scanPlaintextSecretsV1(tree: TrustLintTreeV1): TrustLintFindingV1[] {
   const envFiles = new Set<string>();
   const secretDirs = new Set<string>();
   for (const entry of tree.files) {
+    if (entry.symlink) continue;
     const rel = entry.relativePath;
     const parts = rel.split("/");
     const name = parts.at(-1) ?? "";
@@ -236,10 +241,13 @@ function scanConfigSecretText(raw: string, file: string, hits: ConfigSecretHit[]
 }
 
 /**
- * Port of Core's `scanConfigSecrets` over the tree seam. `files` are
- * source-relative POSIX paths the runtime selected (see
- * `collectIncomingMcpConfigFilesV1`); absent files are skipped, an unreadable
- * listed file is `mcp.config-invalid` (fail closed).
+ * Port of Core's `scanConfigSecrets` over the tree seam (C2a §2.2(4)).
+ * `files` are the DECLARED `detectorOptions.mcpConfigPaths`, scanned in
+ * declared order. A path absent from the tree is skipped (§2.1 validation
+ * refuses it earlier); a symlink, a directory or any other non-regular-file
+ * path, and a listed file that cannot be read, each give one
+ * `mcp.config-invalid` hit — fail closed, exactly like Core's
+ * `readMcpConfig` unsafe state.
  */
 export function scanMcpConfigSecretsV1(
   tree: TrustLintTreeV1,
@@ -247,8 +255,9 @@ export function scanMcpConfigSecretsV1(
 ): TrustLintFindingV1[] {
   const hits: ConfigSecretHit[] = [];
   for (const rel of files) {
-    if (!tree.hasFile(rel)) continue;
-    const raw = tree.readText(rel);
+    const kind = tree.pathKind(rel);
+    if (kind === "absent") continue;
+    const raw = kind === "file" ? tree.readText(rel) : undefined;
     if (raw === undefined) {
       hits.push({
         file: rel,
@@ -275,32 +284,4 @@ export function scanMcpConfigSecretsV1(
       fingerprint: `${code}:${hit.file}:${hit.key}`,
     };
   });
-}
-
-/**
- * Port of Core's `collectIncomingMcpConfigFiles`: each incoming MCP config
- * file name present at the tree root or in any directory holding a
- * `SKILL.md`, root first then skill dirs in localeCompare order, deduplicated.
- */
-export function collectIncomingMcpConfigFilesV1(tree: TrustLintTreeV1): string[] {
-  const skillDirs = [
-    ...new Set(
-      [...tree.matching((entry) => entry.relativePath.split("/").at(-1) === "SKILL.md")].map(
-        (entry) => {
-          const rel = entry.relativePath;
-          const index = rel.lastIndexOf("/");
-          return index === -1 ? "" : rel.slice(0, index);
-        },
-      ),
-    ),
-  ].sort((a, b) => a.localeCompare(b));
-  const roots = [...new Set(["", ...skillDirs])];
-  const out: string[] = [];
-  for (const root of roots) {
-    for (const name of INCOMING_MCP_CONFIG_FILES_V1) {
-      const rel = root.length === 0 ? name : `${root}/${name}`;
-      if (tree.hasFile(rel) && !out.includes(rel)) out.push(rel);
-    }
-  }
-  return out;
 }
