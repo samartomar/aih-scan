@@ -478,6 +478,23 @@ const CISCO_GATES: ProfileGates = {
     ACQUISITION_NETWORK_PREREQUISITE,
   ],
 };
+/**
+ * The OCI capture profile runs only the Docker CLI (`PATH=/usr/bin:/bin`) against a
+ * caller-supplied image that must already be present (`--pull=never`, `--network=none`).
+ * It needs no bubblewrap, uv, uv.lock or acquisition network; the image itself is run
+ * material the caller supplies, so it is validated with the request, not probed here.
+ */
+const CISCO_OCI_GATES: ProfileGates = {
+  supportedPlatforms: LINUX_AMD64,
+  prerequisites: [
+    {
+      kind: "executable",
+      id: BASELINE_DOCKER_EXECUTABLE_V1,
+      required: true,
+      detail: `Install Docker so that ${BASELINE_DOCKER_EXECUTABLE_V1} exists; the OCI capture profile runs the caller-supplied image through it and never pulls.`,
+    },
+  ],
+};
 const SEMGREP_GATES: ProfileGates = {
   supportedPlatforms: LINUX_AMD64,
   prerequisites: [
@@ -517,7 +534,7 @@ const SKILLSPECTOR_GATES: ProfileGates = {
 const OBSERVATION = "BaselineAnalyzerObservationV1" as const;
 const NATIVE_PROFILE = profile("in-process-native-v1", OBSERVATION, NATIVE_GATES);
 const CISCO_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, CISCO_GATES);
-const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_GATES);
+const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_OCI_GATES);
 const SEMGREP_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, SEMGREP_GATES);
 const SEMGREP_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, SEMGREP_HOST_GATES);
 const SKILLSPECTOR_PROFILE = profile(

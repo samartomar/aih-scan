@@ -256,6 +256,24 @@ describe("DetectorCapabilityV1", () => {
     ]);
   });
 
+  it("gates the Cisco OCI capture profile on Docker alone, not on the namespace profile's tools", () => {
+    const cisco = resolveDetectorCapabilityV1("detector.cisco");
+    const oci = cisco?.executionProfiles.find((entry) => entry.id === "oci-hardened-cisco-v1");
+    expect(oci?.supportedPlatforms).toEqual([{ os: "linux", architecture: "amd64" }]);
+    // The OCI profile runs the Docker CLI against a caller-supplied, already-present image
+    // (--pull=never, --network=none): no bubblewrap, no uv, no uv.lock, no acquisition network.
+    expect(oci?.prerequisites.map((entry) => `${entry.kind}:${entry.id}`)).toEqual([
+      "executable:/usr/bin/docker",
+    ]);
+    // The default namespace profile keeps its own gates.
+    expect(cisco?.executionProfile.prerequisites.map((entry) => entry.id)).toEqual([
+      BASELINE_BWRAP_EXECUTABLE_V1,
+      BASELINE_UV_EXECUTABLE_V1,
+      "tools/baseline-analyzers/cisco-skill-scanner/uv.lock",
+      "https://pypi.org/simple",
+    ]);
+  });
+
   it("keeps every profile document's field set, so no existing profile digest drifts", () => {
     for (const document of listDetectorExecutionProfileDocumentsV1())
       expect(Object.keys(document).sort(), document.id).toEqual([

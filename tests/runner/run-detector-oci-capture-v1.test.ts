@@ -213,6 +213,74 @@ describe("runDetectorV1 OCI capture profile", () => {
     for (const flag of document?.containment ?? []) expect(created, flag).toContain(flag);
   });
 
+  it("runs the OCI profile when Docker is present although bubblewrap, uv and the uv lock are not", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+    const layout = fixtureLayout();
+    const sourceRoot = skillFixture();
+    const { runner } = brokerRunner(layout);
+    const probed: string[] = [];
+
+    const result = await runDetectorV1({
+      detectorId: "detector.cisco",
+      subject: { kind: "skill-directory", sourceRoot, selectedClosurePaths: ["SKILL.md"] },
+      // A valid OCI host: Docker only. The namespace profile's tools are absent.
+      prerequisiteProbe: (entry: { id: string }) => {
+        probed.push(entry.id);
+        return entry.id === "/usr/bin/docker" ? ("present" as const) : ("missing" as const);
+      },
+      ociCapture: { ...captureMaterial(layout), runner },
+    });
+
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome !== "succeeded") return;
+    expect(result.executionProfile.id).toBe("oci-hardened-cisco-v1");
+    expect(probed).toEqual(["/usr/bin/docker"]);
+    expect(result.prerequisites.map((entry) => `${entry.id}=${entry.state}`)).toEqual([
+      "/usr/bin/docker=present",
+    ]);
+  });
+
+  it("refuses the OCI profile, naming Docker, when Docker is missing", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+    const layout = fixtureLayout();
+    const sourceRoot = skillFixture();
+    const { runner, calls } = brokerRunner(layout);
+
+    const result = await runDetectorV1({
+      detectorId: "detector.cisco",
+      subject: { kind: "skill-directory", sourceRoot, selectedClosurePaths: ["SKILL.md"] },
+      prerequisiteProbe: () => "missing" as const,
+      ociCapture: { ...captureMaterial(layout), runner },
+    });
+
+    expect(result.outcome).toBe("refused");
+    if (result.outcome !== "refused") return;
+    expect(result.reason).toBe("prerequisite-missing");
+    expect(result.detail).toContain("/usr/bin/docker");
+    expect(result.detail).not.toContain("bwrap");
+    expect(calls).toEqual([]);
+  });
+
+  it("still refuses the namespace profile when bubblewrap is missing", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+    const sourceRoot = skillFixture();
+
+    const result = await runDetectorV1({
+      detectorId: "detector.cisco",
+      subject: { kind: "skill-directory", sourceRoot, selectedClosurePaths: ["SKILL.md"] },
+      prerequisiteProbe: (entry: { id: string }) =>
+        entry.id === "/usr/bin/bwrap" ? ("missing" as const) : ("present" as const),
+    });
+
+    expect(result.outcome).toBe("refused");
+    if (result.outcome !== "refused") return;
+    expect(result.reason).toBe("prerequisite-missing");
+    expect(result.detail).toContain("/usr/bin/bwrap");
+  });
+
   it("reports an uncovered file rather than calling partial coverage complete", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(process, "arch", "get").mockReturnValue("x64");
