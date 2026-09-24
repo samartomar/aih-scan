@@ -7,6 +7,7 @@ import {
   HOST_DOCKER_ENVIRONMENT_V1,
   SKILLSPECTOR_IMAGE_DIGEST_V1,
   SKILLSPECTOR_IMAGE_V1,
+  SKILLSPECTOR_SOURCE_REVISION_V1,
 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
@@ -516,6 +517,11 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 completion evidence v1
         lockSha256: null,
       },
     });
+    // U1f: the upgraded analyzer, SkillSpector v2.12.0 (revision c7958a32), by its image digest.
+    expect(evidence.analyzer).toMatchObject({
+      version: `${SKILLSPECTOR_SOURCE_REVISION_V1}@${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
+    });
+    expect(SKILLSPECTOR_SOURCE_REVISION_V1.startsWith("c7958a32")).toBe(true);
   });
 
   it("gives an empty source root a zero count", async () => {

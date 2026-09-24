@@ -749,7 +749,12 @@ describe("runCiscoShardV1", () => {
             .update(output?.sarif ?? new Uint8Array())
             .digest("hex"),
         );
-        expect(completionOfLogV1(JSON.parse(text))).toMatchObject({ analyzedFileCount: 2 });
+        // Completion evidence v1 names the job's sealed files by their real names.
+        expect(completionOfLogV1(JSON.parse(text))).toEqual({
+          detectorId: "detector.cisco",
+          ...diskSubjectV1(root, ["Skills/Alpha/Guide.md", "Skills/Alpha/SKILL.md"]),
+          analyzer: { version: "2.1.0", lockSha256: bundledLockSha256() },
+        });
       });
 
       it("binds related locations of the job too", async () => {

@@ -653,6 +653,34 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
       },
     );
 
+    // U1f: completion evidence v1 on Cisco 2.1.0. The evidence names the sealed snapshot (its
+    // real names, top-level .git left out), never the normcased names Cisco reported.
+    it.runIf(windows)(
+      "carries completion evidence over the sealed snapshot on a normcased 2.1.0 run",
+      async () => {
+        const host = hostFixture();
+        const root = mixedCaseSkill();
+        mkdirSync(join(root, ".git"));
+        writeFileSync(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        const outcome = await cisco(root, host.env, normcaseRunner(host.python, true));
+
+        const evidence = completionOfObservationV1(outcome);
+        expect(evidence).toEqual({
+          detectorId: "detector.cisco",
+          ...diskSubjectV1(root, ["SKILL.md", "Skills/Nested/SKILL.md"]),
+          analyzer: {
+            version: expect.stringMatching(
+              new RegExp(`^${CISCO_SKILL_SCANNER_VERSION_V1.replaceAll(".", "\\.")}\\+uvlock\\.`),
+            ),
+            lockSha256: resolveDetectorCapabilityV1("detector.cisco")?.executionProfiles.find(
+              (entry) => entry.id === HOST_PROFILE,
+            )?.analyzerLock?.sha256,
+          },
+        });
+        expect(CISCO_SKILL_SCANNER_VERSION_V1).toBe("2.1.0");
+      },
+    );
+
     it("fails at output when a lowercased path matches no sealed file", async () => {
       const host = hostFixture();
       const outcome = await cisco(
@@ -1201,6 +1229,8 @@ describe("runDetectorV1 host-process-uv-v1 completion evidence v1", () => {
     });
     expect(evidence.analyzer).toMatchObject({
       lockSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      // U1f: the upgraded analyzer, Semgrep 1.178.0, under its uv lock.
+      version: expect.stringMatching(/^1\.178\.0\+uvlock\.[0-9a-f]{12}$/),
     });
   });
 

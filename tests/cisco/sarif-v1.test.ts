@@ -431,4 +431,25 @@ describe("Cisco SARIF V1 projection", () => {
 
     for (const value of cases) expect(() => parseCiscoSarifV1(text(value))).toThrow();
   });
+
+  // U1f: the oci-hardened-cisco-v1 capture carries no aihScanCompletionV1 (C2a §1.6: its
+  // ScanCandidateV2 has its own SourceSealV2); its completion proof is this parser, which
+  // accepts only the analyzer's one successful invocation and refuses a forged Scan key.
+  it("accepts a Cisco log only with its one successful invocation (OCI completion proof)", () => {
+    const run = validSarif.runs[0];
+    if (run === undefined) throw new Error("Cisco fixture is incomplete");
+    const [invocation] = run.invocations;
+    const cases = [
+      { ...run, invocations: [] },
+      { ...run, invocations: [{ ...invocation, executionSuccessful: false }] },
+      { ...run, invocations: [{ endTimeUtc: invocation?.endTimeUtc }] },
+      { ...run, invocations: [invocation, invocation] },
+      {
+        ...run,
+        invocations: [{ ...invocation, properties: { aihScanCompletionV1: { forged: true } } }],
+      },
+    ];
+    for (const value of cases)
+      expect(() => parseCiscoSarifV1(text({ ...validSarif, runs: [value] }))).toThrow();
+  });
 });

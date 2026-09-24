@@ -245,6 +245,35 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
     },
   );
 
+  // U1f: completion evidence v1 on a normcased Cisco 2.1.0 source-tree run names the job
+  // directories' sealed files by their real names.
+  it.runIf(windows)(
+    "carries completion evidence over the job directories on a normcased 2.1.0 run",
+    async () => {
+      const host = hostEnv();
+      const root = skillsTree();
+      const outcome = await runDetectorV1(
+        request(root, host.env, {
+          runner: ciscoHost(host.python, [], { inFlight: 0, peak: 0 }, () => undefined, "skill.md"),
+        }),
+      );
+
+      expect(completionOfObservationV1(outcome)).toEqual({
+        detectorId: "detector.cisco",
+        ...diskSubjectV1(
+          root,
+          diskFilesV1(root).filter((path) => path.startsWith("skills/")),
+        ),
+        analyzer: {
+          version: expect.stringMatching(/^2\.1\.0\+uvlock\.[0-9a-f]{12}$/),
+          lockSha256: resolveDetectorCapabilityV1("detector.cisco")?.executionProfiles.find(
+            (entry) => entry.id === HOST,
+          )?.analyzerLock?.sha256,
+        },
+      });
+    },
+  );
+
   it.skipIf(windows)(
     "fails at output off win32 when a job's result names skill.md for the sealed SKILL.md",
     async () => {
