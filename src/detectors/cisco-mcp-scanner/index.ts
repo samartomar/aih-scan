@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Node as JsonNode, type ParseError, parse, parseTree } from "jsonc-parser";
 import {
@@ -12,6 +12,7 @@ import {
   mcpConfigPathsProblemV1,
   visibleOptionsDetailV1,
 } from "../mcp-config-paths-v1.js";
+import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 
 /**
  * Scan detector engine `detector.cisco-mcp-scanner`: the Cisco AI Defense
@@ -88,8 +89,6 @@ const MAX_THREATS_PER_ANALYZER = 4096;
 const MAX_ANALYZERS_PER_RESULT = 64;
 const MAX_DESCRIPTION_LENGTH = 400;
 const MAX_TOOL_NAME_LENGTH = 120;
-const FALLBACK_SARIF_URI = "mcp-scanner.json";
-
 function fail(message: string): never {
   throw new Error(message);
 }
@@ -344,17 +343,17 @@ function mcpScannerRuleId(analyzer: string, threat: string): string {
   return normalized.length > 0 ? normalized : analyzer;
 }
 
-function isSafeRelativeSarifUri(uri: string): boolean {
-  if (uri.length === 0 || isAbsolute(uri) || /^[A-Za-z]:/.test(uri)) return false;
-  return !uri.split("/").some((part) => part === "..");
-}
-
-function toolUri(raw: unknown, sourceUriByToolName: ReadonlyMap<string, string>): string {
-  if (typeof raw !== "string") return FALLBACK_SARIF_URI;
+/**
+ * The declared config path a finding is located at. S2g: a path that is not a safe
+ * source-relative URI fails the run; legacy Core's `mcp-scanner.json` is never substituted,
+ * because that name could bind a finding to an unrelated sealed file of the same name. The
+ * tool name was already matched against the submitted tools.
+ */
+function toolUri(raw: string, sourceUriByToolName: ReadonlyMap<string, string>): string {
   const candidate = sourceUriByToolName.get(raw);
-  return candidate !== undefined && isSafeRelativeSarifUri(candidate)
-    ? candidate
-    : FALLBACK_SARIF_URI;
+  if (candidate === undefined || !isSourceRelativeArtifactUriV1(candidate))
+    fail("mcp-scanner tool config path is not a safe source-relative URI");
+  return candidate;
 }
 
 /**

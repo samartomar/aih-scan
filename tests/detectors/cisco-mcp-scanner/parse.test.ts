@@ -480,3 +480,35 @@ describe("parseCiscoMcpScannerSarifV1 validates every summary before a zero tota
     ).toHaveLength(1);
   });
 });
+
+// S2g sweep (the U1d Cisco finding's pattern): a tool whose declared config path is not a
+// safe source-relative URI fails; legacy Core's `mcp-scanner.json` is never substituted,
+// because that name could bind a finding to an unrelated sealed file of the same name.
+describe("parseCiscoMcpScannerSarifV1 never substitutes a fallback URI (S2g)", () => {
+  const report = [
+    {
+      status: "completed",
+      is_safe: false,
+      findings: {
+        yara_analyzer: {
+          severity: "HIGH",
+          threat_names: ["TOOL POISONING"],
+          threat_summary: "poisoned",
+          total_findings: 1,
+        },
+      },
+      tool_name: "t",
+    },
+  ];
+  it.each([
+    "../outside.json",
+    "/etc/mcp.json",
+    "a//b.json",
+    "C:/x.json",
+    "",
+  ])("fails a finding whose config path %j is unsafe", (uri) => {
+    expect(() =>
+      parseCiscoMcpScannerSarifV1(JSON.stringify(report), submitted(["t", uri])),
+    ).toThrow("mcp-scanner tool config path is not a safe source-relative URI");
+  });
+});
