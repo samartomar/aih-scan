@@ -45,10 +45,11 @@ describe("readDetectorOptionsV1", () => {
     }
   });
 
-  it("validates cisco concurrency 1..64 and refuses every other key or shape", () => {
-    const ok = readDetectorOptionsV1("detector.cisco", { concurrency: 64 }, selection);
-    expect(ok).toEqual({ ok: true, options: { concurrency: 64 } });
-    expect(ok.ok && Object.isFrozen(ok.options)).toBe(true);
+  it("refuses cisco concurrency, valid or not, because no profile applies it yet", () => {
+    for (const valid of [1, 4, 64])
+      expect(refusal("detector.cisco", { concurrency: valid }), String(valid)).toMatch(
+        /concurrency is not applied by this profile/,
+      );
     expect(readDetectorOptionsV1("detector.cisco", undefined, selection)).toEqual({
       ok: true,
       options: undefined,
@@ -195,7 +196,7 @@ describe("runDetectorV1 detectorOptions boundary", () => {
     expect(result.detail).toMatch(/detector\.semgrep takes no detectorOptions/);
   });
 
-  it("refuses an out-of-range Cisco concurrency and lets a valid one through", async () => {
+  it("refuses Cisco concurrency, out of range or not, since no Cisco profile applies it", async () => {
     const root = sourceFixture();
     const bad = await runDetectorV1({
       detectorId: "detector.cisco",
@@ -208,7 +209,21 @@ describe("runDetectorV1 detectorOptions boundary", () => {
       subject: { kind: "skill-directory", sourceRoot: root, selectedClosurePaths: ["README.md"] },
       detectorOptions: { concurrency: 4 },
     });
-    expect(good.outcome === "refused" && good.reason).not.toBe("detector-options-invalid");
+    expect(good.outcome === "refused" && good.reason).toBe("detector-options-invalid");
+    expect(good.outcome === "refused" && good.detail).toMatch(
+      /concurrency is not applied by this profile/,
+    );
+    for (const executionProfileId of ["linux-namespace-uv-v1", "host-process-uv-v1"]) {
+      const named = await runDetectorV1({
+        detectorId: "detector.cisco",
+        executionProfileId,
+        subject: { kind: "skill-directory", sourceRoot: root, selectedClosurePaths: ["README.md"] },
+        detectorOptions: { concurrency: 1 },
+      });
+      expect(named.outcome === "refused" && named.reason, executionProfileId).toBe(
+        "detector-options-invalid",
+      );
+    }
   });
 
   it("refuses a detectorOptions accessor that throws as an unreadable option, not a rejection", async () => {

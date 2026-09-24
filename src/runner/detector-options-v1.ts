@@ -198,7 +198,12 @@ export function readDetectorOptionsV1(
           typeof value === "number" ? String(value) : kind(value)
         }.`,
       };
-    options.concurrency = value;
+    // Every Cisco profile runs one skill per request with the analyzer's own scheduling, so a
+    // valid concurrency would change nothing. It is refused until a profile applies it.
+    return {
+      ok: false,
+      detail: `concurrency is not applied by this profile: no ${detectorId} execution profile in this package runs skills concurrently, so the option would have no effect. Remove it.`,
+    };
   }
   if (rule.keys.includes("internalScopes")) {
     const scopes = stringArray(read.internalScopes, "internalScopes", MAX_INTERNAL_SCOPES);
