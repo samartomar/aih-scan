@@ -14,11 +14,12 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  * - environment: the caller environment is reduced to a fixed allow-list with every
  *   secret-looking key removed; `SNYK_TOKEN` (trimmed) is added only to the scan call,
  *   never to the help probe, and never to any other argv, env, log or diagnostic;
- * - parsing: the scanner's JSON is accepted in the four report shapes Core accepts
- *   (top-level finding array, `{findings|issues|results|vulnerabilities: [...]}`, a
- *   scan-path map whose issues recover their artifact path from the server `reference`
- *   index, and the empty object) and converted to SARIF 2.1.0 with the line defaulting
- *   to 1;
+ * - parsing: the scanner's JSON is accepted in the report shapes Core accepts
+ *   (the 0.6.x `scan_path_responses` risk response, a top-level finding array,
+ *   `{findings|issues|results|vulnerabilities: [...]}`, and the empty object)
+ *   and converted to SARIF 2.1.0 with the line defaulting to 1. The 0.5.x
+ *   scan-path map with `issues` is no longer emitted by the pinned analyzer
+ *   and is rejected;
  * - classification: a spawn failure or an exit code outside `{0, 1}` is a failure, empty
  *   stdout is unavailable, exit 1 with no findings is unavailable, and exit 1 with
  *   findings completes, exactly as Core's `runSnykAgentScan` decides.
@@ -28,7 +29,7 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  * evidence acceptance stay in Core and are deliberately not here.
  */
 
-export const SNYK_AGENT_SCAN_VERSION = "0.5.17";
+export const SNYK_AGENT_SCAN_VERSION = "0.6.4";
 export const SNYK_AGENT_SCAN_ANALYZER = `snyk-agent-scan@uv:${SNYK_AGENT_SCAN_VERSION}`;
 export const SNYK_AGENT_SCAN_UV_PYTHON = "3.12";
 export const SNYK_AGENT_SCAN_SCAN_TIMEOUT_MS = 120_000;
@@ -255,43 +256,7 @@ function isSafeRelativeSarifUri(uri: string): boolean {
   return !uri.split("/").some((part) => part === "..");
 }
 
-function snykIssueReference(issue: Record<string, unknown>): number | undefined {
-  const reference = issue.reference;
-  if (!Array.isArray(reference)) return undefined;
-  const serverIndex = reference[0];
-  return typeof serverIndex === "number" && Number.isInteger(serverIndex) && serverIndex >= 0
-    ? serverIndex
-    : undefined;
-}
-
-function snykServerUri(server: Record<string, unknown>): string | undefined {
-  const configPath = firstString(server, ["config_path", "configPath", "path"]);
-  if (configPath !== undefined) return configPath;
-  if (isRecord(server.server)) {
-    return firstString(server.server, ["path", "config_path", "configPath"]);
-  }
-  return undefined;
-}
-
-function snykScanPathIssueUri(
-  scanPath: string,
-  pathResult: Record<string, unknown>,
-  issue: Record<string, unknown>,
-): string {
-  const direct = firstString(issue, ["file", "path"]);
-  if (direct !== undefined) return direct;
-  const reference = snykIssueReference(issue);
-  if (reference !== undefined && Array.isArray(pathResult.servers)) {
-    const server = pathResult.servers[reference];
-    if (isRecord(server)) {
-      const serverUri = snykServerUri(server);
-      if (serverUri !== undefined) return serverUri;
-    }
-  }
-  return firstString(pathResult, ["path"]) ?? scanPath;
-}
-
-/** The four report shapes Core accepts, or `undefined` for anything else. */
+/** The legacy report shapes Core accepts, or `undefined` for anything else. */
 function snykFindingArray(report: unknown): Record<string, unknown>[] | undefined {
   if (Array.isArray(report)) return report.filter(isRecord);
   if (!isRecord(report)) return undefined;
@@ -299,22 +264,132 @@ function snykFindingArray(report: unknown): Record<string, unknown>[] | undefine
     const value = report[key];
     if (Array.isArray(value)) return value.filter(isRecord);
   }
-  const pathFindings: Record<string, unknown>[] = [];
-  let sawScanPathResult = false;
-  for (const [scanPath, rawPathResult] of Object.entries(report)) {
-    if (!isRecord(rawPathResult)) continue;
-    if (!Array.isArray(rawPathResult.issues)) continue;
-    sawScanPathResult = true;
-    for (const rawIssue of rawPathResult.issues) {
-      if (!isRecord(rawIssue)) continue;
-      pathFindings.push({
-        ...rawIssue,
-        path: snykScanPathIssueUri(scanPath, rawPathResult, rawIssue),
-      });
+  if (Object.keys(report).length === 0) return [];
+  return undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function riskEvidence(risk: Record<string, unknown>): string {
+  const evidence = risk.evidence;
+  return typeof evidence === "string" && evidence.trim().length > 0
+    ? evidence
+    : "Snyk Agent Scan finding";
+}
+
+function riskScoreSuffix(risk: Record<string, unknown>): string {
+  const score = risk.score;
+  return typeof score === "number" && Number.isInteger(score) ? `; score ${score}/1000` : "";
+}
+
+function affectedToolsSuffix(
+  server: Record<string, unknown>,
+  risk: Record<string, unknown>,
+): string {
+  if (!Array.isArray(risk.affected_tools) || !Array.isArray(server.entities)) return "";
+  const names: string[] = [];
+  for (const index of risk.affected_tools) {
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0) continue;
+    const entity = server.entities[index];
+    if (isRecord(entity) && typeof entity.name === "string" && entity.name.length > 0) {
+      names.push(entity.name);
     }
   }
-  if (sawScanPathResult || Object.keys(report).length === 0) return pathFindings;
-  return undefined;
+  return names.length > 0 ? `; affected tools: ${names.join(", ")}` : "";
+}
+
+function skillRiskLocation(risk: Record<string, unknown>): {
+  readonly path?: string;
+  readonly line?: number;
+} {
+  if (!Array.isArray(risk.locations)) return {};
+  for (const rawLocation of risk.locations) {
+    if (!isRecord(rawLocation) || !isRecord(rawLocation.start)) continue;
+    const path = rawLocation.start.path;
+    const line = positiveInteger(rawLocation.start.line);
+    if (typeof path === "string" && path.length > 0)
+      return { path, ...(line === undefined ? {} : { line }) };
+    if (line !== undefined) return { line };
+  }
+  return {};
+}
+
+/**
+ * The 0.6.x scan response: one entry per analyzed path, with MCP server risks and
+ * skill risks keyed by risk name in `risk_indexes` (snyk-agent-scan 0.6.4
+ * docs/json-output.md). Every present risk becomes one SARIF result.
+ */
+function snykScanResponseResults(
+  report: Readonly<Record<string, unknown>>,
+  tree: string,
+): SnykAgentScanSarifResultV1[] {
+  const responses = Array.isArray(report.scan_path_responses)
+    ? report.scan_path_responses.filter(isRecord)
+    : [];
+  const results: SnykAgentScanSarifResultV1[] = [];
+  for (const response of responses) {
+    const scanPath = firstString(response, ["path"]);
+    const fallbackUri = scanPath === undefined ? "." : snykSafeSarifUri(scanPath, tree);
+    const push = (result: SnykAgentScanSarifResultV1) => {
+      results.push(result);
+    };
+    const serverRisks = Array.isArray(response.server_risks)
+      ? response.server_risks.filter(isRecord)
+      : [];
+    for (const server of serverRisks) {
+      const serverName = firstString(server, ["name"]) ?? "unknown";
+      if (!isRecord(server.risk_indexes)) continue;
+      for (const [riskName, rawRisk] of Object.entries(server.risk_indexes)) {
+        if (!isRecord(rawRisk)) continue;
+        push({
+          ruleId: riskName,
+          message: {
+            text: `${riskEvidence(rawRisk)} (MCP server "${serverName}"${riskScoreSuffix(rawRisk)}${affectedToolsSuffix(server, rawRisk)})`,
+          },
+          locations: [
+            {
+              physicalLocation: {
+                artifactLocation: { uri: fallbackUri },
+                region: { startLine: 1 },
+              },
+            },
+          ],
+        });
+      }
+    }
+    const skillRisks = Array.isArray(response.skill_risks)
+      ? response.skill_risks.filter(isRecord)
+      : [];
+    for (const skill of skillRisks) {
+      const skillName = firstString(skill, ["name"]) ?? "unknown";
+      if (!isRecord(skill.risk_indexes)) continue;
+      for (const [riskName, rawRisk] of Object.entries(skill.risk_indexes)) {
+        if (!isRecord(rawRisk)) continue;
+        const location = skillRiskLocation(rawRisk);
+        const uri =
+          location.path !== undefined && isSafeRelativeSarifUri(toPosix(location.path))
+            ? toPosix(location.path)
+            : fallbackUri;
+        push({
+          ruleId: riskName,
+          message: {
+            text: `${riskEvidence(rawRisk)} (skill "${skillName}"${riskScoreSuffix(rawRisk)})`,
+          },
+          locations: [
+            {
+              physicalLocation: {
+                artifactLocation: { uri },
+                region: { startLine: location.line ?? 1 },
+              },
+            },
+          ],
+        });
+      }
+    }
+  }
+  return results;
 }
 
 function snykFindingRuleId(finding: Record<string, unknown>): string {
@@ -375,6 +450,12 @@ function parseReportJson(raw: string): unknown {
  */
 export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentScanSarifV1 {
   const parsed = parseReportJson(raw);
+  if (isRecord(parsed) && Array.isArray(parsed.scan_path_responses)) {
+    return deepFreezeStrictJsonV1({
+      version: "2.1.0" as const,
+      runs: [{ results: snykScanResponseResults(parsed, tree) }],
+    });
+  }
   const findings = snykFindingArray(parsed);
   if (findings === undefined)
     throw new TypeError("snyk-agent-scan JSON did not include a findings array");
