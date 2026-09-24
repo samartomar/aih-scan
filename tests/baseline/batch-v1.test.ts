@@ -22,6 +22,7 @@ import {
   parseBaselineVetRequestV1Json,
   verifyBaselineVetReceiptV1,
 } from "../../src/baseline/batch-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../../src/baseline/runtime-v1.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
@@ -91,7 +92,13 @@ function requestForCurrentSource(root: string, request: ReturnType<typeof fixtur
 const sarif = (name: string) =>
   canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name } }, results: [] }],
+    runs: [
+      {
+        tool: { driver: { name } },
+        results: [],
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
   });
 
 describe("BaselineVetRequestV1", () => {
@@ -214,11 +221,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
             analyzerVersion: `${analyzer}.0123456789ab`,
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
 
@@ -249,11 +258,13 @@ describe("baseline batch execution", () => {
                 files: [],
               }),
               analyzerVersion: "native.0123456789ab",
+              executionProfileId: "in-process-native-v1",
             }
           : {
               mediaType: "application/sarif+json",
               bytes: sarif(analyzer),
               analyzerVersion: `${analyzer}.0123456789ab`,
+              executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             };
       };
 
@@ -386,11 +397,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
             analyzerVersion: `${analyzer}.0123456789ab`,
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
 
@@ -462,11 +475,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
             analyzerVersion: `${analyzer}.0123456789ab`,
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
 
@@ -495,6 +510,7 @@ describe("baseline batch execution", () => {
           mediaType: "application/sarif+json",
           bytes: Buffer.alloc(0),
           analyzerVersion: "missing.0123456789ab",
+          executionProfileId: "linux-namespace-uv-v1",
         }),
       },
       {
@@ -509,6 +525,7 @@ describe("baseline batch execution", () => {
               ? canonicalStrictJsonBytesV1({ protocol: "BaselineNativeObservationV1", files: [] })
               : Buffer.from("{}", "utf8"),
           analyzerVersion: `${analyzer}.0123456789ab`,
+          executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
         }),
       },
       {
@@ -524,11 +541,13 @@ describe("baseline batch execution", () => {
                   files: [],
                 }),
                 analyzerVersion: "native.0123456789ab",
+                executionProfileId: "in-process-native-v1",
               }
             : {
                 mediaType: "application/sarif+json",
                 bytes: sarif(analyzer),
                 analyzerVersion: `${analyzer}.0123456789ab`,
+                executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
               };
         },
       },
@@ -547,11 +566,13 @@ describe("baseline batch execution", () => {
                   files: [],
                 }),
                 analyzerVersion: "native.0123456789ab",
+                executionProfileId: "in-process-native-v1",
               }
             : {
                 mediaType: "application/sarif+json",
                 bytes: sarif(analyzer),
                 analyzerVersion: `${analyzer}.0123456789ab`,
+                executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
               });
       await expect(
         executeBaselineVetBatchV1(request, { sourceRoot: root, execute }),
@@ -571,11 +592,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
             analyzerVersion: `${analyzer}.0123456789ab`,
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     const result = await executeBaselineVetBatchV1(request, { sourceRoot: root, execute });
     const first = result.annexArtifacts[0];
@@ -657,11 +680,13 @@ describe("baseline batch execution", () => {
                 files: [],
               }),
               analyzerVersion: "native.0123456789ab",
+              executionProfileId: "in-process-native-v1",
             }
           : {
               mediaType: "application/sarif+json",
               bytes: sarif(analyzer),
               analyzerVersion: `${analyzer}.0123456789ab`,
+              executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             },
     });
     const ciscoBytes = sarif("cisco");

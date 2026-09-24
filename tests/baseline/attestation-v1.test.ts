@@ -14,6 +14,7 @@ import {
   createBaselineVetRequestV1,
   executeBaselineVetBatchV1,
 } from "../../src/baseline/batch-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { ed25519KeyIdV2 } from "../../src/observation/scan-attestation-v2.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
@@ -58,14 +59,22 @@ async function fixture() {
             files: [],
           }),
           analyzerVersion: "native.0123456789ab",
+          executionProfileId: "in-process-native-v1",
         }
       : {
           mediaType: "application/sarif+json",
           bytes: canonicalStrictJsonBytesV1({
             version: "2.1.0",
-            runs: [{ tool: { driver: { name: analyzer } }, results: [] }],
+            runs: [
+              {
+                tool: { driver: { name: analyzer } },
+                results: [],
+                invocations: [{ executionSuccessful: true }],
+              },
+            ],
           }),
           analyzerVersion: `${analyzer}.0123456789ab`,
+          executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
         };
   return {
     request,

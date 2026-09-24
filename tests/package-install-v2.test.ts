@@ -22,6 +22,7 @@ import {
   executeBaselineVetBatchV1,
 } from "../src/baseline/batch-v1.js";
 import { writeBaselineVetBundleV1 } from "../src/baseline/bundle-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../src/contract/strict-json-v1.js";
 import {
   createObservationKeyV1,
@@ -826,14 +827,22 @@ describe("published V2 package installation", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: canonicalStrictJsonBytesV1({
               version: "2.1.0",
-              runs: [{ tool: { driver: { name: analyzer } }, results: [] }],
+              runs: [
+                {
+                  tool: { driver: { name: analyzer } },
+                  results: [],
+                  invocations: [{ executionSuccessful: true }],
+                },
+              ],
             }),
             analyzerVersion: `${analyzer}.0123456789ab`,
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     const baselineResult = await executeBaselineVetBatchV1(baselineRequest, {
       sourceRoot: baselineRoot,

@@ -21,6 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { z } from "zod";
+import { resolveDetectorCapabilityV1 } from "../capability/detector-capability-v1.js";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
@@ -30,7 +31,17 @@ import {
   deepFreezeStrictJsonV1,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
+import {
+  attachScanCompletionV1,
+  scanCompletionEvidenceV1,
+  scanCompletionSubjectFilesV1,
+} from "../detectors/completion-evidence-v1.js";
+import { assertSarifCompletedV1 } from "../detectors/sarif-completion-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../observation/source-hash-v1.js";
+import {
+  type SourceObservationSealV1,
+  sealSourceObservationV1,
+} from "../observation/source-observation-seal-v1.js";
 import { createBaselineAnalyzerExecutionV1 } from "./runtime-v1.js";
 
 export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "cisco"] as const;
@@ -135,6 +146,12 @@ export type BaselineAnalyzerExecutionV1 = (input: {
   readonly mediaType: "application/sarif+json" | "application/vnd.aih.baseline-native+json";
   readonly bytes: Uint8Array;
   readonly analyzerVersion: string;
+  /**
+   * The execution profile the analyzer actually ran under, one of its detector's
+   * observation profiles. Its published `analyzerLock` is the lock the SARIF annex's
+   * completion evidence names (D24).
+   */
+  readonly executionProfileId: string;
 }>;
 
 export type BaselineVetVerificationV1 =
@@ -332,7 +349,10 @@ export function parseBaselineVetReceiptV1Json(text: string): BaselineVetReceiptV
  */
 export function normalizedObservation(
   analyzerName: BaselineAnalyzerV1,
-  value: Awaited<ReturnType<BaselineAnalyzerExecutionV1>>,
+  value: Pick<
+    Awaited<ReturnType<BaselineAnalyzerExecutionV1>>,
+    "mediaType" | "bytes" | "analyzerVersion"
+  >,
 ): { bytes: Buffer; mediaType: typeof value.mediaType; analyzerVersion: string } {
   const bytes = Buffer.from(value.bytes);
   if (bytes.byteLength === 0 || bytes.byteLength > maxAnnexBytes) fail("observation byte bounds");
@@ -726,6 +746,32 @@ function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: strin
   }
 }
 
+/** The detector a baseline analyzer is, for its capability and its completion evidence. */
+const BASELINE_DETECTOR_IDS_V1: Readonly<Record<BaselineAnalyzerV1, string>> = Object.freeze({
+  "aih-native": "detector.aih-native",
+  skillspector: "detector.skillspector",
+  semgrep: "detector.semgrep",
+  cisco: "detector.cisco",
+});
+
+/** The declared profile, which must be one of the detector's observation profiles. */
+function executedProfile(analyzerName: BaselineAnalyzerV1, executionProfileId: unknown) {
+  const capability = resolveDetectorCapabilityV1(BASELINE_DETECTOR_IDS_V1[analyzerName]);
+  const profile = capability?.executionProfiles.find(
+    (item) => item.id === executionProfileId && item.evidence === "BaselineAnalyzerObservationV1",
+  );
+  if (capability === undefined || profile === undefined)
+    fail(
+      `${analyzerName} execution profile ${JSON.stringify(executionProfileId)} is not one it runs under`,
+    );
+  return { capability, profile };
+}
+
+/** The analyzer snapshot's seal: what every analyzer received, top-level `.git` never among it. */
+function sealAnalyzerSnapshot(snapshotRoot: string): SourceObservationSealV1 {
+  return sealSourceObservationV1({ sourceRoot: snapshotRoot, selectedClosurePaths: [] });
+}
+
 export async function executeBaselineVetBatchV1(
   request: BaselineVetRequestV1,
   runtime: {
@@ -741,33 +787,75 @@ export async function executeBaselineVetBatchV1(
   const observations: z.infer<typeof observation>[] = [];
   const annexArtifacts: BaselineVetAnnexArtifactV1[] = [];
   try {
+    const sealed = sealAnalyzerSnapshot(snapshotRoot);
+    const ran: {
+      analyzer: BaselineAnalyzerV1;
+      observed: ReturnType<typeof normalizedObservation>;
+      executed: ReturnType<typeof executedProfile>;
+    }[] = [];
     for (const analyzerName of selected) {
-      const observed = normalizedObservation(
-        analyzerName,
-        await execute({
-          analyzer: analyzerName,
-          sourceRoot: snapshotRoot,
-          source: request.source,
-        }),
-      );
+      const result = await execute({
+        analyzer: analyzerName,
+        sourceRoot: snapshotRoot,
+        source: request.source,
+      });
+      const executed = executedProfile(analyzerName, result.executionProfileId);
+      const observed = normalizedObservation(analyzerName, result);
+      // S2e: the analyzer's own completion proof, before anything is published from it.
+      if (observed.mediaType === "application/sarif+json")
+        assertSarifCompletedV1(parseStrictJsonObjectV1(observed.bytes.toString("utf8"), "SARIF"));
+      ran.push({ analyzer: analyzerName, observed, executed });
+    }
+    assertSafeAnalyzerSnapshot(snapshotRoot);
+    if (
+      !canonicalStrictJsonBytesV1(sealAnalyzerSnapshot(snapshotRoot)).equals(
+        canonicalStrictJsonBytesV1(sealed),
+      )
+    )
+      fail("baseline analyzer snapshot changed during the run");
+    sourceAndComponentsMatch(request, snapshotRoot);
+    const reobservedRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
+    rmSync(reobservedRoot, { recursive: true, force: true });
+    // C2a §1.6 (D24): only now, every proof passed, does each SARIF run name the files of the
+    // snapshot the analyzer received, under the lock of the profile that ran.
+    for (const { analyzer: analyzerName, observed, executed } of ran) {
+      let bytes = observed.bytes;
+      if (observed.mediaType === "application/sarif+json") {
+        const evidence = scanCompletionEvidenceV1({
+          detectorId: executed.capability.detectorId,
+          files: scanCompletionSubjectFilesV1({
+            engine: analyzerName as "semgrep" | "skillspector" | "cisco",
+            entries: sealed.entries,
+            selectedClosurePaths: sealed.selectedClosurePaths,
+          }),
+          emptyAllowed: executed.capability.emptySource === "completes",
+          analyzer: {
+            version: observed.analyzerVersion,
+            lockSha256: executed.profile.analyzerLock?.sha256 ?? null,
+          },
+        });
+        bytes = canonicalStrictJsonBytesV1(
+          attachScanCompletionV1(
+            parseStrictJsonObjectV1(bytes.toString("utf8"), `${analyzerName} SARIF`),
+            evidence,
+            { scanBuilt: false },
+          ),
+        );
+        normalizedObservation(analyzerName, { ...observed, bytes });
+      }
       const path = `annex/${analyzerName}.json`;
-      const digest = createHash("sha256").update(observed.bytes).digest("hex");
       observations.push({
         analyzer: analyzerName,
         analyzerVersion: observed.analyzerVersion,
         annex: {
           path,
           mediaType: observed.mediaType,
-          sha256: digest,
-          byteLength: observed.bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          byteLength: bytes.byteLength,
         },
       });
-      annexArtifacts.push({ path, bytes: observed.bytes });
+      annexArtifacts.push({ path, bytes });
     }
-    assertSafeAnalyzerSnapshot(snapshotRoot);
-    sourceAndComponentsMatch(request, snapshotRoot);
-    const reobservedRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
-    rmSync(reobservedRoot, { recursive: true, force: true });
   } finally {
     rmSync(snapshotRoot, { recursive: true, force: true });
   }
