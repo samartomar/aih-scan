@@ -40,6 +40,7 @@ import {
 } from "../detectors/sarif-completion-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
+import { assertCiscoScanAllSkillInventoryV1 } from "./cisco-report-skills-v1.js";
 import {
   assertCiscoScanAllAnalyzersCompleteV1,
   ciscoSourceRelativeSarifV1,
@@ -1311,10 +1312,8 @@ async function hostProcessUv(
         hostRuntime,
       };
     }
-    const expectedSkills = hashSourceTreeV1(input.sourceRoot).files.filter(
-      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
-    ).length;
-    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
+    const expectedSkills = ciscoSkillDirectories(input.sourceRoot);
+    if (expectedSkills.length === 0) fail("Cisco skill discovery found no SKILL.md files");
     const reported = (
       await run(
         uvRun([tool("skill-scanner"), "--version"]),
@@ -1346,8 +1345,15 @@ async function hostProcessUv(
     );
     const report = verifyCiscoCoverage(
       readBoundedAnalyzerOutput(jsonPath, "Cisco JSON output"),
-      expectedSkills,
+      expectedSkills.length,
     );
+    // U1j (review of U1i, P1): every expected skill is listed exactly once, so no skill's
+    // failed analyzers can be left out of the D30 decision below.
+    assertCiscoScanAllSkillInventoryV1(report, {
+      sourceRoots: roots,
+      expected: expectedSkills,
+      platform: process.platform,
+    });
     const sarif = parsedSarif(readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output"), "cisco");
     const normalized = ciscoSourceRelativeSarifV1(sarif, report, roots).document;
     // U1i, coordinator decision D30 (revised 20:58Z): complete only when every failed
@@ -1841,6 +1847,20 @@ function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
   return readBoundedRegularFile(path, maxOutputBytes, label);
 }
 
+/**
+ * U1j: the skill directories Cisco `scan-all --recursive` must report, one per sealed
+ * `SKILL.md` ("" is the root skill), source-relative.
+ */
+function ciscoSkillDirectories(sourceRoot: string): string[] {
+  return hashSourceTreeV1(sourceRoot).files.flatMap(({ path }) =>
+    path === "SKILL.md"
+      ? [""]
+      : path.endsWith("/SKILL.md")
+        ? [path.slice(0, -"/SKILL.md".length)]
+        : [],
+  );
+}
+
 /** Checks the Cisco JSON report's coverage and returns the parsed report. */
 function verifyCiscoCoverage(output: Buffer, expectedSkills: number): Record<string, unknown> {
   let report: Record<string, unknown>;
@@ -1889,10 +1909,8 @@ async function cisco(
     mkdirSync(venvDirectory, { mode: 0o700 });
     const sarifOutputPath = join(workDirectory, "results.sarif");
     const jsonOutput = join(workDirectory, "results.json");
-    const expectedSkills = hashSourceTreeV1(sourceRoot).files.filter(
-      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
-    ).length;
-    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
+    const expectedSkills = ciscoSkillDirectories(sourceRoot);
+    if (expectedSkills.length === 0) fail("Cisco skill discovery found no SKILL.md files");
     const sandboxState = {
       project: ciscoProject,
       workDirectory,
@@ -1946,8 +1964,14 @@ async function cisco(
     );
     const report = verifyCiscoCoverage(
       readBoundedAnalyzerOutput(jsonOutput, "Cisco JSON output"),
-      expectedSkills,
+      expectedSkills.length,
     );
+    // U1j, as for host-process-uv-v1.
+    assertCiscoScanAllSkillInventoryV1(report, {
+      sourceRoots: ["/aih/source"],
+      expected: expectedSkills,
+      platform: process.platform,
+    });
     const sarif = parsedSarif(
       readBoundedAnalyzerOutput(sarifOutputPath, "Cisco SARIF output"),
       "cisco",

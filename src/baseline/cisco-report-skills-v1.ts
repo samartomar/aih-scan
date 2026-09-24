@@ -1,4 +1,7 @@
-import { CiscoAnalyzerFailureV1 } from "./cisco-analyzer-failures-v1.js";
+import {
+  CISCO_SKILL_COVERAGE_MISMATCH_V1,
+  CiscoAnalyzerFailureV1,
+} from "./cisco-analyzer-failures-v1.js";
 import { ciscoSealedPathBinderV1 } from "./cisco-sealed-case-binding-v1.js";
 import { sourceRelativeSkillDirectoryV1 } from "./sarif-source-relative-v1.js";
 
@@ -89,5 +92,54 @@ export function assertCiscoSingleSkillReportSkillV1(
     throw new CiscoAnalyzerFailureV1(
       "output",
       `Cisco JSON report of ${context.label} is for skill ${shown(named)}, not ${shown(context.skill)}`,
+    );
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * U1j (review of U1i, P1): Cisco `scan-all` reports each skill's `analyzers_failed` under
+ * `results[i]`, so D30 inspects only the skills the report lists. The report is complete
+ * only when its unique skills ({@link ciscoReportSkillDirectoryV1}) are exactly
+ * `context.expected` (one per SKILL.md Scan sealed): every expected skill once, none twice
+ * and nothing else, with `summary.total_skills_scanned` equal to that count. A missing,
+ * duplicated or extra skill, or a disagreeing count, fails at `coverage` (a partial report
+ * whose summary still counts every skill, or a duplicate standing in for a sibling, can no
+ * longer hide that sibling's failures); a malformed results list or skill path fails at
+ * `output`.
+ */
+export function assertCiscoScanAllSkillInventoryV1(
+  report: Record<string, unknown>,
+  context: CiscoReportSkillContextV1,
+): void {
+  const results = report.results;
+  if (!Array.isArray(results))
+    throw new CiscoAnalyzerFailureV1("output", "Cisco JSON report holds no results list");
+  const listed = results.map((entry: unknown, index) => {
+    if (!isRecord(entry))
+      throw new CiscoAnalyzerFailureV1(
+        "output",
+        `Cisco JSON report results[${index}] is malformed`,
+      );
+    return ciscoReportSkillDirectoryV1(entry.skill_path, `results[${index}]`, context);
+  });
+  const counts = new Map<string, number>();
+  for (const skill of listed) counts.set(skill, (counts.get(skill) ?? 0) + 1);
+  const expected = new Set(context.expected);
+  const problems: string[] = [];
+  const missing = [...expected].filter((skill) => !counts.has(skill));
+  if (missing.length > 0) problems.push(`missing ${missing.map(shown).join(", ")}`);
+  const twice = [...counts].filter(([, count]) => count > 1).map(([skill]) => shown(skill));
+  if (twice.length > 0) problems.push(`listed more than once ${twice.join(", ")}`);
+  const extra = [...counts.keys()].filter((skill) => !expected.has(skill));
+  if (extra.length > 0) problems.push(`not expected ${extra.map(shown).join(", ")}`);
+  const summary = isRecord(report.summary) ? report.summary.total_skills_scanned : undefined;
+  if (problems.length === 0 && summary !== expected.size)
+    problems.push("the summary count disagrees");
+  if (problems.length > 0)
+    throw new CiscoAnalyzerFailureV1(
+      "coverage",
+      `${CISCO_SKILL_COVERAGE_MISMATCH_V1}the JSON report lists ${results.length} result${results.length === 1 ? "" : "s"} for ${expected.size} expected skill${expected.size === 1 ? "" : "s"} (summary ${String(summary)}): ${problems.join("; ")}`,
     );
 }

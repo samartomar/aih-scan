@@ -569,6 +569,65 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
     ]);
   });
 
+  // U1j (review of U1i, P1): the report's unique skills must be the expected inventory, so a
+  // report that drops the nested skill (its summary still counting two) or lists the root
+  // twice in its place cannot hide the nested skill's failed analyzers.
+  it("fails coverage for a partial or duplicated scan-all report (U1j)", async () => {
+    const host = hostFixture();
+    for (const [listed, reason] of [
+      [
+        [""],
+        /the JSON report lists 1 result for 2 expected skills \(summary 2\): missing skills\/nested$/,
+      ],
+      [["", ""], /missing skills\/nested; listed more than once \.$/],
+    ] as const) {
+      const sourceRoot = skillFixture();
+      const runner = hostRunner([], host.python, async (argv) => {
+        const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
+        writeFileSync(
+          argv[argv.indexOf("--output-json") + 1] ?? "",
+          canonicalStrictJsonBytesV1({
+            summary: { total_skills_scanned: 2 },
+            results: listed.map((skill) => ({
+              skill_path: skill === "" ? snapshot : join(snapshot, skill),
+              findings: [],
+            })),
+          }),
+        );
+        writeFileSync(
+          argv[argv.indexOf("--output-sarif") + 1] ?? "",
+          canonicalStrictJsonBytesV1({
+            version: "2.1.0",
+            runs: [
+              {
+                tool: { driver: { name: "skill-scanner" } },
+                invocations: [{ executionSuccessful: true }],
+                results: [],
+              },
+            ],
+          }),
+        );
+        return okay("");
+      });
+      const outcome = await runDetectorV1({
+        detectorId: "detector.cisco",
+        executionProfileId: HOST_PROFILE,
+        subject: {
+          kind: "skill-directory",
+          sourceRoot,
+          selectedClosurePaths: ["SKILL.md", "skills/nested/SKILL.md"],
+        },
+        env: host.env,
+        runner,
+      });
+      expect(outcome, String(listed)).toMatchObject({
+        outcome: "failed",
+        failure: { stage: "coverage" },
+      });
+      if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
+    }
+  });
+
   describe("Cisco 2.1.0 normcase paths (owner decision D1)", () => {
     // skill-scanner 2.1.0 reports os.path.normcase paths: on Windows the whole resolved path,
     // directories included, is lowercased.

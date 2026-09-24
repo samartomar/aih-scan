@@ -12,6 +12,7 @@ import {
 import {
   CISCO_FAILED_ANALYZERS_PREFIX_V1,
   CISCO_REPORT_PREFIX_V1,
+  CISCO_SKILL_COVERAGE_PREFIX_V1,
 } from "../baseline/cisco-analyzer-failures-v1.js";
 import {
   bindCiscoSarifToSealedFilesV1,
@@ -433,7 +434,12 @@ export function failureStage(message: string): RunDetectorFailureStageV1 {
   // U1i, coordinator decision D30: a failed analyzer Cisco reported is a coverage failure, and
   // an unusable Cisco JSON report an output failure. Checked first and by their fixed
   // prefixes, since the analyzer's own text follows them.
-  if (message.startsWith(CISCO_FAILED_ANALYZERS_PREFIX_V1)) return "coverage";
+  // U1j: so is a scan-all report whose skills are not the expected inventory.
+  if (
+    message.startsWith(CISCO_FAILED_ANALYZERS_PREFIX_V1) ||
+    message.startsWith(CISCO_SKILL_COVERAGE_PREFIX_V1)
+  )
+    return "coverage";
   if (message.startsWith(CISCO_REPORT_PREFIX_V1)) return "output";
   if (message.includes("environment acquisition") || message.includes("image acquisition"))
     return "acquisition";

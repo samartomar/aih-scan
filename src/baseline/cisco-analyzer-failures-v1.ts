@@ -39,6 +39,14 @@ export class CiscoAnalyzerFailureV1 extends TypeError {
 export const CISCO_REPORT_PREFIX_V1 = "aih-scan Cisco report: ";
 /** How every D30 coverage failure message starts; the runner classifies it by this prefix. */
 export const CISCO_FAILED_ANALYZERS_PREFIX_V1 = `${CISCO_REPORT_PREFIX_V1}Cisco reported failed analyzers: `;
+/**
+ * U1j: the text a `scan-all` skill-inventory coverage failure starts with, after
+ * {@link CISCO_REPORT_PREFIX_V1}; the runner classifies {@link CISCO_SKILL_COVERAGE_PREFIX_V1}
+ * as `coverage`.
+ */
+export const CISCO_SKILL_COVERAGE_MISMATCH_V1 = "Cisco skill coverage mismatch: ";
+/** How every U1j skill-inventory coverage failure message starts. */
+export const CISCO_SKILL_COVERAGE_PREFIX_V1 = `${CISCO_REPORT_PREFIX_V1}${CISCO_SKILL_COVERAGE_MISMATCH_V1}`;
 
 const malformed = (what: string): never => {
   throw new CiscoAnalyzerFailureV1("output", `Cisco JSON report ${what} is malformed`);

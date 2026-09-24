@@ -104,9 +104,10 @@ describe("code-owned baseline analyzer runtime", () => {
         writeFileSync(join(workDirectory, "results.sarif"), sarif("cisco"), "utf8");
         writeFileSync(
           join(workDirectory, "results.json"),
+          // U1j: the report lists the one expected skill.
           canonicalStrictJsonBytesV1({
             summary: { total_skills_scanned: 1 },
-            results: [],
+            results: [{ skill_path: "/aih/source/skills/demo", findings: [] }],
           }),
         );
         return { code: 0, stdout: "", stderr: "", truncated: false };
