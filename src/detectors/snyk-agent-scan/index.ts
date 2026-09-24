@@ -21,7 +21,11 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  *   owner principle): zero findings completes only when a scan-path entry proves the root
  *   was analyzed; an empty object or empty finding array, any failure ScanError at report,
  *   entry or server level, an agent-scan X-code issue, and any malformed entry or finding
- *   fail at stage `output`;
+ *   fail at stage `output`. The pinned 0.6.x analyzer prints a ScanResponse
+ *   (`{scan_path_responses: [...]}`) instead; it is held to the same rules (every response
+ *   names the root by an existing path, no failure ScanError anywhere, every record and
+ *   risk validated) and every present risk becomes one result. The 0.5.17 shapes stay
+ *   because the recorded parity outputs replayed against Core use them;
  * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
  *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
  *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
@@ -481,6 +485,227 @@ function snykFindingLine(finding: Record<string, unknown>): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
 }
 
+// ---------------------------------------------------------------------------
+// snyk-agent-scan 0.6.x `scan --json`: the ScanResponse (models/api/v20260710.py)
+// ---------------------------------------------------------------------------
+
+const RISK_SCORE_MAX = 1000;
+const RISK_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+const RESPONSE_KEYS = new Set(["client", "path", "server_risks", "skill_risks", "error"]);
+const SERVER_KEYS = new Set(["name", "entities", "risk_indexes", "error"]);
+const SKILL_KEYS = new Set(["name", "files", "risk_indexes", "error"]);
+const SERVER_RISK_KEYS = new Set(["score", "evidence", "affected_tools"]);
+const SKILL_RISK_KEYS = new Set([
+  "score",
+  "evidence",
+  "locations",
+  "malicious_urls",
+  "unverifiable_urls",
+]);
+const ENTITY_TYPES = new Set(["tool", "resource", "resource_template", "prompt"]);
+const FILE_TYPES = new Set(["instruction", "script", "asset"]);
+
+function hasOnlyKeys(record: Record<string, unknown>, keys: ReadonlySet<string>): boolean {
+  return Object.keys(record).every((key) => keys.has(key));
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function malformedEntry(): never {
+  throw new TypeError(MALFORMED_ENTRY);
+}
+
+function malformedFinding(): never {
+  throw new TypeError(MALFORMED_FINDING);
+}
+
+/** A list of `{name, type}` summaries (`McpEntitySummary`, `SkillFileSummary`). */
+function namedSummaries(value: unknown, types: ReadonlySet<string>): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return malformedEntry();
+  return value.map((item) =>
+    isRecord(item) &&
+    Object.keys(item).length === 2 &&
+    isNonBlankString(item.name) &&
+    typeof item.type === "string" &&
+    types.has(item.type)
+      ? item
+      : malformedEntry(),
+  );
+}
+
+/** An existing path whose realpath is the scanned root's; nothing else names the root. */
+function isScannedRoot(raw: unknown, tree: string): boolean {
+  if (typeof raw !== "string" || !isAbsolute(raw)) return false;
+  try {
+    return realpathSync(raw) === realpathSync(tree);
+  } catch {
+    return false;
+  }
+}
+
+interface SnykRiskV1 {
+  readonly name: string;
+  readonly score: number;
+  readonly evidence: string;
+  readonly value: Record<string, unknown>;
+}
+
+/** Every present risk of a record's `risk_indexes`, validated against the 0.6.4 models. */
+function riskEntries(indexes: unknown, keys: ReadonlySet<string>): SnykRiskV1[] {
+  if (!isRecord(indexes)) return malformedEntry();
+  return Object.entries(indexes).map(([name, value]): SnykRiskV1 => {
+    if (!RISK_NAME.test(name) || !isRecord(value) || !hasOnlyKeys(value, keys))
+      return malformedFinding();
+    const { score, evidence } = value;
+    if (!isCount(score) || score > RISK_SCORE_MAX || typeof evidence !== "string")
+      return malformedFinding();
+    for (const key of ["malicious_urls", "unverifiable_urls"] as const) {
+      const urls = value[key];
+      if (urls !== undefined && (!Array.isArray(urls) || !urls.every((u) => typeof u === "string")))
+        malformedFinding();
+    }
+    return { name, score, evidence, value };
+  });
+}
+
+function riskText(risk: SnykRiskV1, subject: string, detail: string): string {
+  const evidence = risk.evidence.trim().length > 0 ? risk.evidence : "Snyk Agent Scan finding";
+  return `${evidence} (${subject}; score ${risk.score}/${RISK_SCORE_MAX}${detail})`;
+}
+
+function affectedToolsText(risk: SnykRiskV1, entities: readonly Record<string, unknown>[]): string {
+  const affected = risk.value.affected_tools;
+  if (affected === undefined) return "";
+  if (!Array.isArray(affected)) return malformedFinding();
+  const names = affected.map((index) =>
+    isCount(index) && index < entities.length
+      ? (entities[index]?.name as string)
+      : malformedFinding(),
+  );
+  return names.length > 0 ? `; affected tools: ${names.join(", ")}` : "";
+}
+
+/** The first skill-relative location (`Region.start`), as `; at path[:line] in the skill`. */
+function skillLocationText(risk: SnykRiskV1): string {
+  const locations = risk.value.locations;
+  if (locations === undefined) return "";
+  if (!Array.isArray(locations)) return malformedFinding();
+  const occurrence = (value: unknown): Record<string, unknown> => {
+    if (!isRecord(value) || !hasOnlyKeys(value, new Set(["path", "line", "offset"])))
+      return malformedFinding();
+    if (typeof value.path !== "string") return malformedFinding();
+    if (value.line !== undefined && !isCount(value.line)) return malformedFinding();
+    if (value.offset !== undefined && !isCount(value.offset)) return malformedFinding();
+    return value;
+  };
+  const starts = locations.map((region) => {
+    if (!isRecord(region) || !hasOnlyKeys(region, new Set(["start", "end"])))
+      return malformedFinding();
+    if (region.end !== undefined) occurrence(region.end);
+    return occurrence(region.start);
+  });
+  const first = starts[0];
+  if (first === undefined) return "";
+  const path = toPosix(first.path as string);
+  return `; at ${typeof first.line === "number" && first.line > 0 ? `${path}:${first.line}` : path} in the skill`;
+}
+
+function scanResponseResult(ruleId: string, text: string): SnykAgentScanSarifResultV1 {
+  // Risk locations are relative to a skill directory the response does not name, so a
+  // result points at the scanned root (line 1) and carries the location in its message.
+  return {
+    ruleId,
+    message: { text },
+    locations: [{ physicalLocation: { artifactLocation: { uri: "." }, region: { startLine: 1 } } }],
+  };
+}
+
+/**
+ * A 0.6.x server or skill record: its keys, name and summaries are validated, a failure
+ * ScanError is an analyzer error, and a non-failure one means the record was not
+ * analyzed. Returns the record's `risk_indexes`.
+ */
+function analyzedRecord(
+  value: unknown,
+  keys: ReadonlySet<string>,
+  summaryKey: "entities" | "files",
+  summaryTypes: ReadonlySet<string>,
+): { name: string; summaries: Record<string, unknown>[]; indexes: unknown } {
+  if (!isRecord(value) || !hasOnlyKeys(value, keys) || !isNonBlankString(value.name))
+    return malformedEntry();
+  const summaries =
+    value[summaryKey] === undefined ? [] : namedSummaries(value[summaryKey], summaryTypes);
+  if (!Object.hasOwn(value, "risk_indexes")) malformedEntry();
+  const error = errorKind(value.error);
+  if (error === "failure") throw new TypeError(ANALYZER_ERROR);
+  if (error === "note") throw new TypeError(NO_ANALYSIS);
+  return { name: value.name, summaries, indexes: value.risk_indexes };
+}
+
+/**
+ * The results of a 0.6.x ScanResponse, under the S2e rules: every response must name the
+ * scanned root by `client` or an absolute `path` that exists and is the root (a home
+ * display path `~/…` never does); any failure ScanError on the report, a response, a
+ * server or a skill is an analyzer error; a non-failure note on a record, or on a response
+ * with nothing analyzed, is no analysis; every record and risk is validated, none skipped.
+ * Every present risk becomes one result named by its risk key.
+ */
+function scanResponseResults(
+  report: Record<string, unknown>,
+  tree: string,
+): SnykAgentScanSarifResultV1[] {
+  if (carriesFailure(report)) throw new TypeError(ANALYZER_ERROR);
+  if (!hasOnlyKeys(report, new Set(["scan_path_responses"]))) malformedEntry();
+  const responses = report.scan_path_responses;
+  if (!Array.isArray(responses)) return malformedEntry();
+  if (responses.length === 0) throw new TypeError(NO_ANALYSIS);
+  const results: SnykAgentScanSarifResultV1[] = [];
+  for (const response of responses) {
+    if (!isRecord(response) || !hasOnlyKeys(response, RESPONSE_KEYS)) return malformedEntry();
+    const { client, path } = response;
+    if (!isNonBlankString(path)) malformedEntry();
+    if (client !== undefined && typeof client !== "string") malformedEntry();
+    if (!Array.isArray(response.server_risks) || !Array.isArray(response.skill_risks))
+      malformedEntry();
+    const error = errorKind(response.error);
+    if (error === "failure") throw new TypeError(ANALYZER_ERROR);
+    const servers = (response.server_risks as unknown[]).map((value) =>
+      analyzedRecord(value, SERVER_KEYS, "entities", ENTITY_TYPES),
+    );
+    const skills = (response.skill_risks as unknown[]).map((value) =>
+      analyzedRecord(value, SKILL_KEYS, "files", FILE_TYPES),
+    );
+    for (const server of servers) {
+      for (const risk of riskEntries(server.indexes, SERVER_RISK_KEYS)) {
+        const tools = affectedToolsText(risk, server.summaries);
+        results.push(
+          scanResponseResult(risk.name, riskText(risk, `MCP server "${server.name}"`, tools)),
+        );
+      }
+    }
+    for (const skill of skills) {
+      for (const risk of riskEntries(skill.indexes, SKILL_RISK_KEYS)) {
+        const location = skillLocationText(risk);
+        results.push(
+          scanResponseResult(risk.name, riskText(risk, `skill "${skill.name}"`, location)),
+        );
+      }
+    }
+    if (results.length > MAX_FINDINGS)
+      throw new TypeError("snyk-agent-scan JSON exceeds the bounded finding count");
+    if (!isScannedRoot(client, tree) && !isScannedRoot(path, tree))
+      throw new TypeError(NO_ANALYSIS);
+    if (error === "note" && servers.length + skills.length === 0) throw new TypeError(NO_ANALYSIS);
+  }
+  return results;
+}
+
 function parseReportJson(raw: string): unknown {
   if (Buffer.byteLength(raw, "utf8") > MAX_OUTPUT_BYTES)
     throw new TypeError("snyk-agent-scan output exceeds the bounded size");
@@ -501,6 +726,11 @@ function parseReportJson(raw: string): unknown {
  */
 export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentScanSarifV1 {
   const parsed = parseReportJson(raw);
+  if (isRecord(parsed) && Object.hasOwn(parsed, "scan_path_responses"))
+    return deepFreezeStrictJsonV1({
+      version: "2.1.0" as const,
+      runs: [{ results: scanResponseResults(parsed, tree) }],
+    });
   const findings = snykFindingArray(parsed, tree);
   if (findings.length > MAX_FINDINGS)
     throw new TypeError("snyk-agent-scan JSON exceeds the bounded finding count");
