@@ -8,10 +8,16 @@
  *
  * - `output`: another version; no runs; a run that is not an object, names no tool driver or
  *   holds no results array; a result that is not an object or whose `locations` is not an
- *   array; a run without invocations; a notification list that is not an array.
+ *   array of location objects (S2f: a `physicalLocation` and its `artifactLocation`, when
+ *   present, are objects, and the artifact `uri`, when present, a string); a run without
+ *   invocations; a notification list that is not an array; a malformed
+ *   notification (S2f): not an object, a `level` that is not one of SARIF 2.1.0's
+ *   none/note/warning/error, or a `message` that is not a message object (`text` or `id`,
+ *   each a string, optional string `markdown`, optional string-array `arguments`).
  * - `execution` (the analyzer's own failure report): an invocation that is not
- *   `executionSuccessful: true`, or an `error`-level (or malformed) entry in its
- *   `toolExecutionNotifications` or `toolConfigurationNotifications`.
+ *   `executionSuccessful: true`, or an `error`-level entry in its
+ *   `toolExecutionNotifications` or `toolConfigurationNotifications` whose lists are
+ *   otherwise well formed.
  */
 
 export type SarifCompletionStageV1 = "execution" | "output";
@@ -29,14 +35,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A SARIF 2.1.0 location object, as far as Scan reads one: physical location and URI. */
+function isLocation(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const physical = value.physicalLocation;
+  if (physical === undefined) return true;
+  if (!isRecord(physical)) return false;
+  const artifact = physical.artifactLocation;
+  if (artifact === undefined) return true;
+  return isRecord(artifact) && (artifact.uri === undefined || typeof artifact.uri === "string");
+}
+
 function problem(stage: SarifCompletionStageV1, detail: string): never {
   throw new SarifCompletionErrorV1(stage, detail);
 }
 
-function hasErrorNotification(value: unknown, where: string): boolean {
-  if (value === undefined) return false;
+const NOTIFICATION_LEVELS: ReadonlySet<unknown> = new Set(["none", "note", "warning", "error"]);
+
+const isOptionalString = (value: unknown): boolean =>
+  value === undefined || typeof value === "string";
+
+/** A SARIF 2.1.0 message object: `text` or `id`, every present property well typed. */
+function isMessage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.text === undefined && value.id === undefined) return false;
+  if (!isOptionalString(value.text) || !isOptionalString(value.id)) return false;
+  if (!isOptionalString(value.markdown)) return false;
+  const args = value.arguments;
+  return (
+    args === undefined || (Array.isArray(args) && args.every((arg) => typeof arg === "string"))
+  );
+}
+
+/** A SARIF 2.1.0 notification object: `level` and `message` well formed when present. */
+function isNotification(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  if (value.level !== undefined && !NOTIFICATION_LEVELS.has(value.level)) return false;
+  return value.message === undefined || isMessage(value.message);
+}
+
+/** The notifications of one list, validated whole; none when the list is absent. */
+function notifications(value: unknown, where: string): Record<string, unknown>[] {
+  if (value === undefined) return [];
   if (!Array.isArray(value)) problem("output", `${where} notifications are malformed`);
-  return value.some((entry) => !isRecord(entry) || entry.level === "error");
+  if (!value.every(isNotification)) problem("output", `${where} reports a malformed notification`);
+  return value;
 }
 
 /**
@@ -59,7 +102,11 @@ export function assertSarifCompletedV1(
     const results = run.results;
     if (!Array.isArray(results)) problem("output", `${where} holds no results array`);
     results.forEach((result: unknown, resultIndex) => {
-      if (!isRecord(result) || (result.locations !== undefined && !Array.isArray(result.locations)))
+      const locations = isRecord(result) ? result.locations : undefined;
+      if (
+        !isRecord(result) ||
+        (locations !== undefined && (!Array.isArray(locations) || !locations.every(isLocation)))
+      )
         problem("output", `${where} result ${resultIndex} is malformed`);
     });
     const invocations = run.invocations;
@@ -68,10 +115,11 @@ export function assertSarifCompletedV1(
     for (const invocation of invocations) {
       if (!isRecord(invocation) || invocation.executionSuccessful !== true)
         problem("execution", `${where} reports an invocation that did not complete successfully`);
-      if (
-        hasErrorNotification(invocation.toolExecutionNotifications, where) ||
-        hasErrorNotification(invocation.toolConfigurationNotifications, where)
-      )
+      const reported = [
+        ...notifications(invocation.toolExecutionNotifications, where),
+        ...notifications(invocation.toolConfigurationNotifications, where),
+      ];
+      if (reported.some((entry) => entry.level === "error"))
         problem("execution", `${where} reports an error notification`);
     }
   });

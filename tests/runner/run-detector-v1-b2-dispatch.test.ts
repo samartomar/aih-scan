@@ -349,7 +349,21 @@ function snykReport(tree: string) {
       servers: [
         {
           name: "clean",
+          config_path: null,
           server: { path: join(tree, "skills", "clean", "SKILL.md"), type: "skill" },
+          // The ServerSignature 0.5.17 records for an inspected skill (S2f: the proof of analysis).
+          signature: {
+            metadata: {
+              protocolVersion: "built-in",
+              capabilities: {},
+              serverInfo: { name: "clean", version: "skills" },
+            },
+            prompts: [{ name: "clean", description: "skill" }],
+            resources: [],
+            resource_templates: [],
+            tools: [],
+          },
+          error: null,
         },
       ],
     },

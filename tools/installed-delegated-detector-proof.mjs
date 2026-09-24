@@ -515,25 +515,34 @@ if (detectors.includes("snyk")) {
     // proves the root was analyzed succeeds; every error, empty or malformed report fails.
     const mocked = (label, stdout, extra = {}) =>
       run(`snyk mocked ${label}`, { ...job(refusalRoot), snykEnv: undefined, env: { SNYK_TOKEN: "synthetic-proof-token-not-a-secret" }, fakeSnykStdout: JSON.stringify(stdout), ...extra });
-    const analyzed = (entry) => ({ "@ROOT@": { client: null, path: "@ROOT@", servers: [{ name: "clean", server: { path: "@ROOT@", type: "skill" } }], issues: [], labels: [], error: null, ...entry } });
+    // S2f: a server proves analysis only with the ServerSignature 0.5.17 records for it.
+    const signature = { metadata: { protocolVersion: "built-in", capabilities: {}, serverInfo: { name: "clean", version: "skills" } }, prompts: [{ name: "clean", description: "skill" }], resources: [], resource_templates: [], tools: [] };
+    const skill = (extra = {}) => ({ name: "clean", config_path: null, server: { path: "@ROOT@", type: "skill" }, signature, error: null, ...extra });
+    const note = { message: "File or folder not found", is_failure: false, category: "file_not_found" };
+    const analyzed = (entry) => ({ "@ROOT@": { client: null, path: "@ROOT@", servers: [skill()], issues: [], labels: [], error: null, ...entry } });
     const responded = (entry) => ({ scan_path_responses: [{ client: "@ROOT@", path: "~/display", server_risks: [], skill_risks: [{ name: "clean", files: [{ name: "SKILL.md", type: "instruction" }], risk_indexes: {} }], ...entry }] });
     const mock = {
       clean: mocked("clean (root analyzed, no issues)", analyzed({})),
       reportError: mocked("report-level error", { error: { message: "analysis failed", is_failure: true } }),
       empty: mocked("empty object", {}),
       malformed: mocked("malformed findings", { findings: [null, 42] }),
-      quota: mocked("quota ScanError on the server", analyzed({ servers: [{ name: "clean", server: { path: "@ROOT@", type: "skill" }, error: { message: "HTTP 429 Too Many Requests", is_failure: true, category: "analysis_error" } }] })),
+      quota: mocked("quota ScanError on the server", analyzed({ servers: [skill({ signature: null, error: { message: "HTTP 429 Too Many Requests", is_failure: true, category: "analysis_error" } })] })),
+      malformedServer: mocked("malformed server beside a file_not_found note", { "@ROOT@": { issues: [], servers: [{}], error: { is_failure: false, category: "file_not_found" } } }),
+      entryNote: mocked("entry note beside an analyzed server", analyzed({ error: note })),
+      unsigned: mocked("server recorded but never inspected", analyzed({ servers: [skill({ signature: null })] })),
+      missingPath: mocked("keys and server paths that do not exist", { "@ROOT@/ghost": { client: null, path: "@ROOT@/ghost", servers: [skill({ server: { path: "@ROOT@/ghost/skill", type: "skill" } })], issues: [], labels: [], error: null } }),
       failureCode: mocked("X-code issue", analyzed({ issues: [{ code: "X007", message: "agent-scan failure" }] })),
       // The pinned 0.6.4 ScanResponse: client is the scanned path, path a home display path.
       v06Clean: mocked("0.6.4 clean response naming the root", responded({})),
       v06Quota: mocked("0.6.4 real quota shape (path-level analysis_error, exit 0)", responded({ skill_risks: [], error: { message: "Daily usage limit reached", is_failure: true, category: "analysis_error" } })),
       v06Unnamed: mocked("0.6.4 response that does not name the root", responded({ client: "@ROOT@-missing" })),
       v06Malformed: mocked("0.6.4 malformed server record", responded({ server_risks: [{}] })),
+      v06Note: mocked("0.6.4 response note beside an analyzed skill", responded({ error: note })),
     };
     for (const [key, record] of Object.entries(mock)) cases[`snykMock${key[0].toUpperCase()}${key.slice(1)}`] = record;
     for (const key of ["clean", "v06Clean"])
       check(`snyk mocked ${key} report that names the scanned root succeeds with zero findings`, mock[key].outcome === "succeeded" && mock[key].findings.length === 0 && noSurvivors(mock[key]), brief(mock[key]));
-    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "v06Quota", "v06Unnamed", "v06Malformed"]) {
+    for (const key of ["reportError", "empty", "malformed", "quota", "failureCode", "malformedServer", "entryNote", "unsigned", "missingPath", "v06Quota", "v06Unnamed", "v06Malformed", "v06Note"]) {
       const record = mock[key];
       check(`snyk mocked ${key} fails closed at the output stage, never a clean result`, record.outcome === "failed" && record.failure?.stage === "output" && /snyk-agent-scan/.test(record.failure?.detail ?? "") && noSurvivors(record), brief(record));
     }

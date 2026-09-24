@@ -363,7 +363,10 @@ function toolUri(raw: unknown, sourceUriByToolName: ReadonlyMap<string, string>)
  * coverage in every result, integer `total_findings` per analyzer, and one
  * SARIF result per threat pointing at the declaring config file on line 1.
  * Anything malformed, incomplete or inconsistent fails closed with Core's
- * message.
+ * message. Beyond Core (S2f): every summary field is validated before a zero
+ * total is skipped; a zero total naming threats, a positive total naming none
+ * or more than it counts, and a result marked safe that reports a finding are
+ * contradictions and fail.
  */
 export function parseCiscoMcpScannerSarifV1(
   stdout: string,
@@ -404,9 +407,9 @@ export function parseCiscoMcpScannerSarifV1(
           ? rawSummary.total_findings
           : undefined;
       if (total === undefined) fail("mcp-scanner JSON analyzer finding omitted a valid total");
-      if (total === 0) continue;
 
-      // Malformed threat fields fail rather than being filtered or ignored (S2e).
+      // Malformed threat fields fail rather than being filtered or ignored (S2e), a zero
+      // total included (S2f).
       const rawThreats = rawSummary.threat_names;
       if (
         rawThreats !== undefined &&
@@ -422,7 +425,15 @@ export function parseCiscoMcpScannerSarifV1(
       const threats: string[] = Array.isArray(rawThreats) ? rawThreats : [];
       if (threats.length > MAX_THREATS_PER_ANALYZER)
         fail("mcp-scanner JSON analyzer finding exceeds the threat bound");
-      const findingNames = threats.length > 0 ? threats : [analyzer];
+      // mcp-scanner's report generator names one threat type per distinct finding type: a
+      // zero total names none, a positive total names at least one and never more than it
+      // counts (S2f). Anything else contradicts the analyzer's own total.
+      if (total === 0 ? threats.length > 0 : threats.length === 0 || threats.length > total)
+        fail("mcp-scanner JSON analyzer finding contradicts its total");
+      if (total === 0) continue;
+      if (rawResult.is_safe === true)
+        fail("mcp-scanner marked a result safe while reporting a finding");
+      const findingNames = threats;
       const detail =
         typeof rawSummary.threat_summary === "string" && rawSummary.threat_summary.length > 0
           ? rawSummary.threat_summary
