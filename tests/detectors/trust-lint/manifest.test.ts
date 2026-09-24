@@ -283,4 +283,71 @@ describe("scanTrustManifestsV1 (parity: Core scanTrustManifests)", () => {
 
     expect(scan()).toEqual([]);
   });
+
+  // YAML features only the real `yaml` parser (Core's parser) handles; the
+  // expectations below are what Core produces with the same parseDocument
+  // semantics.
+  it("detects a Bash wildcard behind a resolvable anchor/alias", () => {
+    write(
+      "skills/anchored/SKILL.md",
+      "---\ncommon: &tools [Read, Bash(*)]\nallowed-tools: *tools\n---\n# X\n",
+    );
+
+    const [check] = scan();
+
+    expect(check).toMatchObject({
+      verdict: "fail",
+      code: "trust.permission-risk",
+      detail: expect.stringContaining("broad Bash permission"),
+      location: expect.objectContaining({ uri: "skills/anchored/SKILL.md" }),
+    });
+  });
+
+  it("parses frontmatter with comments like Core", () => {
+    write(
+      "skills/commented-yaml/SKILL.md",
+      "---\n# leading comment\nallowed-tools: Read, Write # trailing comment\n---\n# Clean\n",
+    );
+
+    expect(scan()).toEqual([]);
+  });
+
+  it("detects quoted frontmatter keys like Core", () => {
+    write("skills/quoted-key/SKILL.md", '---\n"permissionMode": bypassPermissions\n---\n# X\n');
+
+    const [check] = scan();
+
+    expect(check).toMatchObject({
+      verdict: "fail",
+      code: "trust.auto-exec-hook",
+      detail: expect.stringContaining("permissionMode bypasses permissions"),
+      location: expect.objectContaining({ uri: "skills/quoted-key/SKILL.md", startLine: 1 }),
+    });
+  });
+
+  it("detects a Bash wildcard in a folded multi-line scalar", () => {
+    write("skills/folded/SKILL.md", "---\nallowed-tools: >\n  Read, Write,\n  Bash(*)\n---\n# X\n");
+
+    const [check] = scan();
+
+    expect(check).toMatchObject({
+      verdict: "fail",
+      code: "trust.permission-risk",
+      detail: expect.stringContaining("broad Bash permission"),
+      location: expect.objectContaining({ uri: "skills/folded/SKILL.md" }),
+    });
+  });
+
+  it("fails closed on a flow-mapping allowed-tools value", () => {
+    write("skills/flow-map/SKILL.md", "---\nallowed-tools: {Bash(*): true}\n---\n# X\n");
+
+    const [check] = scan();
+
+    expect(check).toMatchObject({
+      verdict: "fail",
+      code: "trust.auto-exec-hook",
+      detail: expect.stringContaining("invalid map shape"),
+      location: expect.objectContaining({ uri: "skills/flow-map/SKILL.md" }),
+    });
+  });
 });

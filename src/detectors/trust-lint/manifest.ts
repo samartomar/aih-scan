@@ -1,6 +1,6 @@
+import { parseDocument } from "yaml";
 import type { TrustLintFindingV1 } from "./findings.js";
 import { contentFindingFingerprintV1 } from "./fingerprint.js";
-import { parseFrontmatterYamlV1 } from "./frontmatter-yaml.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
 
 /**
@@ -8,10 +8,10 @@ import type { TrustLintTreeV1 } from "./inventory.js";
  * `trust.permission-risk`): SKILL/agent/command frontmatter permission grants,
  * `!` auto-run lines, package.json lifecycle scripts, `.npmrc`
  * `ignore-scripts=false`, settings hooks, and the `.claude/hooks` directory.
- * Runs against the inventory/file-read seam instead of the filesystem. The
- * `yaml` dependency is replaced by the fail-closed subset parser in
- * `frontmatter-yaml.ts` (any unsupported YAML shape — anchors, aliases,
- * deeper nesting — yields Core's "unparseable YAML frontmatter" finding).
+ * Runs against the inventory/file-read seam instead of the filesystem.
+ * Frontmatter is parsed with the same `yaml` package and `parseDocument`
+ * semantics Core uses: no options, `doc.errors.length > 0` or a throwing
+ * `doc.toJS()` counts as unparseable; warnings do not.
  */
 
 type ManifestRiskCode = Extract<
@@ -126,9 +126,20 @@ function scanFrontmatter(rel: string, source: string): ManifestCheckDraft[] {
     ];
   }
 
+  const doc = parseDocument(frontmatter.yaml);
+  if (doc.errors.length > 0) {
+    return [
+      {
+        code: AUTO_EXEC_CODE,
+        path: rel,
+        line: 1,
+        detail: "unparseable YAML frontmatter in trust document",
+      },
+    ];
+  }
   let parsed: unknown;
   try {
-    parsed = parseFrontmatterYamlV1(frontmatter.yaml);
+    parsed = doc.toJS();
   } catch {
     return [
       {
