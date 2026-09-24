@@ -60,6 +60,7 @@ const TOOLS = dirname(fileURLToPath(import.meta.url));
 const SCANNER_CLI = resolve(TOOLS, "../dist/cli.js");
 const PACKAGE_JSON = resolve(TOOLS, "../package.json");
 const HEX_40 = /^[0-9a-f]{40}$/u;
+const HEX_64 = /^[0-9a-f]{64}$/u;
 const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const SUBJECT = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const WORKFLOW_PATH = ".github/workflows/baseline-publication.yml";
@@ -295,12 +296,24 @@ function attestationFacts(bytes, repository, publisherCommit, publicationSha256,
   const verification = record(result.verificationResult, "attestation verificationResult");
   const statement = record(verification.statement, "attestation statement");
   equal(statement.predicateType, PROVENANCE_PREDICATE, "attestation predicateType");
-  if (!Array.isArray(statement.subject) || statement.subject.length !== 1)
+  // One publish job attests every batch publication of its run (subject-path
+  // publications/*/publication.json), so the subject list names each exactly once.
+  if (
+    !Array.isArray(statement.subject) ||
+    statement.subject.length === 0 ||
+    statement.subject.length > 1000
+  )
     fail("attestation subject count");
-  const subject = exactKeys(statement.subject[0], ["digest", "name"], "attestation subject");
-  const digest = exactKeys(subject.digest, ["sha256"], "attestation subject digest");
-  if (subject.name !== "publication.json" || digest.sha256 !== publicationSha256)
-    fail("attestation subject is not the released publication.json");
+  const subjects = statement.subject.map((value) => {
+    const subject = exactKeys(value, ["digest", "name"], "attestation subject");
+    const digest = exactKeys(subject.digest, ["sha256"], "attestation subject digest");
+    if (subject.name !== "publication.json" || typeof digest.sha256 !== "string" || !HEX_64.test(digest.sha256))
+      fail("attestation subject is not a publication.json digest");
+    return digest.sha256;
+  });
+  if (new Set(subjects).size !== subjects.length) fail("attestation subject repeated");
+  if (!subjects.includes(publicationSha256))
+    fail("attestation subject does not cover the released publication.json");
   const certificate = record(
     record(verification.signature, "attestation signature").certificate,
     "attestation certificate",
@@ -344,6 +357,7 @@ function attestationFacts(bytes, repository, publisherCommit, publicationSha256,
   return {
     facts: {
       subject: { name: "publication.json", digest: { sha256: publicationSha256 } },
+      subjectCount: subjects.length,
       predicateType: PROVENANCE_PREDICATE,
       issuer: OIDC_ISSUER,
       buildSignerURI: workflowUri,

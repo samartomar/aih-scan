@@ -748,7 +748,45 @@ describe("emit-consumer-handoff", () => {
       },
       /attestation timestamps/,
     ],
+    [
+      "a repeated subject",
+      (_certificate, result) => {
+        const subject = (result.statement as Json).subject as Json[];
+        subject.push({ ...subject[0] });
+      },
+      /attestation subject/,
+    ],
+    [
+      "a subject that is not a publication",
+      (_certificate, result) => {
+        ((result.statement as Json).subject as Json[]).push({
+          name: "discovery.json",
+          digest: { sha256: "1".repeat(64) },
+        });
+      },
+      /attestation subject/,
+    ],
   ];
+
+  it("accepts one run attestation that covers every batch publication of the run", async () => {
+    const current = await fixture();
+    const value = current.attestation();
+    const statement = (value[0]?.verificationResult as unknown as Json).statement as Json;
+    statement.subject = [
+      { name: "publication.json", digest: { sha256: "1".repeat(64) } },
+      ...(statement.subject as Json[]),
+      { name: "publication.json", digest: { sha256: "2".repeat(64) } },
+    ];
+    writeJson(current.paths.attestation, value);
+    const result = current.emit();
+    expect(result.status, result.stderr).toBe(0);
+    const attestation = readJson(join(current.output, "consumer-handoff.json")).attestation as Json;
+    expect(attestation.subject).toEqual({
+      name: "publication.json",
+      digest: { sha256: current.publicationSha256 },
+    });
+    expect(attestation.subjectCount).toBe(3);
+  });
   for (const [label, mutate, reason] of attestationCases)
     it(`rejects an attestation for ${label}`, async () => {
       const current = await fixture();
