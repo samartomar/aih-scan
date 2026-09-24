@@ -283,7 +283,8 @@ describe("DetectorCapabilityV1", () => {
     expect(notes).toMatch(/persistent, Scan-owned uv cache/);
     expect(notes).toMatch(/--no-python-downloads/);
     expect(notes).toMatch(/macOS amd64 \(cryptography 50\.0\.0\) and Windows arm64/);
-    expect(notes).toMatch(/cisco-skill-scanner-host lock/);
+    expect(notes).not.toMatch(/cisco-skill-scanner-host/);
+    expect(notes).toMatch(/Cisco installs the same cisco-skill-scanner lock under both profiles/);
     expect(notes).toMatch(/empty source root completes for detector\.semgrep/);
 
     expect(
@@ -416,7 +417,7 @@ describe("DetectorCapabilityV1", () => {
     }
     for (const [detectorId, lock] of [
       ["detector.semgrep", "tools/baseline-analyzers/semgrep/uv.lock"],
-      ["detector.cisco", "tools/baseline-analyzers/cisco-skill-scanner-host/uv.lock"],
+      ["detector.cisco", "tools/baseline-analyzers/cisco-skill-scanner/uv.lock"],
     ] as const) {
       const host = resolveDetectorCapabilityV1(detectorId)?.executionProfiles.find(
         (entry) => entry.id === "host-process-uv-v1",

@@ -1,6 +1,11 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  CISCO_SKILL_SCANNER_VERSION_V1,
+  SEMGREP_VERSION_V1,
+} from "../../src/baseline/runtime-v1.js";
+import { resolveDetectorCapabilityV1 } from "../../src/capability/detector-capability-v1.js";
 import {
   CISCO_MCP_SCANNER_ANALYZER_V1,
   CISCO_MCP_SCANNER_PROJECT_V1,
@@ -33,6 +38,8 @@ function pinnedVersion(project: string, distribution: string): string {
   return pin;
 }
 
+const analyzers = join(import.meta.dirname, "..", "..", "tools", "baseline-analyzers");
+
 describe("detector analyzer identity matches the bundled uv project", () => {
   it("cisco skill-scanner", () => {
     expect(pinnedVersion(CISCO_MULTI_SKILL_SCANNER_PROJECT_V1, "cisco-ai-skill-scanner")).toBe(
@@ -45,6 +52,29 @@ describe("detector analyzer identity matches the bundled uv project", () => {
       CISCO_MCP_SCANNER_VERSION_V1,
     );
     expect(CISCO_MCP_SCANNER_ANALYZER_V1).toBe(`mcp-scanner@uv:${CISCO_MCP_SCANNER_VERSION_V1}`);
+  });
+
+  it("baseline runtime semgrep (host and namespace profiles)", () => {
+    expect(pinnedVersion(join(analyzers, "semgrep"), "semgrep")).toBe(SEMGREP_VERSION_V1);
+  });
+
+  it("baseline runtime cisco: one lock for the host and namespace profiles", () => {
+    expect(pinnedVersion(join(analyzers, "cisco-skill-scanner"), "cisco-ai-skill-scanner")).toBe(
+      CISCO_SKILL_SCANNER_VERSION_V1,
+    );
+    expect(CISCO_SKILL_SCANNER_VERSION_V1).toBe(CISCO_MULTI_SKILL_SCANNER_VERSION_V1);
+    // The 2.0.14 host lock existed only to pin a litellm with Windows wheels; 2.1.0's lock
+    // (litellm 1.102.1) has win_amd64 wheels for every dependency, so it is gone.
+    expect(existsSync(join(analyzers, "cisco-skill-scanner-host"))).toBe(false);
+    const locks = resolveDetectorCapabilityV1("detector.cisco")?.executionProfiles.map(
+      (profile) => profile.analyzerLock?.path,
+    );
+    expect(locks).toEqual(
+      expect.arrayContaining(["tools/baseline-analyzers/cisco-skill-scanner/uv.lock"]),
+    );
+    expect(
+      locks?.filter((path) => path !== undefined && !path.endsWith("cisco-skill-scanner/uv.lock")),
+    ).toEqual([]);
   });
 
   it("snyk-agent-scan", () => {

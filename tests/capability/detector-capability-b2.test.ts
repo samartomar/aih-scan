@@ -168,7 +168,7 @@ describe("B2 detector registration", () => {
     const expected: Record<string, Record<string, string>> = {
       "detector.cisco": {
         "linux-namespace-uv-v1": "tools/baseline-analyzers/cisco-skill-scanner/uv.lock",
-        "host-process-uv-v1": "tools/baseline-analyzers/cisco-skill-scanner-host/uv.lock",
+        "host-process-uv-v1": "tools/baseline-analyzers/cisco-skill-scanner/uv.lock",
       },
       "detector.semgrep": {
         "linux-namespace-uv-v1": "tools/baseline-analyzers/semgrep/uv.lock",
@@ -194,8 +194,8 @@ describe("B2 detector registration", () => {
         });
       }
     }
-    // The namespace and host Cisco locks differ (C2a §3.7).
-    expect(profileOf("detector.cisco", "linux-namespace-uv-v1")?.analyzerLock?.sha256).not.toBe(
+    // Since skill-scanner 2.1.0 the namespace and host Cisco profiles share one lock.
+    expect(profileOf("detector.cisco", "linux-namespace-uv-v1")?.analyzerLock?.sha256).toBe(
       profileOf("detector.cisco", "host-process-uv-v1")?.analyzerLock?.sha256,
     );
   });

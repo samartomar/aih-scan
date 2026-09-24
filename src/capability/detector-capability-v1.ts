@@ -448,7 +448,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "Semgrep, Cisco and snyk-agent-scan publish exact-pinned binary wheels for Linux (glibc 2.34 or later) amd64 and arm64, macOS arm64 (macOS 14 or later for Cisco) and Windows amd64. macOS amd64 (cryptography 50.0.0) and Windows arm64 (Semgrep, and cryptography 50.0.0 for snyk-agent-scan) have none, and Scan never builds analyzer dependencies from source, so those hosts are not supported.",
       SNYK_SUPPORT.note,
       "detector.cisco-mcp-scanner runs on Linux amd64 and arm64 only: its lock pins litellm 1.93.0, which publishes manylinux wheels alone, so macOS and Windows would need a source build Scan never performs.",
-      "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest. Each profile's analyzerLock names the lock it installs.",
+      "Cisco installs the same cisco-skill-scanner lock under both profiles (skill-scanner 2.1.0, litellm 1.102.1, no win-unicode-console), whose binary wheels exist on every host this profile supports, so both profiles name one uvlock digest in analyzerVersion and analyzerLock.",
       "A detector.cisco source-tree subject runs one skill-scanner scan job per directory holding a selected SKILL.md, over that directory of the private snapshot, at most detectorOptions.concurrency (1 through 64, default 4) at a time; the jobs' SARIF is merged in job order.",
       "detector.cisco-mcp-scanner runs mcp-scanner --raw --analyzers yara static over the tool list Scan derives from the declared MCP config paths; neither analyzer calls a model or a remote service.",
       "Network, detector.snyk-agent-scan: snyk-agent-scan contacts Snyk's service during the scan stage to analyze what it finds, so for it the scan stage is not offline even though uv runs with --offline.",
@@ -717,13 +717,6 @@ const CISCO_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
   detail:
     "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
 };
-const CISCO_HOST_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
-  kind: "bundled-asset",
-  id: "tools/baseline-analyzers/cisco-skill-scanner-host/uv.lock",
-  required: true,
-  detail:
-    "The exact-pinned host analyzer lock ships with this package; a missing lock means the install is incomplete.",
-};
 const SEMGREP_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
   kind: "bundled-asset",
   id: "tools/baseline-analyzers/semgrep/uv.lock",
@@ -808,7 +801,7 @@ const CISCO_HOST_GATES: ProfileGates = {
   prerequisites: [
     HOST_UV_PREREQUISITE,
     HOST_PYTHON_PREREQUISITE,
-    CISCO_HOST_LOCK_PREREQUISITE,
+    CISCO_LOCK_PREREQUISITE,
     ACQUISITION_NETWORK_PREREQUISITE,
   ],
 };
@@ -884,7 +877,7 @@ const CISCO_HOST_PROFILE = profile(
   "host-process-uv-v1",
   OBSERVATION,
   CISCO_HOST_GATES,
-  CISCO_HOST_LOCK_PREREQUISITE.id,
+  CISCO_LOCK_PREREQUISITE.id,
 );
 const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_OCI_GATES);
 const SEMGREP_NAMESPACE_PROFILE = profile(

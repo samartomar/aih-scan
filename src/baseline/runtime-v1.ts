@@ -50,8 +50,8 @@ export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
  * `docker-host-local-skillspector-v1` inspects only this tag and never pulls.
  */
 export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1 = "skillspector:aih-2d198ab910ad";
-export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.14";
-export const SEMGREP_VERSION_V1 = "1.173.0";
+export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.1.0";
+export const SEMGREP_VERSION_V1 = "1.178.0";
 /** The interpreter the Linux namespace profile binds; the host profile discovers its own. */
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
@@ -76,14 +76,11 @@ const packageRoot = resolve(moduleDirectory, "..", "..");
 const analyzerRoot = join(packageRoot, "tools", "baseline-analyzers");
 const ciscoProject = join(analyzerRoot, "cisco-skill-scanner");
 /**
- * The Cisco closure the host profile installs. `litellm` 1.92.0 publishes manylinux wheels
- * only and `win-unicode-console` publishes only an sdist, so the build-free host install
- * pins `litellm` 1.92.2 (same dependencies, wheels for every host) and leaves the console
- * helper out. The namespace and OCI profiles keep `cisco-skill-scanner`, unchanged.
+ * The bundled Cisco project both uv profiles install: its 2.1.0 lock (litellm 1.102.1, no
+ * win-unicode-console) has binary wheels for every host profile platform, so the host and
+ * namespace profiles share one lock and one analyzerLock digest.
  */
-const ciscoHostProject = join(analyzerRoot, "cisco-skill-scanner-host");
-/** The bundled host-profile Cisco project (its lock is host-process-uv-v1's analyzerLock). */
-export const CISCO_SKILL_SCANNER_HOST_PROJECT_V1 = ciscoHostProject;
+export const CISCO_SKILL_SCANNER_PROJECT_V1 = ciscoProject;
 const semgrepProject = join(analyzerRoot, "semgrep");
 const semgrepRules = [
   "rules:",
@@ -1259,7 +1256,7 @@ async function hostProcessUv(
   analyzer: "semgrep" | "cisco",
   input: HostUvSessionInput,
 ): Promise<AnalyzerOutput> {
-  const project = analyzer === "semgrep" ? semgrepProject : ciscoHostProject;
+  const project = analyzer === "semgrep" ? semgrepProject : ciscoProject;
   const version = analyzer === "semgrep" ? SEMGREP_VERSION_V1 : CISCO_SKILL_SCANNER_VERSION_V1;
   return withHostUvSession(project, input, async (session) => {
     const { run, tool, uvRun, hostRuntime } = session;

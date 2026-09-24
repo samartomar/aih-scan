@@ -410,7 +410,7 @@ if (detectors.includes("cisco-source-tree")) {
   } else {
     check("cisco source-tree positive succeeded, one job per SKILL.md directory, injected skill found", positive.outcome === "succeeded" && positive.findings.some((f) => /prompt_injection/i.test(f.rule ?? "") && f.path === "skills/injected/SKILL.md"), `${brief(positive)} ${positive.findings.map((f) => `${f.rule}|${f.path}`).join(", ")}`);
     check("cisco source-tree SARIF URIs are source-relative and job-prefixed", positive.sarifUris.length > 0 && positive.sarifUris.every(relative) && positive.sarifUris.every((uri) => uri.startsWith("skills/")), positive.sarifUris.join(", "));
-    check("cisco source-tree runs the host lock", /^2\.0\.14\+uvlock\.[0-9a-f]{12}$/.test(positive.analyzerVersion ?? "") && positive.analyzerVersion === `2.0.14+uvlock.${profileOf("detector.cisco", HOST)?.analyzerLock?.sha256.slice(0, 12)}`, positive.analyzerVersion);
+    check("cisco source-tree runs the bundled skill-scanner 2.1.0 lock", positive.analyzerVersion === `2.1.0+uvlock.${profileOf("detector.cisco", HOST)?.analyzerLock?.sha256.slice(0, 12)}`, positive.analyzerVersion);
     check("cisco source-tree clean succeeded with no prompt-injection finding", clean.outcome === "succeeded" && !clean.findings.some((f) => /prompt_injection/i.test(f.rule ?? "")), brief(clean));
     check("cisco source-tree empty is refused subject-requirement-unmet", empty.outcome === "refused" && empty.reason === "subject-requirement-unmet", brief(empty));
     check("cisco source-tree concurrency 65 is refused detector-options-invalid", malformed.outcome === "refused" && malformed.reason === "detector-options-invalid", brief(malformed));
@@ -427,14 +427,15 @@ if (detectors.includes("cisco-shard")) {
   const { hashComponentTreeV1 } = await import(new URL(`file:///${join(packageDir, "dist", "observation", "source-hash-v1.js").replaceAll("\\", "/")}`).href);
   const lock = profileOf("detector.cisco", HOST)?.analyzerLock?.sha256;
   const namespaceLock = profileOf("detector.cisco", "linux-namespace-uv-v1")?.analyzerLock?.sha256;
+  const foreignLock = profileOf("detector.semgrep", HOST)?.analyzerLock?.sha256;
   const jobs = ["skills/injected", "skills/tables"].map((path, index) => ({ id: `job-${index}`, path, inputSha256: hashComponentTreeV1(roots.skills, [path]).treeSha256 }));
-  const shard = (extra = {}) => ({ shard: true, request: { sourceRoot: roots.skills, jobs, expected: { analyzerVersion: "2.0.14", lockSha256: lock }, executionProfileId: HOST, concurrency: 2, ...extra } });
+  const shard = (extra = {}) => ({ shard: true, request: { sourceRoot: roots.skills, jobs, expected: { analyzerVersion: "2.1.0", lockSha256: lock }, executionProfileId: HOST, concurrency: 2, ...extra } });
   const positive = run("cisco shard positive (2 jobs)", shard());
-  const mismatch = run("cisco shard lock mismatch (namespace lock)", shard({ expected: { analyzerVersion: "2.0.14", lockSha256: namespaceLock } }));
+  const mismatch = run("cisco shard lock mismatch (semgrep's lock)", shard({ expected: { analyzerVersion: "2.1.0", lockSha256: foreignLock } }));
   const traversal = run("cisco shard malformed (job path ../x)", shard({ jobs: [{ ...jobs[0], path: "../x" }] }));
   const empty = run("cisco shard empty (no jobs)", shard({ jobs: [] }));
   const version = run("cisco shard version gate (expects 2.0.13)", shard({ expected: { analyzerVersion: "2.0.13", lockSha256: lock } }));
-  const namespace = run("cisco shard linux-namespace-uv-v1", shard({ executionProfileId: "linux-namespace-uv-v1", expected: { analyzerVersion: "2.0.14", lockSha256: namespaceLock } }));
+  const namespace = run("cisco shard linux-namespace-uv-v1", shard({ executionProfileId: "linux-namespace-uv-v1", expected: { analyzerVersion: "2.1.0", lockSha256: namespaceLock } }));
   const noUv = run("cisco shard missing prerequisite (no uv)", shard({ env: noUvEnv }));
   const budget = Math.max(1_500, Math.round((positive.ms ?? 10_000) * 0.4));
   const timeout = run(`cisco shard timeout (${budget} ms)`, shard({ timeoutMs: budget }));
@@ -450,7 +451,7 @@ if (detectors.includes("cisco-shard")) {
     unproven("cisco shard real run", `host-process-uv-v1 does not support ${hostKey}`);
   } else {
     const [first, second] = positive.outputs ?? [];
-    check("cisco shard positive succeeded: two outputs in job order, sha256 over each SARIF, seals equal", positive.outcome === "succeeded" && positive.outputs.length === 2 && first?.jobId === "job-0" && second?.jobId === "job-1" && positive.outputs.every((o) => o.sha256Matches) && positive.sourceSeal?.same === true && positive.analyzer?.lockSha256 === lock && positive.analyzer?.version === "2.0.14", brief(positive));
+    check("cisco shard positive succeeded: two outputs in job order, sha256 over each SARIF, seals equal", positive.outcome === "succeeded" && positive.outputs.length === 2 && first?.jobId === "job-0" && second?.jobId === "job-1" && positive.outputs.every((o) => o.sha256Matches) && positive.sourceSeal?.same === true && positive.analyzer?.lockSha256 === lock && positive.analyzer?.version === "2.1.0", brief(positive));
     check("cisco shard SARIF URIs are prefixed with each job path", (first?.uris ?? []).every((uri) => uri.startsWith("skills/injected/")) && (second?.uris ?? []).every((uri) => uri.startsWith("skills/tables/")) && (first?.results ?? 0) > 0, JSON.stringify(positive.outputs));
     check("cisco shard version gate fails at availability against the real analyzer", version.outcome === "failed" && version.failure?.stage === "availability", brief(version));
     if (sharedWellKnownUv) notes.push({ name: "cisco shard missing prerequisite", status: "not-applicable", why: "uv is installed in a shared well-known directory" });

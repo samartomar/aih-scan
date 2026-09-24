@@ -3,7 +3,7 @@ import { join } from "node:path";
 import {
   AnalyzerRunFailureV1,
   type BaselineProcessRunnerV1,
-  CISCO_SKILL_SCANNER_HOST_PROJECT_V1,
+  CISCO_SKILL_SCANNER_PROJECT_V1,
   CISCO_SKILL_SCANNER_VERSION_V1,
   type HostProcessRuntimeV1,
   runHostUvEngineV1,
@@ -251,7 +251,7 @@ export async function runEngineDetectorV1(input: EngineRunInputV1): Promise<Engi
     if (input.analyzer === "cisco-source-tree") {
       const ran = await runHostUvEngineV1({
         ...common,
-        project: CISCO_SKILL_SCANNER_HOST_PROJECT_V1,
+        project: CISCO_SKILL_SCANNER_PROJECT_V1,
         version: CISCO_SKILL_SCANNER_VERSION_V1,
         tools: ["skill-scanner"],
         body: ({ run }) =>
@@ -265,7 +265,7 @@ export async function runEngineDetectorV1(input: EngineRunInputV1): Promise<Engi
               ? {}
               : { detectorOptions: input.detectorOptions }),
             // The host profile installs its own lock, so the engine names that project.
-            analyzerProject: CISCO_SKILL_SCANNER_HOST_PROJECT_V1,
+            analyzerProject: CISCO_SKILL_SCANNER_PROJECT_V1,
           }),
       });
       const outcome = ran.value;

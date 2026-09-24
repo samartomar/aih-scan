@@ -342,7 +342,8 @@ if (detectors.includes("cisco")) {
   check("cisco positive succeeded under host-process-uv-v1 through the installed public API", positive.outcome === "succeeded" && positive.executionProfile?.id === HOST && positive.seams?.runner === "scan-owned-default", JSON.stringify({ outcome: positive.outcome, failure: positive.failure, detail: positive.detail }));
   check("cisco positive finds the injected nested skill at its source-relative path", positive.findings.some((f) => /prompt_injection|PROMPT_INJECTION/i.test(f.rule ?? "") && f.path === "skills/injected/SKILL.md"), positive.findings.map((f) => `${f.rule}|${f.path}|${f.line}`).join(", "));
   check("cisco positive SARIF artifact URIs are source-relative", relativeUris(positive), positive.sarifUris.join(", "));
-  check("cisco runs the host lock, not the namespace lock", /^2\.0\.14\+uvlock\.[0-9a-f]{12}$/.test(positive.analyzerVersion ?? "") && positive.analyzerVersion !== "2.0.14+uvlock.aaba1f326049", positive.analyzerVersion);
+  const ciscoLock = sha256(readFileSync(join(consumer, "node_modules", "@aihq", "scan", "tools", "baseline-analyzers", "cisco-skill-scanner", "uv.lock")));
+  check("cisco runs the bundled skill-scanner 2.1.0 lock", positive.analyzerVersion === `2.1.0+uvlock.${ciscoLock.slice(0, 12)}`, positive.analyzerVersion);
   check("cisco clean succeeded, and reports no prompt-injection finding", clean.outcome === "succeeded" && !clean.findings.some((f) => /prompt_injection/i.test(f.rule ?? "")), clean.findings.map((f) => `${f.rule}|${f.path}`).join(", "));
   check("cisco empty source is refused (Core cannot scan Cisco without a SKILL.md either)", empty.outcome === "refused" && empty.reason === "subject-requirement-unmet", `${empty.reason}: ${empty.detail}`);
   check("cisco malformed input (a skill Cisco skips) fails closed at coverage", unparseable.outcome === "failed" && unparseable.failure?.stage === "coverage", JSON.stringify(unparseable.failure));

@@ -114,7 +114,7 @@ function ciscoHost(
     if (argv[1] === "python" && argv[2] === "find")
       return ok(argv.includes("--show-version") ? "3.12.13\n" : `${python}\n`);
     if (argv[1] === "sync") return ok("");
-    if (argv.at(-1) === "--version") return ok("skill-scanner 2.0.14\n");
+    if (argv.at(-1) === "--version") return ok("skill-scanner 2.1.0\n");
     scans.push({ argv: [...argv], cwd: options.cwd });
     const skillDir = argv[argv.indexOf("scan") + 1] ?? "";
     const skill = skillDir.split(/[\\/]/).at(-1) ?? "";
@@ -189,7 +189,7 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
     )?.analyzerLock;
     expect(outcome.evidence.observation.analyzer).toBe("cisco");
     expect(outcome.evidence.observation.analyzerVersion).toBe(
-      `2.0.14+uvlock.${lock?.sha256.slice(0, 12)}`,
+      `2.1.0+uvlock.${lock?.sha256.slice(0, 12)}`,
     );
     expect(
       outcome.findings.findings.map((finding) =>

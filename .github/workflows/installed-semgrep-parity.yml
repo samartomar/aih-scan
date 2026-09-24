@@ -48,7 +48,6 @@ on:
       - src/runner/**
       - src/capability/**
       - tools/baseline-analyzers/semgrep/**
-      - tools/baseline-analyzers/cisco-skill-scanner-host/**
 
 permissions:
   contents: read

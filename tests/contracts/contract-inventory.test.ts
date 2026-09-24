@@ -247,12 +247,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 732,
+    line: 729,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 221,
+    line: 218,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
