@@ -394,6 +394,7 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
 
     expect(outcome.outcome).toBe("succeeded");
     if (outcome.outcome !== "succeeded") return;
+    expect(outcome.executionProfile.id).toBe("host-process-uv-v1");
     expect(outcome.sourceSeal.before.protocol).toBe("SourceObservationSealV1");
     expect(outcome.sourceSeal.before.entries).toEqual([]);
     expect(outcome.sourceSeal.after.sealedSnapshotSha256).toBe(

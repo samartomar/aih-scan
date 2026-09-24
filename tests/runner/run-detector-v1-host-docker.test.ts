@@ -124,6 +124,7 @@ describe("runDetectorV1 docker-host-local-skillspector-v1", () => {
 
     expect(outcome.outcome).toBe("succeeded");
     if (outcome.outcome !== "succeeded") return;
+    expect(outcome.executionProfile.id).toBe(PROFILE);
     if (outcome.evidence.kind !== "baseline-analyzer-observation-v1")
       throw new Error("evidence kind");
     expect(outcome.evidence.observation.hostDocker).toEqual({
