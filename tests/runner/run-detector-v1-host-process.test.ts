@@ -135,7 +135,7 @@ describe("runDetectorV1 host-process-uv-v1", () => {
       expect(call.argv).not.toContain(BASELINE_BWRAP_EXECUTABLE_V1);
       expect(call.argv).not.toContain("--unshare-all");
       // The host profile still owns and kills the analyzer's whole process group.
-      expect(call.options.killProcessGroup).toBe(true);
+      expect(call.options.containProcessTree).toBe(true);
       expect(call.options.env.API_TOKEN).toBeUndefined();
     }
     const acquisition = calls.find((call) => call.argv.includes("sync"))?.argv ?? [];

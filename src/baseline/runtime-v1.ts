@@ -84,7 +84,9 @@ export type BaselineProcessRunnerV1 = (
     readonly timeoutMs: number;
     readonly maxStdoutBytes: number;
     readonly maxStderrBytes: number;
-    readonly killProcessGroup: true;
+    /** Every analyzer spawn contains and ends its whole process tree. */
+    readonly containProcessTree: true;
+    readonly signal?: AbortSignal;
   },
 ) => Promise<ProcessRunnerResult>;
 
@@ -270,7 +272,7 @@ function runnerOptions(env: Readonly<Record<string, string>>, timeoutMs: number,
     timeoutMs,
     maxStdoutBytes: maxOutputBytes,
     maxStderrBytes,
-    killProcessGroup: true as const,
+    containProcessTree: true as const,
   };
 }
 

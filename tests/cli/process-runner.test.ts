@@ -11,11 +11,24 @@ import {
   processRunner,
 } from "../../src/cli/process-runner.js";
 
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnMock, windowsJobMock } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  windowsJobMock: vi.fn(async (_argv: readonly string[], _options: unknown) => ({
+    code: 0,
+    stdout: "job",
+    stderr: "",
+    truncated: false,
+  })),
+}));
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
+}));
+
+vi.mock("../../src/cli/windows-job-supervisor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/cli/windows-job-supervisor.js")>()),
+  runUnderWindowsJobV1: windowsJobMock,
 }));
 
 class FakeChild extends EventEmitter {
@@ -86,6 +99,7 @@ describe("dockerRunner", () => {
       stdout: "",
       stderr: "",
       truncated: true,
+      termination: "timeout",
     });
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
@@ -106,6 +120,7 @@ describe("dockerRunner", () => {
       stdout: "",
       stderr: "",
       truncated: true,
+      termination: "timeout",
     });
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
@@ -129,6 +144,7 @@ describe("dockerRunner", () => {
       stdout: "",
       stderr: "",
       truncated: true,
+      termination: "timeout",
     });
     expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
@@ -154,6 +170,7 @@ describe("dockerRunner", () => {
       stdout: "",
       stderr: "",
       truncated: true,
+      termination: "output-limit",
     });
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
@@ -175,11 +192,15 @@ describe("processRunner process-group containment", () => {
 
     const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
       ...options,
-      killProcessGroup: true,
+      containProcessTree: true,
     });
     child.emit("close", 0);
 
-    await expect(completed).resolves.toMatchObject({ code: 1, truncated: true });
+    await expect(completed).resolves.toMatchObject({
+      code: 1,
+      truncated: true,
+      termination: "residual-descendants",
+    });
     expect(kill).toHaveBeenCalledWith(-child.pid, 0);
     expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
   });
@@ -198,7 +219,7 @@ describe("processRunner process-group containment", () => {
 
     const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
       ...options,
-      killProcessGroup: true,
+      containProcessTree: true,
     });
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
     child.emit("close", 143);
@@ -207,19 +228,89 @@ describe("processRunner process-group containment", () => {
     ).resolves.toBe("pending");
     await vi.advanceTimersByTimeAsync(1_000);
 
-    await expect(completed).resolves.toMatchObject({ code: 1, truncated: true });
+    await expect(completed).resolves.toMatchObject({
+      code: 1,
+      truncated: true,
+      termination: "timeout",
+    });
     expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
     expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
   });
 
-  it("refuses Windows process-group execution before spawning anything", () => {
+  it("contains a Windows analyzer tree in a Job Object, never a bare spawn", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     spawnMock.mockClear();
+    windowsJobMock.mockClear();
+    const controller = new AbortController();
 
-    expect(() =>
-      processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], { ...options, killProcessGroup: true }),
-    ).toThrow("process-group execution requires a Linux analyzer host");
+    await expect(
+      processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+        ...options,
+        containProcessTree: true,
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({ code: 0, stdout: "job", stderr: "", truncated: false });
     expect(spawnMock).not.toHaveBeenCalled();
+    expect(windowsJobMock).toHaveBeenCalledTimes(1);
+    expect(windowsJobMock.mock.calls[0]?.[0]).toEqual([BASELINE_UV_EXECUTABLE_V1, "run"]);
+    expect(windowsJobMock.mock.calls[0]?.[1]).toMatchObject({
+      containProcessTree: true,
+      signal: controller.signal,
+    });
+  });
+
+  it("ends the whole group on abort exactly as on timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const child = new FakeChild();
+    spawnMock.mockReturnValue(child);
+    let groupAlive = true;
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0 && !groupAlive) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      if (signal === "SIGKILL") groupAlive = false;
+      return true;
+    });
+    const controller = new AbortController();
+
+    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+      ...options,
+      timeoutMs: 60_000,
+      containProcessTree: true,
+      signal: controller.signal,
+    });
+    controller.abort();
+    child.emit("close", null);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(completed).resolves.toMatchObject({
+      code: 1,
+      truncated: true,
+      termination: "abort",
+    });
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+  });
+
+  it("terminates at once when the signal is already aborted", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const child = new FakeChild();
+    spawnMock.mockReturnValue(child);
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      return true;
+    });
+
+    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+      ...options,
+      timeoutMs: 60_000,
+      containProcessTree: true,
+      signal: AbortSignal.abort(),
+    });
+    expect(kill).toHaveBeenCalledWith(-child.pid, "SIGTERM");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(completed).resolves.toMatchObject({ truncated: true, termination: "abort" });
   });
 
   it("fails a run whose process group survives bounded polling, without claiming cleanup", async () => {
@@ -233,7 +324,7 @@ describe("processRunner process-group containment", () => {
     const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
       ...options,
       timeoutMs: 60_000,
-      killProcessGroup: true,
+      containProcessTree: true,
     });
     child.emit("close", 0);
     await expect(
@@ -241,7 +332,11 @@ describe("processRunner process-group containment", () => {
     ).resolves.toBe("pending");
     await vi.advanceTimersByTimeAsync(1_000);
 
-    await expect(completed).resolves.toMatchObject({ code: 1, truncated: true });
+    await expect(completed).resolves.toMatchObject({
+      code: 1,
+      truncated: true,
+      termination: "containment-failure",
+    });
     expect(kill).toHaveBeenCalledWith(-child.pid, "SIGKILL");
     expect(kill.mock.calls.filter(([, signal]) => signal === 0).length).toBeGreaterThan(1);
   });

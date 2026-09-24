@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { isRegisteredHostExecutableV1 } from "./host-executable.js";
+import { runUnderWindowsJobV1 } from "./windows-job-supervisor.js";
 
 const terminationGraceMs = 1_000;
 const groupExitPollMs = 10;
@@ -12,13 +14,36 @@ const allowedExecutables = new Set([
   BASELINE_UV_EXECUTABLE_V1,
 ]);
 
+/**
+ * Why the runner ended a process tree itself:
+ *
+ * - `timeout` and `abort`: the spawn's time budget ran out, or the caller's signal fired;
+ * - `output-limit`: stdout or stderr exceeded its byte cap;
+ * - `residual-descendants`: the leader exited while descendants kept running, and the runner
+ *   killed them with its containment;
+ * - `containment-failure`: the runner could not prove the tree was gone.
+ */
+export type ProcessTerminationV1 =
+  | "timeout"
+  | "abort"
+  | "output-limit"
+  | "residual-descendants"
+  | "containment-failure";
+
 export type ProcessRunnerOptions = {
   readonly cwd?: string;
   readonly env: Readonly<Record<string, string>>;
   readonly timeoutMs: number;
   readonly maxStdoutBytes: number;
   readonly maxStderrBytes: number;
-  readonly killProcessGroup?: boolean;
+  /**
+   * End the whole descendant tree, not only the direct child: on POSIX the child leads its
+   * own process group, which is signalled; on Windows it runs inside a Job Object with
+   * KILL_ON_JOB_CLOSE and no breakaway.
+   */
+  readonly containProcessTree?: boolean;
+  /** Aborting ends the tree exactly as a timeout does. */
+  readonly signal?: AbortSignal;
 };
 
 export type ProcessRunnerResult = Readonly<{
@@ -26,6 +51,10 @@ export type ProcessRunnerResult = Readonly<{
   stdout: string;
   stderr: string;
   truncated: boolean;
+  /** Present only when the runner ended the tree itself. */
+  termination?: ProcessTerminationV1;
+  /** What the containment observed, when it has something to say. */
+  containmentDetail?: string;
 }>;
 
 function fail(message: string): never {
@@ -38,35 +67,48 @@ export function processRunner(
   options: ProcessRunnerOptions,
 ): Promise<ProcessRunnerResult> {
   const executable = argv[0];
-  if (executable === undefined || !allowedExecutables.has(executable) || argv.length < 2)
+  if (
+    executable === undefined ||
+    argv.length < 2 ||
+    !(allowedExecutables.has(executable) || isRegisteredHostExecutableV1(executable))
+  )
     fail("registered process argv");
-  if (options.killProcessGroup === true && process.platform === "win32")
-    fail("process-group execution requires a Linux analyzer host");
+  return spawnBoundedV1(argv, options);
+}
+
+/**
+ * The spawning core behind {@link processRunner}, without its executable allow-list. Internal:
+ * Scan reaches it only through `processRunner`; the real process-tree tests drive it directly.
+ */
+export function spawnBoundedV1(
+  argv: readonly string[],
+  options: ProcessRunnerOptions,
+): Promise<ProcessRunnerResult> {
+  const executable = argv[0];
+  if (executable === undefined) fail("empty argv");
+  if (options.containProcessTree === true && process.platform === "win32")
+    return runUnderWindowsJobV1(argv, options);
+  const group = options.containProcessTree === true;
   return new Promise((resolveResult, reject) => {
     const child = spawn(executable, argv.slice(1), {
       shell: false,
       windowsHide: true,
       cwd: options.cwd,
       env: options.env,
-      stdio: "pipe",
-      detached: options.killProcessGroup === true,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: group,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let stdoutSize = 0;
     let stderrSize = 0;
-    let truncated = false;
+    let termination: ProcessTerminationV1 | undefined;
     let settled = false;
     let terminationRequested = false;
-    const result = (): ProcessRunnerResult => ({
-      code: 1,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-      truncated,
-    });
     let timer: ReturnType<typeof setTimeout> | undefined;
     let terminationTimer: ReturnType<typeof setTimeout> | undefined;
     let groupExitTimer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => terminate("abort");
     const settle = (
       outcome: { readonly result: ProcessRunnerResult } | { readonly error: unknown },
     ) => {
@@ -75,14 +117,24 @@ export function processRunner(
       if (timer !== undefined) clearTimeout(timer);
       if (terminationTimer !== undefined) clearTimeout(terminationTimer);
       if (groupExitTimer !== undefined) clearTimeout(groupExitTimer);
+      options.signal?.removeEventListener("abort", onAbort);
       if ("error" in outcome) reject(outcome.error);
-      else resolveResult(outcome.result);
+      else resolveResult(Object.freeze(outcome.result));
     };
     const finish = (code: number | null) => {
-      settle({ result: { ...result(), code: truncated ? 1 : (code ?? 1) } });
+      const truncated = termination !== undefined;
+      settle({
+        result: {
+          code: truncated ? 1 : (code ?? 1),
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+          truncated,
+          ...(termination === undefined ? {} : { termination }),
+        },
+      });
     };
     const groupExists = (): boolean => {
-      if (options.killProcessGroup !== true || child.pid === undefined) return false;
+      if (!group || child.pid === undefined) return false;
       try {
         process.kill(-child.pid, 0);
         return true;
@@ -91,36 +143,36 @@ export function processRunner(
         throw error;
       }
     };
-    const waitForGroupExit = (code: number | null, attempt = 0): void => {
+    const waitForGroupExit = (attempt = 0): void => {
       if (settled) return;
       try {
         if (!groupExists()) {
-          finish(code);
+          finish(1);
           return;
         }
       } catch {
-        truncated = true;
+        termination = "containment-failure";
         finish(1);
         return;
       }
       if (attempt >= groupExitPollAttempts) {
-        truncated = true;
+        termination = "containment-failure";
         finish(1);
         return;
       }
-      groupExitTimer = setTimeout(() => waitForGroupExit(code, attempt + 1), groupExitPollMs);
+      groupExitTimer = setTimeout(() => waitForGroupExit(attempt + 1), groupExitPollMs);
     };
     const signal = (name: NodeJS.Signals): boolean => {
-      if (options.killProcessGroup === true && child.pid !== undefined) {
+      if (group && child.pid !== undefined) {
         process.kill(-child.pid, name);
         return true;
       }
       return child.kill(name);
     };
-    const terminate = () => {
+    function terminate(reason: ProcessTerminationV1): void {
       if (settled || terminationRequested) return;
       terminationRequested = true;
-      truncated = true;
+      termination = reason;
       try {
         if (!signal("SIGTERM")) {
           finish(1);
@@ -137,25 +189,27 @@ export function processRunner(
         } catch {
           // The group may already be gone; the bounded existence check decides.
         }
-        waitForGroupExit(1);
+        waitForGroupExit();
       }, terminationGraceMs);
-    };
-    timer = setTimeout(terminate, options.timeoutMs);
+    }
+    timer = setTimeout(() => terminate("timeout"), options.timeoutMs);
+    if (options.signal?.aborted) terminate("abort");
+    else options.signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
       if (settled) return;
       stdoutSize += chunk.byteLength;
-      if (stdoutSize > options.maxStdoutBytes) terminate();
+      if (stdoutSize > options.maxStdoutBytes) terminate("output-limit");
       else stdout.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       if (settled) return;
       stderrSize += chunk.byteLength;
-      if (stderrSize > options.maxStderrBytes) terminate();
+      if (stderrSize > options.maxStderrBytes) terminate("output-limit");
       else stderr.push(chunk);
     });
     child.once("error", (error) => settle({ error }));
     child.once("close", (code) => {
-      if (options.killProcessGroup !== true) {
+      if (!group) {
         finish(code);
         return;
       }
@@ -165,11 +219,12 @@ export function processRunner(
           return;
         }
         if (terminationRequested) return;
-        truncated = true;
+        terminationRequested = true;
+        termination = "residual-descendants";
         signal("SIGKILL");
-        waitForGroupExit(1);
+        waitForGroupExit();
       } catch {
-        truncated = true;
+        termination = "containment-failure";
         finish(1);
       }
     });
