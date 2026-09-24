@@ -28,7 +28,9 @@ describe("installed Semgrep parity workflow", () => {
   });
 
   it("proves the host profile on Linux, Windows and macOS runners from the installed package", () => {
-    expect(workflow).toMatch(/host-profile:[\s\S]*?os: \[ubuntu-latest, windows-latest, macos-latest\]/);
+    expect(workflow).toMatch(
+      /host-profile:[\s\S]*?os: \[ubuntu-latest, windows-latest, macos-latest\]/,
+    );
     expect(workflow).toContain("tools/installed-host-profile-proof.mjs");
     expect(workflow).toMatch(/python-version: "3\.12"/);
   });
