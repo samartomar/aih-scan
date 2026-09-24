@@ -9,7 +9,10 @@ import {
   createBaselineAnalyzerSnapshotV1,
   normalizedObservation,
 } from "../baseline/batch-v1.js";
-import { bindCiscoSarifToSealedFilesV1 } from "../baseline/cisco-sealed-case-binding-v1.js";
+import {
+  bindCiscoSarifToSealedFilesV1,
+  unboundCiscoSarifResultV1,
+} from "../baseline/cisco-sealed-case-binding-v1.js";
 import {
   type AnalyzerFailureCauseV1,
   AnalyzerRunFailureV1,
@@ -1200,17 +1203,24 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     // Owner decision D1: Cisco 2.1.0 reports os.path.normcase paths, lowercased on Windows.
     // There, and only there, each is bound to the unique sealed file equal ignoring case and
     // carries that file's real name in the SARIF itself; no match still fails below.
-    if (
-      analyzer === "cisco" &&
-      normalized.mediaType === "application/sarif+json" &&
-      process.platform === "win32"
-    ) {
+    // U1g (review of S2i, P1): then, on every platform, every location of every Cisco result
+    // (related, code-flow, stack, fix, analysis target; by URI or by index) must name a file
+    // of the analyzed subject, by the one Cisco binding the shard uses for each job.
+    if (analyzer === "cisco" && normalized.mediaType === "application/sarif+json") {
       try {
+        const subjectFiles = scanCompletionSubjectFilesV1({
+          engine: (engineAnalyzer ?? analyzer) as ScanCompletionSubjectEngineV1,
+          entries: before.entries,
+          selectedClosurePaths: before.selectedClosurePaths,
+          detectorOptions,
+        }).map((file) => file.path);
         const bound = bindCiscoSarifToSealedFilesV1(
           parseStrictJsonObjectV1(normalized.bytes.toString("utf8"), "Cisco SARIF"),
-          sealedFiles.keys(),
+          subjectFiles,
           process.platform,
         );
+        const unbound = unboundCiscoSarifResultV1(bound.document, new Set(subjectFiles), "subject");
+        if (unbound !== undefined) throw new TypeError(`Cisco SARIF: ${unbound}`);
         if (bound.rebound > 0)
           normalized = {
             ...normalized,

@@ -287,8 +287,8 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
 
       expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
       if (outcome.outcome !== "failed") return;
-      expect(outcome.failure.detail).toContain(
-        "skills/a/skill.md, which is not a sealed source file",
+      expect(outcome.failure.detail).toMatch(
+        /skills\/a\/skill\.md\W+which is not a sealed file of the subject/,
       );
     },
   );
@@ -303,8 +303,8 @@ describe("detector.cisco source-tree under host-process-uv-v1", () => {
 
     expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
     if (outcome.outcome !== "failed") return;
-    expect(outcome.failure.detail).toContain(
-      "skills/a/missing.md, which is not a sealed source file",
+    expect(outcome.failure.detail).toMatch(
+      /skills\/a\/missing\.md\W+which is not a sealed file of the subject/,
     );
   });
 

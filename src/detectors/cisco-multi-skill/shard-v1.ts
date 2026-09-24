@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { bindCiscoSarifToSealedFilesV1 } from "../../baseline/cisco-sealed-case-binding-v1.js";
 import {
-  sarifArtifactLocationTargetV1,
-  sarifDetachedArtifactLocationsV1,
-  sarifResultArtifactLocationsV1,
-} from "../../baseline/sarif-source-relative-v1.js";
+  bindCiscoSarifToSealedFilesV1,
+  unboundCiscoSarifResultV1,
+} from "../../baseline/cisco-sealed-case-binding-v1.js";
 import { UnrepresentableSourcePathErrorV1 } from "../../observation/source-entry-name-v1.js";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
 import { attachScanCompletionV1, scanCompletionEvidenceV1 } from "../completion-evidence-v1.js";
@@ -154,88 +152,6 @@ class CiscoShardJobFailureV1 extends Error {
     this.name = "CiscoShardJobFailureV1";
     this.stage = stage;
   }
-}
-
-const isRecordV1 = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** A SARIF location's `physicalLocation.artifactLocation`, when it has one. */
-function locationArtifactV1(location: unknown): unknown {
-  const physical = isRecordV1(location) ? location.physicalLocation : undefined;
-  return isRecordV1(physical) ? physical.artifactLocation : undefined;
-}
-
-/**
- * S2g (review of U1d): the tree hashes prove a job's input did not change, not that its
- * results name files it analyzed. Every result of the job's normalized SARIF must carry at
- * least one location, and every one of its `locations` must name, by `uri`, a file of the
- * job's own sealed inventory (exact, case-sensitive, root-relative; on Windows after owner
- * decision D1 bound a normcased path to its unique sealed file, U1f).
- * S2h (review of S2g): every other artifact location of a result (related locations, code
- * flows, stacks, attachments, fixes, the analysis target, anywhere but a property bag), and
- * every one under the run's `threadFlowLocations` and `graphs` a result may reference, must
- * name such a file too. Each is resolved by `sarifArtifactLocationTargetV1` (U1g: the one rule of every path), so a file named by
- * `artifactLocation.index` is bound exactly like one named by `uri`. Returns why a result is
- * unbound, or `undefined` when all are bound.
- * S2i (review of S2h): the analysis target is bound after the job's SARIF normalization
- * (`ciscoJobSarifV1`) resolved its base and applied the job prefix, as for every other
- * location, so a job-relative `SKILL.md` names the job's own file.
- */
-function unboundShardResultV1(
-  log: CiscoSarifLogV1,
-  sealedFiles: ReadonlySet<string>,
-): string | undefined {
-  const unbound = (where: string, artifactLocation: unknown, artifacts: unknown) => {
-    const target = sarifArtifactLocationTargetV1(artifactLocation, artifacts);
-    if ("problem" in target) return `${where}: ${target.problem}`;
-    return sealedFiles.has(target.uri)
-      ? undefined
-      : `${where} names ${JSON.stringify(target.uri)}, which is not a sealed file of the job`;
-  };
-  let index = 0;
-  for (const run of log.runs ?? []) {
-    const record = run as Record<string, unknown>;
-    for (const shared of ["threadFlowLocations", "graphs"])
-      for (const artifactLocation of sarifDetachedArtifactLocationsV1(record[shared] ?? [])) {
-        const problem = unbound(`SARIF run ${shared}`, artifactLocation, record.artifacts);
-        if (problem !== undefined) return problem;
-      }
-    for (const result of run.results ?? []) {
-      const { locations: rawLocations, analysisTarget } = result as Record<string, unknown>;
-      const locations = Array.isArray(rawLocations) ? rawLocations : [];
-      const primary = new Set(locations.map(locationArtifactV1));
-      if (locations.length === 0)
-        return `SARIF result ${index} names no sealed file of the job (no location)`;
-      for (const location of locations) {
-        const artifactLocation = locationArtifactV1(location);
-        if (!isRecordV1(artifactLocation) || typeof artifactLocation.uri !== "string")
-          return `SARIF result ${index} names no sealed file of the job (a location has no URI)`;
-        const problem = unbound(`SARIF result ${index}`, artifactLocation, record.artifacts);
-        if (problem !== undefined) return problem;
-      }
-      if (analysisTarget !== undefined) {
-        const problem = unbound(
-          `SARIF result ${index} analysis target`,
-          analysisTarget,
-          record.artifacts,
-        );
-        if (problem !== undefined) return problem;
-      }
-      // U1g: the one enumeration every normalizer uses: never a property bag, and an
-      // analysis target only at result.analysisTarget.
-      for (const artifactLocation of sarifResultArtifactLocationsV1(result)) {
-        if (primary.has(artifactLocation) || artifactLocation === analysisTarget) continue;
-        const problem = unbound(
-          `SARIF result ${index} related location`,
-          artifactLocation,
-          record.artifacts,
-        );
-        if (problem !== undefined) return problem;
-      }
-      index += 1;
-    }
-  }
-  return undefined;
 }
 
 /** Boundary shape validation of a shard run request; never throws. */
@@ -503,7 +419,9 @@ export async function runCiscoShardV1(
             ),
           );
         }
-        const unbound = unboundShardResultV1(bound, new Set(sealedPaths));
+        // S2g/S2h/S2i: every location of every result names a sealed file of this job; U1g:
+        // by the one Cisco binding every Cisco run uses.
+        const unbound = unboundCiscoSarifResultV1(bound, new Set(sealedPaths), "job");
         if (unbound !== undefined) {
           throw new CiscoShardJobFailureV1(
             "output",

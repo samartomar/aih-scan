@@ -938,3 +938,141 @@ describe("artifact indices resolve by one rule on every path (U1g)", () => {
     });
   });
 });
+
+// U1g (review of S2i, P1): Cisco scan-all reports one merged run. Every location a result
+// carries (related locations, code flows, stacks, fixes, the analysis target, by URI or by
+// index) belongs to the skill that reported it: a relative URI is read in that skill's
+// directory, and whatever the spelling, the file it names must lie in that skill and in no
+// other reported skill nested inside it.
+describe("Cisco scan-all nested locations stay in the reporting skill (U1g)", () => {
+  const report = (...skills: [string, boolean][]) => ({
+    results: skills.map(([skillPath, reporting]) => ({
+      skill_path: skillPath,
+      findings: reporting ? [{ rule_id: "R", file_path: "SKILL.md", line_number: 1 }] : [],
+    })),
+  });
+  const log = (fields: Record<string, unknown>, run: Record<string, unknown> = {}) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "skill-scanner" } },
+        originalUriBaseIds: { ROOT: { uri: "file:///scan/" } },
+        ...run,
+        results: [
+          {
+            ruleId: "R",
+            message: { text: "R" },
+            locations: [
+              {
+                physicalLocation: {
+                  artifactLocation: { uri: "SKILL.md" },
+                  region: { startLine: 1 },
+                },
+              },
+            ],
+            ...fields,
+          },
+        ],
+      },
+    ],
+  });
+  const at = (artifactLocation: Record<string, unknown>) => ({
+    physicalLocation: { artifactLocation },
+  });
+  const alphaAndBeta = report(["/scan/skills/alpha", true], ["/scan/skills/beta", false]);
+  const relatedOf = (document: Record<string, unknown>) =>
+    (
+      document.runs as {
+        results: { relatedLocations: { physicalLocation: { artifactLocation: unknown } }[] }[];
+      }[]
+    )[0]?.results[0]?.relatedLocations.map((entry) => entry.physicalLocation.artifactLocation);
+
+  it("reads a sibling-looking or bare URI in the reporting skill (reviewer case)", () => {
+    const normalized = ciscoSourceRelativeSarifV1(
+      log({ relatedLocations: [at({ uri: "skills/beta/SKILL.md" }), at({ uri: "SKILL.md" })] }),
+      alphaAndBeta,
+      ["/scan"],
+    );
+    expect(relatedOf(normalized.document)).toEqual([
+      { uri: "skills/alpha/skills/beta/SKILL.md" },
+      { uri: "skills/alpha/SKILL.md" },
+    ]);
+  });
+
+  it("refuses a based URI that names a sibling skill's file", () => {
+    expect(() =>
+      ciscoSourceRelativeSarifV1(
+        log({ relatedLocations: [at({ uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" })] }),
+        alphaAndBeta,
+        ["/scan"],
+      ),
+    ).toThrow(/skills\/beta\/SKILL\.md.*not in the reporting skill skills\/alpha/);
+  });
+
+  it("refuses an index that resolves to a sibling skill's file (reviewer case)", () => {
+    const beta = { artifacts: [{ location: { uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" } }] };
+    for (const fields of [
+      { relatedLocations: [at({ index: 0 })] },
+      { analysisTarget: { index: 0 } },
+      {
+        locations: [
+          { physicalLocation: { artifactLocation: { uri: "SKILL.md" }, region: { startLine: 1 } } },
+          at({ index: 0 }),
+        ],
+      },
+    ])
+      expect(() => ciscoSourceRelativeSarifV1(log(fields, beta), alphaAndBeta, ["/scan"])).toThrow(
+        /not in the reporting skill/,
+      );
+    const alpha = {
+      artifacts: [{ location: { uri: "skills/alpha/SKILL.md", uriBaseId: "ROOT" } }],
+    };
+    expect(
+      relatedOf(
+        ciscoSourceRelativeSarifV1(
+          log({ relatedLocations: [at({ index: 0 })] }, alpha),
+          alphaAndBeta,
+          ["/scan"],
+        ).document,
+      ),
+    ).toEqual([{ index: 0 }]);
+  });
+
+  it("refuses a code-flow, stack or fix location outside the reporting skill", () => {
+    const beta = at({ uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" });
+    for (const fields of [
+      { codeFlows: [{ threadFlows: [{ locations: [{ location: beta }] }] }] },
+      { stacks: [{ frames: [{ location: beta }] }] },
+      {
+        fixes: [
+          {
+            artifactChanges: [
+              {
+                artifactLocation: { uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" },
+                replacements: [],
+              },
+            ],
+          },
+        ],
+      },
+    ])
+      expect(() => ciscoSourceRelativeSarifV1(log(fields), alphaAndBeta, ["/scan"])).toThrow(
+        /not in the reporting skill/,
+      );
+  });
+
+  it("keeps a root skill's location in a nested skill's directory, which its scan covers", () => {
+    // Cisco's scan of a parent skill walks its whole directory, nested skills included, and
+    // reports their files under the parent (the real shape pinned above).
+    const nested = report(["/scan", true], ["/scan/skills/b", false]);
+    const normalized = ciscoSourceRelativeSarifV1(
+      log({ relatedLocations: [at({ uri: "skills/b/SKILL.md" }), at({ uri: "docs/guide.md" })] }),
+      nested,
+      ["/scan"],
+    );
+    expect(relatedOf(normalized.document)).toEqual([
+      { uri: "skills/b/SKILL.md" },
+      { uri: "docs/guide.md" },
+    ]);
+  });
+});

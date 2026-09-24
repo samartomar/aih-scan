@@ -574,7 +574,11 @@ export function ciscoSourceRelativeSarifV1(
   const findings = ciscoFindings(report, candidates);
   const copy = clone(sarif);
   if (!isRecord(copy) || !Array.isArray(copy.runs)) ciscoFail("the SARIF log holds no runs");
-  const results: { result: Record<string, Json>; base: (id: string) => Base }[] = [];
+  const results: {
+    result: Record<string, Json>;
+    base: (id: string) => Base;
+    run: Record<string, Json>;
+  }[] = [];
   // Result locations this mapper settles from the JSON report; their bases are not re-applied.
   const settled = new Set<object>();
   for (const run of copy.runs) {
@@ -589,7 +593,7 @@ export function ciscoSourceRelativeSarifV1(
     }
     for (const result of run.results) {
       if (!isRecord(result)) ciscoFail("a SARIF result is malformed");
-      results.push({ result, base });
+      results.push({ result, base, run });
     }
   }
   if (results.length !== findings.length)
@@ -649,5 +653,25 @@ export function ciscoSourceRelativeSarifV1(
         );
     }
   }
-  return normalize(copy, sourceRoots, settled, copy);
+  const normalized = normalize(copy, sourceRoots, settled, copy);
+  // U1g (review of S2i, P1): every location a result carries (by URI or by index, once the
+  // run is normalized and its indices resolved) must name a file inside the directory of the
+  // skill that reported it. A relative URI was already read in that skill's directory; a
+  // based URI or an index could still name a sibling skill's file. A nested skill's file is
+  // inside its parent's directory, which Cisco's scan of the parent covers, so it is kept.
+  const inside = (directory: string, path: string) =>
+    directory === "" || path.startsWith(`${directory}/`);
+  const shown = (directory: string) => (directory === "" ? "." : directory);
+  results.forEach(({ result, run }, index) => {
+    const skill = (findings[index] as CiscoFinding).skill;
+    for (const { location } of artifactLocations(result, "result")) {
+      const target = sarifArtifactLocationTargetV1(location, run.artifacts);
+      if ("problem" in target) ciscoFail(`SARIF result ${index} location: ${target.problem}`);
+      if (!inside(skill, target.uri))
+        ciscoFail(
+          `SARIF result ${index} names ${JSON.stringify(target.uri)}, which is not in the reporting skill ${shown(skill)}`,
+        );
+    }
+  });
+  return normalized;
 }
