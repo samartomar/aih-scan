@@ -10,6 +10,7 @@ import {
   AI_HARNESS_STRICT_V2_COMMIT,
   AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
 } from "../../src/core/core-contract-lock-v2.js";
+import { writeCiscoCaptureReportV1 } from "../support/cisco-job-report.js";
 
 const roots: string[] = [];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -118,6 +119,7 @@ function brokerRunner(layout: ReturnType<typeof fixtureLayout>) {
     if (argv[2] === "start") {
       if (outputRoot === undefined) throw new Error("missing output root");
       writeFileSync(join(outputRoot, "result.sarif"), sarif());
+      writeCiscoCaptureReportV1(outputRoot);
       return { code: 0, stdout: "", stderr: "" };
     }
     if (argv[2] === "rm" || argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };

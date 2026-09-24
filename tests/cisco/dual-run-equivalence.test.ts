@@ -10,6 +10,7 @@ import {
 import { probeCiscoLinuxAmd64V1 } from "../../src/cisco/linux-amd64-probe-v1.js";
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { parseCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
+import { writeCiscoCaptureReportV1 } from "../support/cisco-job-report.js";
 
 const lockSha256 = "1e98c5679994dc56f82c1d88a77528d4c4b076160aff85b4d97ce239360bc210";
 const wheelSha256 = "c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e";
@@ -327,6 +328,7 @@ async function produce(
           join(outputRoot, "result.sarif"),
           reportBytes(ociKind, "2026-08-17T12:35:56Z", true),
         );
+        writeCiscoCaptureReportV1(outputRoot);
         return { code: 0, stdout: "", stderr: "" };
       }
       if (argv[2] === "rm") {

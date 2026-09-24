@@ -268,6 +268,12 @@ const runner = async (argv) => {
       }],
     };
     writeFileSync(join(outputRoot, "result.sarif"), JSON.stringify(sarif), { mode: 0o600 });
+    // U1i, coordinator decision D30: the scanner also writes its single-skill JSON report.
+    writeFileSync(
+      join(outputRoot, "result.json"),
+      JSON.stringify({ skill_name: "candidate", skill_path: "/source", findings: [] }),
+      { mode: 0o600 },
+    );
     return { code: 0, stdout: "", stderr: "" };
   }
   if (argv[2] === "rm" || argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };

@@ -1,4 +1,11 @@
 import { assertSafeRelativePosixPathV1 } from "../contract/strict-json-v1.js";
+import {
+  assertCiscoAnalyzersCompleteV1,
+  CISCO_SKILL_LOAD_FALLBACK_RULE_V1,
+  type CiscoSkillAnalyzersV1,
+  ciscoFailedAnalyzersV1,
+  ciscoSkillLabelV1,
+} from "./cisco-analyzer-failures-v1.js";
 
 /**
  * Rewrites the artifact URIs of one analyzer's SARIF so they are relative to the declared
@@ -929,4 +936,75 @@ export function ciscoSourceRelativeSarifV1(
         );
   });
   return normalized;
+}
+
+/**
+ * U1i, coordinator decision D30 (revised 20:58Z): Cisco `scan-all` is complete only when every
+ * `analyzers_failed` entry of its JSON report is the documented `skill_loader` fallback
+ * (`assertCiscoAnalyzersCompleteV1`). The report lists them per skill, under `results[i]`; an
+ * entry at the report's top level names no skill and is never the fallback. A skill's
+ * SKILL_LOAD_FALLBACK_USED finding counts only with its counterpart: the SARIF result paired
+ * with it by position in `normalized`, the document {@link ciscoSourceRelativeSarifV1} returned
+ * for the same reports, which must carry that rule and lie in the same skill. A malformed
+ * `analyzers_failed` fails at `output` before any skill is judged.
+ */
+export function assertCiscoScanAllAnalyzersCompleteV1(
+  report: Record<string, unknown>,
+  normalized: Record<string, unknown>,
+  sourceRoots: readonly string[],
+): void {
+  const candidates = roots(sourceRoots);
+  const results = report.results;
+  if (!Array.isArray(results)) ciscoFail("the JSON report holds no results list");
+  const runs = Array.isArray(normalized.runs) ? (normalized.runs as Json[]) : [];
+  const sarifResults = runs.flatMap((run) =>
+    isRecord(run) && Array.isArray(run.results) ? run.results : [],
+  );
+  const skills: CiscoSkillAnalyzersV1[] = [
+    {
+      label: "at the report's top level",
+      failed: ciscoFailedAnalyzersV1(report.analyzers_failed, "the top level"),
+      fallbackFindings: 0,
+      fallbackCounterparts: 0,
+    },
+  ];
+  let position = 0;
+  results.forEach((entry: unknown, index) => {
+    if (!isRecord(entry) || typeof entry.skill_path !== "string" || !Array.isArray(entry.findings))
+      ciscoFail("a JSON report skill entry is malformed");
+    let skill: string;
+    try {
+      skill = relativeTo(entry.skill_path, candidates, true);
+    } catch {
+      ciscoFail(`skill path ${JSON.stringify(entry.skill_path)} is outside the source root`);
+    }
+    const failed = ciscoFailedAnalyzersV1(entry.analyzers_failed, `results[${index}]`);
+    let fallbackFindings = 0;
+    let fallbackCounterparts = 0;
+    for (const finding of entry.findings) {
+      const paired = sarifResults[position];
+      position += 1;
+      if (!isRecord(finding) || finding.rule_id !== CISCO_SKILL_LOAD_FALLBACK_RULE_V1) continue;
+      fallbackFindings += 1;
+      const locations = isRecord(paired) ? paired.locations : undefined;
+      const first = Array.isArray(locations) ? locations[0] : undefined;
+      const physical = isRecord(first) ? first.physicalLocation : undefined;
+      const artifact = isRecord(physical) ? physical.artifactLocation : undefined;
+      const uri = isRecord(artifact) ? artifact.uri : undefined;
+      if (
+        isRecord(paired) &&
+        paired.ruleId === CISCO_SKILL_LOAD_FALLBACK_RULE_V1 &&
+        typeof uri === "string" &&
+        sarifPathInsideDirectoryV1(skill, uri)
+      )
+        fallbackCounterparts += 1;
+    }
+    skills.push({
+      label: `in ${ciscoSkillLabelV1(skill)}`,
+      failed,
+      fallbackFindings,
+      fallbackCounterparts,
+    });
+  });
+  assertCiscoAnalyzersCompleteV1(skills);
 }

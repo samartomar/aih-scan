@@ -27,6 +27,7 @@ import {
   diskFilesV1,
   diskSubjectV1,
 } from "../../runner/completion-evidence-support.js";
+import { writeCiscoJobReportV1 } from "../../support/cisco-job-report.js";
 
 // Parity tests for the shard EXECUTION side of Core's `detector.cisco`
 // (`src/trust/detectors.ts` `runCiscoSourceShard`), ported from Core's
@@ -75,6 +76,7 @@ function scanningRunner(hooks?: {
       return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
     }
     const scanIndex = argv.indexOf("scan");
+    writeCiscoJobReportV1(argv);
     const outputIndex = argv.indexOf("--output-sarif");
     const target = argv[scanIndex + 1];
     const output = argv[outputIndex + 1];
@@ -601,6 +603,7 @@ describe("runCiscoShardV1", () => {
         return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
       }
       const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
+      writeCiscoJobReportV1(argv);
       const output = argv[argv.indexOf("--output-sarif") + 1];
       if (output === undefined) return { code: 1, stdout: "", stderr: "missing SARIF path" };
       if (target.endsWith("alpha")) {

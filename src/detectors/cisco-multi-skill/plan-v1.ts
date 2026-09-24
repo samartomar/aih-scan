@@ -167,13 +167,17 @@ export function ciscoSkillScannerVersionArgvV1(
 }
 
 /**
- * One `skill-scanner scan <skillDir> --format sarif --output-sarif <out>`
- * invocation; Core runs it with `<skillDir>` as the working directory.
+ * One `skill-scanner scan <skillDir> --format sarif --format json --output-sarif <out>
+ * --output-json <json>` invocation, run with `<skillDir>` as the working directory. SARIF
+ * stays the primary format. U1i, coordinator decision D30 (revised 20:58Z): the job also asks
+ * for Cisco's single-skill JSON report, since only its `analyzers_failed` says whether an
+ * analyzer failed; Core's argv asked for SARIF alone.
  */
 export function ciscoSkillScannerRunArgvV1(
   platform: CiscoMultiSkillPlatformV1,
   skillDir: string,
   outputSarif: string,
+  outputJson: string,
   project: string = CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
 ): string[] {
   return execArgvV1(platform, [
@@ -182,8 +186,12 @@ export function ciscoSkillScannerRunArgvV1(
     skillDir,
     "--format",
     "sarif",
+    "--format",
+    "json",
     "--output-sarif",
     outputSarif,
+    "--output-json",
+    outputJson,
   ]);
 }
 

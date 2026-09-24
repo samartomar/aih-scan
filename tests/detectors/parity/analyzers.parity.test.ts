@@ -15,6 +15,7 @@ import {
 import { runSkillspectorScanV1 } from "../../../src/detectors/skillspector-approval/index.js";
 import { runSnykAgentScanRequestV1 } from "../../../src/detectors/snyk-agent-scan/index.js";
 import { buildTrustLintTreeV1 } from "../../../src/detectors/trust-lint/index.js";
+import { writeCiscoJobReportV1 } from "../../support/cisco-job-report.js";
 import { coreMcpConfigPathsV1, coreSelectionV1 } from "../trust-lint/support.js";
 import {
   type GoldenRawOccurrenceV1,
@@ -32,9 +33,10 @@ import {
 /**
  * Third-party detector parity: W2's recorded analyzer runs replayed through
  * the Scan engines. The injected runner answers each call from the
- * transcript (never invents output) and checks that the engine made the
- * same call Core made: argv with `<root>`/`<tmp>` placeholders, cwd, and the
- * environment keys. The engine's SARIF is then projected to the fields of
+ * transcript (never invents output, with one labelled exception: the Cisco JSON
+ * report D30 added, which Core never requested, is supplied reporting no failed
+ * analyzer) and checks that the engine made the same call Core made: argv with
+ * `<root>`/`<tmp>` placeholders, cwd, and the environment keys. The engine's SARIF is then projected to the fields of
  * Core's `rawOccurrences` (ruleId, level, message, uri, startLine) and
  * compared, in order, with the golden for that environment.
  */
@@ -152,9 +154,30 @@ describe("cisco parity (linux-x64 transcripts, C2a §3)", () => {
           seen.push(placeholderPathV1(root, target));
         }
         if (call === undefined) throw new Error(`no recorded call for ${shown.join(" ")}`);
-        expect(shown).toEqual([...call.argv]);
+        // U1i, coordinator decision D30: Scan's job also asks for Cisco's JSON report
+        // (`--format json --output-json <file>`), which Core's recorded argv never did. That
+        // deliberate divergence is the only one: without exactly those four tokens the argv is
+        // Core's.
+        const json = shown.indexOf("--output-json");
+        const jsonFormat = shown.findIndex(
+          (value, index) => value === "--format" && shown[index + 1] === "json",
+        );
+        const coreArgv =
+          argv.includes("scan") && json >= 0 && jsonFormat >= 0
+            ? shown.filter(
+                (_value, index) =>
+                  index !== json &&
+                  index !== json + 1 &&
+                  index !== jsonFormat &&
+                  index !== jsonFormat + 1,
+              )
+            : shown;
+        expect(coreArgv).toEqual([...call.argv]);
         if (typeof call.outputSarif === "string") {
           writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", call.outputSarif);
+          // Core recorded no JSON report: the replay supplies one reporting no failed analyzer,
+          // so it proves Core's SARIF outcome; D30 has its own tests.
+          writeCiscoJobReportV1(argv);
         }
         return {
           code: call.code,

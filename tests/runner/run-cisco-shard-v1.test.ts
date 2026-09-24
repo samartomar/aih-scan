@@ -15,6 +15,7 @@ import type { BaselineProcessRunnerV1 } from "../../src/baseline/runtime-v1.js";
 import { resolveDetectorCapabilityV1 } from "../../src/capability/detector-capability-v1.js";
 import { hashComponentTreeV1 } from "../../src/observation/source-hash-v1.js";
 import { runCiscoShardV1 } from "../../src/runner/run-cisco-shard-v1.js";
+import { writeCiscoJobReportV1 } from "../support/cisco-job-report.js";
 
 /**
  * C2a §3.7 through the public boundary: one exact-source Cisco shard, its lock proven
@@ -123,6 +124,7 @@ function shardHost(
     const skill = skillDir.split(/[\\/]/).at(-1) ?? "";
     const special = onScan(skill, skillDir);
     if (special !== undefined) return special;
+    writeCiscoJobReportV1(argv);
     writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", jobSarif(skill));
     return ok("");
   };

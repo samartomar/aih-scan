@@ -1592,10 +1592,12 @@ describe("runDetectorV1 host-process-uv-v1 strict analyzer output (U1g)", () => 
 // Coordinator decision D28 (U1h), end to end on the real bytes: Cisco 2.1.0 on win32 reported
 // the golden `malformed` case with a skill-level LOW_ANALYZABILITY finding (`"file_path": null`)
 // and `analyzers_failed: [{analyzer: "skill_loader"}]`. The finding is accepted at the skill's
-// SKILL.md through its SARIF counterpart; completion is decided exactly as before, by the
-// coverage report and the invocation, never by the pairing: `analyzers_failed` was not read
-// before and is not read now, and a skipped skill or a scanned-count mismatch still fails
-// coverage. The capture is win32 output (Cisco's normcased `skill.md`, which D1 binds on win32
+// SKILL.md through its SARIF counterpart; the pairing never proves completion. U1i, coordinator
+// decision D30 (revised 20:58Z): completion also requires that every `analyzers_failed` entry
+// is Cisco's documented fallback (a `skill_loader` failure with its SKILL_LOAD_FALLBACK_USED
+// finding and SARIF counterpart in the same skill), as in this capture; any other failed
+// analyzer fails coverage, and a skipped skill or a scanned-count mismatch still does. The
+// capture is win32 output (Cisco's normcased `skill.md`, which D1 binds on win32
 // only), so the run is proven where it was captured.
 describe("runDetectorV1 Cisco skill-level finding on the real bytes (D28, U1h)", () => {
   const fixture = (name: string) =>
@@ -1671,7 +1673,8 @@ describe("runDetectorV1 Cisco skill-level finding on the real bytes (D28, U1h)",
       expect(completionOfObservationV1(outcome)).toMatchObject(
         diskSubjectV1(root, diskFilesV1(root)),
       );
-      // The same run without `analyzers_failed` decides completion identically: it is not read.
+      // The same run without `analyzers_failed` completes identically: the one failure in the
+      // capture is the matched skill_loader fallback (D30).
       const without = await run(
         root,
         host.env,
@@ -1687,6 +1690,65 @@ describe("runDetectorV1 Cisco skill-level finding on the real bytes (D28, U1h)",
       expect(completionOfObservationV1(without)).toEqual(completionOfObservationV1(outcome));
     },
   );
+
+  it.runIf(windows)(
+    "fails coverage when Cisco reports any other failed analyzer (D30)",
+    async () => {
+      const host = hostFixture();
+      for (const [failures, reason] of [
+        [
+          [
+            { analyzer: "skill_loader", error: "SkillLoadError:MISSING_REQUIRED_MANIFEST_FIELD" },
+            { analyzer: "behavioral", error: "Timeout" },
+          ],
+          /Cisco reported failed analyzers: skill_loader \(SkillLoadError:MISSING_REQUIRED_MANIFEST_FIELD\), behavioral \(Timeout\) in the root skill$/,
+        ],
+        [
+          [
+            { analyzer: "skill_loader", error: "SkillLoadError:MISSING_REQUIRED_MANIFEST_FIELD" },
+            { analyzer: "skill_loader", error: "SkillLoadError:OTHER" },
+          ],
+          /more than one skill_loader failure/,
+        ],
+      ] as const) {
+        const outcome = await run(
+          malformedTree(),
+          host.env,
+          realRunner(
+            host.python,
+            edited((report) => {
+              (report.results as Record<string, unknown>[])[0] = {
+                ...(report.results as Record<string, unknown>[])[0],
+                analyzers_failed: failures,
+              };
+            }),
+          ),
+        );
+        expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "coverage" } });
+        if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
+      }
+    },
+  );
+
+  it.runIf(windows)("fails output for a malformed analyzers_failed (D30)", async () => {
+    const host = hostFixture();
+    const outcome = await run(
+      malformedTree(),
+      host.env,
+      realRunner(
+        host.python,
+        edited((report) => {
+          (report.results as Record<string, unknown>[])[0] = {
+            ...(report.results as Record<string, unknown>[])[0],
+            analyzers_failed: [{ analyzer: "skill_loader" }],
+          };
+        }),
+      ),
+    );
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome === "failed")
+      expect(outcome.failure.detail).toMatch(/Cisco JSON report analyzers_failed .*is malformed/);
+  });
 
   it.runIf(windows)(
     "still fails coverage when the report says a skill was skipped or miscounted",

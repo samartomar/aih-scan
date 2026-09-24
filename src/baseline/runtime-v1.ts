@@ -40,7 +40,11 @@ import {
 } from "../detectors/sarif-completion-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
-import { ciscoSourceRelativeSarifV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
+import {
+  assertCiscoScanAllAnalyzersCompleteV1,
+  ciscoSourceRelativeSarifV1,
+  sourceRelativeSarifV1,
+} from "./sarif-source-relative-v1.js";
 
 export const SKILLSPECTOR_IMAGE_V1 =
   "ghcr.io/samartomar/skillspector@sha256:efe47bd7e073064426541381c8cb284162086950748424d1b4633788a2275bc6";
@@ -1345,11 +1349,12 @@ async function hostProcessUv(
       expectedSkills,
     );
     const sarif = parsedSarif(readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output"), "cisco");
+    const normalized = ciscoSourceRelativeSarifV1(sarif, report, roots).document;
+    // U1i, coordinator decision D30 (revised 20:58Z): complete only when every failed
+    // analyzer Cisco reports is the matched skill_loader fallback.
+    assertCiscoScanAllAnalyzersCompleteV1(report, normalized, roots);
     return {
-      ...sarifOutput(
-        ciscoSourceRelativeSarifV1(sarif, report, roots).document,
-        lockIdentity(version, project),
-      ),
+      ...sarifOutput(normalized, lockIdentity(version, project)),
       hostRuntime,
     };
   });
@@ -1947,10 +1952,10 @@ async function cisco(
       readBoundedAnalyzerOutput(sarifOutputPath, "Cisco SARIF output"),
       "cisco",
     );
-    return sarifOutput(
-      ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"]).document,
-      lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject),
-    );
+    const normalized = ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"]).document;
+    // U1i, coordinator decision D30 (revised 20:58Z), as for host-process-uv-v1.
+    assertCiscoScanAllAnalyzersCompleteV1(report, normalized, ["/aih/source"]);
+    return sarifOutput(normalized, lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject));
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }

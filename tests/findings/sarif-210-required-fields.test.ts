@@ -23,6 +23,7 @@ import {
 import { runTrustLintV1 } from "../../src/detectors/trust-lint/index.js";
 import { hashComponentTreeV1 } from "../../src/observation/source-hash-v1.js";
 import { sarif210RequiredProblemsV1 } from "../runner/completion-evidence-support.js";
+import { writeCiscoJobReportV1 } from "../support/cisco-job-report.js";
 
 // S2h (coordinator decision D16, from Core worker W2D): SARIF 2.1.0 requires run.tool.driver
 // on every run. Every SARIF shape Scan returns is checked here against the required-field set
@@ -159,6 +160,7 @@ describe("every SARIF shape Scan returns has the SARIF 2.1.0 required fields", (
 
   const cisco: CiscoMultiSkillRunnerV1 = async (argv) => {
     if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
+    writeCiscoJobReportV1(argv);
     const output = argv[argv.indexOf("--output-sarif") + 1] ?? "";
     writeFileSync(
       output,

@@ -11,6 +11,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import {
+  assertCiscoSingleSkillAnalyzersCompleteV1,
+  ciscoSingleSkillReportV1,
+} from "../baseline/cisco-analyzer-failures-v1.js";
 import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../cli/process-runner.js";
 import {
   assertSafeRelativePosixPathV1,
@@ -236,14 +240,16 @@ function readOwnedContainerId(path: string): string {
   return normalizedContainerId(text, "container ownership cidfile");
 }
 
-function output(path: string): Buffer {
-  const names = readdirSync(path).sort();
-  if (names.length !== 1 || names[0] !== "result.sarif") fail("SARIF output stale or extra");
+/** The files the scanner may leave in `/output`: its SARIF and (U1i, D30) its JSON report. */
+const OUTPUT_FILES: readonly string[] = ["result.json", "result.sarif"];
+
+/** One regular, unlinked, bounded UTF-8 output file; `label` names it in every failure. */
+function outputFile(path: string, name: string, label: string): Buffer {
   const stat: Stats = (() => {
     try {
-      return lstatSync(join(path, "result.sarif"));
+      return lstatSync(join(path, name));
     } catch {
-      return fail("SARIF output missing");
+      return fail(`${label} missing`);
     }
   })();
   if (
@@ -253,12 +259,28 @@ function output(path: string): Buffer {
     stat.size < 0 ||
     stat.size > MAX_SARIF_BYTES
   )
-    fail("SARIF output invalid");
-  const bytes = readFileSync(join(path, "result.sarif"));
-  if (bytes.length !== stat.size) fail("SARIF output changed while reading");
+    fail(`${label} invalid`);
+  const bytes = readFileSync(join(path, name));
+  if (bytes.length !== stat.size) fail(`${label} changed while reading`);
   const text = bytes.toString("utf8");
-  if (!Buffer.from(text, "utf8").equals(bytes)) fail("SARIF output UTF-8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
   return bytes;
+}
+
+/**
+ * The scanner's SARIF and its single-skill JSON report. U1i, coordinator decision D30: the
+ * report is required; a missing or unusable one fails, named "Cisco JSON report" (stage
+ * `output`), and nothing falls back to the SARIF alone. Any other file fails.
+ */
+function output(path: string): Readonly<{ sarif: Buffer; json: Buffer }> {
+  const names = readdirSync(path).sort();
+  if (names.some((name) => !OUTPUT_FILES.includes(name))) fail("SARIF output stale or extra");
+  if (!names.includes("result.sarif")) fail("SARIF output missing");
+  if (!names.includes("result.json")) fail("Cisco JSON report output missing");
+  return {
+    sarif: outputFile(path, "result.sarif", "SARIF output"),
+    json: outputFile(path, "result.json", "Cisco JSON report output"),
+  };
 }
 
 function temporaryPath(path: string, label: string): void {
@@ -387,8 +409,12 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
           "/source",
           "--format",
           "sarif",
+          "--format",
+          "json",
           "--output-sarif",
           "/output/result.sarif",
+          "--output-json",
+          "/output/result.json",
         ],
         "container create",
       );
@@ -436,7 +462,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     );
     if (run.truncated) fail("scanner run truncated");
     if (run.code !== 0) fail(`scanner run nonzero code ${run.code}`);
-    const rawSarif = output(outputRoot);
+    const { sarif: rawSarif, json: rawReport } = output(outputRoot);
     const parsedSarif = parseCiscoSarifV1(rawSarif.toString("utf8"), {
       sourceRoot: input.sourceRoot,
     });
@@ -444,6 +470,14 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
       for (const location of result.locations)
         if (!Object.hasOwn(selectedFiles, location.physicalLocation.artifactLocation.uri))
           fail("SARIF path outside selected closure");
+    // U1i, coordinator decision D30 (revised 20:58Z): the capture scanned one skill, the
+    // source root; it is complete only when every failed analyzer Cisco reports is the
+    // matched skill_loader fallback (coverage otherwise; a malformed report is output).
+    assertCiscoSingleSkillAnalyzersCompleteV1(
+      ciscoSingleSkillReportV1(rawReport, "the capture"),
+      (parsedSarif.runs[0]?.results ?? []).map((result) => result.ruleId),
+      "",
+    );
     const after = sealNativeObservationSourceV1(sourceInput);
     if (!sameSeal(before, after)) fail("source drift during run");
     const facts = createCiscoFactsOnlyV1({

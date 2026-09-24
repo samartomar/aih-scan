@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BaselineProcessRunnerV1 } from "../../src/baseline/runtime-v1.js";
 import { resolveDetectorCapabilityV1 } from "../../src/capability/detector-capability-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import { writeCiscoJobReportV1 } from "../support/cisco-job-report.js";
 import {
   completionOfObservationV1,
   diskFilesV1,
@@ -130,6 +131,7 @@ function ciscoHost(
     observed.inFlight -= 1;
     const reason = fail(skill);
     if (reason !== undefined) return { code: 1, stdout: "", stderr: reason, truncated: false };
+    writeCiscoJobReportV1(argv);
     writeFileSync(argv[argv.indexOf("--output-sarif") + 1] ?? "", jobSarif(skill, uri));
     return ok("");
   };

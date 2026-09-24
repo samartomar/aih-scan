@@ -19,6 +19,7 @@ import {
   readScanCaptureBundleV2,
   writeScanCaptureBundleV2,
 } from "../../src/observation/scan-bundle-v2.js";
+import { writeCiscoCaptureReportV1 } from "../support/cisco-job-report.js";
 
 const roots: string[] = [];
 const require = createRequire(import.meta.url);
@@ -155,6 +156,7 @@ async function bundleFixture(label: string) {
         if (argv.at(-1) !== containerId || outputRoot === undefined)
           throw new Error("broker did not start the claimed container");
         writeFileSync(join(outputRoot, "result.sarif"), sarif());
+        writeCiscoCaptureReportV1(outputRoot);
         return { code: 0, stdout: "", stderr: "" };
       }
       if (argv[2] === "rm") {

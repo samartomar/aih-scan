@@ -1,6 +1,11 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
+import {
+  assertCiscoSingleSkillAnalyzersCompleteV1,
+  CiscoAnalyzerFailureV1,
+  ciscoSingleSkillReportV1,
+} from "../../baseline/cisco-analyzer-failures-v1.js";
 import {
   ciscoJobDirectoryProblemTextV1,
   resolveContainedCiscoJobDirectoryV1,
@@ -106,8 +111,17 @@ export async function mapConcurrentStableV1<T, R>(
   return results;
 }
 
-/** Failure stages the C2a typed surface reports (C2a §3.5 and §8.4). */
-export type CiscoScanFailureStageV1 = "acquisition" | "availability" | "execution" | "output";
+/**
+ * Failure stages the C2a typed surface reports (C2a §3.5 and §8.4). U1i, coordinator decision
+ * D30: `coverage` when Cisco reports a failed analyzer other than the matched skill_loader
+ * fallback.
+ */
+export type CiscoScanFailureStageV1 =
+  | "acquisition"
+  | "availability"
+  | "execution"
+  | "output"
+  | "coverage";
 
 const MAX_CISCO_DETAIL_CHARACTERS_V1 = 1024;
 
@@ -193,7 +207,7 @@ export async function probeCiscoSkillScannerV1(
 /** Typed outcome of one skill directory's scan (C2a §3.2). */
 export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
   | { kind: "completed"; log: CiscoSarifLogV1 }
-  | { kind: "failed"; stage: "execution" | "output"; detail: string }
+  | { kind: "failed"; stage: "execution" | "output" | "coverage"; detail: string }
 >;
 
 /**
@@ -202,14 +216,18 @@ export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
  * process failure is stage `execution`; a SARIF file that is missing, does
  * not parse or does not prove completion is stage `output`, and one whose
  * invocation reports the analyzer's own failure is stage `execution`
- * ({@link ciscoJobSarifV1}). The private temporary directory is always
- * removed.
+ * ({@link ciscoJobSarifV1}). U1i, coordinator decision D30 (revised 20:58Z): the job's
+ * single-skill JSON report is then read with the one strict parser; a missing, unreadable or
+ * malformed report, or a malformed `analyzers_failed`, is stage `output` (never a fallback
+ * to SARIF alone), and a failed analyzer other than the matched skill_loader fallback is stage
+ * `coverage`. The private temporary directory is always removed.
  */
 export async function scanCiscoSkillDirectoryOutcomeV1(
   request: CiscoSkillDirectoryScanRequestV1,
 ): Promise<CiscoSkillDirectoryScanOutcomeV1> {
   const tmp = mkdtempSync(join(tmpdir(), "aih-cisco-sarif-"));
   const output = join(tmp, "results.sarif");
+  const jsonOutput = join(tmp, "results.json");
   try {
     let scan: CiscoMultiSkillRunResultV1;
     try {
@@ -218,6 +236,7 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
           request.platform,
           request.skillDir,
           output,
+          jsonOutput,
           request.analyzerProject,
         ),
         {
@@ -258,6 +277,31 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
         stage: sarif.stage,
         detail: boundedCiscoDetailV1(sarif.detail),
       });
+    const skill = relative(request.root, request.skillDir).split(sep).join("/");
+    let reportBytes: Buffer;
+    try {
+      reportBytes = readFileSync(jsonOutput);
+    } catch {
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: "output" as const,
+        detail: "detector did not emit its Cisco JSON report",
+      });
+    }
+    try {
+      assertCiscoSingleSkillAnalyzersCompleteV1(
+        ciscoSingleSkillReportV1(reportBytes, `job ${skill === "" ? "." : skill}`),
+        (sarif.log.runs ?? []).flatMap((run) => (run.results ?? []).map((result) => result.ruleId)),
+        skill,
+      );
+    } catch (error) {
+      if (!(error instanceof CiscoAnalyzerFailureV1)) throw error;
+      return Object.freeze({
+        kind: "failed" as const,
+        stage: error.stage,
+        detail: boundedCiscoDetailV1(error.message),
+      });
+    }
     return Object.freeze({ kind: "completed" as const, log: sarif.log });
   } finally {
     rmSync(tmp, { recursive: true, force: true });

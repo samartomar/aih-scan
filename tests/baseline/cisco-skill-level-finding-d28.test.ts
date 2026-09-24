@@ -13,7 +13,8 @@ import { ciscoSourceRelativeSarifV1 } from "../../src/baseline/sarif-source-rela
 // fingerprints.primaryLocationLineHash), unique on both sides across the paired reports, and
 // the SARIF counterpart's own location resolves, through every location, index and D1 rule,
 // to that SKILL.md. Scan never generates the location. The pairing proves no analysis:
-// completion is decided exactly as before (the runner tests pin it).
+// completion is decided without it (U1i: D30 then judges analyzers_failed; the runner tests
+// pin both).
 
 // Real skill-scanner 2.1.0 output on win32 for the golden `malformed` case (U1g real-output
 // capture); the one machine path, the scanned snapshot, is @SKILL_PATH@.

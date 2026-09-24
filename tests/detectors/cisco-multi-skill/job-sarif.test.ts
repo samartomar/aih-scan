@@ -54,8 +54,21 @@ function sarif(runs: unknown[]) {
   return { version: "2.1.0", runs };
 }
 
-/** The version gate passes; each job writes `perJob(<job dir basename>)`. */
-function runner(perJob: (name: string) => unknown, delays?: Record<string, number>) {
+/** A single-skill `scan` JSON report with no failed analyzer (D30). */
+function scanReport(skillPath: string, extra: Record<string, unknown> = {}) {
+  return { skill_name: "fixture", skill_path: skillPath, findings: [], ...extra };
+}
+
+/**
+ * The version gate passes; each job writes `perJob(<job dir basename>)` as its SARIF and, when
+ * asked for one (D30), `report(<name>, <scanned dir>)` as its JSON report (none when
+ * `undefined`).
+ */
+function runner(
+  perJob: (name: string) => unknown,
+  delays?: Record<string, number>,
+  report: (name: string, target: string) => unknown = (_name, target) => scanReport(target),
+) {
   const run: CiscoMultiSkillRunnerV1 = async (argv) => {
     if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" };
     const target = (argv[argv.indexOf("scan") + 1] ?? "").replaceAll("\\", "/");
@@ -68,6 +81,13 @@ function runner(perJob: (name: string) => unknown, delays?: Record<string, numbe
       output,
       typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body),
     );
+    const jsonAt = argv.indexOf("--output-json");
+    const json = report(name, target);
+    if (jsonAt >= 0 && json !== undefined)
+      writeFileSync(
+        argv[jsonAt + 1] ?? "",
+        typeof json === "string" || Buffer.isBuffer(json) ? json : JSON.stringify(json),
+      );
     return { code: 0, stdout: "", stderr: "" };
   };
   return run;
@@ -674,5 +694,111 @@ describe.each(
       artifact("skills/alpha/bundle.zip"),
     ]);
     expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});
+
+// U1i, coordinator decision D30 (revised 20:58Z): every job asks Cisco for its single-skill
+// JSON report beside the SARIF and reads it strictly; a missing, unreadable or malformed report
+// fails the job at output, never falling back to SARIF alone. The job completes only when every
+// top-level `analyzers_failed` entry is the documented skill_loader fallback with its
+// SKILL_LOAD_FALLBACK_USED finding in the report and its SARIF counterpart in the job's skill;
+// anything else fails at coverage, naming each analyzer and error.
+describe.each(
+  BOTH,
+)("Cisco job analyzers_failed decides completion (%s, D30)", (_label, execute) => {
+  const FALLBACK = "SKILL_LOAD_FALLBACK_USED";
+  const fallbackSarif = () => sarif([cleanRun([{ ...result("SKILL.md"), ruleId: FALLBACK }])]);
+  const loader = { analyzers_failed: [{ analyzer: "skill_loader", error: "SkillLoadError:X" }] };
+  const fallbackFinding = {
+    findings: [{ id: FALLBACK, rule_id: FALLBACK, file_path: "SKILL.md", line_number: null }],
+  };
+  const outcomeOf = (alphaSarif: unknown, alphaReport: (target: string) => unknown) =>
+    execute(
+      runner(
+        (name) => (name === "alpha" ? alphaSarif : sarif([cleanRun()])),
+        undefined,
+        (name, target) => (name === "alpha" ? alphaReport(target) : scanReport(target)),
+      ),
+    );
+
+  it("asks Cisco for the JSON report and completes when it reports no failure", async () => {
+    const argvs: string[][] = [];
+    const base = runner(() => sarif([cleanRun()]));
+    const outcome = await execute(async (argv, options) => {
+      argvs.push([...argv]);
+      return base(argv, options);
+    });
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+    for (const argv of argvs.filter((entry) => entry.includes("scan")))
+      expect(argv.slice(argv.indexOf("scan") + 2)).toEqual([
+        "--format",
+        "sarif",
+        "--format",
+        "json",
+        "--output-sarif",
+        expect.stringMatching(/results\.sarif$/),
+        "--output-json",
+        expect.stringMatching(/results\.json$/),
+      ]);
+  });
+
+  it("completes the documented skill_loader fallback", async () => {
+    const outcome = await outcomeOf(fallbackSarif(), (target) =>
+      scanReport(target, { ...loader, ...fallbackFinding }),
+    );
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+
+  it("fails coverage for any other failed analyzer or an unmatched skill_loader failure", async () => {
+    for (const [alphaSarif, extra, reason] of [
+      [
+        fallbackSarif(),
+        { analyzers_failed: [{ analyzer: "behavioral", error: "Timeout" }], ...fallbackFinding },
+        /Cisco reported failed analyzers: behavioral \(Timeout\) in skills\/alpha$/,
+      ],
+      [
+        fallbackSarif(),
+        loader,
+        /skill_loader \(SkillLoadError:X\) in skills\/alpha: no SKILL_LOAD_FALLBACK_USED finding in that skill$/,
+      ],
+      [
+        sarif([cleanRun()]),
+        { ...loader, ...fallbackFinding },
+        /no SARIF counterpart in that skill$/,
+      ],
+      [
+        fallbackSarif(),
+        {
+          analyzers_failed: [...loader.analyzers_failed, { analyzer: "skill_loader", error: "Y" }],
+          ...fallbackFinding,
+        },
+        /more than one skill_loader failure/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(alphaSarif, (target) => scanReport(target, extra));
+      expect(outcome, JSON.stringify(extra)).toMatchObject({ kind: "failed", stage: "coverage" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  it("fails output for a missing, unreadable or malformed JSON report, or a malformed analyzers_failed", async () => {
+    for (const [report, reason] of [
+      [undefined, /JSON report/],
+      ["{", /Cisco JSON report/],
+      [Buffer.from([0xff]), /Cisco JSON report/],
+      [{ summary: {}, results: [] }, /not a single-skill scan report/],
+      [
+        { skill_path: "/x", findings: [], analyzers_failed: "skill_loader" },
+        /analyzers_failed .*is malformed/,
+      ],
+      [
+        { skill_path: "/x", findings: [], analyzers_failed: [{ analyzer: "a" }] },
+        /analyzers_failed .*is malformed/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(sarif([cleanRun()]), () => report);
+      expect(outcome, String(report)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
   });
 });

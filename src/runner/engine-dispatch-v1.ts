@@ -158,7 +158,7 @@ export type EngineOutcomeV1 =
   | Readonly<{ kind: "refused"; refusal: EngineRefusalV1 }>
   | Readonly<{
       kind: "failed";
-      stage: "availability" | "acquisition" | "execution" | "output";
+      stage: "availability" | "acquisition" | "execution" | "output" | "coverage";
       error: unknown;
     }>;
 

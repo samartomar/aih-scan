@@ -36,8 +36,15 @@ function skill(rel: string, body: string): void {
 
 describe("cisco multi-skill argv planning", () => {
   it("invokes Cisco skill-scanner from the committed uv lock without network-enabling options", () => {
-    // Ported from Core tests/trust/scan.test.ts:5187.
-    const argv = ciscoSkillScannerRunArgvV1("linux", "/scan-root", "/tmp/cisco.sarif");
+    // Ported from Core tests/trust/scan.test.ts:5187. U1i, coordinator decision D30: the job
+    // also asks for the single-skill JSON report, whose analyzers_failed decides completion;
+    // SARIF stays the primary format.
+    const argv = ciscoSkillScannerRunArgvV1(
+      "linux",
+      "/scan-root",
+      "/tmp/cisco.sarif",
+      "/tmp/cisco.json",
+    );
 
     expect(argv).toEqual([
       "uv",
@@ -56,8 +63,12 @@ describe("cisco multi-skill argv planning", () => {
       "/scan-root",
       "--format",
       "sarif",
+      "--format",
+      "json",
       "--output-sarif",
       "/tmp/cisco.sarif",
+      "--output-json",
+      "/tmp/cisco.json",
     ]);
     expect(argv).not.toEqual(expect.arrayContaining(["--use-llm"]));
     expect(argv).not.toEqual(expect.arrayContaining(["--use-virustotal"]));
@@ -84,8 +95,10 @@ describe("cisco multi-skill argv planning", () => {
 
   it("passes uv argv through unchanged on Windows because uv is no cmd shim", () => {
     // Core's execArgv wraps only WIN_CMD_SHIMS (claude/npm/npx/pnpm/scoop/yarn).
-    expect(ciscoSkillScannerRunArgvV1("windows", "C:/scan-root", "C:/tmp/cisco.sarif")).toEqual(
-      ciscoSkillScannerRunArgvV1("linux", "C:/scan-root", "C:/tmp/cisco.sarif"),
+    expect(
+      ciscoSkillScannerRunArgvV1("windows", "C:/scan-root", "C:/tmp/cisco.sarif", "C:/tmp/c.json"),
+    ).toEqual(
+      ciscoSkillScannerRunArgvV1("linux", "C:/scan-root", "C:/tmp/cisco.sarif", "C:/tmp/c.json"),
     );
   });
 });

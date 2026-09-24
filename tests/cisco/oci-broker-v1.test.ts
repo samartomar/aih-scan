@@ -20,6 +20,7 @@ import {
 import { executeCiscoOciBrokerV1 } from "../../src/cisco/oci-broker-v1.js";
 import { loadCiscoOciLayoutV1 } from "../../src/cisco/oci-layout-v1.js";
 import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../../src/cli/process-runner.js";
+import { failureStage } from "../../src/runner/run-detector-v1.js";
 
 const roots: string[] = [];
 const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
@@ -104,7 +105,7 @@ function sourceFixture(name = "aih-scan-oci-broker-source-") {
   return root;
 }
 
-function sarif(path = "SKILL.md"): string {
+function sarif(path = "SKILL.md", ruleId = "PROMPT_INJECTION_IGNORE_INSTRUCTIONS"): string {
   return JSON.stringify({
     $schema:
       "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -118,7 +119,7 @@ function sarif(path = "SKILL.md"): string {
             informationUri: "https://github.com/cisco-ai-defense/skill-scanner",
             rules: [
               {
-                id: "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
+                id: ruleId,
                 name: "Prompt Injection Ignore Instructions",
                 shortDescription: { text: "Prompt injection pattern." },
                 fullDescription: { text: "Pattern detected." },
@@ -131,7 +132,7 @@ function sarif(path = "SKILL.md"): string {
         invocations: [{ executionSuccessful: true, endTimeUtc: "2026-08-17T12:34:56Z" }],
         results: [
           {
-            ruleId: "PROMPT_INJECTION_IGNORE_INSTRUCTIONS",
+            ruleId,
             level: "error",
             message: { text: "Pattern detected." },
             properties: { category: "prompt-injection", severity: "high" },
@@ -151,6 +152,27 @@ function sarif(path = "SKILL.md"): string {
   });
 }
 
+const FALLBACK = "SKILL_LOAD_FALLBACK_USED";
+const LOADER = [{ analyzer: "skill_loader", error: "SkillLoadError:X" }];
+
+/** The fake analyzer's single-skill JSON report for `mode` (D30); none for "json-missing". */
+function scanReportFor(mode: string): string | undefined {
+  const report = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ skill_name: "candidate", skill_path: "/source", findings: [], ...extra });
+  const fallbackFinding = [
+    { id: FALLBACK, rule_id: FALLBACK, file_path: "SKILL.md", line_number: null },
+  ];
+  if (mode === "json-missing") return undefined;
+  if (mode === "json-malformed") return "{";
+  if (mode === "json-scan-all") return JSON.stringify({ summary: {}, results: [] });
+  if (mode === "json-behavioral")
+    return report({ analyzers_failed: [{ analyzer: "behavioral", error: "Timeout" }] });
+  if (mode === "json-fallback")
+    return report({ analyzers_failed: LOADER, findings: fallbackFinding });
+  if (mode === "json-loader-unmatched") return report({ analyzers_failed: LOADER });
+  return report();
+}
+
 function mountSource(argv: readonly string[], destination: "/source" | "/output"): string {
   const suffix = destination === "/source" ? ",dst=/source,readonly" : ",dst=/output";
   const mount = argv.find((item) => item.startsWith("type=bind,src=") && item.endsWith(suffix));
@@ -166,6 +188,12 @@ type RunnerMode =
   | "cleanup-absence-truncated"
   | "cleanup-client-error"
   | "image-mismatch"
+  | "json-behavioral"
+  | "json-fallback"
+  | "json-loader-unmatched"
+  | "json-malformed"
+  | "json-missing"
+  | "json-scan-all"
   | "image-nonzero"
   | "malformed"
   | "missing"
@@ -262,8 +290,13 @@ function runner(layout: ReturnType<typeof layoutFixture>, mode: RunnerMode = "su
         symlinkSync(join(output, "alternate.sarif"), join(output, "result.sarif"));
       } else if (mode === "output-fifo") {
         execFileSync("mkfifo", [join(output, "result.sarif")]);
-      } else if (mode !== "missing") writeFileSync(join(output, "result.sarif"), sarif());
+      } else if (mode === "json-fallback")
+        writeFileSync(join(output, "result.sarif"), sarif("SKILL.md", FALLBACK));
+      else if (mode !== "missing") writeFileSync(join(output, "result.sarif"), sarif());
       if (mode === "output-extra") writeFileSync(join(output, "stale.sarif"), sarif());
+      // D30: the single-skill JSON report `scan` writes beside the SARIF.
+      const report = scanReportFor(mode);
+      if (report !== undefined) writeFileSync(join(output, "result.json"), report);
       if (mode === "nonzero") return { code: 1, stdout: "", stderr: "failed" };
       if (mode === "timeout" || mode === "truncated")
         return { code: 0, stdout: "", stderr: "", truncated: true };
@@ -450,8 +483,12 @@ describe("Cisco OCI broker V1", () => {
       "/source",
       "--format",
       "sarif",
+      "--format",
+      "json",
       "--output-sarif",
       "/output/result.sarif",
+      "--output-json",
+      "/output/result.json",
     ]);
     expect(create?.argv?.filter((item) => item === "--mount")).toHaveLength(2);
     for (const forbidden of [
@@ -991,6 +1028,58 @@ describe("Cisco OCI broker V1", () => {
       if (outputMount !== undefined)
         expect(existsSync(mountSource([outputMount], "/output"))).toBe(false);
       expectClientRootsRemoved(fake.clientStates);
+    }
+  });
+
+  // U1i, coordinator decision D30 (revised 20:58Z): the capture asks Cisco for its single-skill
+  // JSON report beside the SARIF and reads it strictly (a missing, unreadable or malformed one
+  // fails at output); it completes only when every analyzers_failed entry is the documented
+  // skill_loader fallback with its SKILL_LOAD_FALLBACK_USED finding and SARIF counterpart,
+  // and otherwise fails at coverage, naming each analyzer and error.
+  it("fails output, and cleans, when the JSON report is missing or malformed (D30)", async () => {
+    for (const mode of ["json-missing", "json-malformed", "json-scan-all"] as const) {
+      const layout = layoutFixture();
+      const fake = runner(layout, mode);
+      const value = input(layout, sourceFixture(), { runner: fake.run }).value;
+      const error = await executeCiscoOciBrokerV1(value).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error, mode).toBeInstanceOf(TypeError);
+      const message = (error as Error).message;
+      expect(message, mode).toMatch(/Cisco JSON report/);
+      expect(failureStage(message), mode).toBe("output");
+      expectCleanup(fake.calls);
+    }
+  });
+
+  it("completes the skill_loader fallback and fails coverage for any other failed analyzer (D30)", async () => {
+    const layout = layoutFixture();
+    const fallback = runner(layout, "json-fallback");
+    await expect(
+      executeCiscoOciBrokerV1(input(layout, sourceFixture(), { runner: fallback.run }).value),
+    ).resolves.toMatchObject({ protocol: "CiscoOciBrokerV1" });
+    for (const [mode, reason] of [
+      [
+        "json-behavioral",
+        /Cisco reported failed analyzers: behavioral \(Timeout\) in the root skill$/,
+      ],
+      [
+        "json-loader-unmatched",
+        /skill_loader \(SkillLoadError:X\) in the root skill: no SKILL_LOAD_FALLBACK_USED finding in that skill$/,
+      ],
+    ] as const) {
+      const fake = runner(layoutFixture(), mode);
+      const error = await executeCiscoOciBrokerV1(
+        input(layoutFixture(), sourceFixture(), { runner: fake.run }).value,
+      ).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      const message = (error as Error | undefined)?.message ?? "";
+      expect(message, mode).toMatch(reason);
+      expect(failureStage(message), mode).toBe("coverage");
+      expectCleanup(fake.calls);
     }
   });
 
