@@ -9,6 +9,7 @@ import {
   listDetectorCapabilitiesV1,
   resolveDetectorCapabilityV1,
   resolveDetectorExecutionProfileDocumentV1,
+  snykAgentScanPlatformSupportV1,
 } from "../../src/capability/detector-capability-v1.js";
 
 /**
@@ -36,8 +37,9 @@ const EVERY_PLATFORM = [
   "windows/amd64",
   "windows/arm64",
 ];
-// snyk-agent-scan imports the POSIX-only pwd module: no Windows platform.
-const SNYK_HOST_PLATFORMS = ["darwin/arm64", "linux/amd64", "linux/arm64"];
+// snyk-agent-scan 0.6.4 guards its POSIX-only pwd imports and its lock installs build-free
+// on these hosts; macOS amd64 and Windows arm64 lack a cryptography 50.0.0 wheel.
+const SNYK_HOST_PLATFORMS = ["darwin/arm64", "linux/amd64", "linux/arm64", "windows/amd64"];
 
 describe("B2 detector registration", () => {
   it("registers every detector Core delegates, in canonical order", () => {
@@ -110,19 +112,29 @@ describe("B2 detector registration", () => {
     ]);
   });
 
-  it("excludes Windows only at snyk-agent-scan 0.5.17, whose scan path imports pwd", () => {
+  it("derives the snyk-agent-scan platform set from the pinned analyzer version", () => {
     const capability = resolveDetectorCapabilityV1("detector.snyk-agent-scan");
     const profile = capability?.executionProfiles[0];
-    // Tied to the pinned analyzer: moving the lock must re-verify Windows (U1 reports 0.6.4
-    // runs there) and then restore windows/amd64 or restate this exclusion.
     expect(capability?.analyzerVersion).toBe("0.6.4");
-    expect(profile?.supportedPlatforms.map((entry) => `${entry.os}/${entry.architecture}`)).toEqual(
-      ["darwin/arm64", "linux/amd64", "linux/arm64"],
+    // 0.6.4 guards its pwd imports (agents/base.py, and utils.py only under
+    // --scan-all-users on Linux or macOS); U1c ran help and a real scan on Windows.
+    expect(platforms(profile)).toEqual(SNYK_HOST_PLATFORMS);
+    const notes = resolveDetectorExecutionProfileDocumentV1("host-process-uv-v1")?.notes ?? [];
+    expect(notes.join(" ")).not.toMatch(/pwd/);
+    expect(notes).toContainEqual(
+      "detector.snyk-agent-scan 0.6.4 runs on Linux amd64 and arm64, macOS arm64 and Windows amd64; macOS amd64 and Windows arm64 lack an exact-pinned cryptography 50.0.0 wheel, which Scan never builds from source.",
     );
-    expect(resolveDetectorExecutionProfileDocumentV1("host-process-uv-v1")?.notes).toContainEqual(
-      expect.stringContaining(
-        "windows: unsupported at snyk-agent-scan 0.6.4 (imports POSIX-only pwd)",
-      ),
+    // The platform set belongs to the version: 0.5.17 imports pwd unconditionally on its
+    // scan path, and a version without recorded evidence has no platform set at all.
+    const legacy = snykAgentScanPlatformSupportV1("0.5.17");
+    expect(legacy.platforms.map((entry) => `${entry.os}/${entry.architecture}`)).toEqual([
+      "darwin/arm64",
+      "linux/amd64",
+      "linux/arm64",
+    ]);
+    expect(legacy.refusal).toMatch(/0\.5\.17 imports Python's POSIX-only pwd module/);
+    expect(() => snykAgentScanPlatformSupportV1("0.6.5")).toThrow(
+      /no recorded platform evidence for snyk-agent-scan 0\.6\.5/,
     );
   });
 

@@ -214,17 +214,56 @@ const HOST_UV_PLATFORMS: readonly DetectorPlatformV1[] = [
   { os: "linux", architecture: "arm64" },
   { os: "windows", architecture: "amd64" },
 ];
+/** Where one snyk-agent-scan version runs, and why the other hosts are refused. */
+export interface SnykAgentScanPlatformSupportV1 {
+  readonly platforms: readonly DetectorPlatformV1[];
+  /** The execution profile note stating the platform set. */
+  readonly note: string;
+  /** The reason an unsupported-platform refusal gives. */
+  readonly refusal: string;
+}
+
 /**
- * snyk-agent-scan 0.5.17 (the pinned lock) imports Python's POSIX-only `pwd` module on its
- * scan path, so it cannot run on Windows; macOS amd64 lacks a binary wheel for its
- * cryptography 50.0.0. The Windows exclusion belongs to that version: when the lock moves,
- * re-verify a real Windows scan and restore `{ os: "windows", architecture: "amd64" }`.
+ * The platform set belongs to the analyzer version, recorded from evidence per version:
+ * - 0.5.17 imports Python's POSIX-only `pwd` module on its scan path, so it cannot run on
+ *   Windows;
+ * - 0.6.4 guards both `pwd` imports (`agents/base.py` falls through on ImportError, and
+ *   `utils.py` imports it only for `--scan-all-users` on Linux or macOS). Its lock resolves
+ *   build-free on win_amd64 (U1 `uv sync --locked --no-build --dry-run` matrix), and U1c ran
+ *   `help` and a real scan to the analysis API on Windows amd64.
+ * Both locks lack a cryptography 50.0.0 wheel for macOS amd64 and Windows arm64. Moving the
+ * lock to a version without an entry here fails at load: re-derive its platforms first.
  */
-const SNYK_PLATFORMS: readonly DetectorPlatformV1[] = [
-  { os: "darwin", architecture: "arm64" },
-  { os: "linux", architecture: "amd64" },
-  { os: "linux", architecture: "arm64" },
-];
+const SNYK_PLATFORM_SUPPORT_V1: Readonly<Record<string, SnykAgentScanPlatformSupportV1>> = {
+  "0.5.17": {
+    platforms: [
+      { os: "darwin", architecture: "arm64" },
+      { os: "linux", architecture: "amd64" },
+      { os: "linux", architecture: "arm64" },
+    ],
+    note: "detector.snyk-agent-scan 0.5.17 runs on Linux amd64 and arm64 and macOS arm64 only: it imports POSIX-only pwd on its scan path, and macOS amd64 lacks an exact-pinned cryptography 50.0.0 wheel.",
+    refusal:
+      "snyk-agent-scan 0.5.17 imports Python's POSIX-only pwd module, so it cannot run on Windows, and macOS amd64 lacks an exact-pinned cryptography 50.0.0 wheel, which Scan never builds from source.",
+  },
+  "0.6.4": {
+    platforms: HOST_UV_PLATFORMS,
+    note: "detector.snyk-agent-scan 0.6.4 runs on Linux amd64 and arm64, macOS arm64 and Windows amd64; macOS amd64 and Windows arm64 lack an exact-pinned cryptography 50.0.0 wheel, which Scan never builds from source.",
+    refusal:
+      "snyk-agent-scan 0.6.4 needs an exact-pinned cryptography 50.0.0 wheel, which macOS amd64 and Windows arm64 lack, and Scan never builds analyzer dependencies from source.",
+  },
+};
+
+/** The recorded platform support of one snyk-agent-scan version; unknown versions throw. */
+export function snykAgentScanPlatformSupportV1(version: string): SnykAgentScanPlatformSupportV1 {
+  const support = Object.hasOwn(SNYK_PLATFORM_SUPPORT_V1, version)
+    ? SNYK_PLATFORM_SUPPORT_V1[version]
+    : undefined;
+  if (support === undefined)
+    throw new Error(`no recorded platform evidence for snyk-agent-scan ${version}`);
+  return support;
+}
+
+const SNYK_SUPPORT = snykAgentScanPlatformSupportV1(SNYK_AGENT_SCAN_VERSION);
 /** litellm 1.93.0, in the cisco-mcp-scanner lock, publishes manylinux wheels only. */
 const MCP_SCANNER_PLATFORMS: readonly DetectorPlatformV1[] = [
   { os: "linux", architecture: "amd64" },
@@ -407,7 +446,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "The observation records the resolved uv path and version, the discovered interpreter path and version, the uv cache key and the containment used.",
       `The run's private temporary directory must be at most ${HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1} characters, because Semgrep's core fails once it passes 79; a longer host temporary directory fails the run at availability.`,
       "Semgrep, Cisco and snyk-agent-scan publish exact-pinned binary wheels for Linux (glibc 2.34 or later) amd64 and arm64, macOS arm64 (macOS 14 or later for Cisco) and Windows amd64. macOS amd64 (cryptography 50.0.0) and Windows arm64 (Semgrep, and cryptography 50.0.0 for snyk-agent-scan) have none, and Scan never builds analyzer dependencies from source, so those hosts are not supported.",
-      `detector.snyk-agent-scan, windows: unsupported at snyk-agent-scan ${SNYK_AGENT_SCAN_VERSION} (imports POSIX-only pwd), because its scan path needs it; it runs on Linux amd64 and arm64 and macOS arm64 only.`,
+      SNYK_SUPPORT.note,
       "detector.cisco-mcp-scanner runs on Linux amd64 and arm64 only: its lock pins litellm 1.93.0, which publishes manylinux wheels alone, so macOS and Windows would need a source build Scan never performs.",
       "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest. Each profile's analyzerLock names the lock it installs.",
       "A detector.cisco source-tree subject runs one skill-scanner scan job per directory holding a selected SKILL.md, over that directory of the private snapshot, at most detectorOptions.concurrency (1 through 64, default 4) at a time; the jobs' SARIF is merged in job order.",
@@ -783,7 +822,7 @@ const MCP_SCANNER_HOST_GATES: ProfileGates = {
   ],
 };
 const SNYK_HOST_GATES: ProfileGates = {
-  supportedPlatforms: SNYK_PLATFORMS,
+  supportedPlatforms: SNYK_SUPPORT.platforms,
   prerequisites: [
     HOST_UV_PREREQUISITE,
     HOST_PYTHON_PREREQUISITE,
