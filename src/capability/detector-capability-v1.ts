@@ -1,9 +1,13 @@
 import {
   BASELINE_ENVIRONMENT_ALLOW_LIST_V1,
-  BASELINE_HOST_FIXED_ENVIRONMENT_V1,
   BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
-  BASELINE_PYTHON_EXECUTABLE_V1,
   CISCO_SKILL_SCANNER_VERSION_V1,
+  HOST_DOCKER_CONTEXT_VARIABLES_V1,
+  HOST_DOCKER_ENVIRONMENT_V1,
+  HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1,
+  HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1,
+  HOST_PROCESS_UV_ENVIRONMENT_V1,
+  HOST_PROCESS_UV_PYTHON_REQUEST_V1,
   SEMGREP_VERSION_V1,
   SKILLSPECTOR_IMAGE_V1,
   SKILLSPECTOR_SOURCE_REVISION_V1,
@@ -29,14 +33,14 @@ import {
  * Honesty rules enforced by construction:
  *
  * - `supportedPlatforms` restates the platform gates the execution code already
- *   applies. Scan's hardened detector profiles are Linux `amd64` only; only the
- *   in-process `aih-native` analyzer runs anywhere else, and it is not isolated
- *   because it spawns nothing.
+ *   applies. Scan's hardened detector profiles are Linux `amd64` only. The host profiles
+ *   (`host-process-uv-v1`, `docker-host-skillspector-v1`) run on Linux, macOS and
+ *   Windows where their exact-pinned inputs exist, and the in-process `aih-native`
+ *   analyzer runs anywhere; none of those is isolated beyond what it declares.
  * - Every execution profile carries its own `supportedPlatforms` and `prerequisites`,
  *   and the runner gates on the selected profile's; a capability's own fields restate
- *   its default profile's. `host-process-uv-v1` is never a default: it runs only when
- *   named, reports `isolation: "none"` and `network: "unenforced"`, and stays Linux-only
- *   until Windows process-tree containment and a hosted macOS proof exist.
+ *   its default profile's. A host profile is never a default: it runs only when named,
+ *   and `host-process-uv-v1` reports `isolation: "none"` and `network: "unenforced"`.
  * - `executionProfile.sha256` is the digest of the readable profile document this
  *   module publishes, so "which profile ran" is answerable from the package rather
  *   than from an opaque number. It is deliberately NOT the author-supplied
@@ -71,13 +75,20 @@ export type DetectorPlatformV1 = Readonly<{
 }>;
 
 export interface DetectorPrerequisiteV1 {
+  /**
+   * `executable` is an absolute path; `host-executable` is a name resolved from the
+   * declared PATH, then fixed well-known directories; `uv-python` is a Python version
+   * request uv must satisfy without downloading, which cannot be settled before a spawn.
+   */
   readonly kind:
     | "executable"
+    | "host-executable"
+    | "uv-python"
     | "container-image"
     | "environment-variable"
     | "network"
     | "bundled-asset";
-  /** `/usr/bin/bwrap`, an immutable OCI reference, an environment variable name, a host. */
+  /** `/usr/bin/bwrap`, `uv`, `3.12`, an immutable OCI reference, a variable name, a host. */
   readonly id: string;
   /** `true` when the run cannot proceed without it. */
   readonly required: boolean;
@@ -124,8 +135,10 @@ export interface DetectorExecutionProfileDocumentV1 {
   /** Mount declarations the profile always applies, with run-specific paths elided. */
   readonly mounts: readonly string[];
   /**
-   * `allow-list-scrub`: the caller environment reduced to `allowed`. `fixed-values`: the
-   * spawn's whole environment is exactly `values`; a `<…>` value is a run-private path.
+   * `allow-list-scrub`: the caller environment reduced to `allowed`. `fixed-values-by-os`:
+   * the spawn's whole environment is exactly `values[os]`, where a `<…>` value is a
+   * run-private path or the host's own `%SystemRoot%`; only the listed resolution spawns
+   * (Python discovery, the Docker context lookup) also read `callerVariables[os]`.
    */
   readonly environment:
     | Readonly<{
@@ -133,8 +146,9 @@ export interface DetectorExecutionProfileDocumentV1 {
         allowed: readonly string[];
       }>
     | Readonly<{
-        policy: "fixed-values";
-        values: Readonly<Record<string, string>>;
+        policy: "fixed-values-by-os";
+        values: Readonly<Record<"linux" | "darwin" | "windows", Readonly<Record<string, string>>>>;
+        callerVariables: Readonly<Record<"linux" | "darwin" | "windows", readonly string[]>>;
       }>;
   /** Statements that are true of this profile and that a reader should not have to infer. */
   readonly notes: readonly string[];
@@ -154,6 +168,12 @@ export interface DetectorCapabilityV1 {
   readonly executionProfiles: readonly DetectorExecutionProfileV1[];
   readonly subjectKinds: readonly DetectorSubjectKindV1[];
   readonly subjectRequirements: readonly string[];
+  /**
+   * An empty source root (no entries, empty selection): `completes` runs the analyzer over
+   * an empty snapshot and reports what it reports; `refused` refuses
+   * `subject-requirement-unmet` before anything runs.
+   */
+  readonly emptySource: "completes" | "refused";
   readonly supportedPlatforms: readonly DetectorPlatformV1[];
   readonly prerequisites: readonly DetectorPrerequisiteV1[];
   readonly outputs: readonly ("sarif-2.1.0" | "aih-baseline-native-v1" | "vendor-json")[];
@@ -168,6 +188,26 @@ export interface DetectorCapabilityV1 {
 }
 
 const LINUX_AMD64: readonly DetectorPlatformV1[] = [{ os: "linux", architecture: "amd64" }];
+/**
+ * Where the exact-pinned, build-free uv installs exist: every Semgrep and Cisco dependency
+ * publishes a binary wheel for these hosts. macOS amd64 has none for cryptography 50.0.0
+ * (and Cisco's onnxruntime 1.27.0), and Windows arm64 none for Semgrep itself.
+ */
+const HOST_UV_PLATFORMS: readonly DetectorPlatformV1[] = [
+  { os: "darwin", architecture: "arm64" },
+  { os: "linux", architecture: "amd64" },
+  { os: "linux", architecture: "arm64" },
+  { os: "windows", architecture: "amd64" },
+];
+/** Hosts whose Docker engine runs the linux/amd64 SkillSpector image, natively or emulated. */
+const HOST_DOCKER_PLATFORMS: readonly DetectorPlatformV1[] = [
+  { os: "darwin", architecture: "amd64" },
+  { os: "darwin", architecture: "arm64" },
+  { os: "linux", architecture: "amd64" },
+  { os: "windows", architecture: "amd64" },
+];
+const SARIF_NORMALIZATION_NOTE =
+  "Every SARIF artifact URI is rewritten relative to the declared source root, with forward slashes, before the annex digest is taken; a URI outside that root fails the run.";
 const EVERY_PLATFORM: readonly DetectorPlatformV1[] = [
   { os: "darwin", architecture: "amd64" },
   { os: "darwin", architecture: "arm64" },
@@ -242,6 +282,7 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "Only the uv acquisition stage adds --share-net; the scan stage runs with no network at all.",
       "The analyzer is resolved from the bundled uv.lock, so the run is exact-pinned rather than latest.",
       "bubblewrap and uv are absolute Linux paths, so this profile cannot run on Windows or macOS.",
+      `${SARIF_NORMALIZATION_NOTE} The /aih/source mount prefix is removed, and Cisco's per-skill URIs are mapped through its JSON report.`,
     ],
   },
   {
@@ -250,9 +291,16 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     isolation: "none",
     network: "unenforced",
     backend: "host-process-uv",
-    executables: [BASELINE_UV_EXECUTABLE_V1],
+    executables: [
+      "uv: the first uv (uv.exe on Windows) on the declared PATH, else in a well-known directory (~/.local/bin, ~/.cargo/bin, Homebrew, /usr/local/bin, /usr/bin); spawned and recorded by real path, with its version",
+      "Windows supervisor: %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe, never resolved through PATH",
+    ],
     image: null,
-    containment: [],
+    containment: [
+      "linux, darwin: every spawn leads its own process group; a timeout, an abort, an output cap or descendants outliving the leader send SIGTERM and then SIGKILL to the whole group",
+      "windows: every spawn is created suspended inside a Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and no breakaway; a timeout or an abort closes the job, and descendants outliving the leader are terminated with it",
+      "every OS: after the run, every process whose command line or image names the run's private directories is killed and the run fails closed",
+    ],
     acquisition: [
       "sync",
       "--locked",
@@ -269,22 +317,21 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
     ],
     mounts: [],
     environment: {
-      policy: "fixed-values",
-      values: {
-        ...BASELINE_HOST_FIXED_ENVIRONMENT_V1,
-        HOME: "<run home directory>",
-        TMPDIR: "<run temporary directory>",
-        UV_CACHE_DIR: "<run cache directory>",
-        UV_PROJECT_ENVIRONMENT: "<run venv directory>",
-      },
+      policy: "fixed-values-by-os",
+      values: HOST_PROCESS_UV_ENVIRONMENT_V1,
+      callerVariables: HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1,
     },
     notes: [
-      "Used only when a caller names it; Scan never falls back to it when bubblewrap is missing.",
-      "Isolation is 'none': uv and Semgrep run as host processes with the invoking user's filesystem access.",
-      "Network is not enforced at any stage; the scan stage passes --offline to uv and --metrics=off to Semgrep, but nothing blocks a connection.",
-      "Each spawn leads its own process group; Scan signals the group on timeout or when descendants outlive the leader, polls for it for a bounded time, and fails the spawn as truncated with a nonzero code if it is still present. Cleanup of every descendant is not guaranteed.",
-      "Every spawn receives only run-private HOME, TMPDIR and uv paths plus fixed PATH, LANG and Python values; no caller variable reaches it.",
-      "Windows is refused because Scan has no proven fail-closed process-tree containment there; macOS is refused pending a hosted proof.",
+      "Used only when a caller names it; Scan never falls back to it, or from it, when a prerequisite is missing.",
+      "Isolation is 'none': uv and the analyzer run as host processes with the invoking user's filesystem access.",
+      "Network is not enforced at any stage. Acquisition (uv sync) may download the locked wheels into a persistent, Scan-owned uv cache under the user's cache directory, addressed by the lock's sha256, so a warm cache is not downloaded again; the scan stage passes --offline to uv, and Semgrep gets --metrics=off and SEMGREP_ENABLE_VERSION_CHECK=0, but nothing blocks a connection.",
+      `uv discovers a CPython ${HOST_PROCESS_UV_PYTHON_REQUEST_V1} (uv python find ${HOST_PROCESS_UV_PYTHON_REQUEST_V1} --no-python-downloads --no-project --no-config --resolve-links), and only that discovery reads the caller variables listed in callerVariables; every analyzer spawn gets only the fixed per-OS values.`,
+      "The observation records the resolved uv path and version, the discovered interpreter path and version, the uv cache key and the containment used.",
+      `The run's private temporary directory must be at most ${HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1} characters, because Semgrep's core fails once it passes 79; a longer host temporary directory fails the run at availability.`,
+      "Semgrep and Cisco publish exact-pinned binary wheels for Linux (glibc 2.34 or later) amd64 and arm64, macOS arm64 (macOS 14 or later for Cisco) and Windows amd64. macOS amd64 (cryptography 50.0.0) and Windows arm64 (Semgrep) have none, and Scan never builds analyzer dependencies from source, so those hosts are not supported.",
+      "Cisco installs the cisco-skill-scanner-host lock (litellm 1.92.2, no win-unicode-console), not the namespace profile's cisco-skill-scanner lock, so its analyzerVersion names a different uvlock digest.",
+      `${SARIF_NORMALIZATION_NOTE} The private snapshot root is removed, and Cisco's per-skill URIs are mapped through its JSON report.`,
+      "An empty source root completes for detector.semgrep: Semgrep runs over an empty snapshot and reports its own empty SARIF.",
     ],
   },
   {
@@ -324,6 +371,58 @@ const PROFILE_DOCUMENTS: readonly DetectorExecutionProfileDocumentV1[] = [
       "The image is pinned by digest and the inspected image ID must equal that digest before any scan.",
       "Each run gets a private DOCKER_CONFIG directory that is removed afterwards.",
       "Acquisition pulls only the digest-addressed reference; no tag is ever resolved.",
+      "When the scan's Docker client is ended on a timeout, an abort or a failure, the container is removed by name with docker rm --force --volumes.",
+      `${SARIF_NORMALIZATION_NOTE} The /scan mount prefix is removed.`,
+    ],
+  },
+  {
+    protocol: "DetectorExecutionProfileDocumentV1",
+    id: "docker-host-skillspector-v1",
+    isolation: "container",
+    network: "none",
+    backend: "oci-container",
+    executables: [
+      "docker: the first docker (docker.exe on Windows) on the declared PATH, else in a well-known Docker Desktop directory; spawned and recorded by real path",
+      "Windows supervisor: %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe, never resolved through PATH",
+    ],
+    image: SKILLSPECTOR_IMAGE_V1,
+    containment: [
+      "--rm",
+      "--network",
+      "none",
+      "--cpus",
+      "2",
+      "--memory",
+      "4g",
+      "--memory-swap",
+      "4g",
+      "--pids-limit",
+      "256",
+      "--cap-drop",
+      "ALL",
+      "--cap-add",
+      "DAC_OVERRIDE",
+      "--security-opt",
+      "no-new-privileges",
+      "--read-only",
+      "--tmpfs",
+      "/tmp:rw,noexec,nosuid,size=64m",
+    ],
+    acquisition: ["pull", SKILLSPECTOR_IMAGE_V1],
+    mounts: ["type=bind,src=<sealed analyzer snapshot>,dst=/scan,readonly"],
+    environment: {
+      policy: "fixed-values-by-os",
+      values: HOST_DOCKER_ENVIRONMENT_V1,
+      callerVariables: HOST_DOCKER_CONTEXT_VARIABLES_V1,
+    },
+    notes: [
+      "Used only when a caller names it; the Linux default stays docker-hardened-skillspector-v1.",
+      "The host's current Docker context is read once (docker context inspect) with only the caller variables listed in callerVariables; every later Docker call uses that context's local npipe:// or unix:// endpoint as DOCKER_HOST and a private, empty DOCKER_CONFIG, so no credential helper or plugin reaches the run. A context carrying TLS material is refused.",
+      "The Docker client runs under the same process-tree containment as host-process-uv-v1: a POSIX process group, or a Windows Job Object.",
+      "The image is pinned by digest and the inspected image ID must equal that digest, or a caller-accepted digest, before any scan.",
+      "When the scan's Docker client is ended on a timeout, an abort or a failure, the container is removed by name with docker rm --force --volumes, because ending the client does not stop the container.",
+      "The image is linux/amd64; arm64 hosts depend on the Docker engine's amd64 emulation.",
+      `${SARIF_NORMALIZATION_NOTE} The /scan mount prefix is removed.`,
     ],
   },
   {
@@ -434,11 +533,25 @@ const UV_PREREQUISITE: DetectorPrerequisiteV1 = {
   required: true,
   detail: `Install uv at ${BASELINE_UV_EXECUTABLE_V1}; the analyzer environment is resolved from the bundled uv.lock.`,
 };
-const PYTHON_PREREQUISITE: DetectorPrerequisiteV1 = {
-  kind: "executable",
-  id: BASELINE_PYTHON_EXECUTABLE_V1,
+const HOST_UV_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "host-executable",
+  id: "uv",
   required: true,
-  detail: `Install Python 3.13 at ${BASELINE_PYTHON_EXECUTABLE_V1}; uv runs with --no-python-downloads, so it never fetches an interpreter.`,
+  detail:
+    "Install uv so that it is on PATH or in a well-known directory (~/.local/bin, ~/.cargo/bin, Homebrew, /usr/local/bin); the analyzer environment is resolved from the bundled uv.lock.",
+};
+const HOST_PYTHON_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "uv-python",
+  id: HOST_PROCESS_UV_PYTHON_REQUEST_V1,
+  required: true,
+  detail: `Provide a CPython ${HOST_PROCESS_UV_PYTHON_REQUEST_V1} that uv can discover (on PATH, uv-managed, or registered with Windows); uv runs with --no-python-downloads, so it never fetches one, and whether one exists is known only once uv looks.`,
+};
+const HOST_DOCKER_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "host-executable",
+  id: "docker",
+  required: true,
+  detail:
+    "Install Docker so that docker is on PATH or in a well-known Docker Desktop directory; this profile runs the SkillSpector container through the host's current Docker context.",
 };
 const DOCKER_PREREQUISITE: DetectorPrerequisiteV1 = {
   kind: "executable",
@@ -459,6 +572,13 @@ const CISCO_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
   required: true,
   detail:
     "The exact-pinned analyzer lock ships with this package; a missing lock means the install is incomplete.",
+};
+const CISCO_HOST_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
+  kind: "bundled-asset",
+  id: "tools/baseline-analyzers/cisco-skill-scanner-host/uv.lock",
+  required: true,
+  detail:
+    "The exact-pinned host analyzer lock ships with this package; a missing lock means the install is incomplete.",
 };
 const SEMGREP_LOCK_PREREQUISITE: DetectorPrerequisiteV1 = {
   kind: "bundled-asset",
@@ -506,16 +626,38 @@ const SEMGREP_GATES: ProfileGates = {
   ],
 };
 /**
- * The host profile needs no bubblewrap. Windows stays excluded until Scan has fail-closed
- * process-tree containment there, and macOS until a hosted proof exists.
+ * The host profile needs no bubblewrap: uv is resolved on the host, Python is discovered by
+ * uv, and the process tree is contained by a process group or a Windows Job Object.
  */
 const SEMGREP_HOST_GATES: ProfileGates = {
-  supportedPlatforms: LINUX_AMD64,
+  supportedPlatforms: HOST_UV_PLATFORMS,
   prerequisites: [
-    UV_PREREQUISITE,
-    PYTHON_PREREQUISITE,
+    HOST_UV_PREREQUISITE,
+    HOST_PYTHON_PREREQUISITE,
     SEMGREP_LOCK_PREREQUISITE,
     ACQUISITION_NETWORK_PREREQUISITE,
+  ],
+};
+const CISCO_HOST_GATES: ProfileGates = {
+  supportedPlatforms: HOST_UV_PLATFORMS,
+  prerequisites: [
+    HOST_UV_PREREQUISITE,
+    HOST_PYTHON_PREREQUISITE,
+    CISCO_HOST_LOCK_PREREQUISITE,
+    ACQUISITION_NETWORK_PREREQUISITE,
+  ],
+};
+const SKILLSPECTOR_HOST_GATES: ProfileGates = {
+  supportedPlatforms: HOST_DOCKER_PLATFORMS,
+  prerequisites: [
+    HOST_DOCKER_PREREQUISITE,
+    {
+      kind: "container-image",
+      id: SKILLSPECTOR_IMAGE_V1,
+      required: true,
+      detail:
+        "Scan pulls this exact digest-addressed image when it is absent; whether it is present cannot be determined without Docker.",
+    },
   ],
 };
 const SKILLSPECTOR_GATES: ProfileGates = {
@@ -535,6 +677,7 @@ const SKILLSPECTOR_GATES: ProfileGates = {
 const OBSERVATION = "BaselineAnalyzerObservationV1" as const;
 const NATIVE_PROFILE = profile("in-process-native-v1", OBSERVATION, NATIVE_GATES);
 const CISCO_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, CISCO_GATES);
+const CISCO_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, CISCO_HOST_GATES);
 const CISCO_OCI_PROFILE = profile("oci-hardened-cisco-v1", "ScanCandidateV2", CISCO_OCI_GATES);
 const SEMGREP_NAMESPACE_PROFILE = profile("linux-namespace-uv-v1", OBSERVATION, SEMGREP_GATES);
 const SEMGREP_HOST_PROFILE = profile("host-process-uv-v1", OBSERVATION, SEMGREP_HOST_GATES);
@@ -542,6 +685,11 @@ const SKILLSPECTOR_PROFILE = profile(
   "docker-hardened-skillspector-v1",
   OBSERVATION,
   SKILLSPECTOR_GATES,
+);
+const SKILLSPECTOR_HOST_PROFILE = profile(
+  "docker-host-skillspector-v1",
+  OBSERVATION,
+  SKILLSPECTOR_HOST_GATES,
 );
 
 const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
@@ -557,7 +705,9 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       subjectRequirements: [
         "The declared source root must hold at least one file.",
         "Every declared selected closure path must exist as a regular file under that root.",
+        "A top-level .git directory is not given to the analyzer, so its files are reported as uncovered.",
       ],
+      emptySource: "refused",
       outputs: ["aih-baseline-native-v1"],
       contracts: {
         capabilityVersion: 1,
@@ -573,14 +723,16 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       analyzerVersion: CISCO_SKILL_SCANNER_VERSION_V1,
       backend: "linux-namespace-uv",
       executionProfile: CISCO_NAMESPACE_PROFILE,
-      executionProfiles: [CISCO_NAMESPACE_PROFILE, CISCO_OCI_PROFILE],
+      executionProfiles: [CISCO_NAMESPACE_PROFILE, CISCO_HOST_PROFILE, CISCO_OCI_PROFILE],
       subjectKinds: ["skill-directory"],
       subjectRequirements: [
         "The declared source root must hold a top-level SKILL.md, and that SKILL.md must be one of the declared selected closure paths.",
         "Scan never creates, renames, copies or discovers a SKILL.md to satisfy this requirement.",
         "The scan must cover every SKILL.md the sealed snapshot holds and may skip none.",
         "The oci-hardened-cisco-v1 profile additionally needs a caller-supplied immutable OCI layout, runtime registration, broker identity and annex payloads.",
+        "A top-level .git directory is not given to the analyzer, so its files are reported as uncovered.",
       ],
+      emptySource: "refused",
       outputs: ["sarif-2.1.0"],
       contracts: {
         capabilityVersion: 1,
@@ -599,9 +751,11 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       executionProfiles: [SEMGREP_NAMESPACE_PROFILE, SEMGREP_HOST_PROFILE],
       subjectKinds: ["source-tree"],
       subjectRequirements: [
-        "The declared source root must hold at least one file.",
-        "Every declared selected closure path must exist as a regular file under that root.",
+        "Every declared selected closure path must exist as a regular file under the declared source root.",
+        "A source root with no entries at all is accepted only with an empty selection; Semgrep then runs over an empty snapshot and reports its own empty SARIF.",
+        "The analyzer is given the whole tree, a top-level .git and dependency or build directories included, as Core's own run is.",
       ],
+      emptySource: "completes",
       outputs: ["sarif-2.1.0"],
       contracts: {
         capabilityVersion: 1,
@@ -619,12 +773,14 @@ const CAPABILITIES: readonly DetectorCapabilityV1[] = Object.freeze(
       )}`,
       backend: "oci-container",
       executionProfile: SKILLSPECTOR_PROFILE,
-      executionProfiles: [SKILLSPECTOR_PROFILE],
+      executionProfiles: [SKILLSPECTOR_PROFILE, SKILLSPECTOR_HOST_PROFILE],
       subjectKinds: ["source-tree"],
       subjectRequirements: [
         "The declared source root must hold at least one file.",
         "The source root path must be representable as a Docker bind mount, so it may hold no comma or control character.",
+        "The analyzer is given the whole tree, a top-level .git and dependency or build directories included, as Core's own run is.",
       ],
+      emptySource: "refused",
       outputs: ["sarif-2.1.0"],
       contracts: {
         capabilityVersion: 1,

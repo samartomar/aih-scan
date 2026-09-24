@@ -116,14 +116,14 @@ describe("runDetectorV1 refusals", () => {
       "execution-profile-unavailable",
       () => ({
         detectorId: "detector.cisco",
-        executionProfileId: "host-process-uv-v1",
+        executionProfileId: "docker-hardened-skillspector-v1",
         subject: {
           kind: "skill-directory" as const,
           sourceRoot: skillFixture(),
           selectedClosurePaths: ["SKILL.md"],
         },
       }),
-      /has no execution profile host-process-uv-v1/,
+      /has no execution profile docker-hardened-skillspector-v1/,
     ],
     [
       "subject-requirement-unmet",
@@ -360,15 +360,15 @@ describe("runDetectorV1 in-process execution", () => {
 
     expect(first.coverage).toEqual({
       kind: "source-tree",
-      sha256: first.sourceSeal.before.sourceTreeSha256,
+      sha256: first.sourceSeal?.before.sourceTreeSha256,
       complete: true,
       coveredPaths: ["README.md", "rules/base.md"],
       excludedPaths: [],
       uncoveredPaths: [],
     });
-    expect(first.sourceSeal.before.selectedClosurePaths).toEqual(["README.md", "rules/base.md"]);
-    expect(first.sourceSeal.after.sealedSnapshotSha256).toBe(
-      first.sourceSeal.before.sealedSnapshotSha256,
+    expect(first.sourceSeal?.before.selectedClosurePaths).toEqual(["README.md", "rules/base.md"]);
+    expect(first.sourceSeal?.after.sealedSnapshotSha256).toBe(
+      first.sourceSeal?.before.sealedSnapshotSha256,
     );
     expect(first.findings.source).toBe("analyzer-output-digest-bound");
     expect(first.findings.findings).toEqual([]);
@@ -376,6 +376,23 @@ describe("runDetectorV1 in-process execution", () => {
     expect(first.findings.gaps.map((entry) => entry.detail).join(" ")).toContain(
       "not a claim that nothing was found",
     );
+  });
+
+  it("reports a top-level .git it did not analyze as uncovered, never as covered", async () => {
+    const sourceRoot = sourceFixture();
+    mkdirSync(join(sourceRoot, ".git"), { recursive: true });
+    writeFileSync(join(sourceRoot, ".git", "config"), "[core]\n", "utf8");
+
+    const result = await runDetectorV1({
+      detectorId: "detector.aih-native",
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: ["README.md"] },
+    });
+
+    expect(result.outcome).toBe("succeeded");
+    if (result.outcome !== "succeeded") return;
+    expect(result.coverage.coveredPaths).toEqual(["README.md", "rules/base.md"]);
+    expect(result.coverage.uncoveredPaths).toEqual([".git/config"]);
+    expect(result.coverage.complete).toBe(false);
   });
 
   it("preserves the caller's exact selection whatever order it is declared in", async () => {
@@ -400,8 +417,8 @@ describe("runDetectorV1 in-process execution", () => {
     if (ordered.outcome !== "succeeded" || reversed.outcome !== "succeeded")
       throw new Error("both runs must succeed");
     expect(reversed.coverage).toEqual(ordered.coverage);
-    expect(reversed.sourceSeal.before.selectedClosureSha256).toBe(
-      ordered.sourceSeal.before.selectedClosureSha256,
+    expect(reversed.sourceSeal?.before.selectedClosureSha256).toBe(
+      ordered.sourceSeal?.before.selectedClosureSha256,
     );
   });
 

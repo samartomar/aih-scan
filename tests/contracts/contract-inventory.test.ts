@@ -153,40 +153,82 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 110,
+    line: 121,
     contains: "export interface DetectorExecutionProfileDocumentV1",
   },
   {
     path: "src/capability/detector-capability-v1.ts",
-    line: 143,
+    line: 157,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 69, contains: "RunDetectorRefusalReasonV1" },
-  { path: "src/runner/run-detector-v1.ts", line: 85, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 99, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 611,
+    line: 121,
+    contains: "export type RunDetectorFailureCauseV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 123, contains: "export interface ScanCoverageV1" },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 743,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 177,
+    line: 234,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 153,
+    line: 210,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 121,
+    line: 159,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
+    path: "src/runner/run-detector-v1.ts",
+    line: 161,
+    contains: "readonly hostRuntime?: HostProcessRuntimeV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 188, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 193, contains: "readonly timeoutMs?: number" },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 283,
+    contains: "sourceSeal: Readonly<{ before: SourceSealV2; after: SourceSealV2 }> | null",
+  },
+  {
     path: "src/baseline/runtime-v1.ts",
-    line: 434,
+    line: 703,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 210,
+    contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 130,
+    contains: "export function sourceRelativeSarifV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 210,
+    contains: "export function ciscoSourceRelativeSarifV1",
+  },
+  {
+    path: "src/cli/windows-job-supervisor.ts",
+    line: 441,
+    contains: "export function runUnderWindowsJobV1",
+  },
+  {
+    path: "src/cli/residual-processes.ts",
+    line: 178,
+    contains: "export async function sweepResidualProcessesV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },
   {
@@ -196,7 +238,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/findings/scan-findings-v1.ts",
-    line: 368,
+    line: 404,
+    contains: "export function projectAnalyzerSarifFindingsV1",
+  },
+  {
+    path: "src/findings/scan-findings-v1.ts",
+    line: 534,
     contains: "export function readScanFindingsV1",
   },
 ];

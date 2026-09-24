@@ -8,13 +8,16 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   type Stats,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type HostExecutableV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
 import {
   BASELINE_BWRAP_EXECUTABLE_V1,
   BASELINE_DOCKER_EXECUTABLE_V1,
@@ -22,6 +25,8 @@ import {
   type ProcessRunnerResult,
   processRunner,
 } from "../cli/process-runner.js";
+import { type LiveProcessV1, sweepResidualProcessesV1 } from "../cli/residual-processes.js";
+import { windowsSystemRootV1 } from "../cli/windows-job-supervisor.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
@@ -29,6 +34,7 @@ import {
 } from "../contract/strict-json-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
+import { ciscoSourceRelativeSarifV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
 
 export const SKILLSPECTOR_IMAGE_V1 =
   "ghcr.io/samartomar/skillspector@sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
@@ -37,29 +43,36 @@ export const SKILLSPECTOR_IMAGE_DIGEST_V1 =
   "sha256:c5d4a1816419f129ae85ff96b3e366d4a062c1859997e26b7ab87341a43d4800";
 export const CISCO_SKILL_SCANNER_VERSION_V1 = "2.0.14";
 export const SEMGREP_VERSION_V1 = "1.173.0";
+/** The interpreter the Linux namespace profile binds; the host profile discovers its own. */
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
+/** The Python version request `host-process-uv-v1` hands to `uv python find`. */
+export const HOST_PROCESS_UV_PYTHON_REQUEST_V1 = "3.12";
 /**
- * The fixed part of every `host-process-uv-v1` spawn's environment. Each spawn also gets
- * run-private HOME, TMPDIR, UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT, and nothing else.
+ * The longest private temporary directory a host run accepts. Semgrep's analyzer core fails
+ * with ERROR_INSUFFICIENT_BUFFER (Windows) once its temporary directory passes 79
+ * characters, an AF_UNIX socket path bound that POSIX shares; 64 leaves a margin.
  */
-export const BASELINE_HOST_FIXED_ENVIRONMENT_V1: Readonly<Record<string, string>> = Object.freeze({
-  PATH: "/usr/local/bin:/usr/bin:/bin",
-  LANG: "C.UTF-8",
-  UV_NO_ENV_FILE: "1",
-  PYTHONSAFEPATH: "1",
-  PYTHONPATH: baselinePythonPathV1,
-});
+export const HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1 = 64;
 
 const maxOutputBytes = 16 * 1024 * 1024;
 const maxStderrBytes = 64 * 1024;
+const maxProjectBytes = 64 * 1024;
 const maxFailureDetailCharacters = 400;
 const startupTimeoutMs = 120_000;
 const scanTimeoutMs = 900_000;
+const containerRemovalTimeoutMs = 30_000;
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(moduleDirectory, "..", "..");
 const analyzerRoot = join(packageRoot, "tools", "baseline-analyzers");
 const ciscoProject = join(analyzerRoot, "cisco-skill-scanner");
+/**
+ * The Cisco closure the host profile installs. `litellm` 1.92.0 publishes manylinux wheels
+ * only and `win-unicode-console` publishes only an sdist, so the build-free host install
+ * pins `litellm` 1.92.2 (same dependencies, wheels for every host) and leaves the console
+ * helper out. The namespace and OCI profiles keep `cisco-skill-scanner`, unchanged.
+ */
+const ciscoHostProject = join(analyzerRoot, "cisco-skill-scanner-host");
 const semgrepProject = join(analyzerRoot, "semgrep");
 const semgrepRules = [
   "rules:",
@@ -89,6 +102,53 @@ export type BaselineProcessRunnerV1 = (
     readonly signal?: AbortSignal;
   },
 ) => Promise<ProcessRunnerResult>;
+
+/** The execution profiles this runtime implements, by the ID their documents publish. */
+export type BaselineExecutionProfileIdV1 =
+  | "in-process-native-v1"
+  | "linux-namespace-uv-v1"
+  | "host-process-uv-v1"
+  | "docker-hardened-skillspector-v1"
+  | "docker-host-skillspector-v1";
+
+/**
+ * Why an analyzer run failed, when the reason is not the analyzer's own error:
+ *
+ * - `cancelled`: the caller's signal fired; the process tree was ended;
+ * - `timed-out`: a stage, or the caller's whole-run budget, ran out; the tree was ended;
+ * - `residual-processes`: processes outlived the analyzer and were killed;
+ * - `containment-failure`: Scan could not prove the process tree was gone.
+ */
+export type AnalyzerFailureCauseV1 =
+  | "cancelled"
+  | "timed-out"
+  | "residual-processes"
+  | "containment-failure";
+
+export class AnalyzerRunFailureV1 extends TypeError {
+  readonly failureCause: AnalyzerFailureCauseV1;
+  constructor(failureCause: AnalyzerFailureCauseV1, message: string) {
+    super(`aih-scan baseline analyzer: ${message}`);
+    this.name = "AnalyzerRunFailureV1";
+    this.failureCause = failureCause;
+  }
+}
+
+/** What a `host-process-uv-v1` run resolved on this host, recorded with its observation. */
+export type HostProcessRuntimeV1 = Readonly<{
+  uv: Readonly<{ path: string; version: string; foundIn: HostExecutableV1["foundIn"] }>;
+  python: Readonly<{ request: string; path: string; version: string }>;
+  /** The content address of the Scan-owned uv cache the run used: its lock's digest. */
+  uvCache: Readonly<{ key: string }>;
+  containment: "posix-process-group" | "windows-job-object";
+}>;
+
+/** What a `docker-host-skillspector-v1` run resolved on this host. */
+export type HostDockerRuntimeV1 = Readonly<{
+  docker: Readonly<{ path: string; foundIn: HostExecutableV1["foundIn"] }>;
+  context: Readonly<{ name: string; endpoint: string }>;
+  containment: "posix-process-group" | "windows-job-object";
+}>;
 
 /**
  * The exact analyzer identity the in-process `aih-native` observation records.
@@ -129,8 +189,123 @@ export const BASELINE_ENVIRONMENT_ALLOW_LIST_V1: readonly string[] = Object.free
   [...safeEnvironmentKeys].sort(),
 );
 
+type HostOsV1 = "linux" | "darwin" | "windows";
+
+const HOST_COMMON_ENVIRONMENT: Readonly<Record<string, string>> = Object.freeze({
+  UV_CACHE_DIR: "<Scan uv cache directory for this lock>",
+  UV_PROJECT_ENVIRONMENT: "<run venv directory>",
+  UV_NO_ENV_FILE: "1",
+  UV_PYTHON_DOWNLOADS: "never",
+  PYTHONSAFEPATH: "1",
+  PYTHONUTF8: "1",
+  SEMGREP_ENABLE_VERSION_CHECK: "0",
+  SEMGREP_SEND_METRICS: "off",
+});
+
+/**
+ * The whole environment of every `host-process-uv-v1` analyzer spawn, per OS. A `<…>` value
+ * is a run-private path, or the host's own `%SystemRoot%`, substituted at run time; nothing
+ * else reaches the spawn. The profile document publishes this very object.
+ */
+export const HOST_PROCESS_UV_ENVIRONMENT_V1: Readonly<
+  Record<HostOsV1, Readonly<Record<string, string>>>
+> = Object.freeze({
+  linux: Object.freeze({
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    HOME: "<run home directory>",
+    TMPDIR: "<run temporary directory>",
+    ...HOST_COMMON_ENVIRONMENT,
+  }),
+  darwin: Object.freeze({
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    LANG: "en_US.UTF-8",
+    HOME: "<run home directory>",
+    TMPDIR: "<run temporary directory>",
+    ...HOST_COMMON_ENVIRONMENT,
+  }),
+  windows: Object.freeze({
+    SystemRoot: "<host SystemRoot>",
+    windir: "<host SystemRoot>",
+    PATH: "<host SystemRoot>\\System32;<host SystemRoot>",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    TEMP: "<run temporary directory>",
+    TMP: "<run temporary directory>",
+    USERPROFILE: "<run home directory>",
+    APPDATA: "<run roaming data directory>",
+    LOCALAPPDATA: "<run local data directory>",
+    ...HOST_COMMON_ENVIRONMENT,
+  }),
+});
+
+/**
+ * The only caller variables the Python discovery spawns (`uv python find`) receive, on top
+ * of the fixed environment, so uv sees the host's own interpreters and uv-managed Pythons.
+ * No analyzer spawn ever receives a caller variable.
+ */
+export const HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1: Readonly<Record<HostOsV1, readonly string[]>> =
+  Object.freeze({
+    linux: Object.freeze(["PATH", "HOME", "XDG_DATA_HOME", "UV_PYTHON_INSTALL_DIR"]),
+    darwin: Object.freeze(["PATH", "HOME", "XDG_DATA_HOME", "UV_PYTHON_INSTALL_DIR"]),
+    windows: Object.freeze([
+      "PATH",
+      "USERPROFILE",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "UV_PYTHON_INSTALL_DIR",
+    ]),
+  });
+
+/**
+ * The whole environment of every `docker-host-skillspector-v1` Docker client call after the
+ * current context is read, per OS. `<run Docker client directory>` is private, empty and
+ * removed after the run; `<current context endpoint>` is the context's local endpoint.
+ */
+export const HOST_DOCKER_ENVIRONMENT_V1: Readonly<
+  Record<HostOsV1, Readonly<Record<string, string>>>
+> = Object.freeze({
+  linux: Object.freeze({
+    PATH: "/usr/bin:/bin",
+    HOME: "<run Docker client directory>",
+    TMPDIR: "<run Docker client directory>",
+    DOCKER_CONFIG: "<run Docker client directory>",
+    DOCKER_HOST: "<current context endpoint>",
+  }),
+  darwin: Object.freeze({
+    PATH: "/usr/bin:/bin",
+    HOME: "<run Docker client directory>",
+    TMPDIR: "<run Docker client directory>",
+    DOCKER_CONFIG: "<run Docker client directory>",
+    DOCKER_HOST: "<current context endpoint>",
+  }),
+  windows: Object.freeze({
+    SystemRoot: "<host SystemRoot>",
+    windir: "<host SystemRoot>",
+    PATH: "<host SystemRoot>\\System32;<host SystemRoot>",
+    TEMP: "<run Docker client directory>",
+    TMP: "<run Docker client directory>",
+    USERPROFILE: "<run Docker client directory>",
+    DOCKER_CONFIG: "<run Docker client directory>",
+    DOCKER_HOST: "<current context endpoint>",
+  }),
+});
+
+/** The only caller variables the context lookup (`docker context inspect`) receives. */
+export const HOST_DOCKER_CONTEXT_VARIABLES_V1: Readonly<Record<HostOsV1, readonly string[]>> =
+  Object.freeze({
+    linux: Object.freeze(["HOME", "DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_HOST"]),
+    darwin: Object.freeze(["HOME", "DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_HOST"]),
+    windows: Object.freeze(["USERPROFILE", "DOCKER_CONFIG", "DOCKER_CONTEXT", "DOCKER_HOST"]),
+  });
+
 function fail(reason: string): never {
   throw new TypeError(`aih-scan baseline analyzer: ${reason}`);
+}
+
+/** The hardened profiles run absolute Linux executables, so any other host is refused. */
+function requireLinuxHost(profile: string): void {
+  if (process.platform !== "linux")
+    fail(`${profile} needs a Linux analyzer host; this host is ${process.platform}`);
 }
 
 function sameIdentity(left: Stats, right: Stats): boolean {
@@ -184,6 +359,21 @@ function scrubEnvironment(env: Readonly<NodeJS.ProcessEnv>): Record<string, stri
   return result;
 }
 
+/** A caller variable by name; Windows names match case-insensitively, as Windows does. */
+function callerVariable(
+  env: Readonly<NodeJS.ProcessEnv>,
+  name: string,
+  windows: boolean,
+): string | undefined {
+  const direct = env[name];
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  if (!windows) return undefined;
+  const folded = name.toUpperCase();
+  for (const [key, value] of Object.entries(env))
+    if (key.toUpperCase() === folded && typeof value === "string" && value.length > 0) return value;
+  return undefined;
+}
+
 function encodeDiagnosticLine(value: string): string {
   const jsonEscaped = JSON.stringify(value).slice(1, -1);
   return Array.from(jsonEscaped, (character) => {
@@ -221,6 +411,30 @@ function requireCleanResult(
   label: string,
   allowedCodes: readonly number[] = [0],
 ): ProcessRunnerResult {
+  const containment =
+    result.containmentDetail === undefined
+      ? ""
+      : `: ${boundedDiagnosticDetailV1(result.containmentDetail)}`;
+  if (result.termination === "abort")
+    throw new AnalyzerRunFailureV1(
+      "cancelled",
+      `${label} was cancelled; its whole process tree was ended`,
+    );
+  if (result.termination === "timeout")
+    throw new AnalyzerRunFailureV1(
+      "timed-out",
+      `${label} ran out of time; its whole process tree was ended`,
+    );
+  if (result.termination === "residual-descendants")
+    throw new AnalyzerRunFailureV1(
+      "residual-processes",
+      `${label} left processes running after it exited; they were killed${containment}`,
+    );
+  if (result.termination === "containment-failure")
+    throw new AnalyzerRunFailureV1(
+      "containment-failure",
+      `${label} could not be proven to have ended its process tree${containment}`,
+    );
   if (result.truncated || !allowedCodes.includes(result.code)) resultFailure(result, label);
   return result;
 }
@@ -236,9 +450,25 @@ function lockIdentity(version: string, project: string): string {
   return `${version}+uvlock.${createHash("sha256").update(bytes).digest("hex").slice(0, 12)}`;
 }
 
-function uvSyncArgv(project: string): string[] {
+/** The caller's cancellation signal and whole-run deadline, applied to every spawn. */
+type RunControl = Readonly<{ signal?: AbortSignal; deadline?: number }>;
+
+function spawnTimeout(control: RunControl, stageMs: number, label: string): number {
+  if (control.signal?.aborted)
+    throw new AnalyzerRunFailureV1("cancelled", `${label} was not started: the run was cancelled`);
+  if (control.deadline === undefined) return stageMs;
+  const remaining = control.deadline - Date.now();
+  if (remaining <= 0)
+    throw new AnalyzerRunFailureV1(
+      "timed-out",
+      `${label} was not started: the run's time budget is spent`,
+    );
+  return Math.min(stageMs, remaining);
+}
+
+function uvSyncArgv(uv: string, project: string, python: string): string[] {
   return [
-    BASELINE_UV_EXECUTABLE_V1,
+    uv,
     "sync",
     "--project",
     project,
@@ -249,7 +479,7 @@ function uvSyncArgv(project: string): string[] {
     "--link-mode",
     "copy",
     "--python",
-    BASELINE_PYTHON_EXECUTABLE_V1,
+    python,
     "--default-index",
     "https://pypi.org/simple",
     "--index-strategy",
@@ -265,7 +495,12 @@ function uvSyncArgv(project: string): string[] {
   ];
 }
 
-function runnerOptions(env: Readonly<Record<string, string>>, timeoutMs: number, cwd?: string) {
+function runnerOptions(
+  env: Readonly<Record<string, string>>,
+  timeoutMs: number,
+  control: RunControl,
+  cwd?: string,
+) {
   return {
     ...(cwd === undefined ? {} : { cwd }),
     env,
@@ -273,7 +508,49 @@ function runnerOptions(env: Readonly<Record<string, string>>, timeoutMs: number,
     maxStdoutBytes: maxOutputBytes,
     maxStderrBytes,
     containProcessTree: true as const,
+    ...(control.signal === undefined ? {} : { signal: control.signal }),
   };
+}
+
+type AnalyzerOutput = {
+  readonly mediaType: "application/sarif+json" | "application/vnd.aih.baseline-native+json";
+  readonly bytes: Uint8Array;
+  readonly analyzerVersion: string;
+  readonly image?: SkillspectorImageMatchV1;
+  readonly hostRuntime?: HostProcessRuntimeV1;
+  readonly hostDocker?: HostDockerRuntimeV1;
+};
+
+function parsedSarif(text: string, analyzer: string): Record<string, unknown> {
+  try {
+    return parseStrictJsonObjectV1(text, `${analyzer} observation`);
+  } catch (error) {
+    fail(
+      `baseline ${analyzer} observation is invalid: ${error instanceof Error ? error.message : "JSON"}`,
+    );
+  }
+}
+
+function sarifOutput(
+  document: Record<string, unknown>,
+  analyzerVersion: string,
+): Pick<AnalyzerOutput, "mediaType" | "bytes" | "analyzerVersion"> {
+  return {
+    mediaType: "application/sarif+json" as const,
+    bytes: canonicalStrictJsonBytesV1(document),
+    analyzerVersion,
+  };
+}
+
+/** The spellings of a host snapshot root an analyzer may print: as given, and resolved. */
+function hostRoots(sourceRoot: string): string[] {
+  const roots = new Set([resolve(sourceRoot)]);
+  try {
+    roots.add(realpathSync.native(sourceRoot));
+  } catch {
+    // The snapshot exists for the whole run; a failed resolution only drops one spelling.
+  }
+  return [...roots];
 }
 
 function bubblewrapContainedRunner(
@@ -388,21 +665,6 @@ function bubblewrapContainedRunner(
   };
 }
 
-function analyzerSandbox(
-  runner: BaselineProcessRunnerV1,
-  input: {
-    readonly project: string;
-    readonly sourceRoot?: string;
-    readonly workDirectory: string;
-    readonly cacheDirectory: string;
-    readonly venvDirectory: string;
-    readonly network: boolean;
-    readonly workingDirectory: "/aih/project" | "/aih/source";
-  },
-): BaselineProcessRunnerV1 {
-  return bubblewrapContainedRunner(runner, input);
-}
-
 async function syncUvEnvironment(
   runner: BaselineProcessRunnerV1,
   input: {
@@ -412,14 +674,19 @@ async function syncUvEnvironment(
     readonly venvDirectory: string;
   },
   env: Readonly<Record<string, string>>,
+  control: RunControl,
 ): Promise<void> {
+  const label = "analyzer environment acquisition";
   requireCleanResult(
-    await analyzerSandbox(runner, {
+    await bubblewrapContainedRunner(runner, {
       ...input,
       network: true,
       workingDirectory: "/aih/project",
-    })(uvSyncArgv("/aih/project"), runnerOptions(env, scanTimeoutMs)),
-    "analyzer environment acquisition",
+    })(
+      uvSyncArgv(BASELINE_UV_EXECUTABLE_V1, "/aih/project", BASELINE_PYTHON_EXECUTABLE_V1),
+      runnerOptions(env, spawnTimeout(control, scanTimeoutMs, label), control),
+    ),
+    label,
   );
 }
 
@@ -509,34 +776,121 @@ function verifiedAcceptedSkillspectorImage(stdout: string, digest: string): stri
   return id;
 }
 
+/** How one SkillSpector profile reaches Docker. */
+type DockerClient = Readonly<{
+  /** The argv prefix: the Docker executable and any global flags. */
+  prefix: readonly string[];
+  env: Readonly<Record<string, string>>;
+  hostDocker?: HostDockerRuntimeV1;
+}>;
+
+/**
+ * `docker-host-skillspector-v1`: Docker from the declared PATH (or a well-known Docker
+ * Desktop directory), talking to the endpoint of the host's current Docker context. The
+ * context is read once with the caller's own Docker client configuration; every later call
+ * runs with a private, empty DOCKER_CONFIG and that endpoint as DOCKER_HOST, so no caller
+ * credential helper or plugin reaches the run.
+ */
+async function hostDockerClient(
+  runner: BaselineProcessRunnerV1,
+  callerEnv: Readonly<NodeJS.ProcessEnv>,
+  dockerConfig: string,
+  control: RunControl,
+): Promise<DockerClient> {
+  const os = hostOs();
+  const windows = os === "windows";
+  const docker =
+    resolveHostExecutableV1("docker", callerEnv) ??
+    fail("Docker availability: docker is on neither the declared PATH nor a well-known directory");
+  const fixed = (endpoint: string) =>
+    substitute(HOST_DOCKER_ENVIRONMENT_V1[os], {
+      "<host SystemRoot>": windows ? windowsSystemRootV1() : "",
+      "<run Docker client directory>": dockerConfig,
+      "<current context endpoint>": endpoint,
+    });
+  // The lookup sees the caller's own client variables, and no private DOCKER_CONFIG/HOST.
+  const { DOCKER_CONFIG: _config, DOCKER_HOST: _host, ...lookupBase } = fixed("unused");
+  const contextEnvironment: Record<string, string> = { ...lookupBase };
+  for (const name of HOST_DOCKER_CONTEXT_VARIABLES_V1[os]) {
+    const value = callerVariable(callerEnv, name, windows);
+    if (value !== undefined) contextEnvironment[name] = value;
+  }
+  const label = "Docker availability: current context";
+  const inspected = requireCleanResult(
+    await runner(
+      [docker.path, "context", "inspect", "--format", "{{json .}}"],
+      runnerOptions(
+        contextEnvironment,
+        spawnTimeout(control, startupTimeoutMs, label),
+        control,
+        dockerConfig,
+      ),
+    ),
+    label,
+  );
+  let context: Record<string, unknown>;
+  try {
+    context = parseStrictJsonObjectV1(inspected.stdout.trim(), "Docker context");
+  } catch {
+    fail("Docker availability: the current context could not be read");
+  }
+  const endpoints = context.Endpoints as Record<string, unknown> | undefined;
+  const endpoint = (endpoints?.docker as Record<string, unknown> | undefined)?.Host;
+  const name = context.Name;
+  const tls = context.TLSMaterial as Record<string, unknown> | undefined;
+  if (
+    typeof name !== "string" ||
+    typeof endpoint !== "string" ||
+    !/^(npipe|unix):\/\//u.test(endpoint)
+  )
+    fail("Docker availability: the current context names no local npipe:// or unix:// endpoint");
+  if (tls !== undefined && tls !== null && Object.keys(tls).length > 0)
+    fail(
+      `Docker availability: context ${name} uses TLS material, which docker-host-skillspector-v1 does not carry into its private client configuration`,
+    );
+  return Object.freeze({
+    prefix: Object.freeze([docker.path]),
+    env: Object.freeze(fixed(endpoint)),
+    hostDocker: Object.freeze({
+      docker: Object.freeze({ path: docker.path, foundIn: docker.foundIn }),
+      context: Object.freeze({ name, endpoint }),
+      containment: windows ? ("windows-job-object" as const) : ("posix-process-group" as const),
+    }),
+  });
+}
+
 async function skillspector(
   sourceRoot: string,
   runner: BaselineProcessRunnerV1,
   env: Readonly<Record<string, string>>,
+  callerEnv: Readonly<NodeJS.ProcessEnv>,
   acceptedImageDigests: readonly string[] | undefined,
-) {
+  control: RunControl,
+  host: boolean,
+): Promise<AnalyzerOutput> {
+  if (!host) requireLinuxHost("docker-hardened-skillspector-v1");
   const dockerConfig = mkdtempSync(join(tmpdir(), "aih-scan-docker-config-"));
-  const dockerEnvironment = { ...env, DOCKER_CONFIG: dockerConfig };
-  const inspect = (reference: string) =>
-    runner(
-      [
-        BASELINE_DOCKER_EXECUTABLE_V1,
-        "--context",
-        "default",
-        "image",
-        "inspect",
-        reference,
-        "--format",
-        "{{json .}}",
-      ],
-      runnerOptions(dockerEnvironment, startupTimeoutMs),
-    );
   try {
+    const client: DockerClient = host
+      ? await hostDockerClient(runner, callerEnv, dockerConfig, control)
+      : Object.freeze({
+          prefix: Object.freeze([BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default"]),
+          env: Object.freeze({ ...env, DOCKER_CONFIG: dockerConfig }),
+        });
+    // The private client directory is every Docker call's working directory.
+    const docker = (argv: readonly string[], stageMs: number, label: string) =>
+      runner(
+        [...client.prefix, ...argv],
+        runnerOptions(client.env, spawnTimeout(control, stageMs, label), control, dockerConfig),
+      );
+    const inspect = (reference: string) =>
+      docker(
+        ["image", "inspect", reference, "--format", "{{json .}}"],
+        startupTimeoutMs,
+        "SkillSpector image inspection",
+      );
     requireCleanResult(
-      await runner(
-        [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "version"],
-        runnerOptions(dockerEnvironment, startupTimeoutMs),
-      ),
+      await docker(["version"], startupTimeoutMs, "Docker availability"),
       "Docker availability",
     );
     // (a) Scan's pinned image present: run it. (b) Absent: attempt Scan's own pinned pull,
@@ -545,13 +899,12 @@ async function skillspector(
     // local images alone; the first present runs by image ID and nothing more is pulled.
     // (d) None present: the run fails at availability.
     let inspected = await inspect(SKILLSPECTOR_IMAGE_V1);
+    if (inspected.termination !== undefined)
+      requireCleanResult(inspected, "SkillSpector image inspection");
     let accepted: SkillspectorImageMatchV1 | undefined;
     if (inspected.truncated || inspected.code !== 0) {
       const pull = () =>
-        runner(
-          [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
-          runnerOptions(dockerEnvironment, scanTimeoutMs),
-        );
+        docker(["pull", SKILLSPECTOR_IMAGE_V1], scanTimeoutMs, "SkillSpector image acquisition");
       if (acceptedImageDigests === undefined) {
         requireCleanResult(await pull(), "SkillSpector image acquisition");
         inspected = requireCleanResult(
@@ -562,11 +915,14 @@ async function skillspector(
         let pinnedPullFailure: string | undefined;
         try {
           const pulled = await pull();
+          if (pulled.termination === "abort" || pulled.termination === "timeout")
+            requireCleanResult(pulled, "SkillSpector image acquisition");
           if (pulled.truncated || pulled.code !== 0)
             pinnedPullFailure =
               boundedDiagnosticDetailV1(pulled.stderr || pulled.stdout) ||
               `exit ${pulled.code}${pulled.truncated ? " with truncated output" : ""}`;
         } catch (error) {
+          if (error instanceof AnalyzerRunFailureV1) throw error;
           pinnedPullFailure =
             boundedDiagnosticDetailV1(error instanceof Error ? error.message : "") ||
             "the pull could not be run";
@@ -616,9 +972,6 @@ async function skillspector(
       fail("SkillSpector source path cannot be represented as a Docker bind mount");
     const containerName = `aih-scan-baseline-${randomUUID()}`;
     const argv = [
-      BASELINE_DOCKER_EXECUTABLE_V1,
-      "--context",
-      "default",
       "run",
       "--rm",
       "--name",
@@ -651,126 +1004,440 @@ async function skillspector(
       "--format",
       "sarif",
     ];
-    const result = await runner(argv, runnerOptions(dockerEnvironment, scanTimeoutMs));
+    const result = await docker(argv, scanTimeoutMs, "SkillSpector scan");
     if (result.truncated || (result.code !== 0 && result.code !== 1)) {
+      // Ending the docker client does not stop the container, so it is removed by name,
+      // without the caller's signal, even when the run was cancelled or timed out.
       await runner(
-        [
-          BASELINE_DOCKER_EXECUTABLE_V1,
-          "--context",
-          "default",
-          "rm",
-          "--force",
-          "--volumes",
-          containerName,
-        ],
-        runnerOptions(dockerEnvironment, 30_000),
+        [...client.prefix, "rm", "--force", "--volumes", containerName],
+        runnerOptions(client.env, containerRemovalTimeoutMs, {}, dockerConfig),
       ).catch(() => undefined);
-      resultFailure(result, "SkillSpector scan");
+      requireCleanResult(result, "SkillSpector scan", [0, 1]);
     }
     if (!result.stdout.trim()) fail("SkillSpector scan emitted no SARIF");
+    const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "skillspector"), ["/scan"]);
     return {
-      mediaType: "application/sarif+json" as const,
-      bytes: Buffer.from(result.stdout, "utf8"),
-      analyzerVersion: `${SKILLSPECTOR_SOURCE_REVISION_V1}@${match.digest}`,
+      ...sarifOutput(normalized.document, `${SKILLSPECTOR_SOURCE_REVISION_V1}@${match.digest}`),
       image: match,
+      ...(client.hostDocker === undefined ? {} : { hostDocker: client.hostDocker }),
     };
   } finally {
     rmSync(dockerConfig, { recursive: true, force: true });
   }
 }
 
+type HostDirectories = Readonly<{
+  root: string;
+  temporary: string;
+  home: string;
+  roamingData: string;
+  localData: string;
+  work: string;
+  venv: string;
+  project: string;
+}>;
+
 /**
- * `host-process-uv-v1`: uv and Semgrep run as ordinary host processes, each leading a
- * process group that Scan kills on timeout. Nothing is isolated and the network is not
- * enforced. Only Linux has the process-group containment this relies on, so any other
- * host fails closed here as well as at the runner's platform gate.
+ * The persistent, Scan-owned uv cache for one analyzer lock, addressed by that lock's
+ * digest, under the declared user's cache directory. Acquisition may fill it from the
+ * network; a warm cache lets the offline scan stage run without downloading again.
  */
-async function hostProcessSemgrep(
-  runner: BaselineProcessRunnerV1,
+function scanUvCacheDirectory(
+  callerEnv: Readonly<NodeJS.ProcessEnv>,
+  lockSha256: string,
+): { readonly directory: string; readonly key: string } {
+  const windows = process.platform === "win32";
+  const absolute = (value: string | undefined) =>
+    value !== undefined && (windows ? win32.isAbsolute(value) : value.startsWith("/"))
+      ? value
+      : undefined;
+  const base = windows
+    ? (absolute(callerVariable(callerEnv, "LOCALAPPDATA", true)) ??
+      (() => {
+        const profile = absolute(callerVariable(callerEnv, "USERPROFILE", true));
+        return profile === undefined ? undefined : win32.join(profile, "AppData", "Local");
+      })())
+    : process.platform === "darwin"
+      ? (() => {
+          const home = absolute(callerVariable(callerEnv, "HOME", false));
+          return home === undefined ? undefined : join(home, "Library", "Caches");
+        })()
+      : (absolute(callerVariable(callerEnv, "XDG_CACHE_HOME", false)) ??
+        (() => {
+          const home = absolute(callerVariable(callerEnv, "HOME", false));
+          return home === undefined ? undefined : join(home, ".cache");
+        })());
+  if (base === undefined)
+    fail(
+      `host runtime availability: no per-user cache directory can be derived from the declared environment (${
+        windows ? "LOCALAPPDATA or USERPROFILE" : "XDG_CACHE_HOME or HOME"
+      })`,
+    );
+  const key = `uv-cache-v1/${lockSha256.slice(0, 32)}`;
+  const directory = join(base, "aih-scan", ...key.split("/"));
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    fail(`host runtime availability: the Scan uv cache ${directory} is not a plain directory`);
+  if (!windows && typeof process.getuid === "function" && stat.uid !== process.getuid())
+    fail(`host runtime availability: the Scan uv cache ${directory} belongs to another user`);
+  return { directory, key };
+}
+
+function substitute(
+  template: Readonly<Record<string, string>>,
+  values: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(template)) {
+    let resolved = value;
+    for (const [placeholder, replacement] of Object.entries(values))
+      resolved = resolved.replaceAll(placeholder, replacement);
+    if (/<[^>]+>/u.test(resolved)) fail(`host environment ${name} has an unresolved placeholder`);
+    environment[name] = resolved;
+  }
+  return environment;
+}
+
+function hostOs(): HostOsV1 {
+  if (process.platform === "linux") return "linux";
+  if (process.platform === "darwin") return "darwin";
+  if (process.platform === "win32") return "windows";
+  return fail(`host runtime availability: ${process.platform} has no host-process containment`);
+}
+
+/** Marker-safe names of the run's private directories, for the residual process sweep. */
+function sweepMarkers(runRoot: string, sourceRoot: string): string[] {
+  const markers = [basename(runRoot)];
+  const snapshot = basename(sourceRoot);
+  if (/^aih-scan-baseline-source-[A-Za-z0-9]{6}$/u.test(snapshot)) markers.push(snapshot);
+  return markers;
+}
+
+type ResidualSweep = (markers: readonly string[]) => Promise<
+  Readonly<{
+    found: readonly LiveProcessV1[];
+    surviving: readonly LiveProcessV1[];
+  }>
+>;
+
+/**
+ * `host-process-uv-v1`: uv and the analyzer run as ordinary host processes. uv is resolved
+ * from the declared PATH (then well-known directories) and discovers a Python 3.12 without
+ * downloading one; every analyzer spawn gets only the fixed per-OS environment and leads a
+ * contained process tree (a POSIX process group, a Windows Job Object). Acquisition fills
+ * a persistent, lock-addressed uv cache and may use the network; the scan stage runs
+ * `--offline`. Nothing is isolated and the network is not enforced.
+ */
+async function hostProcessUv(
+  analyzer: "semgrep" | "cisco",
   input: {
-    readonly temporary: string;
     readonly sourceRoot: string;
-    readonly config: string;
-    readonly workDirectory: string;
-    readonly cacheDirectory: string;
-    readonly venvDirectory: string;
+    readonly runner: BaselineProcessRunnerV1;
+    readonly callerEnv: Readonly<NodeJS.ProcessEnv>;
+    readonly control: RunControl;
+    readonly sweep?: ResidualSweep;
   },
-) {
-  if (process.platform !== "linux")
-    fail("host-process-uv-v1 needs a Linux host; process-tree containment is unproven elsewhere");
-  const homeDirectory = join(input.temporary, "home");
-  const temporaryDirectory = join(input.temporary, "tmp");
-  mkdirSync(homeDirectory, { mode: 0o700 });
-  mkdirSync(temporaryDirectory, { mode: 0o700 });
-  // Every spawn sees only these run-private values, as the namespace profile's --clearenv does.
-  const env: Readonly<Record<string, string>> = {
-    ...BASELINE_HOST_FIXED_ENVIRONMENT_V1,
-    HOME: homeDirectory,
-    TMPDIR: temporaryDirectory,
-    UV_CACHE_DIR: input.cacheDirectory,
-    UV_PROJECT_ENVIRONMENT: input.venvDirectory,
-  };
-  // Scan's own work directory, never the untrusted snapshot, is every spawn's cwd.
-  const cwd = input.workDirectory;
-  requireCleanResult(
-    await runner(uvSyncArgv(semgrepProject), runnerOptions(env, scanTimeoutMs, cwd)),
-    "analyzer environment acquisition",
-  );
-  const uvRunSemgrep = (argv: readonly string[]): string[] => [
-    BASELINE_UV_EXECUTABLE_V1,
-    "run",
-    "--project",
-    semgrepProject,
-    "--no-sync",
-    "--offline",
-    "--no-config",
-    "--no-python-downloads",
-    "--no-progress",
-    "--color",
-    "never",
-    "--",
-    join(input.venvDirectory, "bin", "semgrep"),
-    ...argv,
-  ];
-  const version = requireCleanResult(
-    await runner(uvRunSemgrep(["--version"]), runnerOptions(env, startupTimeoutMs, cwd)),
-    "Semgrep version",
-  ).stdout.trim();
-  if (version !== SEMGREP_VERSION_V1)
-    fail(`Semgrep version ${version} is not ${SEMGREP_VERSION_V1}`);
-  const result = requireCleanResult(
-    await runner(
-      uvRunSemgrep([
-        "scan",
-        "--config",
-        input.config,
-        "--sarif",
-        "--metrics=off",
-        "--disable-version-check",
-        "--x-ignore-semgrepignore-files",
-        "--no-git-ignore",
-        "--scan-unknown-extensions",
-        "--",
-        input.sourceRoot,
-      ]),
-      runnerOptions(env, scanTimeoutMs, cwd),
-    ),
-    "Semgrep scan",
-  );
-  if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
-  return {
-    mediaType: "application/sarif+json" as const,
-    bytes: Buffer.from(result.stdout, "utf8"),
-    analyzerVersion: lockIdentity(SEMGREP_VERSION_V1, semgrepProject),
-  };
+): Promise<AnalyzerOutput> {
+  const os = hostOs();
+  const windows = os === "windows";
+  const project = analyzer === "semgrep" ? semgrepProject : ciscoHostProject;
+  const version = analyzer === "semgrep" ? SEMGREP_VERSION_V1 : CISCO_SKILL_SCANNER_VERSION_V1;
+  let lockBytes: Buffer;
+  let projectBytes: Buffer;
+  try {
+    lockBytes = readBoundedRegularFile(join(project, "uv.lock"), maxOutputBytes, "analyzer lock");
+    projectBytes = readBoundedRegularFile(
+      join(project, "pyproject.toml"),
+      maxProjectBytes,
+      "analyzer project",
+    );
+  } catch (error) {
+    fail(`bundled analyzer lock unavailable: ${error instanceof Error ? error.message : project}`);
+  }
+  const lockSha256 = createHash("sha256").update(lockBytes).digest("hex");
+  const uv =
+    resolveHostExecutableV1("uv", input.callerEnv) ??
+    fail(
+      "host runtime availability: uv is on neither the declared PATH nor a well-known directory",
+    );
+  const cache = scanUvCacheDirectory(input.callerEnv, lockSha256);
+  const runRoot = mkdtempSync(join(tmpdir(), "aihs-"));
+  let output: AnalyzerOutput | undefined;
+  let primary: unknown;
+  try {
+    const directories: HostDirectories = {
+      root: runRoot,
+      temporary: join(runRoot, "t"),
+      home: join(runRoot, "h"),
+      roamingData: join(runRoot, "a"),
+      localData: join(runRoot, "l"),
+      work: join(runRoot, "w"),
+      venv: join(runRoot, "v"),
+      project: join(runRoot, "p"),
+    };
+    if (directories.temporary.length > HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1)
+      fail(
+        `host runtime availability: the private temporary directory ${directories.temporary} is ${directories.temporary.length} characters; the analyzer needs at most ${HOST_PROCESS_TEMPORARY_PATH_LIMIT_V1}. Point ${windows ? "TEMP and TMP" : "TMPDIR"} at a shorter directory.`,
+      );
+    for (const directory of [
+      directories.temporary,
+      directories.home,
+      directories.work,
+      directories.venv,
+      directories.project,
+      ...(windows ? [directories.roamingData, directories.localData] : []),
+    ])
+      mkdirSync(directory, { mode: 0o700 });
+    writeFileSync(join(directories.project, "uv.lock"), lockBytes, { flag: "wx", mode: 0o600 });
+    writeFileSync(join(directories.project, "pyproject.toml"), projectBytes, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    const systemRoot = windows ? windowsSystemRootV1() : "";
+    const fixed = substitute(HOST_PROCESS_UV_ENVIRONMENT_V1[os], {
+      "<host SystemRoot>": systemRoot,
+      "<run temporary directory>": directories.temporary,
+      "<run home directory>": directories.home,
+      "<run roaming data directory>": directories.roamingData,
+      "<run local data directory>": directories.localData,
+      "<run venv directory>": directories.venv,
+      "<Scan uv cache directory for this lock>": cache.directory,
+    });
+    const discovery: Record<string, string> = { ...fixed };
+    for (const name of HOST_PROCESS_UV_DISCOVERY_VARIABLES_V1[os]) {
+      const value = callerVariable(input.callerEnv, name, windows);
+      if (value !== undefined) discovery[name] = value;
+    }
+    const run = async (
+      argv: readonly string[],
+      label: string,
+      stageMs: number,
+      env: Readonly<Record<string, string>> = fixed,
+      allowedCodes: readonly number[] = [0],
+    ) =>
+      requireCleanResult(
+        await input.runner(
+          argv,
+          runnerOptions(
+            env,
+            spawnTimeout(input.control, stageMs, label),
+            input.control,
+            directories.work,
+          ),
+        ),
+        label,
+        allowedCodes,
+      );
+    const uvVersionLine = (
+      await run([uv.path, "--version"], "host runtime availability: uv version", startupTimeoutMs)
+    ).stdout.trim();
+    const uvVersion = /^uv (\d+\.\d+\.\d+\S*)/u.exec(uvVersionLine)?.[1];
+    if (uvVersion === undefined)
+      fail(
+        `host runtime availability: uv version output is not recognised: ${boundedDiagnosticDetailV1(uvVersionLine)}`,
+      );
+    const find = [
+      uv.path,
+      "python",
+      "find",
+      HOST_PROCESS_UV_PYTHON_REQUEST_V1,
+      "--no-python-downloads",
+      "--no-project",
+      "--no-config",
+      "--resolve-links",
+      "--no-progress",
+      "--color",
+      "never",
+    ];
+    const pythonPath = (
+      await run(find, "host runtime availability: Python discovery", startupTimeoutMs, discovery)
+    ).stdout.trim();
+    const pythonVersion = (
+      await run(
+        [...find, "--show-version"],
+        "host runtime availability: Python discovery",
+        startupTimeoutMs,
+        discovery,
+      )
+    ).stdout.trim();
+    const absolutePython = windows ? win32.isAbsolute(pythonPath) : pythonPath.startsWith("/");
+    if (!absolutePython || pythonPath.includes("\n") || !statSync(pythonPath).isFile())
+      fail(
+        `host runtime availability: Python discovery returned no interpreter path: ${boundedDiagnosticDetailV1(pythonPath)}`,
+      );
+    if (
+      !new RegExp(`^${HOST_PROCESS_UV_PYTHON_REQUEST_V1.replace(".", "\\.")}\\.\\d+$`, "u").test(
+        pythonVersion,
+      )
+    )
+      fail(
+        `host runtime availability: the discovered Python reports ${boundedDiagnosticDetailV1(pythonVersion)}, not ${HOST_PROCESS_UV_PYTHON_REQUEST_V1}`,
+      );
+    await run(
+      uvSyncArgv(uv.path, directories.project, pythonPath),
+      "analyzer environment acquisition",
+      scanTimeoutMs,
+    );
+    const tool = (name: string) =>
+      windows
+        ? join(directories.venv, "Scripts", `${name}.exe`)
+        : join(directories.venv, "bin", name);
+    const uvRun = (argv: readonly string[]) => [
+      uv.path,
+      "run",
+      "--project",
+      directories.project,
+      "--no-sync",
+      "--offline",
+      "--no-config",
+      "--no-python-downloads",
+      "--no-progress",
+      "--color",
+      "never",
+      "--",
+      ...argv,
+    ];
+    const hostRuntime: HostProcessRuntimeV1 = Object.freeze({
+      uv: Object.freeze({ path: uv.path, version: uvVersion, foundIn: uv.foundIn }),
+      python: Object.freeze({
+        request: HOST_PROCESS_UV_PYTHON_REQUEST_V1,
+        path: pythonPath,
+        version: pythonVersion,
+      }),
+      uvCache: Object.freeze({ key: cache.key }),
+      containment: windows ? "windows-job-object" : "posix-process-group",
+    });
+    const roots = hostRoots(input.sourceRoot);
+    if (analyzer === "semgrep") {
+      writeFileSync(join(directories.work, "rules.yml"), semgrepRules, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      const reported = (
+        await run(uvRun([tool("semgrep"), "--version"]), "Semgrep version", startupTimeoutMs)
+      ).stdout.trim();
+      if (reported !== version) fail(`Semgrep version ${reported} is not ${version}`);
+      const result = await run(
+        uvRun([
+          tool("semgrep"),
+          "scan",
+          "--config",
+          "rules.yml",
+          "--sarif",
+          "--metrics=off",
+          "--disable-version-check",
+          "--x-ignore-semgrepignore-files",
+          "--no-git-ignore",
+          "--scan-unknown-extensions",
+          "--",
+          input.sourceRoot,
+        ]),
+        "Semgrep scan",
+        scanTimeoutMs,
+      );
+      if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
+      const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "semgrep"), roots);
+      output = {
+        ...sarifOutput(normalized.document, lockIdentity(version, project)),
+        hostRuntime,
+      };
+    } else {
+      const expectedSkills = hashSourceTreeV1(input.sourceRoot).files.filter(
+        ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
+      ).length;
+      if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
+      const reported = (
+        await run(
+          uvRun([tool("skill-scanner"), "--version"]),
+          "Cisco skill-scanner version",
+          startupTimeoutMs,
+        )
+      ).stdout.trim();
+      if (reported !== `skill-scanner ${version}`)
+        fail(`Cisco skill-scanner version ${reported} is not ${version}`);
+      const jsonPath = join(directories.work, "results.json");
+      const sarifPath = join(directories.work, "results.sarif");
+      await run(
+        uvRun([
+          tool("skill-scanner"),
+          "scan-all",
+          input.sourceRoot,
+          "--recursive",
+          "--format",
+          "json",
+          "--format",
+          "sarif",
+          "--output-json",
+          jsonPath,
+          "--output-sarif",
+          sarifPath,
+        ]),
+        "Cisco skill-scanner scan",
+        scanTimeoutMs,
+      );
+      const report = verifyCiscoCoverage(
+        readBoundedAnalyzerOutput(jsonPath, "Cisco JSON output"),
+        expectedSkills,
+      );
+      const sarif = parsedSarif(
+        readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output").toString("utf8"),
+        "cisco",
+      );
+      output = {
+        ...sarifOutput(
+          ciscoSourceRelativeSarifV1(sarif, report, roots).document,
+          lockIdentity(version, project),
+        ),
+        hostRuntime,
+      };
+    }
+  } catch (error) {
+    primary = error;
+  }
+  let residual: AnalyzerRunFailureV1 | undefined;
+  if (input.sweep !== undefined) {
+    try {
+      const swept = await input.sweep(sweepMarkers(runRoot, input.sourceRoot));
+      if (swept.found.length > 0)
+        residual = new AnalyzerRunFailureV1(
+          swept.surviving.length > 0 ? "containment-failure" : "residual-processes",
+          `${swept.found.length} process${swept.found.length === 1 ? "" : "es"} still referenced the run's private directories after it ended${
+            swept.surviving.length > 0
+              ? ` and ${swept.surviving.length} survived being killed`
+              : "; they were killed"
+          }: ${boundedDiagnosticDetailV1(
+            swept.found.map((entry) => `${entry.pid} ${entry.command}`).join("; "),
+          )}`,
+        );
+    } catch (error) {
+      residual = new AnalyzerRunFailureV1(
+        "containment-failure",
+        `the residual process sweep could not run: ${error instanceof Error ? error.message : "unknown failure"}`,
+      );
+    }
+  }
+  try {
+    rmSync(runRoot, { recursive: true, force: true });
+  } catch (error) {
+    if (primary === undefined && residual === undefined)
+      primary = new TypeError(
+        `aih-scan baseline analyzer: run directory cleanup failed: ${error instanceof Error ? error.message : runRoot}`,
+      );
+  }
+  if (residual !== undefined) throw residual;
+  if (primary !== undefined) throw primary;
+  return output as AnalyzerOutput;
 }
 
 async function semgrep(
   sourceRoot: string,
   runner: BaselineProcessRunnerV1,
   env: Readonly<Record<string, string>>,
-  hostProcess: boolean,
-) {
+  control: RunControl,
+): Promise<AnalyzerOutput> {
+  requireLinuxHost("linux-namespace-uv-v1");
   const temporary = mkdtempSync(join(tmpdir(), "aih-scan-semgrep-"));
   try {
     const workDirectory = join(temporary, "work");
@@ -781,23 +1448,14 @@ async function semgrep(
     mkdirSync(venvDirectory, { mode: 0o700 });
     const config = join(workDirectory, "rules.yml");
     writeFileSync(config, semgrepRules, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    if (hostProcess)
-      return await hostProcessSemgrep(runner, {
-        temporary,
-        sourceRoot,
-        config,
-        workDirectory,
-        cacheDirectory,
-        venvDirectory,
-      });
     const sandboxState = {
       project: semgrepProject,
       workDirectory,
       cacheDirectory,
       venvDirectory,
     };
-    await syncUvEnvironment(runner, sandboxState, env);
-    const sandbox = analyzerSandbox(runner, {
+    await syncUvEnvironment(runner, sandboxState, env, control);
+    const sandbox = bubblewrapContainedRunner(runner, {
       ...sandboxState,
       sourceRoot,
       network: false,
@@ -805,7 +1463,10 @@ async function semgrep(
     });
     const executable = "/aih/venv/bin/semgrep";
     const version = requireCleanResult(
-      await sandbox([executable, "--version"], runnerOptions(env, startupTimeoutMs)),
+      await sandbox(
+        [executable, "--version"],
+        runnerOptions(env, spawnTimeout(control, startupTimeoutMs, "Semgrep version"), control),
+      ),
       "Semgrep version",
     ).stdout.trim();
     if (version !== SEMGREP_VERSION_V1)
@@ -826,16 +1487,15 @@ async function semgrep(
           "--",
           "/aih/source",
         ],
-        runnerOptions(env, scanTimeoutMs),
+        runnerOptions(env, spawnTimeout(control, scanTimeoutMs, "Semgrep scan"), control),
       ),
       "Semgrep scan",
     );
     if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
-    return {
-      mediaType: "application/sarif+json" as const,
-      bytes: Buffer.from(result.stdout, "utf8"),
-      analyzerVersion: lockIdentity(SEMGREP_VERSION_V1, semgrepProject),
-    };
+    const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "semgrep"), [
+      "/aih/source",
+    ]);
+    return sarifOutput(normalized.document, lockIdentity(SEMGREP_VERSION_V1, semgrepProject));
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
@@ -845,7 +1505,8 @@ function readBoundedAnalyzerOutput(path: string, label: string): Buffer {
   return readBoundedRegularFile(path, maxOutputBytes, label);
 }
 
-function verifyCiscoCoverage(output: Buffer, expectedSkills: number): void {
+/** Checks the Cisco JSON report's coverage and returns the parsed report. */
+function verifyCiscoCoverage(output: Buffer, expectedSkills: number): Record<string, unknown> {
   let report: Record<string, unknown>;
   try {
     report = parseStrictJsonObjectV1(output.toString("utf8"), "Cisco JSON report");
@@ -866,13 +1527,16 @@ function verifyCiscoCoverage(output: Buffer, expectedSkills: number): void {
     fail("Cisco JSON report scanned-skill count is invalid");
   if (scanned !== expectedSkills)
     fail(`Cisco skill coverage mismatch: expected ${expectedSkills}, scanned ${String(scanned)}`);
+  return report;
 }
 
 async function cisco(
   sourceRoot: string,
   runner: BaselineProcessRunnerV1,
   env: Readonly<Record<string, string>>,
-) {
+  control: RunControl,
+): Promise<AnalyzerOutput> {
+  requireLinuxHost("linux-namespace-uv-v1");
   const temporary = mkdtempSync(join(tmpdir(), "aih-scan-cisco-"));
   try {
     const workDirectory = join(temporary, "work");
@@ -881,7 +1545,7 @@ async function cisco(
     mkdirSync(workDirectory, { mode: 0o700 });
     mkdirSync(cacheDirectory, { mode: 0o700 });
     mkdirSync(venvDirectory, { mode: 0o700 });
-    const sarifOutput = join(workDirectory, "results.sarif");
+    const sarifOutputPath = join(workDirectory, "results.sarif");
     const jsonOutput = join(workDirectory, "results.json");
     const expectedSkills = hashSourceTreeV1(sourceRoot).files.filter(
       ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
@@ -893,8 +1557,8 @@ async function cisco(
       cacheDirectory,
       venvDirectory,
     };
-    await syncUvEnvironment(runner, sandboxState, env);
-    const sandbox = analyzerSandbox(runner, {
+    await syncUvEnvironment(runner, sandboxState, env, control);
+    const sandbox = bubblewrapContainedRunner(runner, {
       ...sandboxState,
       sourceRoot,
       network: false,
@@ -902,7 +1566,14 @@ async function cisco(
     });
     const executable = "/aih/venv/bin/skill-scanner";
     const version = requireCleanResult(
-      await sandbox([executable, "--version"], runnerOptions(env, startupTimeoutMs)),
+      await sandbox(
+        [executable, "--version"],
+        runnerOptions(
+          env,
+          spawnTimeout(control, startupTimeoutMs, "Cisco skill-scanner version"),
+          control,
+        ),
+      ),
       "Cisco skill-scanner version",
     ).stdout.trim();
     if (version !== `skill-scanner ${CISCO_SKILL_SCANNER_VERSION_V1}`)
@@ -923,22 +1594,32 @@ async function cisco(
           "--output-sarif",
           "/aih/work/results.sarif",
         ],
-        runnerOptions(env, scanTimeoutMs),
+        runnerOptions(
+          env,
+          spawnTimeout(control, scanTimeoutMs, "Cisco skill-scanner scan"),
+          control,
+        ),
       ),
       "Cisco skill-scanner scan",
     );
-    verifyCiscoCoverage(readBoundedAnalyzerOutput(jsonOutput, "Cisco JSON output"), expectedSkills);
-    return {
-      mediaType: "application/sarif+json" as const,
-      bytes: readBoundedAnalyzerOutput(sarifOutput, "Cisco SARIF output"),
-      analyzerVersion: lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject),
-    };
+    const report = verifyCiscoCoverage(
+      readBoundedAnalyzerOutput(jsonOutput, "Cisco JSON output"),
+      expectedSkills,
+    );
+    const sarif = parsedSarif(
+      readBoundedAnalyzerOutput(sarifOutputPath, "Cisco SARIF output").toString("utf8"),
+      "cisco",
+    );
+    return sarifOutput(
+      ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"]).document,
+      lockIdentity(CISCO_SKILL_SCANNER_VERSION_V1, ciscoProject),
+    );
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
 }
 
-function native(sourceRoot: string) {
+function native(sourceRoot: string): AnalyzerOutput {
   const source = hashSourceTreeV1(sourceRoot);
   const bytes = canonicalStrictJsonBytesV1({
     protocol: "BaselineNativeObservationV1",
@@ -961,7 +1642,21 @@ export type BaselineAnalyzerRunV1 = (input: {
   readonly analyzerVersion: string;
   /** Present only for SkillSpector: the image that ran and whose digest admitted it. */
   readonly image?: SkillspectorImageMatchV1;
+  /** Present only for `host-process-uv-v1`: the uv, Python and cache the run resolved. */
+  readonly hostRuntime?: HostProcessRuntimeV1;
+  /** Present only for `docker-host-skillspector-v1`: the Docker client and context used. */
+  readonly hostDocker?: HostDockerRuntimeV1;
 }>;
+
+const PROFILE_ANALYZERS: Readonly<
+  Record<BaselineExecutionProfileIdV1, readonly BaselineAnalyzerV1[]>
+> = Object.freeze({
+  "in-process-native-v1": ["aih-native"],
+  "linux-namespace-uv-v1": ["semgrep", "cisco"],
+  "host-process-uv-v1": ["semgrep", "cisco"],
+  "docker-hardened-skillspector-v1": ["skillspector"],
+  "docker-host-skillspector-v1": ["skillspector"],
+});
 
 /**
  * Runs exactly one analyzer over one already-sealed snapshot.
@@ -979,16 +1674,21 @@ export function createBaselineAnalyzerRunV1(
      */
     readonly skillspectorAcceptedImageDigests?: readonly string[];
     /**
-     * Semgrep only. `host-process-uv-v1` runs uv and Semgrep directly on a Linux host with
-     * no isolation and no network enforcement; it is used only when a caller names it.
+     * The profile to run under. Absent, each analyzer uses its hardened default. A named
+     * profile runs only the analyzers it declares, and nothing falls back to another.
      */
-    readonly semgrepExecutionProfile?: "linux-namespace-uv-v1" | "host-process-uv-v1";
+    readonly executionProfileId?: BaselineExecutionProfileIdV1;
+    /** Aborting ends the running process tree and fails the run as cancelled. */
+    readonly signal?: AbortSignal;
+    /** Epoch milliseconds after which no stage starts and a running one is ended. */
+    readonly deadline?: number;
   } = {},
 ): BaselineAnalyzerRunV1 {
   if (process.platform === "linux" && process.getuid?.() === 0)
     fail("analyzer execution refuses root identity");
   const runner = options.runner ?? processRunner;
-  const env = scrubEnvironment(options.env ?? process.env);
+  const callerEnv = options.env ?? process.env;
+  const env = scrubEnvironment(callerEnv);
   let acceptedImageDigests: readonly string[] | undefined;
   if (options.skillspectorAcceptedImageDigests !== undefined) {
     const refusal = skillspectorAcceptedImageDigestsRefusalV1(
@@ -997,17 +1697,57 @@ export function createBaselineAnalyzerRunV1(
     if (refusal !== undefined) fail(refusal);
     acceptedImageDigests = Object.freeze([...options.skillspectorAcceptedImageDigests]);
   }
-  const semgrepProfile = options.semgrepExecutionProfile ?? "linux-namespace-uv-v1";
-  if (semgrepProfile !== "linux-namespace-uv-v1" && semgrepProfile !== "host-process-uv-v1")
-    fail("unknown Semgrep execution profile");
-  const hostProcess = semgrepProfile === "host-process-uv-v1";
+  const profile = options.executionProfileId;
+  if (profile !== undefined && !Object.hasOwn(PROFILE_ANALYZERS, profile))
+    fail("unknown execution profile");
+  const control: RunControl = Object.freeze({
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
+  });
+  // The residual sweep inspects real processes, so it runs only with Scan's own runner.
+  const sweep: ResidualSweep | undefined =
+    options.runner === undefined ? sweepResidualProcessesV1 : undefined;
   return async ({ analyzer, sourceRoot }) => {
-    if (hostProcess && analyzer !== "semgrep") fail("host-process-uv-v1 runs only Semgrep");
-    const implementations: Record<BaselineAnalyzerV1, () => ReturnType<BaselineAnalyzerRunV1>> = {
+    if (profile !== undefined && !PROFILE_ANALYZERS[profile].includes(analyzer))
+      fail(`${profile} does not run ${analyzer}`);
+    if (control.signal?.aborted)
+      throw new AnalyzerRunFailureV1(
+        "cancelled",
+        `${analyzer} was not started: the run was cancelled`,
+      );
+    const host = profile === "host-process-uv-v1";
+    const implementations: Record<BaselineAnalyzerV1, () => Promise<AnalyzerOutput>> = {
       "aih-native": async () => native(sourceRoot),
-      skillspector: () => skillspector(sourceRoot, runner, env, acceptedImageDigests),
-      semgrep: () => semgrep(sourceRoot, runner, env, hostProcess),
-      cisco: () => cisco(sourceRoot, runner, env),
+      skillspector: () =>
+        skillspector(
+          sourceRoot,
+          runner,
+          env,
+          callerEnv,
+          acceptedImageDigests,
+          control,
+          profile === "docker-host-skillspector-v1",
+        ),
+      semgrep: () =>
+        host
+          ? hostProcessUv("semgrep", {
+              sourceRoot,
+              runner,
+              callerEnv,
+              control,
+              ...(sweep === undefined ? {} : { sweep }),
+            })
+          : semgrep(sourceRoot, runner, env, control),
+      cisco: () =>
+        host
+          ? hostProcessUv("cisco", {
+              sourceRoot,
+              runner,
+              callerEnv,
+              control,
+              ...(sweep === undefined ? {} : { sweep }),
+            })
+          : cisco(sourceRoot, runner, env, control),
     };
     return implementations[analyzer]();
   };

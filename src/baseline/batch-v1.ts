@@ -415,8 +415,22 @@ type SafeAnalyzerSourceSymlink = Readonly<{
   targetType: "directory" | "file";
 }>;
 
+/**
+ * What an analyzer snapshot copies. By default a top-level `.git` is left out, as the
+ * batch receipts have always done; a single-detector run for an analyzer that scans the
+ * whole tree (Semgrep, SkillSpector) copies it too.
+ */
+export type BaselineAnalyzerSnapshotOptionsV1 = Readonly<{ includeGitDirectory?: boolean }>;
+
+function topLevelNames(root: string, options: BaselineAnalyzerSnapshotOptionsV1): string[] {
+  return readdirSync(root)
+    .filter((value) => options.includeGitDirectory === true || value !== ".git")
+    .sort(codeUnitCompare);
+}
+
 function inspectSafeAnalyzerSource(
   sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
 ): ReadonlyMap<string, SafeAnalyzerSourceSymlink> {
   const root = resolve(sourceRoot);
   const rootStat = lstatSync(root);
@@ -450,10 +464,7 @@ function inspectSafeAnalyzerSource(
     budget.bytes += stat.size;
     entries.set(path, "file");
   };
-  for (const name of readdirSync(root)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    visit(join(root, name));
+  for (const name of topLevelNames(root, options)) visit(join(root, name));
   const rootAfter = lstatSync(root);
   if (!rootAfter.isDirectory() || rootAfter.isSymbolicLink() || !sameIdentity(rootStat, rootAfter))
     fail("baseline source directory replacement");
@@ -504,11 +515,15 @@ function inspectSafeAnalyzerSource(
   return safeSymlinks;
 }
 
-function copyAnalyzerSource(source: string, snapshot: string): void {
+function copyAnalyzerSource(
+  source: string,
+  snapshot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
   const rootBefore = lstatSync(source);
   if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink())
     fail("baseline source directory shape");
-  const safeSymlinks = inspectSafeAnalyzerSource(source);
+  const safeSymlinks = inspectSafeAnalyzerSource(source, options);
   const rootAfterInspection = lstatSync(source);
   if (
     !rootAfterInspection.isDirectory() ||
@@ -551,10 +566,7 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
     budget.bytes += bytes.byteLength;
     writeFileSync(to, bytes, { flag: "wx", mode: 0o600 });
   };
-  for (const name of readdirSync(source)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    copy(join(source, name), join(snapshot, name));
+  for (const name of topLevelNames(source, options)) copy(join(source, name), join(snapshot, name));
   const rootAfter = lstatSync(source);
   if (
     !rootAfter.isDirectory() ||
@@ -565,8 +577,11 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
   if (budget.entries === 0) fail("baseline source has no content");
 }
 
-function assertSafeAnalyzerSource(sourceRoot: string): void {
-  inspectSafeAnalyzerSource(sourceRoot);
+function assertSafeAnalyzerSource(
+  sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
+  inspectSafeAnalyzerSource(sourceRoot, options);
 }
 
 /**
@@ -575,7 +590,10 @@ function assertSafeAnalyzerSource(sourceRoot: string): void {
  * Exported for Scan's own single-detector runner so the snapshot, symbolic-link and
  * byte-bound rules are one implementation; it is not part of the package API.
  */
-export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
+export function createBaselineAnalyzerSnapshotV1(
+  sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): string {
   const source = resolve(sourceRoot);
   const snapshot = mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"));
   try {
@@ -584,8 +602,8 @@ export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
     // Windows ACLs are platform-managed; mkdtemp remains the private creation boundary.
   }
   try {
-    copyAnalyzerSource(source, snapshot);
-    assertSafeAnalyzerSource(snapshot);
+    copyAnalyzerSource(source, snapshot, options);
+    assertSafeAnalyzerSource(snapshot, options);
     return snapshot;
   } catch (error) {
     rmSync(snapshot, { recursive: true, force: true });
@@ -594,8 +612,11 @@ export function createBaselineAnalyzerSnapshotV1(sourceRoot: string): string {
 }
 
 /** Re-proves that a snapshot still matches the source shape it was taken from. */
-export function assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot: string): void {
-  assertSafeAnalyzerSource(snapshotRoot);
+export function assertBaselineAnalyzerSnapshotUnchangedV1(
+  snapshotRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
+  assertSafeAnalyzerSource(snapshotRoot, options);
 }
 
 function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {
