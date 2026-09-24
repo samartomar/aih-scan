@@ -715,7 +715,12 @@ describe("parser report shapes and finding projection", () => {
     expect(uri(inside)).toBe("skills/clean/SKILL.md");
     expect(uri(`file://${inside.replace(/\\/g, "/")}`)).toBe("skills/clean/SKILL.md");
     expect(uri("file://skills/clean/SKILL.md")).toBe("skills/clean/SKILL.md");
-    expect(uri(inside.replace(/\//g, "\\"))).toBe("skills/clean/SKILL.md");
+    // A backslash-separated absolute path is absolute only on Windows. On POSIX a backslash
+    // is an ordinary file-name character: the text is one relative name that resolves outside
+    // the tree, so it becomes "." (never a URI carrying a backslash or an escape).
+    expect(uri(inside.replace(/\//g, "\\"))).toBe(
+      process.platform === "win32" ? "skills/clean/SKILL.md" : ".",
+    );
     expect(uri("../outside.md")).toBe(".");
     expect(uri(join(tmpdir(), "definitely-outside-the-tree.md"))).toBe(".");
     expect(uri(undefined)).toBe(".");
