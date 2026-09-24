@@ -1,0 +1,73 @@
+{
+  "case": "unicode",
+  "detector": "cisco",
+  "environment": "linux-x64",
+  "calls": [
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "--version"
+      ],
+      "cwd": null,
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 0,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 7688,
+      "stdout": "skill-scanner 2.0.14\n",
+      "stderr": "Installed 89 packages in 585ms\n"
+    },
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--project",
+        "/w/tools/cisco-skill-scanner",
+        "--locked",
+        "--isolated",
+        "--python",
+        "3.12",
+        "--offline",
+        "--no-python-downloads",
+        "--no-env-file",
+        "skill-scanner",
+        "scan",
+        "<root>",
+        "--format",
+        "sarif",
+        "--output-sarif",
+        "<tmp>/aih-cisco-sarif-<random>/results.sarif"
+      ],
+      "cwd": "<root>",
+      "timeoutMs": 120000,
+      "envKeys": [
+        "HOME",
+        "LANG",
+        "PATH"
+      ],
+      "code": 0,
+      "spawnError": false,
+      "truncated": false,
+      "durationMs": 9001,
+      "stdout": "Report saved to: <tmp>/aih-cisco-sarif-<random>/results.sarif\n",
+      "stderr": "Installed 89 packages in 600ms\n",
+      "outputSarif": "{\n  \"$schema\": \"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json\",\n  \"version\": \"2.1.0\",\n  \"runs\": [\n    {\n      \"tool\": {\n        \"driver\": {\n          \"name\": \"skill-scanner\",\n          \"version\": \"1.0.0\",\n          \"informationUri\": \"https://github.com/cisco-ai-defense/skill-scanner\",\n          \"rules\": [\n            {\n              \"id\": \"MANIFEST_MISSING_LICENSE\",\n              \"name\": \"Manifest Missing License\",\n              \"shortDescription\": {\n                \"text\": \"Skill does not specify a license\"\n              },\n              \"fullDescription\": {\n                \"text\": \"Skill manifest does not include a 'license' field. Specifying a license helps users understand usage terms.\"\n              },\n              \"defaultConfiguration\": {\n                \"level\": \"note\"\n              },\n              \"properties\": {\n                \"category\": \"policy_violation\",\n                \"severity\": \"INFO\",\n                \"tags\": [\n                  \"policy_violation\",\n                  \"security\"\n                ]\n              },\n              \"help\": {\n                \"text\": \"Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)\",\n                \"markdown\": \"**Remediation**: Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)\"\n              }\n            },\n            {\n              \"id\": \"YARA_prompt_injection_unicode_steganography\",\n              \"name\": \"Yara Prompt Injection Unicode Steganography\",\n              \"shortDescription\": {\n                \"text\": \"UNICODE STEGANOGRAPHY detected by YARA\"\n              },\n              \"fullDescription\": {\n                \"text\": \"Detects hidden Unicode characters used for invisible prompt injection and ASCII smuggling steganography: \\u200b\"\n              },\n              \"defaultConfiguration\": {\n                \"level\": \"warning\"\n              },\n              \"properties\": {\n                \"category\": \"unicode_steganography\",\n                \"severity\": \"MEDIUM\",\n                \"tags\": [\n                  \"unicode_steganography\",\n                  \"security\"\n                ]\n              },\n              \"help\": {\n                \"text\": \"Review and remove unicode steganography pattern\",\n                \"markdown\": \"**Remediation**: Review and remove unicode steganography pattern\"\n              }\n            },\n            {\n              \"id\": \"ASCII_SMUGGLING_TAG_BLOCK\",\n              \"name\": \"Ascii Smuggling Tag Block\",\n              \"shortDescription\": {\n                \"text\": \"ASCII smuggling via Unicode Tag Block detected\"\n              },\n              \"fullDescription\": {\n                \"text\": \"ASCII smuggling detected in 'SKILL.md': 2 Unicode Tag Block character(s) found (2 printable, 0 boundary marker(s)). First occurrence at line 9. Decoded hidden payload (first 120 chars): \\u00abAB\\u00bb. Tag Block characters (U+E0000\\u2013U+E007F) are invisible in editors but are decoded by LLMs, enabling hidden prompt-injection payloads inside otherwise-legitimate skill files.\"\n              },\n              \"defaultConfiguration\": {\n                \"level\": \"error\"\n              },\n              \"properties\": {\n                \"category\": \"prompt_injection\",\n                \"severity\": \"CRITICAL\",\n                \"tags\": [\n                  \"prompt_injection\",\n                  \"security\"\n                ]\n              },\n              \"help\": {\n                \"text\": \"Remove all Unicode Tag Block characters (U+E0000\\u2013U+E007F) from the file. You can strip them with: python3 -c \\\"import sys; t=open(sys.argv[1]).read(); open(sys.argv[1],'w').write(''.join(c for c in t if not(0xE0000<=ord(c)<=0xE007F)))\\\" <file>. Or use the 'aid' tool: https://github.com/wunderwuzzi23/aid\",\n                \"markdown\": \"**Remediation**: Remove all Unicode Tag Block characters (U+E0000\\u2013U+E007F) from the file. You can strip them with: python3 -c \\\"import sys; t=open(sys.argv[1]).read(); open(sys.argv[1],'w').write(''.join(c for c in t if not(0xE0000<=ord(c)<=0xE007F)))\\\" <file>. Or use the 'aid' tool: https://github.com/wunderwuzzi23/aid\"\n              }\n            }\n          ]\n        }\n      },\n      \"results\": [\n        {\n          \"ruleId\": \"MANIFEST_MISSING_LICENSE\",\n          \"level\": \"note\",\n          \"message\": {\n            \"text\": \"Skill manifest does not include a 'license' field. Specifying a license helps users understand usage terms.\"\n          },\n          \"properties\": {\n            \"category\": \"policy_violation\",\n            \"severity\": \"INFO\",\n            \"remediation\": \"Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)\"\n          },\n          \"locations\": [\n            {\n              \"physicalLocation\": {\n                \"artifactLocation\": {\n                  \"uri\": \"SKILL.md\",\n                  \"uriBaseId\": \"%SRCROOT%\"\n                }\n              }\n            }\n          ],\n          \"fingerprints\": {\n            \"primaryLocationLineHash\": \"MANIFEST_MISSING_LICENSE_c5ae9be793\"\n          }\n        },\n        {\n          \"ruleId\": \"YARA_prompt_injection_unicode_steganography\",\n          \"level\": \"warning\",\n          \"message\": {\n            \"text\": \"Detects hidden Unicode characters used for invisible prompt injection and ASCII smuggling steganography: \\u200b\"\n          },\n          \"properties\": {\n            \"category\": \"unicode_steganography\",\n            \"severity\": \"MEDIUM\",\n            \"remediation\": \"Review and remove unicode steganography pattern\"\n          },\n          \"locations\": [\n            {\n              \"physicalLocation\": {\n                \"artifactLocation\": {\n                  \"uri\": \"SKILL.md\",\n                  \"uriBaseId\": \"%SRCROOT%\"\n                },\n                \"region\": {\n                  \"startLine\": 3,\n                  \"snippet\": {\n                    \"text\": \"Summarize the re\\u200bport briefly.\"\n                  }\n                }\n              }\n            }\n          ],\n          \"fingerprints\": {\n            \"primaryLocationLineHash\": \"YARA_prompt_injection_unicode_steganography_ed8d2e2079\"\n          }\n        },\n        {\n          \"ruleId\": \"YARA_prompt_injection_unicode_steganography\",\n          \"level\": \"warning\",\n          \"message\": {\n            \"text\": \"Detects hidden Unicode characters used for invisible prompt injection and ASCII smuggling steganography: \\u202e\"\n          },\n          \"properties\": {\n            \"category\": \"unicode_steganography\",\n            \"severity\": \"MEDIUM\",\n            \"remediation\": \"Review and remove unicode steganography pattern\"\n          },\n          \"locations\": [\n            {\n              \"physicalLocation\": {\n                \"artifactLocation\": {\n                  \"uri\": \"SKILL.md\",\n                  \"uriBaseId\": \"%SRCROOT%\"\n                },\n                \"region\": {\n                  \"startLine\": 4,\n                  \"snippet\": {\n                    \"text\": \"Label: \\u202eabc\\u202c end.\"\n                  }\n                }\n              }\n            }\n          ],\n          \"fingerprints\": {\n            \"primaryLocationLineHash\": \"YARA_prompt_injection_unicode_steganography_b98c8eb7bb\"\n          }\n        },\n        {\n          \"ruleId\": \"YARA_prompt_injection_unicode_steganography\",\n          \"level\": \"warning\",\n          \"message\": {\n            \"text\": \"Detects hidden Unicode characters used for invisible prompt injection and ASCII smuggling steganography: \\udb40\\udc41\"\n          },\n          \"properties\": {\n            \"category\": \"unicode_steganography\",\n            \"severity\": \"MEDIUM\",\n            \"remediation\": \"Review and remove unicode steganography pattern\"\n          },\n          \"locations\": [\n            {\n              \"physicalLocation\": {\n                \"artifactLocation\": {\n                  \"uri\": \"SKILL.md\",\n                  \"uriBaseId\": \"%SRCROOT%\"\n                },\n                \"region\": {\n                  \"startLine\": 5,\n                  \"snippet\": {\n                    \"text\": \"Tagged: plain\\udb40\\udc41\\udb40\\udc42 text.\"\n                  }\n                }\n              }\n            }\n          ],\n          \"fingerprints\": {\n            \"primaryLocationLineHash\": \"YARA_prompt_injection_unicode_steganography_3497338c7b\"\n          }\n        },\n        {\n          \"ruleId\": \"ASCII_SMUGGLING_TAG_BLOCK\",\n          \"level\": \"error\",\n          \"message\": {\n            \"text\": \"ASCII smuggling detected in 'SKILL.md': 2 Unicode Tag Block character(s) found (2 printable, 0 boundary marker(s)). First occurrence at line 9. Decoded hidden payload (first 120 chars): \\u00abAB\\u00bb. Tag Block characters (U+E0000\\u2013U+E007F) are invisible in editors but are decoded by LLMs, enabling hidden prompt-injection payloads inside otherwise-legitimate skill files.\"\n          },\n          \"properties\": {\n            \"category\": \"prompt_injection\",\n            \"severity\": \"CRITICAL\",\n            \"remediation\": \"Remove all Unicode Tag Block characters (U+E0000\\u2013U+E007F) from the file. You can strip them with: python3 -c \\\"import sys; t=open(sys.argv[1]).read(); open(sys.argv[1],'w').write(''.join(c for c in t if not(0xE0000<=ord(c)<=0xE007F)))\\\" <file>. Or use the 'aid' tool: https://github.com/wunderwuzzi23/aid\"\n          },\n          \"locations\": [\n            {\n              \"physicalLocation\": {\n                \"artifactLocation\": {\n                  \"uri\": \"SKILL.md\",\n                  \"uriBaseId\": \"%SRCROOT%\"\n                },\n                \"region\": {\n                  \"startLine\": 9\n                }\n              }\n            }\n          ],\n          \"fingerprints\": {\n            \"primaryLocationLineHash\": \"ASCII_SMUGGLING_TAG_BLOCK_914e07592d\"\n          }\n        }\n      ],\n      \"invocations\": [\n        {\n          \"executionSuccessful\": true,\n          \"endTimeUtc\": \"2026-09-24T02:11:16Z\"\n        }\n      ]\n    }\n  ]\n}"
+    }
+  ]
+}
