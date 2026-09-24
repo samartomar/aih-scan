@@ -373,3 +373,70 @@ describe.each(BOTH)("Cisco job uriBaseId resolution (%s)", (_label, execute) => 
     });
   });
 });
+
+// S2i (review of S2h): a result's `analysisTarget` is an artifact location. It is
+// normalized exactly like every other one (base resolution, job prefix, index kept for
+// the shard's resolution through the normalized run artifacts) before anything binds it.
+describe.each(BOTH)("Cisco job analysisTarget normalization (%s)", (label, execute) => {
+  const outcomeOf = (analysisTarget: unknown, run: Record<string, unknown> = {}) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([{ ...cleanRun([{ ...result("SKILL.md"), analysisTarget }]), ...run }])
+          : sarif([cleanRun()]),
+      ),
+    );
+  const targetOf = async (analysisTarget: unknown, run: Record<string, unknown> = {}) => {
+    const outcome = await outcomeOf(analysisTarget, run);
+    if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
+    const text =
+      "outputs" in outcome
+        ? Buffer.from(outcome.outputs[0]?.sarif ?? new Uint8Array()).toString("utf8")
+        : outcome.sarifText;
+    const log = JSON.parse(text) as { runs: { results: { analysisTarget?: unknown }[] }[] };
+    return log.runs[0]?.results[0]?.analysisTarget;
+  };
+  const rootBase = () => ({ ROOT: { uri: `${pathToFileURL(root).href}/` } });
+
+  it("prefixes a job-relative analysis target with the job directory (reviewer case)", async () => {
+    expect(await targetOf({ uri: "SKILL.md" })).toEqual({ uri: "skills/alpha/SKILL.md" });
+  });
+
+  it("relates a root-based analysis target to the root, not the job", async () => {
+    expect(
+      await targetOf(
+        { uri: "skills/alpha/SKILL.md", uriBaseId: "ROOT" },
+        { originalUriBaseIds: rootBase() },
+      ),
+    ).toEqual({ uri: "skills/alpha/SKILL.md" });
+  });
+
+  it("reads a root-relative spelling as job-relative (reviewer case)", async () => {
+    const outcome = await outcomeOf({ uri: "skills/alpha/SKILL.md" });
+    if (label === "shard") {
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+        /skills\/alpha\/skills\/alpha\/SKILL\.md/,
+      );
+    } else
+      expect(await targetOf({ uri: "skills/alpha/SKILL.md" })).toEqual({
+        uri: "skills/alpha/skills/alpha/SKILL.md",
+      });
+  });
+
+  it("fails an analysis target whose base is undeclared or outside the root", async () => {
+    for (const [analysisTarget, run] of [
+      [{ uri: "SKILL.md", uriBaseId: "NOPE" }, {}],
+      [{ index: 0, uriBaseId: "NOPE" }, {}],
+      [
+        { uri: "SKILL.md", uriBaseId: "OUT" },
+        { originalUriBaseIds: { OUT: { uri: "file:///outside/" } } },
+      ],
+      [{ uri: "../beta/SKILL.md" }, {}],
+    ] as const) {
+      const outcome = await outcomeOf(analysisTarget, run);
+      expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(/detector SARIF location/);
+    }
+  });
+});

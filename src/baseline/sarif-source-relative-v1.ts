@@ -140,7 +140,8 @@ function directoryScope(path: readonly (string | number)[]): boolean {
 }
 
 /**
- * Every SARIF `artifactLocation`, and every run artifact's `location`, in the document.
+ * Every SARIF `artifactLocation`, every result's `analysisTarget` (an artifact location
+ * too, S2i), and every run artifact's `location`, in the document.
  * With `run`, the document is one SARIF run, and the locations its notifications and run
  * artifacts hold may name directories ({@link directoryScope}); otherwise none may.
  */
@@ -161,7 +162,11 @@ function artifactLocations(document: Json, run = false): FoundLocation[] {
       return;
     }
     if (!isRecord(value)) return;
-    if (key === "artifactLocation" || (key === "location" && owner === "artifacts"))
+    if (
+      key === "artifactLocation" ||
+      key === "analysisTarget" ||
+      (key === "location" && owner === "artifacts")
+    )
       found.push({ location: value, directory: run && directoryScope(path) });
     for (const [childKey, child] of Object.entries(value))
       visit(child, childKey, key ?? owner, [...path, childKey]);
@@ -447,8 +452,8 @@ function ciscoLocationIdentity(
  * to each skill's own directory, so `SKILL.md` can mean any skill. Its JSON report lists the
  * same findings in the same order under each skill's absolute path. Each SARIF result is
  * paired with its JSON finding (rule, file and line must agree, or the run fails closed) and
- * rewritten as `<skill directory relative to the source root>/<file>`. Every location's base
- * is validated before it is settled (`ciscoLocationIdentity`); a declared base must resolve
+ * rewritten as `<skill directory relative to the source root>/<file>`, and so is its
+ * `analysisTarget` (S2i). Every location's base is validated before it is settled (`ciscoLocationIdentity`); a declared base must resolve
  * to the file the paired JSON finding names.
  */
 export function ciscoSourceRelativeSarifV1(
@@ -500,9 +505,13 @@ export function ciscoSourceRelativeSarifV1(
       ciscoFail(
         `SARIF result ${index} (${String(result.ruleId)} ${identity}:${String(line)}) does not match JSON finding ${index} (${finding.ruleId} ${expected}:${String(finding.line)})`,
       );
-    for (const location of locations) {
+    // S2i: the analysis target is a Cisco location too, relative to the skill directory.
+    const targets = locations.map((location) => {
       const entry = isRecord(location) ? location.physicalLocation : undefined;
-      const target = isRecord(entry) ? entry.artifactLocation : undefined;
+      return isRecord(entry) ? entry.artifactLocation : undefined;
+    });
+    targets.push(result.analysisTarget);
+    for (const target of targets) {
       if (!isRecord(target) || typeof target.uri !== "string") continue;
       target.uri =
         target === artifact

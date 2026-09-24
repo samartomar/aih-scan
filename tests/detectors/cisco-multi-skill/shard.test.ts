@@ -873,6 +873,62 @@ describe("runCiscoShardV1", () => {
       });
     });
 
+    // S2i (review of S2h): the analysis target is normalized like every other location
+    // before it is bound, so it names a job-relative file exactly as a location does.
+    describe("analysis target", () => {
+      const rootBase = (root: string) => {
+        const safeRoot = realpathSync(root).replaceAll("\\", "/");
+        return { ROOT: { uri: `file://${safeRoot.startsWith("/") ? "" : "/"}${safeRoot}/` } };
+      };
+      const completes = async (root: string, hooks: Parameters<typeof scanningRunner>[0]) => {
+        const outcome = await runCiscoShardV1(shardRequest(root, { run: scanningRunner(hooks) }));
+        expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+      };
+
+      it("binds a job-relative analysis target (reviewer case: SKILL.md)", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-target-");
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        await completes(root, { result: () => ({ analysisTarget: { uri: "SKILL.md" } }) });
+        await completes(root, {
+          run: () => ({ artifacts: [{ location: { uri: "SKILL.md" } }] }),
+          result: () => ({ analysisTarget: { index: 0 } }),
+        });
+      });
+
+      it("fails a root-relative spelling, which names another job-relative path (reviewer case)", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-target-");
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        await failsAtOutput(
+          root,
+          { result: () => ({ analysisTarget: { uri: "skills/alpha/SKILL.md" } }) },
+          /analysis target names .*skills\/alpha\/skills\/alpha\/SKILL\.md.*not a sealed file/,
+        );
+      });
+
+      it("binds a base-resolved analysis target, and fails one resolving to another job", async () => {
+        const root = fixtureRoot("aih-cisco-shard-v1-target-");
+        skill(root, join("skills", "alpha"), "# alpha\n");
+        skill(root, join("skills", "beta"), "# beta\n");
+        await completes(root, {
+          run: () => ({ originalUriBaseIds: rootBase(root) }),
+          result: (target) => ({
+            analysisTarget: {
+              uri: `skills/${target.replaceAll("\\", "/").split("/").at(-1) ?? ""}/SKILL.md`,
+              uriBaseId: "ROOT",
+            },
+          }),
+        });
+        await failsAtOutput(
+          root,
+          {
+            run: () => ({ originalUriBaseIds: rootBase(root) }),
+            result: () => ({ analysisTarget: { uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" } }),
+          },
+          /skills\/alpha: .*skills\/beta\/SKILL\.md/,
+        );
+      });
+    });
+
     it("completes when every result names a sealed file of its own job", async () => {
       const root = fixtureRoot("aih-cisco-shard-v1-bind-");
       skill(root, join("skills", "alpha"), "# alpha\n");

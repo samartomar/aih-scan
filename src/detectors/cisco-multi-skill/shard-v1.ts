@@ -217,6 +217,9 @@ function nestedArtifactLocationsV1(value: unknown, found: unknown[] = []): unkno
  * name such a file too. Each is resolved by {@link artifactTargetV1}, so a file named by
  * `artifactLocation.index` is bound exactly like one named by `uri`. Returns why a result is
  * unbound, or `undefined` when all are bound.
+ * S2i (review of S2h): the analysis target is bound after the job's SARIF normalization
+ * (`ciscoJobSarifV1`) resolved its base and applied the job prefix, as for every other
+ * location, so a job-relative `SKILL.md` names the job's own file.
  */
 function unboundShardResultV1(
   log: CiscoSarifLogV1,
@@ -238,7 +241,11 @@ function unboundShardResultV1(
         if (problem !== undefined) return problem;
       }
     for (const result of run.results ?? []) {
-      const { locations: rawLocations, ...rest } = result as Record<string, unknown>;
+      const {
+        locations: rawLocations,
+        analysisTarget,
+        ...rest
+      } = result as Record<string, unknown>;
       const locations = Array.isArray(rawLocations) ? rawLocations : [];
       if (locations.length === 0)
         return `SARIF result ${index} names no sealed file of the job (no location)`;
@@ -247,6 +254,14 @@ function unboundShardResultV1(
         if (!isRecordV1(artifactLocation) || typeof artifactLocation.uri !== "string")
           return `SARIF result ${index} names no sealed file of the job (a location has no URI)`;
         const problem = unbound(`SARIF result ${index}`, artifactLocation, record.artifacts);
+        if (problem !== undefined) return problem;
+      }
+      if (analysisTarget !== undefined) {
+        const problem = unbound(
+          `SARIF result ${index} analysis target`,
+          analysisTarget,
+          record.artifacts,
+        );
         if (problem !== undefined) return problem;
       }
       for (const artifactLocation of nestedArtifactLocationsV1(rest)) {

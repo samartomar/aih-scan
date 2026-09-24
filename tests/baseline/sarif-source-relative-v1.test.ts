@@ -516,3 +516,114 @@ describe("ciscoSourceRelativeSarifV1", () => {
     expect(uris(spaced.document)).toEqual(["skills/a/my notes.md"]);
   });
 });
+
+// S2i (review of S2h): a result's `analysisTarget` is an artifact location, so it is
+// normalized exactly like every other one: its base resolved, its URI related to the root.
+describe("analysisTarget is normalized like every other artifact location (S2i)", () => {
+  const targeted = (analysisTarget: unknown, run: Record<string, unknown> = {}) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "x" } },
+        ...run,
+        results: [{ ...result("/scan/skills/a/SKILL.md"), analysisTarget }],
+      },
+    ],
+  });
+  const target = (document: Record<string, unknown>) =>
+    (document.runs as { results: { analysisTarget: unknown }[] }[])[0]?.results[0]?.analysisTarget;
+
+  it("relates an absolute or file: analysis target to the source root", () => {
+    expect(
+      target(sourceRelativeSarifV1(targeted({ uri: "/scan/a.md" }), ["/scan"]).document),
+    ).toEqual({ uri: "a.md" });
+    expect(
+      target(sourceRelativeSarifV1(targeted({ uri: "file:///scan/b%20c.md" }), ["/scan"]).document),
+    ).toEqual({ uri: "b c.md" });
+  });
+
+  it("resolves an analysis target's base, then drops the obsolete reference", () => {
+    const normalized = sourceRelativeSarifV1(
+      targeted(
+        { uri: "SKILL.md", uriBaseId: "SKILL" },
+        {
+          originalUriBaseIds: { SKILL: { uri: "file:///scan/skills/a/" } },
+        },
+      ),
+      ["/scan"],
+    );
+    expect(target(normalized.document)).toEqual({ uri: "skills/a/SKILL.md" });
+  });
+
+  it("fails closed on an analysis target outside the root, escaping it or on a bad base", () => {
+    for (const analysisTarget of [
+      { uri: "/elsewhere/a.md" },
+      { uri: "../a.md" },
+      { uri: "/scan" },
+      { uri: 7 },
+      { uri: "a.md", uriBaseId: "NOPE" },
+      { index: 0, uriBaseId: "NOPE" },
+    ])
+      expect(() => sourceRelativeSarifV1(targeted(analysisTarget), ["/scan"])).toThrow(
+        /artifact URI|artifact uriBaseId/,
+      );
+    expect(() =>
+      sourceRelativeSarifV1(
+        targeted(
+          { uri: "a.md", uriBaseId: "OUT" },
+          {
+            originalUriBaseIds: { OUT: { uri: "file:///outside/" } },
+          },
+        ),
+        ["/scan"],
+      ),
+    ).toThrow(/outside the declared source root/);
+  });
+
+  it("prefixes a Cisco analysis target with its skill's directory, as its locations are", () => {
+    const document = {
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "skill-scanner" } },
+          results: [
+            {
+              ruleId: "R",
+              message: { text: "R" },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" },
+                    region: { startLine: 1 },
+                  },
+                },
+              ],
+              analysisTarget: { uri: "SKILL.md", uriBaseId: "%SRCROOT%" },
+            },
+          ],
+        },
+      ],
+    };
+    const report = {
+      results: [
+        {
+          skill_path: "/scan/skills/a",
+          findings: [{ rule_id: "R", file_path: "SKILL.md", line_number: 1 }],
+        },
+      ],
+    };
+    const normalized = ciscoSourceRelativeSarifV1(document, report, ["/scan"]);
+    expect(target(normalized.document)).toEqual({
+      uri: "skills/a/SKILL.md",
+      uriBaseId: "%SRCROOT%",
+    });
+    const run = document.runs[0] as { originalUriBaseIds?: unknown };
+    const escaping = structuredClone(document);
+    (escaping.runs[0]?.results[0] as { analysisTarget: unknown }).analysisTarget = {
+      uri: "SKILL.md",
+      uriBaseId: "OUT",
+    };
+    (escaping.runs[0] as typeof run).originalUriBaseIds = { OUT: { uri: "file:///outside/" } };
+    expect(() => ciscoSourceRelativeSarifV1(escaping, report, ["/scan"])).toThrow(/Cisco/);
+  });
+});
