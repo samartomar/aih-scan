@@ -14,11 +14,14 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  * - environment: the caller environment is reduced to a fixed allow-list with every
  *   secret-looking key removed; `SNYK_TOKEN` (trimmed) is added only to the scan call,
  *   never to the help probe, and never to any other argv, env, log or diagnostic;
- * - parsing: the scanner's JSON is accepted in the four report shapes Core accepts
- *   (top-level finding array, `{findings|issues|results|vulnerabilities: [...]}`, a
- *   scan-path map whose issues recover their artifact path from the server `reference`
- *   index, and the empty object) and converted to SARIF 2.1.0 with the line defaulting
- *   to 1;
+ * - parsing: the scanner's JSON is accepted in Core's report shapes (top-level finding
+ *   array, `{findings|issues|results|vulnerabilities: [...]}`, and a scan-path map whose
+ *   issues recover their artifact path from the server `reference` index) and converted
+ *   to SARIF 2.1.0 with the line defaulting to 1. Unlike Core it fails closed (S2e, the
+ *   owner principle): zero findings completes only when a scan-path entry proves the root
+ *   was analyzed; an empty object or empty finding array, any failure ScanError at report,
+ *   entry or server level, an agent-scan X-code issue, and any malformed entry or finding
+ *   fail at stage `output`;
  * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
  *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
  *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
@@ -304,30 +307,139 @@ function snykScanPathIssueUri(
   return firstString(pathResult, ["path"]) ?? scanPath;
 }
 
-/** The four report shapes Core accepts, or `undefined` for anything else. */
-function snykFindingArray(report: unknown): Record<string, unknown>[] | undefined {
-  if (Array.isArray(report)) return report.filter(isRecord);
-  if (!isRecord(report)) return undefined;
-  for (const key of ["findings", "issues", "results", "vulnerabilities"] as const) {
-    const value = report[key];
-    if (Array.isArray(value)) return value.filter(isRecord);
+const ANALYZER_ERROR = "snyk-agent-scan JSON reported an analyzer error";
+const NO_ANALYSIS = "snyk-agent-scan JSON shows no analysis of the scanned root";
+const MALFORMED_FINDING = "snyk-agent-scan JSON carries a malformed finding";
+const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
+const NO_FINDINGS_ARRAY = "snyk-agent-scan JSON did not include a findings array";
+
+/** agent-scan's own failure codes (`FAILURE_CATEGORY_TO_CODE`), never an analysis finding. */
+const FAILURE_CODE = /^X\d{3}$/;
+
+/**
+ * A ScanError-style `error` value: absent or null is no error, an object whose `is_failure`
+ * is exactly `false` is agent-scan's non-failure note (a missing candidate config), and
+ * anything else — a failure ScanError, a bare string, an object without the flag — is an
+ * analyzer error.
+ */
+function errorKind(value: unknown): "none" | "note" | "failure" {
+  if (value === undefined || value === null) return "none";
+  return isRecord(value) && value.is_failure === false ? "note" : "failure";
+}
+
+/** An object carrying an analyzer error or failure marker of its own. */
+function carriesFailure(record: Record<string, unknown>): boolean {
+  if (errorKind(record.error) === "failure") return true;
+  if (record.errors !== undefined && record.errors !== null) {
+    if (!Array.isArray(record.errors) || record.errors.length > 0) return true;
   }
-  const pathFindings: Record<string, unknown>[] = [];
-  let sawScanPathResult = false;
-  for (const [scanPath, rawPathResult] of Object.entries(report)) {
-    if (!isRecord(rawPathResult)) continue;
-    if (!Array.isArray(rawPathResult.issues)) continue;
-    sawScanPathResult = true;
-    for (const rawIssue of rawPathResult.issues) {
-      if (!isRecord(rawIssue)) continue;
-      pathFindings.push({
-        ...rawIssue,
-        path: snykScanPathIssueUri(scanPath, rawPathResult, rawIssue),
-      });
+  if (record.is_failure !== undefined && record.is_failure !== false) return true;
+  return record.isFailure !== undefined && record.isFailure !== false;
+}
+
+/** A path inside the tree, or the tree itself; relative or scheme-less text never counts. */
+function namesTreePath(raw: unknown, tree: string): boolean {
+  if (typeof raw !== "string") return false;
+  const stripped = raw.replace(/^file:\/\//, "");
+  if (!isAbsolute(stripped)) return false;
+  const rel = relative(realpathIfExists(tree), realpathIfExists(stripped));
+  return rel === "" || (!isAbsolute(rel) && !toPosix(rel).split("/").includes(".."));
+}
+
+function serverNamesTree(server: Record<string, unknown>, tree: string): boolean {
+  const nested = isRecord(server.server) ? server.server : {};
+  return [
+    server.config_path,
+    server.configPath,
+    server.path,
+    nested.path,
+    nested.config_path,
+    nested.configPath,
+  ].some((value) => namesTreePath(value, tree));
+}
+
+/**
+ * A generic finding (top-level array or finding-key report): an object carrying no error or
+ * failure marker and no agent-scan failure code. The rule id, message, URI and line keep
+ * C2a §5.3's documented defaults.
+ */
+function validatedFinding(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new TypeError(MALFORMED_FINDING);
+  if (carriesFailure(value) || FAILURE_CODE.test(snykFindingRuleId(value)))
+    throw new TypeError(ANALYZER_ERROR);
+  return value;
+}
+
+/**
+ * The findings of a `{<scanPath>: ScanPathResult}` report (snyk-agent-scan 0.5.17's
+ * `--json` output, keyed by `ScanPathResult.path`). Every entry, server and issue is
+ * validated, never skipped: a failure ScanError anywhere or an X-code issue is an analyzer
+ * error; `servers: null`, or a non-failure ScanError with nothing discovered, means that
+ * entry was not analyzed. The scanned root must be named by an entry key or a server path
+ * (a root holding SKILL.md is reported under its parent, with the root as the skill's
+ * path), or nothing proves the root was analyzed.
+ */
+function scanPathFindings(
+  report: Record<string, unknown>,
+  tree: string,
+): Record<string, unknown>[] {
+  const findings: Record<string, unknown>[] = [];
+  let namesRoot = false;
+  for (const [scanPath, entry] of Object.entries(report)) {
+    if (!isRecord(entry) || !Array.isArray(entry.issues)) throw new TypeError(MALFORMED_ENTRY);
+    const error = errorKind(entry.error);
+    if (error === "failure" || carriesFailure(entry)) throw new TypeError(ANALYZER_ERROR);
+    if (!Array.isArray(entry.servers)) throw new TypeError(NO_ANALYSIS);
+    if (error === "note" && entry.servers.length === 0) throw new TypeError(NO_ANALYSIS);
+    if (namesTreePath(scanPath, tree)) namesRoot = true;
+    for (const server of entry.servers) {
+      if (!isRecord(server)) throw new TypeError(MALFORMED_ENTRY);
+      if (carriesFailure(server)) throw new TypeError(ANALYZER_ERROR);
+      if (serverNamesTree(server, tree)) namesRoot = true;
+    }
+    for (const issue of entry.issues) {
+      if (!isRecord(issue)) throw new TypeError(MALFORMED_FINDING);
+      const code = issue.code;
+      if (typeof code !== "string" || code.trim().length === 0 || typeof issue.message !== "string")
+        throw new TypeError(MALFORMED_FINDING);
+      if (FAILURE_CODE.test(code.trim()) || carriesFailure(issue))
+        throw new TypeError(ANALYZER_ERROR);
+      findings.push({ ...issue, path: snykScanPathIssueUri(scanPath, entry, issue) });
     }
   }
-  if (sawScanPathResult || Object.keys(report).length === 0) return pathFindings;
-  return undefined;
+  if (!namesRoot) throw new TypeError(NO_ANALYSIS);
+  return findings;
+}
+
+/**
+ * The report shapes of C2a §5.3, validated whole. A finding array must be non-empty to prove
+ * analysis (an empty one, like `{}`, says nothing about the root); a report-level error or
+ * failure marker beside it is an analyzer error; every finding is validated, none filtered.
+ */
+function snykFindingArray(report: unknown, tree: string): Record<string, unknown>[] {
+  const findingList = (value: unknown[]): Record<string, unknown>[] => {
+    const findings = value.map(validatedFinding);
+    if (findings.length === 0) throw new TypeError(NO_ANALYSIS);
+    return findings;
+  };
+  if (Array.isArray(report)) return findingList(report);
+  if (!isRecord(report)) throw new TypeError(NO_FINDINGS_ARRAY);
+  for (const key of ["findings", "issues", "results", "vulnerabilities"] as const) {
+    const value = report[key];
+    if (!Array.isArray(value)) continue;
+    if (carriesFailure(report)) throw new TypeError(ANALYZER_ERROR);
+    return findingList(value);
+  }
+  const entries = Object.values(report);
+  if (entries.length === 0) throw new TypeError(NO_ANALYSIS);
+  // A map in which no value is a ScanPathResult is no report shape at all (Core's message);
+  // once one is, every other value must be one too.
+  if (!entries.some((entry) => isRecord(entry) && Array.isArray(entry.issues))) {
+    if (carriesFailure(report) || entries.some((entry) => isRecord(entry) && carriesFailure(entry)))
+      throw new TypeError(ANALYZER_ERROR);
+    throw new TypeError(NO_FINDINGS_ARRAY);
+  }
+  return scanPathFindings(report, tree);
 }
 
 function snykFindingRuleId(finding: Record<string, unknown>): string {
@@ -384,13 +496,12 @@ function parseReportJson(raw: string): unknown {
 /**
  * Converts the scanner's JSON stdout to the SARIF 2.1.0 projection Core emits, frozen.
  * Throws `TypeError` with Core's exact messages when the output is not parseable JSON or
- * holds no findings array.
+ * holds no findings array, and with the engine's fixed messages when the report carries an
+ * analyzer error, a malformed entry or finding, or no evidence that the root was analyzed.
  */
 export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentScanSarifV1 {
   const parsed = parseReportJson(raw);
-  const findings = snykFindingArray(parsed);
-  if (findings === undefined)
-    throw new TypeError("snyk-agent-scan JSON did not include a findings array");
+  const findings = snykFindingArray(parsed, tree);
   if (findings.length > MAX_FINDINGS)
     throw new TypeError("snyk-agent-scan JSON exceeds the bounded finding count");
   const results = findings.map((finding): SnykAgentScanSarifResultV1 => {
@@ -503,6 +614,10 @@ const SNYK_OUTPUT_MESSAGES: ReadonlySet<string> = new Set([
   "snyk-agent-scan did not emit parseable JSON",
   "snyk-agent-scan JSON did not include a findings array",
   "snyk-agent-scan JSON exceeds the bounded finding count",
+  ANALYZER_ERROR,
+  NO_ANALYSIS,
+  MALFORMED_FINDING,
+  MALFORMED_ENTRY,
 ]);
 
 const RUNNER_FAILED = "runner failed before an exit status was available";
@@ -557,9 +672,12 @@ async function executeSnykAgentScanPlanV1(
   try {
     sarif = redactSarif(parseSnykAgentScanSarifV1(scan.stdout, tree), token);
   } catch (error) {
+    // An exit 1 whose report proves nothing keeps Core's exit-1 message (§5.3).
     const message =
       error instanceof TypeError && SNYK_OUTPUT_MESSAGES.has(error.message)
-        ? error.message
+        ? scan.code === 1 && error.message === NO_ANALYSIS
+          ? "snyk-agent-scan exited 1 without findings"
+          : error.message
         : "invalid snyk-agent-scan JSON";
     return Object.freeze({
       kind: "failed" as const,

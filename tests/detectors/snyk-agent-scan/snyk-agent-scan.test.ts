@@ -402,9 +402,24 @@ describe("run outcomes", () => {
     ]);
   });
 
-  // Ported from Core tests/trust/scan.test.ts ~3865-3892.
+  // Ported from Core tests/trust/scan.test.ts ~3865-3892. S2e: Core's report was
+  // `{findings: []}`, which proves nothing; a clean run is the root's own ScanPathResult.
   it("passes a clean Snyk Agent Scan exit 0 with no findings", async () => {
-    const { run } = snykRunner({ findings: [] }, { scanCode: 0 });
+    const { run } = snykRunner(
+      {
+        [root]: {
+          client: root,
+          path: root,
+          servers: [
+            { name: "clean", server: { path: join(root, "skills", "clean") }, error: null },
+          ],
+          issues: [],
+          labels: [],
+          error: null,
+        },
+      },
+      { scanCode: 0 },
+    );
 
     const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
@@ -579,9 +594,10 @@ describe("parser report shapes and finding projection", () => {
     }
   });
 
-  it("treats an empty report object as zero findings", () => {
-    const sarif = parseSnykAgentScanSarifV1("{}", root);
-    expect(sarif.runs[0]?.results).toEqual([]);
+  it("rejects an empty report object: it proves no analysis (S2e)", () => {
+    expect(() => parseSnykAgentScanSarifV1("{}", root)).toThrow(
+      "snyk-agent-scan JSON shows no analysis of the scanned root",
+    );
   });
 
   it("rejects reports without a findings array with Core's message", () => {
@@ -641,7 +657,13 @@ describe("parser report shapes and finding projection", () => {
     const direct = join(root, "skills", "clean", "SKILL.md");
     const uri = (issue: Record<string, unknown>, pathResult: Record<string, unknown>) =>
       parseSnykAgentScanSarifV1(
-        JSON.stringify({ [root]: { ...pathResult, issues: [issue] } }),
+        JSON.stringify({
+          [root]: {
+            servers: [],
+            ...pathResult,
+            issues: [{ code: "E001", message: "m", ...issue }],
+          },
+        }),
         root,
       ).runs[0]?.results[0]?.locations[0]?.physicalLocation.artifactLocation.uri;
 
@@ -1014,5 +1036,221 @@ describe("request token never reaches an outward string", () => {
       status: "unavailable",
       detail: `snyk-agent-scan help check failed; exit 3, stdout 0 bytes, stderr ${Buffer.byteLength(`help saw ${jsonEscaped}`)} bytes`,
     });
+  });
+});
+
+// Owner principle (S2e): zero findings is a success only when the analyzer's own output
+// proves the scanned root was analyzed. The report model is snyk-agent-scan 0.5.17's
+// `{<path>: ScanPathResult}` (`agent_scan/models.py`): a ScanPathResult and each
+// ServerScanResult carry `error: ScanError | null`, and a ScanError is a failure unless its
+// `is_failure` is exactly false (a 401 or 429 from the analysis API lands there).
+describe("fail-closed analysis evidence (S2e)", () => {
+  const scanned = (stdout: string, code = 0) =>
+    runSnykAgentScanRequestV1(
+      fakeRunner((argv) => (argv.includes("scan") ? { code, stdout, stderr: "" } : undefined)).run,
+      {
+        platform: "linux",
+        tree: root,
+        hostEnv: {},
+        requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      },
+    );
+  const failedWith = async (report: unknown, message: string, code = 0) => {
+    const stdout = JSON.stringify(report);
+    const outcome = await scanned(stdout, code);
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: `${message}; exit ${code}, stdout ${Buffer.byteLength(stdout)} bytes, stderr 0 bytes`,
+    });
+  };
+  const skillServer = () => ({
+    name: "clean",
+    config_path: null,
+    server: { path: join(root, "skills", "clean"), type: "skill" },
+    signature: { metadata: {}, tools: [] },
+    error: null,
+  });
+  const pathResult = (extra: Record<string, unknown> = {}) => ({
+    client: root,
+    path: root,
+    servers: [skillServer()],
+    issues: [],
+    labels: [],
+    error: null,
+    ...extra,
+  });
+  const ANALYZER_ERROR = "snyk-agent-scan JSON reported an analyzer error";
+  const NO_ANALYSIS = "snyk-agent-scan JSON shows no analysis of the scanned root";
+  const MALFORMED = "snyk-agent-scan JSON carries a malformed finding";
+  const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
+
+  beforeAll(() => {
+    write("skills/clean/SKILL.md", "# Clean\n");
+  });
+
+  it("fails a report-level error string with exit 0 (reviewer reproduction)", async () => {
+    await failedWith(
+      { " /scan": { issues: [], servers: [], error: "authentication failed" } },
+      ANALYZER_ERROR,
+    );
+  });
+
+  it("fails an empty report object: nothing proves the root was analyzed", async () => {
+    await failedWith({}, NO_ANALYSIS);
+  });
+
+  it("fails malformed findings instead of filtering them (reviewer reproduction)", async () => {
+    await failedWith({ findings: [null, 42] }, MALFORMED);
+    await failedWith([{ code: "E001", file: "skills/clean/SKILL.md" }, "junk"], MALFORMED, 1);
+    await failedWith({ issues: [{ code: "E001" }, []] }, MALFORMED, 1);
+  });
+
+  it("fails empty finding arrays: they carry no analysis evidence", async () => {
+    await failedWith({ findings: [] }, NO_ANALYSIS);
+    await failedWith([], NO_ANALYSIS);
+    await failedWith({ vulnerabilities: [] }, NO_ANALYSIS);
+  });
+
+  it("fails report-level error or failure markers beside a findings array", async () => {
+    const finding = { code: "E001", file: "skills/clean/SKILL.md" };
+    await failedWith({ findings: [finding], error: "quota exceeded" }, ANALYZER_ERROR, 1);
+    await failedWith({ findings: [finding], is_failure: true }, ANALYZER_ERROR, 1);
+    await failedWith(
+      [{ ...finding, error: { message: "x", is_failure: true } }],
+      ANALYZER_ERROR,
+      1,
+    );
+  });
+
+  it("fails a ScanPathResult whose ScanError is a failure (analysis API 401 or 429)", async () => {
+    const quota = {
+      message: "Daily usage limit reached",
+      exception: null,
+      traceback: null,
+      is_failure: true,
+      category: "analysis_error",
+      server_output: null,
+    };
+    await failedWith({ [root]: pathResult({ error: quota }) }, ANALYZER_ERROR);
+    await failedWith(
+      { [root]: pathResult({ error: { message: "no is_failure field" } }) },
+      ANALYZER_ERROR,
+    );
+  });
+
+  it("fails a ServerScanResult whose ScanError is a failure, with or without issues", async () => {
+    const server = {
+      ...skillServer(),
+      signature: null,
+      error: { message: "Unauthorized", is_failure: true, category: "analysis_error" },
+    };
+    await failedWith({ [root]: pathResult({ servers: [server] }) }, ANALYZER_ERROR);
+    await failedWith(
+      {
+        [root]: pathResult({
+          servers: [server],
+          issues: [{ code: "E004", message: "m", reference: [0, null] }],
+        }),
+      },
+      ANALYZER_ERROR,
+      1,
+    );
+  });
+
+  it("fails a failure-code issue (X001..X009 are agent-scan failure codes)", async () => {
+    await failedWith(
+      { [root]: pathResult({ issues: [{ code: "X007", message: "analysis", reference: null }] }) },
+      ANALYZER_ERROR,
+      1,
+    );
+  });
+
+  it("fails a non-failure ScanError when nothing was discovered (file_not_found)", async () => {
+    await failedWith(
+      {
+        [root]: pathResult({
+          servers: [],
+          error: {
+            message: "File or folder not found",
+            is_failure: false,
+            category: "file_not_found",
+          },
+        }),
+      },
+      NO_ANALYSIS,
+    );
+  });
+
+  it("fails a ScanPathResult whose servers are null (discovery failed)", async () => {
+    await failedWith({ [root]: pathResult({ servers: null }) }, NO_ANALYSIS);
+  });
+
+  it("fails reports whose entries never name the scanned root", async () => {
+    const elsewhere = join(tmpdir(), "aih-scan-snyk-elsewhere");
+    await failedWith(
+      {
+        [elsewhere]: pathResult({
+          client: elsewhere,
+          path: elsewhere,
+          servers: [{ ...skillServer(), server: { path: elsewhere, type: "skill" } }],
+        }),
+      },
+      NO_ANALYSIS,
+    );
+    await failedWith(
+      { "relative/key": pathResult({ path: "relative/key", servers: [] }) },
+      NO_ANALYSIS,
+    );
+  });
+
+  it("fails malformed scan-path entries, issues and servers instead of skipping them", async () => {
+    await failedWith({ [root]: pathResult(), other: "junk" }, MALFORMED_ENTRY);
+    await failedWith({ [root]: pathResult({ servers: [skillServer(), 7] }) }, MALFORMED_ENTRY);
+    await failedWith({ [root]: pathResult({ issues: [null] }) }, MALFORMED, 1);
+    await failedWith(
+      { [root]: pathResult({ issues: [{ message: "no code", reference: null }] }) },
+      MALFORMED,
+      1,
+    );
+    await failedWith(
+      { [root]: pathResult({ issues: [{ code: "E004", reference: null }] }) },
+      MALFORMED,
+      1,
+    );
+  });
+
+  it("completes zero findings when the root's ScanPathResult proves analysis", async () => {
+    const clean = await scanned(JSON.stringify({ [root]: pathResult() }));
+    expect(clean).toMatchObject({ kind: "completed" });
+    if (clean.kind === "completed") expect(clean.sarif.runs[0]?.results).toEqual([]);
+
+    // Discovery ran on the root and found nothing to send: the analyzer's own statement.
+    const nothing = await scanned(JSON.stringify({ [root]: pathResult({ servers: [] }) }));
+    expect(nothing).toMatchObject({ kind: "completed" });
+
+    // A non-failure ScanError (a missing candidate config) beside analyzed servers is kept.
+    const partial = await scanned(
+      JSON.stringify({
+        [root]: pathResult({
+          error: { message: "not found", is_failure: false, category: "file_not_found" },
+        }),
+      }),
+    );
+    expect(partial).toMatchObject({ kind: "completed" });
+  });
+
+  it("accepts the root SKILL.md form: the entry names the parent, the server the root", async () => {
+    const parent = dirname(root);
+    const outcome = await scanned(
+      JSON.stringify({
+        [parent]: pathResult({
+          client: root,
+          path: parent,
+          servers: [{ ...skillServer(), server: { path: root, type: "skill" } }],
+        }),
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: "completed" });
   });
 });
