@@ -40,6 +40,7 @@ import {
 } from "../contract/strict-json-v1.js";
 import {
   attachScanCompletionV1,
+  inGitDirectoryV1,
   type ScanCompletionSubjectEngineV1,
   scanCompletionEvidenceV1,
   scanCompletionSubjectFilesV1,
@@ -479,7 +480,7 @@ function coverageRecord(input: {
   const sealedFiles = input.seal.entries.filter(isFileEntry).map((entry) => entry.path);
   const coveredPaths =
     input.kind === "source-tree"
-      ? sealedFiles.filter((path) => input.analyzesGitDirectory || !path.startsWith(".git/"))
+      ? sealedFiles.filter((path) => input.analyzesGitDirectory || !inGitDirectoryV1(path))
       : [...input.seal.selectedClosurePaths];
   coveredPaths.sort(codeUnitCompare);
   const covered = new Set(coveredPaths);
