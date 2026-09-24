@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
+import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 import {
   hasUnsupportedDockerMountSourceCharV1,
   type SkillspectorPlatformV1,
@@ -249,15 +250,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** C2a §1.4: the fallback URI when the analyzer's URI cannot be made source-relative. */
 export const SKILLSPECTOR_FALLBACK_SARIF_URI_V1 = "skillspector.sarif";
 
-function isSourceRelativePosixUriV1(uri: string): boolean {
-  if (uri.length === 0 || uri.includes("\\")) return false;
-  if (uri.startsWith("/") || /^[A-Za-z]:/.test(uri)) return false;
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(uri)) return false;
-  return !uri
-    .split("/")
-    .some((segment) => segment.length === 0 || segment === "." || segment === "..");
-}
-
 /**
  * C2a §6.3 URI rule for one SkillSpector artifact location: strip a leading
  * `/scan/` or `scan/` (the container's view of the bind mount, exactly as
@@ -268,7 +260,7 @@ function isSourceRelativePosixUriV1(uri: string): boolean {
 export function skillspectorSarifUriV1(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0) return SKILLSPECTOR_FALLBACK_SARIF_URI_V1;
   const stripped = raw.replace(/^\/scan\/?/, "").replace(/^scan\/?/, "");
-  return isSourceRelativePosixUriV1(stripped) ? stripped : SKILLSPECTOR_FALLBACK_SARIF_URI_V1;
+  return isSourceRelativeArtifactUriV1(stripped) ? stripped : SKILLSPECTOR_FALLBACK_SARIF_URI_V1;
 }
 
 function rewriteSarifUrisV1(sarif: Record<string, unknown>): void {

@@ -1,5 +1,6 @@
-import { isAbsolute, relative } from "node:path";
+import { relative } from "node:path";
 import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
+import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 
 /**
  * SARIF pass-through and merge for the `detector.cisco` multi-skill scan,
@@ -79,25 +80,26 @@ function toPosixV1(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-function isSafeRelativeSarifUriV1(uri: string): boolean {
-  if (uri.length === 0 || isAbsolute(uri) || /^[A-Za-z]:/.test(uri)) return false;
-  return !uri.split("/").some((part) => part === "..");
-}
-
 /**
  * Prefixes one artifact URI with the skill's source-relative directory. A
- * `file://` prefix is stripped first; an unsafe URI (absolute, drive-relative,
- * or escaping through `..`) is rewritten to {@link CISCO_SARIF_FALLBACK_URI_V1}
- * (C2a §3.4), because C2a Core fails closed on any URI that is not
- * source-relative instead of sanitizing downstream. A non-string or empty
- * value passes through untouched; Core's boundary maps a missing URI to the
- * same fallback.
+ * `file://` prefix is stripped and backslashes become `/` first (C2a §3.4);
+ * the analyzer URI and the FINAL prefixed URI must then satisfy the complete C2a §1.4 rule
+ * ({@link isSourceRelativeArtifactUriV1}: no `.`, `..` or empty segment, no
+ * scheme, drive letter or leading `/`), or it is rewritten to
+ * {@link CISCO_SARIF_FALLBACK_URI_V1}, because Core fails the whole detector
+ * on any URI that is not source-relative. A missing URI stays missing (Core's
+ * boundary maps it to the same fallback); any other non-string value becomes
+ * the fallback.
  */
 export function prefixSafeCiscoUriV1(prefix: string, raw: unknown): unknown {
-  if (typeof raw !== "string" || raw.length === 0) return raw;
+  if (raw === undefined) return raw;
+  if (typeof raw !== "string") return CISCO_SARIF_FALLBACK_URI_V1;
   const stripped = toPosixV1(raw.replace(/^file:\/\//, ""));
-  if (!isSafeRelativeSarifUriV1(stripped)) return CISCO_SARIF_FALLBACK_URI_V1;
-  return prefix.length > 0 ? `${prefix}/${stripped}` : stripped;
+  // The analyzer's own URI must be a safe relative path (a scheme or drive is
+  // only visible before prefixing), and so must the final prefixed URI.
+  if (!isSourceRelativeArtifactUriV1(stripped)) return CISCO_SARIF_FALLBACK_URI_V1;
+  const prefixed = prefix.length > 0 ? `${prefix}/${stripped}` : stripped;
+  return isSourceRelativeArtifactUriV1(prefixed) ? prefixed : CISCO_SARIF_FALLBACK_URI_V1;
 }
 
 /**
