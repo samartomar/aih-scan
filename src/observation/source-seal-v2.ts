@@ -4,7 +4,6 @@ import {
   constants,
   fstatSync,
   lstatSync,
-  opendirSync,
   openSync,
   readSync,
   realpathSync,
@@ -19,6 +18,7 @@ import {
   codeUnitCompare,
   deepFreezeStrictJsonV1,
 } from "../contract/strict-json-v1.js";
+import { readSourceEntryNamesV1 } from "./source-entry-name-v1.js";
 
 const maxEntries = 4_096,
   maxFileBytes = 16 * 1024 * 1024,
@@ -201,18 +201,12 @@ function readFileEntry(
     if (descriptor !== undefined) closeSync(descriptor);
   }
 }
-function directoryNames(directoryPath: string, maximum: number): string[] {
-  const handle = opendirSync(directoryPath);
-  try {
-    const names: string[] = [];
-    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
-      if (names.length >= maximum) fail("source entry bound");
-      names.push(entry.name);
-    }
-    return names.sort(codeUnitCompare);
-  } finally {
-    handle.closeSync();
-  }
+/** S2h: a name the source-relative form cannot carry is refused before the seal exists. */
+function directoryNames(directoryPath: string, parent: string, maximum: number): string[] {
+  return readSourceEntryNamesV1(directoryPath, parent, {
+    maximum,
+    onBound: () => fail("source entry bound"),
+  }).sort(codeUnitCompare);
 }
 function traverse(
   root: string,
@@ -222,7 +216,11 @@ function traverse(
   budget: TraverseBudget,
 ): void {
   requireDirectory(directoryPath, realRoot);
-  const names = directoryNames(directoryPath, maxEntries - budget.entries);
+  const names = directoryNames(
+    directoryPath,
+    relative(root, directoryPath).split(sep).join("/"),
+    maxEntries - budget.entries,
+  );
   for (const name of names) {
     const absolute = resolve(directoryPath, name);
     inside(root, absolute);

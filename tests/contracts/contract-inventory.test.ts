@@ -164,7 +164,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   { path: "src/runner/run-detector-v1.ts", line: 143, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/observation/source-observation-seal-v1.ts",
-    line: 144,
+    line: 138,
     contains: "export function sealSourceObservationV1",
   },
   {

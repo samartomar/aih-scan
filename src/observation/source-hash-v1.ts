@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  type Stats,
-} from "node:fs";
-import { isAbsolute, posix, relative, resolve } from "node:path";
+import { lstatSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
+import { isAbsolute, posix, relative, resolve, sep } from "node:path";
+import { readSourceEntryNamesV1 } from "./source-entry-name-v1.js";
 
 export type SourceHashedFileV1 = { path: string; bytes: number; sha256: string };
 export type SourceTreeHashV1 = { treeSha256: string; files: SourceHashedFileV1[] };
@@ -27,8 +21,10 @@ const file = (path: string) => {
   const bytes = readFileSync(path);
   return { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
 };
+// S2h: only the platform separator is rewritten; a POSIX name never holds a backslash, as
+// readSourceEntryNamesV1 refuses one before it could be read as a separator.
 const rel = (root: string, target: string) => {
-  const value = relative(root, target).replaceAll("\\", "/");
+  const value = relative(root, target).split(sep).join("/");
   if (!value || value === ".." || value.startsWith("../") || isAbsolute(value))
     fail(`source path escapes root: ${target}`);
   return value;
@@ -72,7 +68,8 @@ export function hashComponentTreeV1(
     if (stat.isSymbolicLink()) fail("symbolic link in component");
     if (stat.isDirectory()) {
       entries.set(pathRel, { type: "directory", path: pathRel });
-      for (const child of readdirSync(path).sort(codeUnitCompare)) visit(resolve(path, child));
+      for (const child of readSourceEntryNamesV1(path, pathRel).sort(codeUnitCompare))
+        visit(resolve(path, child));
       return;
     }
     if (!stat.isFile()) fail("unsupported component entry");
@@ -101,14 +98,15 @@ export function hashSourceTreeV1(sourceRoot: string): SourceTreeHashV1 {
     }
     if (stat.isDirectory()) {
       entries.set(pathRel, { type: "directory", path: pathRel });
-      for (const child of readdirSync(path).sort(codeUnitCompare)) visit(resolve(path, child));
+      for (const child of readSourceEntryNamesV1(path, pathRel).sort(codeUnitCompare))
+        visit(resolve(path, child));
       return;
     }
     if (!stat.isFile()) fail("unsupported source entry");
     if (stat.nlink > 1) fail("hard link in source");
     entries.set(pathRel, { type: "file", path: pathRel, ...file(path) });
   };
-  const names = readdirSync(root)
+  const names = readSourceEntryNamesV1(root, "")
     .filter((x) => x !== ".git")
     .sort(codeUnitCompare);
   if (!names.length) fail("source tree has no content");

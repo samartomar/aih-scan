@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { UnrepresentableSourcePathErrorV1 } from "../../observation/source-entry-name-v1.js";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
 import { attachScanCompletionV1, scanCompletionEvidenceV1 } from "../completion-evidence-v1.js";
 import {
@@ -390,6 +391,29 @@ export function preflightCiscoShardV1(
         refusedShardRunV1(
           "shard-request-invalid",
           `Cisco shard job path holds no SKILL.md: ${job.path}`,
+        ),
+      );
+    }
+    // S2h (review of S2g): a job file whose name its inventory path cannot carry exactly
+    // (on POSIX a backslash, a control character, bytes that are not UTF-8) is refused here,
+    // before the analyzer is acquired. Any other shortfall of the tree fails exactly as the
+    // seal before the shard would report it.
+    try {
+      hashComponentTreeV1(safeRoot, [job.path]);
+    } catch (error) {
+      if (error instanceof UnrepresentableSourcePathErrorV1)
+        return stop(
+          refusedShardRunV1(
+            "shard-request-invalid",
+            boundedCiscoDetailV1(`Cisco shard job ${job.path}: ${error.message}`),
+          ),
+        );
+      return stop(
+        failedShardRunV1(
+          "coverage",
+          boundedCiscoDetailV1(
+            error instanceof Error ? error.message : "source changed before the shard",
+          ),
         ),
       );
     }
