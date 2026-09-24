@@ -18,7 +18,10 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  *   (top-level finding array, `{findings|issues|results|vulnerabilities: [...]}`, a
  *   scan-path map whose issues recover their artifact path from the server `reference`
  *   index, and the empty object) and converted to SARIF 2.1.0 with the line defaulting
- *   to 1;
+ *   to 1. The pinned 0.6.x analyzer prints a `{scan_path_responses: [...]}` risk
+ *   response instead; it is validated strictly, a reported analysis failure fails the
+ *   run, and every present risk becomes one result. Core's four shapes stay because the
+ *   recorded parity outputs replayed against Core use them;
  * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
  *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
  *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
@@ -37,7 +40,7 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  * evidence acceptance stay in Core and are deliberately not here.
  */
 
-export const SNYK_AGENT_SCAN_VERSION = "0.5.17";
+export const SNYK_AGENT_SCAN_VERSION = "0.6.4";
 export const SNYK_AGENT_SCAN_ANALYZER = `snyk-agent-scan@uv:${SNYK_AGENT_SCAN_VERSION}`;
 export const SNYK_AGENT_SCAN_UV_PYTHON = "3.12";
 export const SNYK_AGENT_SCAN_SCAN_TIMEOUT_MS = 120_000;
@@ -367,6 +370,174 @@ function snykFindingLine(finding: Record<string, unknown>): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
 }
 
+// ---------------------------------------------------------------------------
+// snyk-agent-scan 0.6.x `scan --json`: the ScanResponse root (models/api/v20260710.py)
+// ---------------------------------------------------------------------------
+
+const SNYK_RISK_SCORE_MAX = 1000;
+const MALFORMED_SCAN_RESPONSE = "snyk-agent-scan scan response is malformed";
+
+function malformedScanResponse(): never {
+  throw new TypeError(MALFORMED_SCAN_RESPONSE);
+}
+
+function optionalRecordArray(value: unknown): readonly Record<string, unknown>[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(isRecord)) return malformedScanResponse();
+  return value;
+}
+
+function requiredName(record: Record<string, unknown>): string {
+  const name = record.name;
+  return typeof name === "string" && name.length > 0 ? name : malformedScanResponse();
+}
+
+/**
+ * A `ScanError` whose `is_failure` is not literally `false` means the analysis did not
+ * happen for that path, server or skill (0.6.4 reports an unreachable analysis API as
+ * exit 0 with a path-level `analysis_error`). Treating it as zero findings would report
+ * an unanalysed tree as clean, so it fails the run instead.
+ */
+function refuseReportedFailure(record: Record<string, unknown>): void {
+  const error = record.error;
+  if (error === undefined) return;
+  if (!isRecord(error)) malformedScanResponse();
+  if (error.is_failure === false) return;
+  const category =
+    typeof error.category === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(error.category)
+      ? error.category
+      : "unknown";
+  throw new TypeError(`snyk-agent-scan reported an analysis failure (${category})`);
+}
+
+interface SnykRiskV1 {
+  readonly name: string;
+  readonly score: number;
+  readonly evidence: string;
+  readonly value: Record<string, unknown>;
+}
+
+function riskEntries(record: Record<string, unknown>): readonly SnykRiskV1[] {
+  const indexes = record.risk_indexes;
+  if (indexes === undefined) return [];
+  if (!isRecord(indexes)) return malformedScanResponse();
+  return Object.entries(indexes).map(([name, value]): SnykRiskV1 => {
+    if (!isRecord(value)) return malformedScanResponse();
+    const { score, evidence } = value;
+    if (
+      typeof score !== "number" ||
+      !Number.isInteger(score) ||
+      score < 0 ||
+      score > SNYK_RISK_SCORE_MAX ||
+      typeof evidence !== "string"
+    )
+      return malformedScanResponse();
+    return { name, score, evidence, value };
+  });
+}
+
+function riskText(risk: SnykRiskV1): string {
+  return risk.evidence.trim().length > 0 ? risk.evidence : "Snyk Agent Scan finding";
+}
+
+function affectedToolNames(server: Record<string, unknown>, risk: SnykRiskV1): string[] {
+  const affected = risk.value.affected_tools;
+  if (affected === undefined) return [];
+  const entities = optionalRecordArray(server.entities);
+  if (!Array.isArray(affected)) return malformedScanResponse();
+  return affected.map((index) => {
+    const entity =
+      typeof index === "number" && Number.isInteger(index) ? entities[index] : undefined;
+    return entity === undefined ? malformedScanResponse() : requiredName(entity);
+  });
+}
+
+/** The first skill-relative location of a skill risk, as `path[:line]`. */
+function skillRiskLocationText(risk: SnykRiskV1): string | undefined {
+  const locations = risk.value.locations;
+  if (locations === undefined) return undefined;
+  const regions = optionalRecordArray(locations);
+  for (const region of regions) {
+    const start = region.start;
+    if (!isRecord(start) || typeof start.path !== "string") return malformedScanResponse();
+    const line = start.line;
+    if (line !== undefined && (typeof line !== "number" || !Number.isInteger(line) || line < 0))
+      return malformedScanResponse();
+  }
+  const first = regions[0]?.start as Record<string, unknown> | undefined;
+  if (first === undefined) return undefined;
+  const path = toPosix(first.path as string);
+  return typeof first.line === "number" && first.line > 0 ? `${path}:${first.line}` : path;
+}
+
+/** A display path (`~/…`) or anything outside the tree maps to the C2a §1.4 fallback `.`. */
+function scanPathUri(path: string, tree: string): string {
+  return path.startsWith("~") ? "." : snykSafeSarifUri(path, tree);
+}
+
+function scanResponseResult(ruleId: string, uri: string, text: string): SnykAgentScanSarifResultV1 {
+  return {
+    ruleId,
+    message: { text },
+    locations: [{ physicalLocation: { artifactLocation: { uri }, region: { startLine: 1 } } }],
+  };
+}
+
+/**
+ * The 0.6.x scan response: one entry per analysed path, MCP server risks and skill
+ * risks keyed by risk name in `risk_indexes`. Every present risk becomes one SARIF
+ * result whose rule id is the risk name. Skill risk locations are relative to the
+ * skill directory, which the response does not name, so they are carried in the
+ * message and the result points at the scanned path (line 1) rather than at a guessed
+ * file. Malformed entries and reported analysis failures throw.
+ */
+function snykScanResponseResults(
+  report: Record<string, unknown>,
+  tree: string,
+): SnykAgentScanSarifResultV1[] {
+  const responses = report.scan_path_responses;
+  if (!Array.isArray(responses) || !responses.every(isRecord)) return malformedScanResponse();
+  const results: SnykAgentScanSarifResultV1[] = [];
+  for (const response of responses) {
+    if (typeof response.path !== "string" || response.path.length === 0) malformedScanResponse();
+    refuseReportedFailure(response);
+    const uri = scanPathUri(response.path as string, tree);
+    for (const server of optionalRecordArray(response.server_risks)) {
+      const serverName = requiredName(server);
+      refuseReportedFailure(server);
+      for (const risk of riskEntries(server)) {
+        const tools = affectedToolNames(server, risk);
+        const toolsText = tools.length > 0 ? `; affected tools: ${tools.join(", ")}` : "";
+        results.push(
+          scanResponseResult(
+            risk.name,
+            uri,
+            `${riskText(risk)} (MCP server "${serverName}"; score ${risk.score}/${SNYK_RISK_SCORE_MAX}${toolsText})`,
+          ),
+        );
+      }
+    }
+    for (const skill of optionalRecordArray(response.skill_risks)) {
+      const skillName = requiredName(skill);
+      refuseReportedFailure(skill);
+      for (const risk of riskEntries(skill)) {
+        const location = skillRiskLocationText(risk);
+        const locationText = location === undefined ? "" : `; at ${location} in the skill`;
+        results.push(
+          scanResponseResult(
+            risk.name,
+            uri,
+            `${riskText(risk)} (skill "${skillName}"; score ${risk.score}/${SNYK_RISK_SCORE_MAX}${locationText})`,
+          ),
+        );
+      }
+    }
+    if (results.length > MAX_FINDINGS)
+      throw new TypeError("snyk-agent-scan JSON exceeds the bounded finding count");
+  }
+  return results;
+}
+
 function parseReportJson(raw: string): unknown {
   if (Buffer.byteLength(raw, "utf8") > MAX_OUTPUT_BYTES)
     throw new TypeError("snyk-agent-scan output exceeds the bounded size");
@@ -386,6 +557,12 @@ function parseReportJson(raw: string): unknown {
  */
 export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentScanSarifV1 {
   const parsed = parseReportJson(raw);
+  if (isRecord(parsed) && Object.hasOwn(parsed, "scan_path_responses")) {
+    return deepFreezeStrictJsonV1({
+      version: "2.1.0" as const,
+      runs: [{ results: snykScanResponseResults(parsed, tree) }],
+    });
+  }
   const findings = snykFindingArray(parsed);
   if (findings === undefined)
     throw new TypeError("snyk-agent-scan JSON did not include a findings array");

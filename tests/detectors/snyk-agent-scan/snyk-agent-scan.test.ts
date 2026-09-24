@@ -990,3 +990,216 @@ describe("request token redaction in every outward string", () => {
     });
   });
 });
+
+// Fixtures for the 0.6.x `scan --json` ScanResponse. They are hand-built from the
+// snyk-agent-scan 0.6.4 sdist: the example in docs/json-output.md ("scan --json") and
+// the pydantic models in src/agent_scan/models/api/v20260710.py (ScanResponse,
+// ScanPathResponse, McpServerRiskResponse, SkillRiskResponse, RiskScore, Region). No
+// real Snyk run produced them: no SNYK_TOKEN exists on the development host.
+describe("snyk-agent-scan 0.6.x scan response (fixtures from the 0.6.4 sdist)", () => {
+  const docsExample = (scanPath: string) => ({
+    scan_path_responses: [
+      {
+        client: "cursor",
+        path: scanPath,
+        server_risks: [
+          {
+            name: "github",
+            entities: [
+              { name: "create_pull_request", type: "tool" },
+              { name: "search_code", type: "tool" },
+            ],
+            risk_indexes: {
+              prompt_injection_tool_desc: {
+                score: 1000,
+                evidence: "The tool description contains instructions directed at the agent.",
+                affected_tools: [0],
+              },
+            },
+          },
+          { name: "clean-server", entities: [], risk_indexes: {} },
+        ],
+        skill_risks: [
+          {
+            name: "release-helper",
+            files: [
+              { name: "SKILL.md", type: "instruction" },
+              { name: "scripts/install.sh", type: "script" },
+            ],
+            risk_indexes: {
+              suspicious_download_url: {
+                score: 600,
+                evidence: "The script downloads an executable from an untrusted host.",
+                locations: [{ start: { path: "scripts/install.sh", line: 12 } }],
+                malicious_urls: ["https://downloads.example.invalid/install.sh"],
+              },
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  const at = (uri: string) => [
+    { physicalLocation: { artifactLocation: { uri }, region: { startLine: 1 } } },
+  ];
+
+  it("maps every present risk to one result named by its risk key", () => {
+    const sarif = parseSnykAgentScanSarifV1(JSON.stringify(docsExample(root)), root);
+    expect(sarif.runs[0].results).toEqual([
+      {
+        ruleId: "prompt_injection_tool_desc",
+        message: {
+          text: 'The tool description contains instructions directed at the agent. (MCP server "github"; score 1000/1000; affected tools: create_pull_request)',
+        },
+        locations: at("."),
+      },
+      {
+        ruleId: "suspicious_download_url",
+        message: {
+          text: 'The script downloads an executable from an untrusted host. (skill "release-helper"; score 600/1000; at scripts/install.sh:12 in the skill)',
+        },
+        locations: at("."),
+      },
+    ]);
+  });
+
+  it("points a result at the scanned path relative to the tree", () => {
+    const sub = join(root, "v06-sub");
+    mkdirSync(sub, { recursive: true });
+    const sarif = parseSnykAgentScanSarifV1(JSON.stringify(docsExample(sub)), root);
+    expect(
+      sarif.runs[0].results.map((r) => r.locations[0].physicalLocation.artifactLocation.uri),
+    ).toEqual(["v06-sub", "v06-sub"]);
+  });
+
+  it("never emits a home-display path or an outside path as a URI", () => {
+    for (const scanPath of ["~/.cursor/mcp.json", "~", join(tmpdir(), "elsewhere")]) {
+      const sarif = parseSnykAgentScanSarifV1(JSON.stringify(docsExample(scanPath)), root);
+      for (const result of sarif.runs[0].results)
+        expect(result.locations[0].physicalLocation.artifactLocation.uri).toBe(".");
+    }
+  });
+
+  it("treats clean components and an empty response list as zero findings", () => {
+    expect(
+      parseSnykAgentScanSarifV1(JSON.stringify({ scan_path_responses: [] }), root).runs[0].results,
+    ).toEqual([]);
+    const clean = {
+      scan_path_responses: [
+        {
+          path: root,
+          server_risks: [{ name: "s", entities: [], risk_indexes: {} }],
+          skill_risks: [{ name: "k", files: [] }],
+        },
+      ],
+    };
+    expect(parseSnykAgentScanSarifV1(JSON.stringify(clean), root).runs[0].results).toEqual([]);
+  });
+
+  it("fails closed on a reported analysis failure at path, server or skill level", () => {
+    // verify_api.py `_analysis_error_response`: exit 0, every path carries this error.
+    const analysisError = {
+      message: "Could not reach analysis server",
+      is_failure: true,
+      category: "analysis_error",
+    };
+    const reports = [
+      { scan_path_responses: [{ path: root, error: analysisError }] },
+      {
+        scan_path_responses: [{ path: root, server_risks: [{ name: "s", error: analysisError }] }],
+      },
+      {
+        scan_path_responses: [
+          { path: root, skill_risks: [{ name: "k", error: { message: "x" } }] },
+        ],
+      },
+    ];
+    expect(() => parseSnykAgentScanSarifV1(JSON.stringify(reports[0]), root)).toThrow(
+      "snyk-agent-scan reported an analysis failure (analysis_error)",
+    );
+    expect(() => parseSnykAgentScanSarifV1(JSON.stringify(reports[1]), root)).toThrow(
+      "snyk-agent-scan reported an analysis failure (analysis_error)",
+    );
+    // is_failure defaults to true in models/errors.py when omitted.
+    expect(() => parseSnykAgentScanSarifV1(JSON.stringify(reports[2]), root)).toThrow(
+      "snyk-agent-scan reported an analysis failure (unknown)",
+    );
+  });
+
+  it("accepts a benign skipped error (is_failure false)", () => {
+    const report = {
+      scan_path_responses: [
+        {
+          path: root,
+          error: { message: "not found", is_failure: false, category: "file_not_found" },
+        },
+      ],
+    };
+    expect(parseSnykAgentScanSarifV1(JSON.stringify(report), root).runs[0].results).toEqual([]);
+  });
+
+  it("rejects malformed responses instead of filtering them", () => {
+    const risk = (value: unknown) => ({
+      scan_path_responses: [
+        { path: root, skill_risks: [{ name: "k", risk_indexes: { r: value } }] },
+      ],
+    });
+    const malformed: unknown[] = [
+      { scan_path_responses: {} },
+      { scan_path_responses: [1] },
+      { scan_path_responses: [{}] },
+      { scan_path_responses: [{ path: root, server_risks: [{ entities: [] }] }] },
+      { scan_path_responses: [{ path: root, skill_risks: "x" }] },
+      risk(1),
+      risk({ score: 1001, evidence: "e" }),
+      risk({ score: 1.5, evidence: "e" }),
+      risk({ score: 5 }),
+      risk({ score: 5, evidence: "e", locations: [{ start: { line: 3 } }] }),
+      {
+        scan_path_responses: [
+          {
+            path: root,
+            server_risks: [
+              {
+                name: "s",
+                entities: [],
+                risk_indexes: { r: { score: 1, evidence: "e", affected_tools: [0] } },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    for (const report of malformed)
+      expect(() => parseSnykAgentScanSarifV1(JSON.stringify(report), root)).toThrow(
+        "snyk-agent-scan scan response is malformed",
+      );
+  });
+
+  it("completes an exit-0 scan with risks and fails an exit-0 analysis error at output", async () => {
+    const input = {
+      platform: "linux" as const,
+      tree: root,
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "tok-v06" },
+    };
+    const completed = await runSnykAgentScanRequestV1(
+      snykRunner(docsExample(root), { scanCode: 0 }).run,
+      input,
+    );
+    expect(completed.kind).toBe("completed");
+    const failed = await runSnykAgentScanRequestV1(
+      snykRunner(
+        {
+          scan_path_responses: [
+            { path: root, error: { is_failure: true, category: "analysis_error" } },
+          ],
+        },
+        { scanCode: 0 },
+      ).run,
+      input,
+    );
+    expect(failed).toMatchObject({ kind: "failed", stage: "output" });
+  });
+});
