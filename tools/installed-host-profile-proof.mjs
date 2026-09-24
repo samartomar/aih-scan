@@ -197,7 +197,10 @@ process.stdout.write(JSON.stringify({
   findingsSource: result.findings?.source ?? null,
   findings: (result.findings?.findings ?? []).map((f) => ({ rule: f.rule.value?.nativeRuleId ?? null, level: f.severity.value?.level ?? null, path: f.location.value?.path ?? null, line: f.location.value?.startLine ?? null })),
   coverage: result.coverage ?? null,
-  sourceSealNull: result.outcome === "succeeded" ? result.sourceSeal === null : null,
+  sourceSealEntries:
+    result.outcome === "succeeded" && result.sourceSeal?.before?.protocol === "SourceObservationSealV1"
+      ? result.sourceSeal.before.entries.length
+      : null,
   privateDirectories: [...seen],
 }));
 `,
@@ -311,7 +314,7 @@ if (detectors.includes("semgrep")) {
   check("semgrep positive records the resolved uv, Python and cache", typeof positive.hostRuntime?.uv?.path === "string" && /^3\.12\./.test(positive.hostRuntime?.python?.version ?? "") && /^uv-cache-v1\//.test(positive.hostRuntime?.uvCache?.key ?? ""), JSON.stringify(positive.hostRuntime));
   check("semgrep warm re-run is identical and reuses the same uv cache", warm.outcome === "succeeded" && warm.annexSha256 === positive.annexSha256 && warm.hostRuntime?.uvCache?.key === positive.hostRuntime?.uvCache?.key, `first ${positive.ms} ms, warm ${warm.ms} ms`);
   check("semgrep clean succeeded with zero findings", clean.outcome === "succeeded" && clean.findings.length === 0 && clean.findingsSource === "analyzer-sarif", JSON.stringify({ outcome: clean.outcome, findings: clean.findings.length }));
-  check("semgrep empty source completes with zero findings (Core parity)", empty.outcome === "succeeded" && empty.findings.length === 0 && empty.sourceSealNull === true && empty.coverage?.complete === true, JSON.stringify({ outcome: empty.outcome, reason: empty.reason, detail: empty.detail, failure: empty.failure }));
+  check("semgrep empty source completes with zero findings (Core parity)", empty.outcome === "succeeded" && empty.findings.length === 0 && empty.sourceSealEntries === 0 && empty.coverage?.complete === true, JSON.stringify({ outcome: empty.outcome, reason: empty.reason, detail: empty.detail, failure: empty.failure }));
   check("semgrep malformed input (hard link) is refused before anything runs", hardlink.outcome === "refused" && hardlink.reason === "subject-requirement-unmet", `${hardlink.reason}: ${hardlink.detail}`);
   check("semgrep malformed input (absent selected file) is refused", missingFile.outcome === "refused" && missingFile.reason === "subject-requirement-unmet", `${missingFile.reason}: ${missingFile.detail}`);
   if (sharedWellKnownUv)
