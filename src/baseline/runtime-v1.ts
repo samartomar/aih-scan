@@ -1197,20 +1197,148 @@ type ResidualSweep = (markers: readonly string[]) => Promise<
  * a persistent, lock-addressed uv cache and may use the network; the scan stage runs
  * `--offline`. Nothing is isolated and the network is not enforced.
  */
+type HostUvSessionInput = {
+  readonly sourceRoot: string;
+  readonly runner: BaselineProcessRunnerV1;
+  readonly callerEnv: Readonly<NodeJS.ProcessEnv>;
+  readonly control: RunControl;
+  readonly sweep?: ResidualSweep;
+};
+
+/** One prepared host-process-uv-v1 environment: uv resolved, Python found, lock synced. */
+type HostUvSession = Readonly<{
+  /** Runs a contained spawn and requires a clean exit among `allowedCodes`. */
+  run: (
+    argv: readonly string[],
+    label: string,
+    stageMs: number,
+    env?: Readonly<Record<string, string>>,
+    allowedCodes?: readonly number[],
+  ) => Promise<ProcessRunnerResult>;
+  /** Runs a contained spawn and returns its raw result, exit code and termination included. */
+  spawn: (
+    argv: readonly string[],
+    label: string,
+    stageMs: number,
+    env: Readonly<Record<string, string>>,
+    cwd?: string,
+  ) => Promise<ProcessRunnerResult>;
+  tool: (name: string) => string;
+  uvRun: (argv: readonly string[]) => string[];
+  /** The fixed per-OS spawn environment for this run. */
+  fixed: Readonly<Record<string, string>>;
+  work: string;
+  hostRuntime: HostProcessRuntimeV1;
+}>;
+
 async function hostProcessUv(
   analyzer: "semgrep" | "cisco",
-  input: {
-    readonly sourceRoot: string;
-    readonly runner: BaselineProcessRunnerV1;
-    readonly callerEnv: Readonly<NodeJS.ProcessEnv>;
-    readonly control: RunControl;
-    readonly sweep?: ResidualSweep;
-  },
+  input: HostUvSessionInput,
 ): Promise<AnalyzerOutput> {
-  const os = hostOs();
-  const windows = os === "windows";
   const project = analyzer === "semgrep" ? semgrepProject : ciscoHostProject;
   const version = analyzer === "semgrep" ? SEMGREP_VERSION_V1 : CISCO_SKILL_SCANNER_VERSION_V1;
+  return withHostUvSession(project, input, async (session) => {
+    const { run, tool, uvRun, hostRuntime } = session;
+    const roots = hostRoots(input.sourceRoot);
+    if (analyzer === "semgrep") {
+      writeFileSync(join(session.work, "rules.yml"), semgrepRules, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      const reported = (
+        await run(uvRun([tool("semgrep"), "--version"]), "Semgrep version", startupTimeoutMs)
+      ).stdout.trim();
+      if (reported !== version) fail(`Semgrep version ${reported} is not ${version}`);
+      const result = await run(
+        uvRun([
+          tool("semgrep"),
+          "scan",
+          "--config",
+          "rules.yml",
+          "--sarif",
+          "--metrics=off",
+          "--disable-version-check",
+          "--x-ignore-semgrepignore-files",
+          "--no-git-ignore",
+          "--scan-unknown-extensions",
+          "--",
+          input.sourceRoot,
+        ]),
+        "Semgrep scan",
+        scanTimeoutMs,
+      );
+      if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
+      const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "semgrep"), roots);
+      return {
+        ...sarifOutput(normalized.document, lockIdentity(version, project)),
+        hostRuntime,
+      };
+    }
+    const expectedSkills = hashSourceTreeV1(input.sourceRoot).files.filter(
+      ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
+    ).length;
+    if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
+    const reported = (
+      await run(
+        uvRun([tool("skill-scanner"), "--version"]),
+        "Cisco skill-scanner version",
+        startupTimeoutMs,
+      )
+    ).stdout.trim();
+    if (reported !== `skill-scanner ${version}`)
+      fail(`Cisco skill-scanner version ${reported} is not ${version}`);
+    const jsonPath = join(session.work, "results.json");
+    const sarifPath = join(session.work, "results.sarif");
+    await run(
+      uvRun([
+        tool("skill-scanner"),
+        "scan-all",
+        input.sourceRoot,
+        "--recursive",
+        "--format",
+        "json",
+        "--format",
+        "sarif",
+        "--output-json",
+        jsonPath,
+        "--output-sarif",
+        sarifPath,
+      ]),
+      "Cisco skill-scanner scan",
+      scanTimeoutMs,
+    );
+    const report = verifyCiscoCoverage(
+      readBoundedAnalyzerOutput(jsonPath, "Cisco JSON output"),
+      expectedSkills,
+    );
+    const sarif = parsedSarif(
+      readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output").toString("utf8"),
+      "cisco",
+    );
+    return {
+      ...sarifOutput(
+        ciscoSourceRelativeSarifV1(sarif, report, roots).document,
+        lockIdentity(version, project),
+      ),
+      hostRuntime,
+    };
+  });
+}
+
+/**
+ * Prepares a host-process-uv-v1 run for one bundled uv project, gives it to `body`, and
+ * then always sweeps residual processes and removes the run's private directories. A
+ * residual or containment failure outranks the body's own failure; a cleanup failure is
+ * reported only when nothing else failed.
+ */
+async function withHostUvSession<T>(
+  project: string,
+  input: HostUvSessionInput,
+  body: (session: HostUvSession) => Promise<T>,
+): Promise<T> {
+  const os = hostOs();
+  const windows = os === "windows";
   let lockBytes: Buffer;
   let projectBytes: Buffer;
   try {
@@ -1231,7 +1359,7 @@ async function hostProcessUv(
     );
   const cache = scanUvCacheDirectory(input.callerEnv, lockSha256);
   const runRoot = mkdtempSync(join(tmpdir(), "aihs-"));
-  let output: AnalyzerOutput | undefined;
+  let output: { readonly value: T } | undefined;
   let primary: unknown;
   try {
     const directories: HostDirectories = {
@@ -1376,91 +1504,34 @@ async function hostProcessUv(
       uvCache: Object.freeze({ key: cache.key }),
       containment: windows ? "windows-job-object" : "posix-process-group",
     });
-    const roots = hostRoots(input.sourceRoot);
-    if (analyzer === "semgrep") {
-      writeFileSync(join(directories.work, "rules.yml"), semgrepRules, {
-        encoding: "utf8",
-        mode: 0o600,
-        flag: "wx",
-      });
-      const reported = (
-        await run(uvRun([tool("semgrep"), "--version"]), "Semgrep version", startupTimeoutMs)
-      ).stdout.trim();
-      if (reported !== version) fail(`Semgrep version ${reported} is not ${version}`);
-      const result = await run(
-        uvRun([
-          tool("semgrep"),
-          "scan",
-          "--config",
-          "rules.yml",
-          "--sarif",
-          "--metrics=off",
-          "--disable-version-check",
-          "--x-ignore-semgrepignore-files",
-          "--no-git-ignore",
-          "--scan-unknown-extensions",
-          "--",
-          input.sourceRoot,
-        ]),
-        "Semgrep scan",
-        scanTimeoutMs,
-      );
-      if (!result.stdout.trim()) fail("Semgrep scan emitted no SARIF");
-      const normalized = sourceRelativeSarifV1(parsedSarif(result.stdout, "semgrep"), roots);
-      output = {
-        ...sarifOutput(normalized.document, lockIdentity(version, project)),
-        hostRuntime,
-      };
-    } else {
-      const expectedSkills = hashSourceTreeV1(input.sourceRoot).files.filter(
-        ({ path }) => path === "SKILL.md" || path.endsWith("/SKILL.md"),
-      ).length;
-      if (expectedSkills === 0) fail("Cisco skill discovery found no SKILL.md files");
-      const reported = (
-        await run(
-          uvRun([tool("skill-scanner"), "--version"]),
-          "Cisco skill-scanner version",
-          startupTimeoutMs,
-        )
-      ).stdout.trim();
-      if (reported !== `skill-scanner ${version}`)
-        fail(`Cisco skill-scanner version ${reported} is not ${version}`);
-      const jsonPath = join(directories.work, "results.json");
-      const sarifPath = join(directories.work, "results.sarif");
-      await run(
-        uvRun([
-          tool("skill-scanner"),
-          "scan-all",
-          input.sourceRoot,
-          "--recursive",
-          "--format",
-          "json",
-          "--format",
-          "sarif",
-          "--output-json",
-          jsonPath,
-          "--output-sarif",
-          sarifPath,
-        ]),
-        "Cisco skill-scanner scan",
-        scanTimeoutMs,
-      );
-      const report = verifyCiscoCoverage(
-        readBoundedAnalyzerOutput(jsonPath, "Cisco JSON output"),
-        expectedSkills,
-      );
-      const sarif = parsedSarif(
-        readBoundedAnalyzerOutput(sarifPath, "Cisco SARIF output").toString("utf8"),
-        "cisco",
-      );
-      output = {
-        ...sarifOutput(
-          ciscoSourceRelativeSarifV1(sarif, report, roots).document,
-          lockIdentity(version, project),
-        ),
-        hostRuntime,
-      };
-    }
+    output = {
+      value: await body(
+        Object.freeze({
+          run,
+          spawn: async (
+            argv: readonly string[],
+            label: string,
+            stageMs: number,
+            env: Readonly<Record<string, string>>,
+            cwd?: string,
+          ) =>
+            input.runner(
+              argv,
+              runnerOptions(
+                env,
+                spawnTimeout(input.control, stageMs, label),
+                input.control,
+                cwd ?? directories.work,
+              ),
+            ),
+          tool,
+          uvRun,
+          fixed,
+          work: directories.work,
+          hostRuntime,
+        }),
+      ),
+    };
   } catch (error) {
     primary = error;
   }
@@ -1496,7 +1567,165 @@ async function hostProcessUv(
   }
   if (residual !== undefined) throw residual;
   if (primary !== undefined) throw primary;
-  return output as AnalyzerOutput;
+  return (output as { readonly value: T }).value;
+}
+
+/** The uv argv an engine builds (Core's shape), and the only one the adapter accepts. */
+const ENGINE_UV_PREFIX = [
+  "--locked",
+  "--isolated",
+  "--python",
+  HOST_PROCESS_UV_PYTHON_REQUEST_V1,
+  "--offline",
+  "--no-python-downloads",
+  "--no-env-file",
+] as const;
+
+/** What an engine's process seam sees: Core's `RunResult` shape. */
+export type HostUvEngineProcessResultV1 = Readonly<{
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  /** Set when Scan ended the spawn or refused it; the run then fails with the recorded cause. */
+  spawnError?: boolean;
+}>;
+
+/** The process seam handed to an engine: it runs only the engine's locked uv argv. */
+export type HostUvEngineRunnerV1 = (
+  argv: readonly string[],
+  options: Readonly<{
+    env?: Readonly<Record<string, string | undefined>>;
+    timeoutMs?: number;
+    cwd?: string;
+  }>,
+) => Promise<HostUvEngineProcessResultV1>;
+
+export interface HostUvEngineRequestV1<T> {
+  /** Absolute bundled uv project directory (pyproject.toml + uv.lock) the engine names. */
+  readonly project: string;
+  /** The analyzer version the lock pins, recorded as `<version>+uvlock.<digest>`. */
+  readonly version: string;
+  /** Console scripts the engine may run from the synced environment. */
+  readonly tools: readonly string[];
+  /**
+   * Variables the engine may hand one spawn through its own `env`, by name; every other
+   * variable an engine passes is dropped for the fixed per-OS environment.
+   */
+  readonly passEnv?: readonly string[];
+  /** The private snapshot the engine scans; named in the residual sweep. */
+  readonly sourceRoot: string;
+  readonly runner?: BaselineProcessRunnerV1;
+  /** The host environment uv and Python are resolved from. */
+  readonly callerEnv: Readonly<NodeJS.ProcessEnv>;
+  readonly signal?: AbortSignal;
+  readonly deadline?: number;
+  /** Drives the engine; `work` is a private directory the run removes. */
+  readonly body: (session: Readonly<{ run: HostUvEngineRunnerV1; work: string }>) => Promise<T>;
+}
+
+/**
+ * Runs an engine-driven detector under host-process-uv-v1: the same uv resolution, Python
+ * discovery, locked acquisition, process-tree containment, residual sweep and private
+ * directory removal as Semgrep and Cisco. The engine keeps Core's argv; the adapter accepts
+ * only its exact locked offline uv prefix and runs the named console script from the synced
+ * environment with `uv run --no-sync --offline`. A spawn Scan ends (timeout, abort, output
+ * bound, residual descendants) is shown to the engine as a failed spawn, and the recorded
+ * cause is thrown once the engine returns, so the engine's own classification never hides it.
+ */
+export async function runHostUvEngineV1<T>(
+  request: HostUvEngineRequestV1<T>,
+): Promise<Readonly<{ value: T; analyzerVersion: string; hostRuntime: HostProcessRuntimeV1 }>> {
+  if (process.platform === "linux" && process.getuid?.() === 0)
+    fail("analyzer execution refuses root identity");
+  const control: RunControl = Object.freeze({
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+    ...(request.deadline === undefined ? {} : { deadline: request.deadline }),
+  });
+  if (control.signal?.aborted)
+    throw new AnalyzerRunFailureV1(
+      "cancelled",
+      "the analyzer was not started: the run was cancelled",
+    );
+  const analyzerVersion = lockIdentity(request.version, request.project);
+  const passEnv = new Set(request.passEnv ?? []);
+  let hostRuntime: HostProcessRuntimeV1 | undefined;
+  const value = await withHostUvSession(
+    request.project,
+    {
+      sourceRoot: request.sourceRoot,
+      runner: request.runner ?? processRunner,
+      callerEnv: request.callerEnv,
+      control,
+      ...(request.runner === undefined ? { sweep: sweepResidualProcessesV1 } : {}),
+    },
+    async (session) => {
+      hostRuntime = session.hostRuntime;
+      let recorded: unknown;
+      const run: HostUvEngineRunnerV1 = async (argv, options) => {
+        const tool = argv[11];
+        const shaped =
+          argv[0] === "uv" &&
+          argv[1] === "run" &&
+          argv[2] === "--project" &&
+          argv[3] === request.project &&
+          ENGINE_UV_PREFIX.every((value, index) => argv[4 + index] === value) &&
+          typeof tool === "string" &&
+          request.tools.includes(tool);
+        if (!shaped) {
+          recorded ??= new TypeError(
+            "aih-scan baseline analyzer: the engine asked for a spawn outside its locked offline uv argv",
+          );
+          return Object.freeze({ code: null, stdout: "", stderr: "", spawnError: true });
+        }
+        const env: Record<string, string> = { ...session.fixed };
+        for (const name of passEnv) {
+          const passed = options.env?.[name];
+          if (typeof passed === "string") env[name] = passed;
+        }
+        const label = `the ${tool} analyzer`;
+        let result: ProcessRunnerResult;
+        try {
+          result = await session.spawn(
+            session.uvRun([session.tool(tool), ...argv.slice(12)]),
+            label,
+            options.timeoutMs ?? scanTimeoutMs,
+            env,
+            options.cwd,
+          );
+          if (result.termination !== undefined || result.truncated) {
+            // Only the termination is classified here: the analyzer's own output never
+            // reaches a diagnostic from this seam.
+            try {
+              requireCleanResult({ ...result, code: 0, truncated: false }, label);
+            } catch (error) {
+              recorded ??= error;
+            }
+            recorded ??= new TypeError(
+              `aih-scan baseline analyzer: ${label} output exceeded its bound`,
+            );
+            return Object.freeze({ code: null, stdout: "", stderr: "", spawnError: true });
+          }
+        } catch (error) {
+          recorded ??= error;
+          return Object.freeze({ code: null, stdout: "", stderr: "", spawnError: true });
+        }
+        return Object.freeze({ code: result.code, stdout: result.stdout, stderr: result.stderr });
+      };
+      let produced: T;
+      try {
+        produced = await request.body(Object.freeze({ run, work: session.work }));
+      } catch (error) {
+        throw recorded ?? error;
+      }
+      if (recorded !== undefined) throw recorded;
+      return produced;
+    },
+  );
+  return Object.freeze({
+    value,
+    analyzerVersion,
+    hostRuntime: hostRuntime as HostProcessRuntimeV1,
+  });
 }
 
 async function semgrep(

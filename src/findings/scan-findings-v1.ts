@@ -367,6 +367,7 @@ export function digestBoundAnalyzerFindingsV1(detail: string): ScanFindingsV1 {
 }
 
 const MAX_SARIF_RESULTS = 10_000;
+const ZERO_SHA256 = "0".repeat(64);
 const MAX_SARIF_MESSAGE_CHARACTERS = 16 * 1024;
 
 export interface AnalyzerSarifFindingsInputV1 {
@@ -379,6 +380,15 @@ export interface AnalyzerSarifFindingsInputV1 {
   readonly bytes: Uint8Array;
   /** Every sealed source file, by relative path, with its sha256. */
   readonly sealedFiles: ReadonlyMap<string, string>;
+  /**
+   * `fail` (the default): a result whose first location is not a sealed source file fails
+   * the projection. `unavailable`: for engines whose SARIF legitimately names no file (a
+   * whole-tree finding, a fallback URI), that result's location is reported unavailable and
+   * its fingerprint binds the URI as written with an all-zero file digest.
+   */
+  readonly unboundLocations?: "fail" | "unavailable";
+  /** The most results accepted; defaults to 10 000. */
+  readonly maxResults?: number;
 }
 
 function sarifFail(reason: string): never {
@@ -425,7 +435,10 @@ export function projectAnalyzerSarifFindingsV1(
     for (const result of runRecord.results as unknown[])
       results.push(sarifRecord(result) ?? sarifFail("a SARIF result is not an object"));
   }
-  if (results.length > MAX_SARIF_RESULTS) sarifFail(`more than ${MAX_SARIF_RESULTS} results`);
+  const maxResults = input.maxResults ?? MAX_SARIF_RESULTS;
+  if (results.length > maxResults) sarifFail(`more than ${maxResults} results`);
+  const tolerant = input.unboundLocations === "unavailable";
+  const unbound: string[] = [];
   const ordinals = new Map<string, number>();
   const findings = results.map((result, ordinal) => {
     const ruleId = result.ruleId;
@@ -436,16 +449,28 @@ export function projectAnalyzerSarifFindingsV1(
       ? sarifRecord(sarifRecord(locations[0])?.physicalLocation)
       : undefined;
     const uri = sarifRecord(physical?.artifactLocation)?.uri;
-    if (typeof uri !== "string") sarifFail(`result ${ordinal} names no file location`);
-    let path: string;
-    try {
-      path = assertSafeRelativePosixPathV1(uri as string, "SARIF location");
-    } catch {
-      return sarifFail(`result ${ordinal} location ${JSON.stringify(uri)} is not source-relative`);
+    let bound: string | undefined;
+    if (typeof uri !== "string") {
+      if (!tolerant) sarifFail(`result ${ordinal} names no file location`);
+    } else if (uri.length > 1024) {
+      sarifFail(`result ${ordinal} has an over-long location`);
+    } else {
+      try {
+        const safe = assertSafeRelativePosixPathV1(uri, "SARIF location");
+        if (input.sealedFiles.has(safe)) bound = safe;
+        else if (!tolerant)
+          sarifFail(`result ${ordinal} names ${safe}, which is not a sealed source file`);
+      } catch (error) {
+        if (!tolerant) {
+          if (error instanceof TypeError && error.message.startsWith("invalid analyzer SARIF"))
+            throw error;
+          sarifFail(`result ${ordinal} location ${JSON.stringify(uri)} is not source-relative`);
+        }
+      }
     }
-    const fileSha256 =
-      input.sealedFiles.get(path) ??
-      sarifFail(`result ${ordinal} names ${path}, which is not a sealed source file`);
+    if (bound === undefined) unbound.push(typeof uri === "string" ? uri : "");
+    const path = bound ?? (typeof uri === "string" ? uri : "");
+    const fileSha256 = bound === undefined ? ZERO_SHA256 : (input.sealedFiles.get(bound) as string);
     const region = sarifRecord(physical?.region);
     const startLine = region?.startLine;
     if (startLine !== undefined && (!Number.isSafeInteger(startLine) || (startLine as number) < 1))
@@ -489,13 +514,21 @@ export function projectAnalyzerSarifFindingsV1(
               "finding-message-and-location-not-read-from-annex",
               "The analyzer emitted no message text for this result.",
             ),
-      location: present(
-        Object.freeze({
-          path,
-          fileSha256,
-          ...(startLine === undefined ? {} : { startLine: startLine as number }),
-        }),
-      ),
+      location:
+        bound === undefined
+          ? unavailable(
+              "finding-location-not-a-sealed-file",
+              typeof uri === "string"
+                ? `The analyzer named ${JSON.stringify(uri)}, which is not a sealed source file.`
+                : "The analyzer named no file location for this result.",
+            )
+          : present(
+              Object.freeze({
+                path,
+                fileSha256,
+                ...(startLine === undefined ? {} : { startLine: startLine as number }),
+              }),
+            ),
       supportingEvidence: present(
         Object.freeze({
           annexDescriptorId: input.annex.descriptorId,
@@ -510,6 +543,14 @@ export function projectAnalyzerSarifFindingsV1(
     source: "analyzer-sarif" as const,
     findings: Object.freeze(findings),
     gaps: Object.freeze([
+      ...(unbound.length === 0
+        ? []
+        : [
+            gap(
+              "finding-location-not-a-sealed-file",
+              `${unbound.length} result${unbound.length === 1 ? " names" : "s name"} no sealed source file (a whole-tree finding or the analyzer's fallback URI), so ${unbound.length === 1 ? "its location is" : "their locations are"} reported unavailable; each fingerprint binds the URI as written with an all-zero file digest.`,
+            ),
+          ]),
       gap(
         "vendor-severity-not-projected",
         "Only the SARIF rule id, level, message and first location are read. Vendor severities, categories and rule metadata stay in the digest-bound SARIF annex.",

@@ -85,16 +85,16 @@ describe("readDetectorOptionsV1", () => {
       ).toMatch(/internalScopes/);
     expect(
       refusal("detector.aih-trust-lint", { internalScopes: ["@b", "@a"], mcpConfigPaths: [] }),
-    ).toMatch(/sorted/);
+    ).toMatch(/localeCompare\) order/);
     expect(
       refusal("detector.aih-trust-lint", { internalScopes: ["@a", "@a"], mcpConfigPaths: [] }),
-    ).toMatch(/sorted|unique/);
+    ).toMatch(/duplicates an earlier scope/);
     expect(
       refusal("detector.aih-trust-lint", {
         internalScopes: Array.from({ length: 257 }, (_, i) => `@s${String(i).padStart(3, "0")}`),
         mcpConfigPaths: [],
       }),
-    ).toMatch(/at most 256/);
+    ).toMatch(/the bound is 256/);
   });
 
   it("accepts MCP config paths only under the root or a selected skill directory, in discovery order", () => {
@@ -117,16 +117,16 @@ describe("readDetectorOptionsV1", () => {
     const mcp = (paths: unknown) =>
       refusal("detector.cisco-mcp-scanner", { mcpConfigPaths: paths });
     expect(mcp(["skills/c/mcp.json"])).toMatch(
-      /not an MCP config name under the root or a selected skill directory/,
+      /not an incoming MCP config name at the root or under a selected SKILL\.md directory/,
     );
-    expect(mcp(["docs/mcp.json"])).toMatch(/not an MCP config name/);
-    expect(mcp(["servers.json"])).toMatch(/not an MCP config name/);
+    expect(mcp(["docs/mcp.json"])).toMatch(/not an incoming MCP config name/);
+    expect(mcp(["servers.json"])).toMatch(/not an incoming MCP config name/);
     expect(mcp(["mcp.json", ".mcp.json"])).toMatch(/discovery order/);
     expect(mcp(["skills/b/mcp.json", "skills/a/mcp.json"])).toMatch(/discovery order/);
-    expect(mcp(["mcp.json", "mcp.json"])).toMatch(/discovery order|unique/);
+    expect(mcp(["mcp.json", "mcp.json"])).toMatch(/duplicates an earlier path/);
     for (const unsafe of ["/mcp.json", "../mcp.json", "skills\\a\\mcp.json", "./mcp.json", ""])
       expect(mcp([unsafe]), unsafe).toBeDefined();
-    expect(mcp(Array.from({ length: 1025 }, () => "mcp.json"))).toMatch(/at most 1024/);
+    expect(mcp(Array.from({ length: 1025 }, () => "mcp.json"))).toMatch(/the bound is 1024/);
     expect(refusal("detector.cisco-mcp-scanner", undefined)).toMatch(/requires detectorOptions/);
     expect(
       refusal("detector.cisco-mcp-scanner", { mcpConfigPaths: [], internalScopes: [] }),
@@ -249,6 +249,6 @@ describe("runDetectorV1 detectorOptions boundary", () => {
       refusal("detector.cisco-mcp-scanner", { mcpConfigPaths: ["skills/a/mcp.json"] }, [
         "README.md",
       ]),
-    ).toMatch(/not an MCP config name/);
+    ).toMatch(/not an incoming MCP config name/);
   });
 });

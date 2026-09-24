@@ -21,6 +21,11 @@ function skillRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-echo-"));
   roots.push(root);
   writeFileSync(join(root, "SKILL.md"), "# Skill\n");
+  // One MCP server, so detector.cisco-mcp-scanner derives a tool and reaches its analyzer.
+  writeFileSync(
+    join(root, ".mcp.json"),
+    JSON.stringify({ mcpServers: { local: { command: "x" } } }),
+  );
   return root;
 }
 
@@ -30,17 +35,10 @@ const cases = listDetectorCapabilitiesV1().flatMap((capability) =>
     .map((profile) => [capability.detectorId, profile.id, capability.subjectKinds[0]] as const),
 );
 
-const UNDISPATCHED = new Set([
-  "detector.aih-binding-gate",
-  "detector.aih-trust-lint",
-  "detector.cisco-mcp-scanner",
-  "detector.snyk-agent-scan",
-]);
-
 /** Detectors that need detectorOptions get the smallest valid ones. */
 const OPTIONS: Readonly<Record<string, unknown>> = {
   "detector.aih-trust-lint": { internalScopes: [], mcpConfigPaths: [] },
-  "detector.cisco-mcp-scanner": { mcpConfigPaths: [] },
+  "detector.cisco-mcp-scanner": { mcpConfigPaths: [".mcp.json"] },
 };
 
 describe("runDetectorV1 execution profile echo", () => {
@@ -68,26 +66,18 @@ describe("runDetectorV1 execution profile echo", () => {
     const outcome = await runDetectorV1({
       detectorId,
       executionProfileId: profileId,
-      subject: { kind, sourceRoot: skillRoot(), selectedClosurePaths: ["SKILL.md"] },
+      subject: { kind, sourceRoot: skillRoot(), selectedClosurePaths: ["SKILL.md", ".mcp.json"] },
       ...(OPTIONS[detectorId] === undefined ? {} : { detectorOptions: OPTIONS[detectorId] }),
+      ...(detectorId === "detector.snyk-agent-scan" ? { env: { SNYK_TOKEN: "synthetic" } } : {}),
       prerequisiteProbe: () => "present",
       runner: async () => {
         throw new Error("analyzer unavailable in this test");
       },
     });
-    if (UNDISPATCHED.has(detectorId)) {
-      // Registered ahead of the runner dispatch that lands next; refused, never run.
-      expect(outcome).toMatchObject({
-        outcome: "refused",
-        reason: "execution-profile-unavailable",
-        detail: `${detectorId} has no analyzer backend in this package.`,
-      });
-      return;
-    }
     expect(["succeeded", "failed"]).toContain(outcome.outcome);
     if (outcome.outcome === "refused") return;
     expect(outcome.executionProfile.id).toBe(profileId);
-    // The in-process analyzer spawns nothing, so it succeeds; every other one fails here.
-    expect(outcome.outcome).toBe(profileId === "in-process-native-v1" ? "succeeded" : "failed");
+    // In-process analyzers spawn nothing, so they succeed; every other one fails here.
+    expect(outcome.outcome).toBe(profileId.startsWith("in-process-") ? "succeeded" : "failed");
   });
 });

@@ -32,7 +32,11 @@ import {
 } from "../capability/detector-capability-v1.js";
 import { type CiscoCaptureV2, captureCiscoOciCandidateV2 } from "../cisco/capture-v2.js";
 import { resolveHostExecutableV1 } from "../cli/host-executable.js";
-import { assertSafeRelativePosixPathV1, codeUnitCompare } from "../contract/strict-json-v1.js";
+import {
+  assertSafeRelativePosixPathV1,
+  canonicalStrictJsonBytesV1,
+  codeUnitCompare,
+} from "../contract/strict-json-v1.js";
 import {
   buildScanFindingsV1,
   digestBoundAnalyzerFindingsV1,
@@ -50,6 +54,15 @@ import {
   detectorOptionsSealRefusalV1,
   readDetectorOptionsV1,
 } from "./detector-options-v1.js";
+import {
+  ENGINE_ANALYZER_BY_DETECTOR_V1,
+  ENGINE_MAX_RESULTS_V1,
+  type EngineAnalyzerV1,
+  engineEnvironmentsV1,
+  enginePreflightRefusalV1,
+  engineRunsInProcessV1,
+  runEngineDetectorV1,
+} from "./engine-dispatch-v1.js";
 
 /**
  * Runs one Scan-owned detector without the caller writing any execution code.
@@ -155,7 +168,7 @@ export type { HostDockerRuntimeV1, HostProcessRuntimeV1, SkillspectorImageMatchV
 
 export interface BaselineAnalyzerObservationV1 {
   readonly protocol: "BaselineAnalyzerObservationV1";
-  readonly analyzer: BaselineAnalyzerV1;
+  readonly analyzer: BaselineAnalyzerV1 | EngineAnalyzerV1;
   readonly analyzerVersion: string;
   readonly mediaType: "application/sarif+json" | "application/vnd.aih.baseline-native+json";
   readonly annex: Readonly<{ path: string; sha256: string; byteLength: number }>;
@@ -357,10 +370,14 @@ function platformRefusal(
   const hostPlatform = `${process.platform}/${process.arch}`;
   const reason =
     profile.id === "host-process-uv-v1"
-      ? "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 lacks cryptography 50.0.0, Windows arm64 lacks Semgrep), and Scan never builds analyzer dependencies from source."
+      ? capability.detectorId === "detector.cisco-mcp-scanner"
+        ? "Its lock pins litellm 1.93.0, which publishes manylinux wheels only, and Scan never builds analyzer dependencies from source."
+        : capability.detectorId === "detector.snyk-agent-scan"
+          ? "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 and Windows arm64 lack cryptography 50.0.0), and Scan never builds analyzer dependencies from source."
+          : "No exact-pinned binary wheel exists for every analyzer dependency on this host (macOS amd64 lacks cryptography 50.0.0, Windows arm64 lacks Semgrep), and Scan never builds analyzer dependencies from source."
       : profile.id === "docker-host-local-skillspector-v1"
         ? "Its Docker engine must run the linux/amd64 SkillSpector image, natively or emulated."
-        : profile.id === "in-process-native-v1"
+        : profile.id.startsWith("in-process-")
           ? "The in-process analyzer knows only these operating systems and architectures."
           : "Scan's hardened detector profiles are Linux amd64 only.";
   return `This host is ${hostPlatform}; ${capability.detectorId} under ${profile.id} runs only on ${supported}. ${reason}`;
@@ -404,6 +421,7 @@ function failureStage(message: string): RunDetectorFailureStageV1 {
 function probePrerequisite(
   prerequisite: DetectorPrerequisiteV1,
   env: Readonly<NodeJS.ProcessEnv>,
+  requestEnv: Readonly<NodeJS.ProcessEnv>,
 ): DetectorPrerequisiteStateV1["state"] {
   if (prerequisite.kind === "executable" || prerequisite.kind === "bundled-asset") {
     const path =
@@ -421,7 +439,7 @@ function probePrerequisite(
     return resolveHostExecutableV1(prerequisite.id, env) === undefined ? "missing" : "present";
   }
   if (prerequisite.kind === "environment-variable") {
-    const value = env[prerequisite.id];
+    const value = requestEnv[prerequisite.id];
     return typeof value === "string" && value.length > 0 ? "present" : "missing";
   }
   // A container image, a uv-discoverable Python and a reachable index cannot be settled
@@ -470,6 +488,10 @@ function selectProfile(
         ? capability.executionProfile
         : available.find((entry) => entry.evidence === "ScanCandidateV2")
       : available.find((entry) => entry.id === named);
+  if (named === undefined && selected?.id === "host-process-uv-v1")
+    return {
+      refusal: `${capability.detectorId} runs only under host-process-uv-v1, which is unisolated and never a default: it runs only when named. Set executionProfileId to host-process-uv-v1 to run it.`,
+    };
   if (selected === undefined)
     return {
       refusal:
@@ -699,12 +721,14 @@ function probeStates(
   declared: readonly DetectorPrerequisiteV1[],
   probe: unknown,
   env: Readonly<NodeJS.ProcessEnv>,
+  requestEnv: Readonly<NodeJS.ProcessEnv> = env,
 ): { readonly states: readonly DetectorPrerequisiteStateV1[]; readonly failure?: string } {
   const states: DetectorPrerequisiteStateV1[] = [];
   let failure: string | undefined;
   for (const prerequisite of declared) {
     let state: DetectorPrerequisiteStateV1["state"] = "not-probed";
-    if (failure === undefined && probe === undefined) state = probePrerequisite(prerequisite, env);
+    if (failure === undefined && probe === undefined)
+      state = probePrerequisite(prerequisite, env, requestEnv);
     else if (failure === undefined) {
       try {
         const reported: unknown = (probe as (entry: DetectorPrerequisiteV1) => unknown)(
@@ -916,8 +940,19 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   )
     return refuse("unsupported-platform", platformRefusal(capability, profile), capability);
 
-  const env = input.env ?? process.env;
+  const environments = engineEnvironmentsV1(capability.detectorId, input.env);
+  const env = environments.host;
   const probe = input.prerequisiteProbe;
+  const engineAnalyzer = ENGINE_ANALYZER_BY_DETECTOR_V1[capability.detectorId];
+  if (engineAnalyzer !== undefined) {
+    const preflight = enginePreflightRefusalV1(engineAnalyzer, {
+      sourceRoot: subject.sourceRoot,
+      selectedClosurePaths: subject.selectedClosurePaths,
+      detectorOptions,
+      requestEnv: input.env,
+    });
+    if (preflight !== undefined) return refuse(preflight.reason, preflight.detail, capability);
+  }
   const seams: RunDetectorSeamsV1 = Object.freeze({
     runner:
       (input.ociCapture?.runner ?? input.runner) === undefined
@@ -934,7 +969,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     analyzesGitDirectory: wholeTree,
   });
   // Only the selected profile's prerequisites are probed, and only they gate the run.
-  const probed = probeStates(profile.prerequisites, probe, env);
+  const probed = probeStates(profile.prerequisites, probe, env, environments.prerequisites);
   const prerequisites = probed.states;
   const failed = (stage: RunDetectorFailureStageV1, error: unknown): RunDetectorV1Result =>
     Object.freeze({
@@ -1024,58 +1059,105 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
     });
   }
 
-  const analyzer = ANALYZER_BY_DETECTOR[capability.detectorId];
+  const analyzer: BaselineAnalyzerV1 | EngineAnalyzerV1 | undefined =
+    engineAnalyzer ?? ANALYZER_BY_DETECTOR[capability.detectorId];
   if (analyzer === undefined)
     return refuse(
       "execution-profile-unavailable",
       `${capability.detectorId} has no analyzer backend in this package.`,
       capability,
     );
+  // In-process engines read the declared source root, sealed before and after; every
+  // other analyzer is given a private snapshot that is itself checked and removed.
+  const inProcessEngine = engineAnalyzer !== undefined && engineRunsInProcessV1(engineAnalyzer);
 
   const snapshotOptions = {
     includeGitDirectory: wholeTree,
     maxFileBytes: SOURCE_OBSERVATION_SEAL_LIMITS_V1.maxFileBytes,
     links: "observation" as const,
   };
-  let snapshotRoot: string;
-  try {
-    snapshotRoot = empty
-      ? mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"))
-      : createBaselineAnalyzerSnapshotV1(subject.sourceRoot, snapshotOptions);
-  } catch (error) {
-    return failed("availability", error);
+  let snapshotRoot: string | undefined;
+  if (!inProcessEngine) {
+    try {
+      snapshotRoot = empty
+        ? mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"))
+        : createBaselineAnalyzerSnapshotV1(subject.sourceRoot, snapshotOptions);
+    } catch (error) {
+      return failed("availability", error);
+    }
   }
   // Every path below returns a result rather than throwing, so the snapshot removal after
   // it always runs and a removal that fails is reported instead of rejecting.
   const analyzed = await (async (): Promise<RunDetectorV1Result> => {
-    let observed: Awaited<ReturnType<ReturnType<typeof createBaselineAnalyzerRunV1>>>;
-    try {
-      const run = createBaselineAnalyzerRunV1({
+    let normalized: {
+      readonly analyzerVersion: string;
+      readonly mediaType: BaselineAnalyzerObservationV1["mediaType"];
+      readonly bytes: Buffer;
+    };
+    let extras: Pick<BaselineAnalyzerObservationV1, "image" | "hostRuntime" | "hostDocker"> = {};
+    if (engineAnalyzer !== undefined) {
+      const ran = await runEngineDetectorV1({
+        analyzer: engineAnalyzer,
+        root: snapshotRoot ?? subject.sourceRoot,
+        selectedClosurePaths: subject.selectedClosurePaths,
+        detectorOptions,
+        requestEnv: input.env,
+        hostEnv: env,
         ...(input.runner === undefined ? {} : { runner: input.runner }),
-        ...(input.env === undefined ? {} : { env: input.env }),
-        ...(input.acceptedImageDigests === undefined
-          ? {}
-          : { skillspectorAcceptedImageDigests: input.acceptedImageDigests }),
-        executionProfileId: profile.id as BaselineExecutionProfileIdV1,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(deadline === undefined ? {} : { deadline }),
       });
-      observed = await run({ analyzer, sourceRoot: snapshotRoot });
-    } catch (error) {
-      return failed(failureStage(thrownMessage(error) ?? ""), error);
-    }
-    let normalized: ReturnType<typeof normalizedObservation>;
-    try {
-      normalized = normalizedObservation(analyzer, observed);
-    } catch (error) {
-      return failed("output", error);
+      if (ran.kind === "refused") return refuse(ran.refusal.reason, ran.refusal.detail, capability);
+      if (ran.kind === "failed") return failed(ran.stage, ran.error);
+      try {
+        normalized = {
+          analyzerVersion: ran.analyzerVersion,
+          mediaType: "application/sarif+json",
+          bytes: Buffer.from(canonicalStrictJsonBytesV1(ran.sarif)),
+        };
+      } catch (error) {
+        return failed("output", error);
+      }
+      if (ran.hostRuntime !== undefined) extras = { hostRuntime: ran.hostRuntime };
+    } else {
+      let observed: Awaited<ReturnType<ReturnType<typeof createBaselineAnalyzerRunV1>>>;
+      try {
+        const run = createBaselineAnalyzerRunV1({
+          ...(input.runner === undefined ? {} : { runner: input.runner }),
+          ...(input.env === undefined ? {} : { env: input.env }),
+          ...(input.acceptedImageDigests === undefined
+            ? {}
+            : { skillspectorAcceptedImageDigests: input.acceptedImageDigests }),
+          executionProfileId: profile.id as BaselineExecutionProfileIdV1,
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
+          ...(deadline === undefined ? {} : { deadline }),
+        });
+        observed = await run({
+          analyzer: analyzer as BaselineAnalyzerV1,
+          sourceRoot: snapshotRoot as string,
+        });
+      } catch (error) {
+        return failed(failureStage(thrownMessage(error) ?? ""), error);
+      }
+      try {
+        normalized = normalizedObservation(analyzer as BaselineAnalyzerV1, observed);
+      } catch (error) {
+        return failed("output", error);
+      }
+      extras = {
+        ...(observed.image === undefined ? {} : { image: observed.image }),
+        ...(observed.hostRuntime === undefined ? {} : { hostRuntime: observed.hostRuntime }),
+        ...(observed.hostDocker === undefined ? {} : { hostDocker: observed.hostDocker }),
+      };
     }
     let after: SourceObservationSealV1;
     try {
-      if (empty) {
-        if (readdirSync(snapshotRoot).length !== 0)
-          throw new TypeError("source changed during the run");
-      } else assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot, snapshotOptions);
+      if (snapshotRoot !== undefined) {
+        if (empty) {
+          if (readdirSync(snapshotRoot).length !== 0)
+            throw new TypeError("source changed during the run");
+        } else assertBaselineAnalyzerSnapshotUnchangedV1(snapshotRoot, snapshotOptions);
+      }
       after = sealSourceObservationV1({
         sourceRoot: subject.sourceRoot,
         selectedClosurePaths: subject.selectedClosurePaths,
@@ -1110,6 +1192,10 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
                     : [],
                 ),
               ),
+              // Engine SARIF may name no file (a whole-tree finding, a fallback URI).
+              ...(engineAnalyzer === undefined
+                ? {}
+                : { unboundLocations: "unavailable" as const, maxResults: ENGINE_MAX_RESULTS_V1 }),
             })
           : digestBoundAnalyzerFindingsV1(
               `The ${analyzer} output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.`,
@@ -1133,9 +1219,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
           mediaType: normalized.mediaType,
           annex,
           bytes: normalized.bytes,
-          ...(observed.image === undefined ? {} : { image: observed.image }),
-          ...(observed.hostRuntime === undefined ? {} : { hostRuntime: observed.hostRuntime }),
-          ...(observed.hostDocker === undefined ? {} : { hostDocker: observed.hostDocker }),
+          ...extras,
         }),
       }),
       findings,
@@ -1143,6 +1227,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       sourceSeal: Object.freeze({ before: before as SourceObservationSealV1, after }),
     });
   })();
+  if (snapshotRoot === undefined) return analyzed;
   try {
     rmSync(snapshotRoot, { recursive: true, force: true });
   } catch (error) {
