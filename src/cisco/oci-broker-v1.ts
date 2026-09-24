@@ -15,6 +15,7 @@ import {
   assertCiscoSingleSkillAnalyzersCompleteV1,
   ciscoSingleSkillReportV1,
 } from "../baseline/cisco-analyzer-failures-v1.js";
+import { assertCiscoSingleSkillReportSkillV1 } from "../baseline/cisco-report-skills-v1.js";
 import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../cli/process-runner.js";
 import {
   assertSafeRelativePosixPathV1,
@@ -473,8 +474,16 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     // U1i, coordinator decision D30 (revised 20:58Z): the capture scanned one skill, the
     // source root; it is complete only when every failed analyzer Cisco reports is the
     // matched skill_loader fallback (coverage otherwise; a malformed report is output).
+    // U1j (review of U1i, P1): the report must be the report of `/source` itself.
+    const report = ciscoSingleSkillReportV1(rawReport, "the capture");
+    assertCiscoSingleSkillReportSkillV1(report, {
+      label: "the capture",
+      sourceRoots: ["/source"],
+      skill: "",
+      platform: "linux",
+    });
     assertCiscoSingleSkillAnalyzersCompleteV1(
-      ciscoSingleSkillReportV1(rawReport, "the capture"),
+      report,
       (parsedSarif.runs[0]?.results ?? []).map((result) => result.ruleId),
       "",
     );

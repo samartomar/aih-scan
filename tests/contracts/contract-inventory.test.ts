@@ -204,7 +204,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 951,
+    line: 967,
     contains: "export function assertCiscoScanAllAnalyzersCompleteV1",
   },
   {
@@ -267,12 +267,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 581,
+    line: 597,
     contains: "export function sourceRelativeSarifV1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 796,
+    line: 812,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {

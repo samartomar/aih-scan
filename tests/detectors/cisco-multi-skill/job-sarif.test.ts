@@ -783,20 +783,49 @@ describe.each(
 
   it("fails output for a missing, unreadable or malformed JSON report, or a malformed analyzers_failed", async () => {
     for (const [report, reason] of [
-      [undefined, /JSON report/],
-      ["{", /Cisco JSON report/],
-      [Buffer.from([0xff]), /Cisco JSON report/],
-      [{ summary: {}, results: [] }, /not a single-skill scan report/],
+      [() => undefined, /JSON report/],
+      [() => "{", /Cisco JSON report/],
+      [() => Buffer.from([0xff]), /Cisco JSON report/],
+      [() => ({ summary: {}, results: [] }), /not a single-skill scan report/],
       [
-        { skill_path: "/x", findings: [], analyzers_failed: "skill_loader" },
+        (target: string) => ({
+          skill_path: target,
+          findings: [],
+          analyzers_failed: "skill_loader",
+        }),
         /analyzers_failed .*is malformed/,
       ],
       [
-        { skill_path: "/x", findings: [], analyzers_failed: [{ analyzer: "a" }] },
+        (target: string) => ({
+          skill_path: target,
+          findings: [],
+          analyzers_failed: [{ analyzer: "a" }],
+        }),
         /analyzers_failed .*is malformed/,
       ],
     ] as const) {
-      const outcome = await outcomeOf(sarif([cleanRun()]), () => report);
+      const outcome = await outcomeOf(sarif([cleanRun()]), report);
+      expect(outcome, String(report)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  // U1j (review of U1i, P1): the report is evidence only for the skill the job scanned.
+  it("fails output for another skill's failure-free report on the alpha job (U1j)", async () => {
+    for (const [report, reason] of [
+      [
+        (target: string) => scanReport(target.replace(/alpha$/u, "beta")),
+        /Cisco JSON report of job skills\/alpha is for skill skills\/beta, not skills\/alpha/,
+      ],
+      [(target: string) => scanReport(`${target}/nested`), /is for skill skills\/alpha\/nested/],
+      [() => scanReport("/elsewhere/skills/alpha"), /is outside the source root/],
+      [
+        (target: string) => ({ ...scanReport(target), skill_path: undefined }),
+        /not a single-skill scan report/,
+      ],
+    ] as const) {
+      // alpha's own SARIF is clean, so only the report binding can refuse the job.
+      const outcome = await outcomeOf(sarif([cleanRun()]), report);
       expect(outcome, String(report)).toMatchObject({ kind: "failed", stage: "output" });
       expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
     }

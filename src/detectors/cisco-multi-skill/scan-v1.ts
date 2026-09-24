@@ -6,6 +6,7 @@ import {
   CiscoAnalyzerFailureV1,
   ciscoSingleSkillReportV1,
 } from "../../baseline/cisco-analyzer-failures-v1.js";
+import { assertCiscoSingleSkillReportSkillV1 } from "../../baseline/cisco-report-skills-v1.js";
 import {
   ciscoJobDirectoryProblemTextV1,
   resolveContainedCiscoJobDirectoryV1,
@@ -220,7 +221,9 @@ export type CiscoSkillDirectoryScanOutcomeV1 = Readonly<
  * single-skill JSON report is then read with the one strict parser; a missing, unreadable or
  * malformed report, or a malformed `analyzers_failed`, is stage `output` (never a fallback
  * to SARIF alone), and a failed analyzer other than the matched skill_loader fallback is stage
- * `coverage`. The private temporary directory is always removed.
+ * `coverage`. U1j: a report whose `skill_path` does not name exactly this job's directory
+ * (`assertCiscoSingleSkillReportSkillV1`) is stage `output`, before its `analyzers_failed` is
+ * read. The private temporary directory is always removed.
  */
 export async function scanCiscoSkillDirectoryOutcomeV1(
   request: CiscoSkillDirectoryScanRequestV1,
@@ -289,8 +292,17 @@ export async function scanCiscoSkillDirectoryOutcomeV1(
       });
     }
     try {
+      const label = `job ${skill === "" ? "." : skill}`;
+      const report = ciscoSingleSkillReportV1(reportBytes, label);
+      // U1j (review of U1i, P1): the report is evidence only for the skill this job scanned.
+      assertCiscoSingleSkillReportSkillV1(report, {
+        label,
+        sourceRoots: [request.root],
+        skill,
+        platform: request.platform === "windows" ? "win32" : request.platform,
+      });
       assertCiscoSingleSkillAnalyzersCompleteV1(
-        ciscoSingleSkillReportV1(reportBytes, `job ${skill === "" ? "." : skill}`),
+        report,
         (sarif.log.runs ?? []).flatMap((run) => (run.results ?? []).map((result) => result.ruleId)),
         skill,
       );

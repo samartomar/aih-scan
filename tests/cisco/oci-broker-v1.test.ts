@@ -165,6 +165,13 @@ function scanReportFor(mode: string): string | undefined {
   if (mode === "json-missing") return undefined;
   if (mode === "json-malformed") return "{";
   if (mode === "json-scan-all") return JSON.stringify({ summary: {}, results: [] });
+  // U1j: a failure-free report for a directory the capture did not scan.
+  if (mode === "json-other-skill")
+    return JSON.stringify({
+      skill_name: "other",
+      skill_path: "/source/skills/other",
+      findings: [],
+    });
   if (mode === "json-behavioral")
     return report({ analyzers_failed: [{ analyzer: "behavioral", error: "Timeout" }] });
   if (mode === "json-fallback")
@@ -193,6 +200,7 @@ type RunnerMode =
   | "json-loader-unmatched"
   | "json-malformed"
   | "json-missing"
+  | "json-other-skill"
   | "json-scan-all"
   | "image-nonzero"
   | "malformed"
@@ -1037,7 +1045,12 @@ describe("Cisco OCI broker V1", () => {
   // skill_loader fallback with its SKILL_LOAD_FALLBACK_USED finding and SARIF counterpart,
   // and otherwise fails at coverage, naming each analyzer and error.
   it("fails output, and cleans, when the JSON report is missing or malformed (D30)", async () => {
-    for (const mode of ["json-missing", "json-malformed", "json-scan-all"] as const) {
+    for (const mode of [
+      "json-missing",
+      "json-malformed",
+      "json-scan-all",
+      "json-other-skill",
+    ] as const) {
       const layout = layoutFixture();
       const fake = runner(layout, mode);
       const value = input(layout, sourceFixture(), { runner: fake.run }).value;

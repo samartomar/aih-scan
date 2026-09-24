@@ -456,6 +456,22 @@ export function sarifResultSharedArtifactLocationsV1(
 }
 
 /**
+ * U1j: the source-relative directory an absolute Cisco JSON report `skill_path` names,
+ * related to `sourceRoots` by the rule every Cisco location uses (a Windows root matches
+ * ignoring case; the root itself is ""). A relative, unsafe or outside path throws
+ * `TypeError`.
+ */
+export function sourceRelativeSkillDirectoryV1(
+  path: string,
+  sourceRoots: readonly string[],
+): string {
+  const spelling = decodedPath(path).replaceAll("\\", "/");
+  if (!spelling.startsWith("/") && !/^[A-Za-z]:\//u.test(spelling))
+    fail(`${JSON.stringify(path)} is not an absolute skill path`);
+  return relativeTo(path, roots(sourceRoots), true);
+}
+
+/**
  * Whether source-relative `path` lies in source-relative `directory` ("" is the root, which
  * holds everything). A nested skill's directory lies inside its parent's.
  */
