@@ -96,7 +96,13 @@ const okay = (stdout: string) => ({ code: 0, stdout, stderr: "", truncated: fals
 const sarif = (results: unknown[]) =>
   canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name: "semgrep" } }, results }],
+    runs: [
+      {
+        tool: { driver: { name: "semgrep" } },
+        results,
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
   }).toString("utf8");
 const result = (uri: string, startLine: number, ruleId = "semgrep.prompt-injection") => ({
   ruleId,
@@ -519,6 +525,7 @@ describe("runDetectorV1 host-process-uv-v1 execution", () => {
           runs: [
             {
               tool: { driver: { name: "skill-scanner" } },
+              invocations: [{ executionSuccessful: true }],
               results: [result("SKILL.md", 5, "YARA_prompt_injection_generic")],
             },
           ],
@@ -796,5 +803,142 @@ describe("host-process-uv-v1 capability", () => {
         { os: "windows", architecture: "amd64" },
       ]);
     }
+  });
+});
+
+// S2e sweep: the baseline analyzers' SARIF must prove a completed analysis before any
+// result, zero findings included, is reported (src/detectors/sarif-completion-v1.ts).
+describe("runDetectorV1 host-process-uv-v1 analyzer SARIF completion (S2e)", () => {
+  const semgrepWith = async (document: unknown) => {
+    const host = hostFixture();
+    return runDetectorV1(
+      semgrepRequest({
+        env: host.env,
+        runner: hostRunner([], host.python, async () =>
+          okay(canonicalStrictJsonBytesV1(document as never).toString("utf8")),
+        ),
+      }),
+    );
+  };
+  const driver = { driver: { name: "semgrep" } };
+
+  it.each([
+    ["no runs", { version: "2.1.0", runs: [] }, "output", /holds no runs/],
+    ["another version", { version: "2.0.0", runs: [] }, "output", /version 2\.1\.0/],
+    [
+      "no invocation",
+      { version: "2.1.0", runs: [{ tool: driver, results: [] }] },
+      "output",
+      /reports no invocation/,
+    ],
+    [
+      "no results array",
+      { version: "2.1.0", runs: [{ tool: driver, invocations: [{ executionSuccessful: true }] }] },
+      "output",
+      /holds no results array/,
+    ],
+    [
+      "an unsuccessful invocation",
+      {
+        version: "2.1.0",
+        runs: [{ tool: driver, results: [], invocations: [{ executionSuccessful: false }] }],
+      },
+      "execution",
+      /did not complete successfully/,
+    ],
+    [
+      "an error notification",
+      {
+        version: "2.1.0",
+        runs: [
+          {
+            tool: driver,
+            results: [],
+            invocations: [
+              {
+                executionSuccessful: true,
+                toolExecutionNotifications: [{ level: "error", message: { text: "rule crash" } }],
+              },
+            ],
+          },
+        ],
+      },
+      "execution",
+      /error notification/,
+    ],
+  ] as const)("fails Semgrep SARIF with %s", async (_label, document, stage, detail) => {
+    const outcome = await semgrepWith(document);
+    expect(outcome.outcome).toBe("failed");
+    if (outcome.outcome !== "failed") return;
+    expect(outcome.failure.stage).toBe(stage);
+    expect(outcome.failure.detail).toMatch(detail);
+  });
+
+  it("keeps a warning-level notification (Semgrep's per-file limitations)", async () => {
+    const outcome = await semgrepWith({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: driver,
+          results: [],
+          invocations: [
+            {
+              executionSuccessful: true,
+              toolExecutionNotifications: [{ level: "warning", message: { text: "skipped" } }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(outcome.outcome).toBe("succeeded");
+  });
+
+  it("fails Cisco skill-directory SARIF whose invocation did not complete", async () => {
+    const host = hostFixture();
+    const sourceRoot = skillFixture();
+    const runner = hostRunner([], host.python, async (argv) => {
+      const snapshot = argv[argv.indexOf("scan-all") + 1] ?? "";
+      writeFileSync(
+        argv[argv.indexOf("--output-json") + 1] ?? "",
+        canonicalStrictJsonBytesV1({
+          summary: { total_skills_scanned: 2 },
+          results: [
+            { skill_path: snapshot, findings: [] },
+            { skill_path: join(snapshot, "skills", "nested"), findings: [] },
+          ],
+        }),
+      );
+      writeFileSync(
+        argv[argv.indexOf("--output-sarif") + 1] ?? "",
+        canonicalStrictJsonBytesV1({
+          version: "2.1.0",
+          runs: [
+            {
+              tool: { driver: { name: "skill-scanner" } },
+              results: [],
+              invocations: [{ executionSuccessful: false }],
+            },
+          ],
+        }),
+      );
+      return okay("");
+    });
+
+    const outcome = await runDetectorV1({
+      detectorId: "detector.cisco",
+      executionProfileId: HOST_PROFILE,
+      subject: {
+        kind: "skill-directory",
+        sourceRoot,
+        selectedClosurePaths: ["SKILL.md", "skills/nested/SKILL.md"],
+      },
+      env: host.env,
+      runner,
+    });
+
+    expect(outcome.outcome).toBe("failed");
+    if (outcome.outcome !== "failed") return;
+    expect(outcome.failure.stage).toBe("execution");
+    expect(outcome.failure.detail).toMatch(/did not complete successfully/);
   });
 });

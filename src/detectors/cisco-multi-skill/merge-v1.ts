@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { rewriteSarifRunLocationsV1 } from "../../baseline/sarif-source-relative-v1.js";
 import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
+import { assertSarifCompletedV1, SarifCompletionErrorV1 } from "../sarif-completion-v1.js";
 import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 
 /**
@@ -66,10 +67,6 @@ export const MAX_CISCO_SARIF_BYTES_V1 = 16 * 1024 * 1024;
  */
 export const CISCO_SARIF_FALLBACK_URI_V1 = "cisco.sarif";
 
-function isRecordV1(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Where a job's SARIF fell short: the analyzer's own failure report, or unusable output. */
 export type CiscoJobSarifFailureStageV1 = "execution" | "output";
 
@@ -89,26 +86,11 @@ class CiscoJobSarifProblemV1 extends Error {
 
 const INVALID_SARIF = "detector did not emit valid SARIF";
 
-function sarifProblem(stage: CiscoJobSarifFailureStageV1, detail: string): never {
-  throw new CiscoJobSarifProblemV1(stage, `detector SARIF ${detail}`);
-}
-
-/** An invocation's notification list holding an `error`-level (or malformed) entry. */
-function hasErrorNotification(value: unknown, where: string): boolean {
-  if (value === undefined) return false;
-  if (!Array.isArray(value)) sarifProblem("output", `${where} notifications are malformed`);
-  return value.some((entry) => !isRecordV1(entry) || entry.level === "error");
-}
-
 /**
- * The completion evidence one skill-scanner job must carry (S2e, the owner principle): the
- * analyzer's own SARIF proves the job ran to completion, or the job fails. Real
- * skill-scanner 2.0.14 output is `version` "2.1.0" with runs that each name a tool driver,
- * hold a `results` array and report their invocations with `executionSuccessful: true`.
- * An unparseable or oversized file, another version, no runs, a run without a driver or a
- * results array, a malformed result and a run without invocations are `output` failures;
- * an invocation that is not `executionSuccessful: true`, or that carries an `error`-level
- * tool execution or configuration notification, is the analyzer's own `execution` failure.
+ * The completion evidence one skill-scanner job must carry (S2e, the owner principle; the
+ * shared {@link assertSarifCompletedV1}): the analyzer's own SARIF proves the job ran to
+ * completion, or the job fails. An unparseable or oversized file is an `output` failure
+ * with Core's "did not emit valid SARIF".
  */
 function validatedCiscoJobSarifV1(raw: string): Record<string, unknown> & { runs: unknown[] } {
   if (Buffer.byteLength(raw, "utf8") > MAX_CISCO_SARIF_BYTES_V1)
@@ -119,41 +101,13 @@ function validatedCiscoJobSarifV1(raw: string): Record<string, unknown> & { runs
   } catch {
     throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
   }
-  if (!isRecordV1(parsed)) throw new CiscoJobSarifProblemV1("output", INVALID_SARIF);
-  if (parsed.version !== "2.1.0") sarifProblem("output", "is not version 2.1.0");
-  const runs = parsed.runs;
-  if (!Array.isArray(runs) || runs.length === 0) sarifProblem("output", "holds no runs");
-  runs.forEach((run: unknown, index) => {
-    const where = `run ${index}`;
-    if (!isRecordV1(run)) sarifProblem("output", `${where} is malformed`);
-    const driver = isRecordV1(run.tool) ? run.tool.driver : undefined;
-    if (!isRecordV1(driver) || typeof driver.name !== "string" || driver.name.length === 0)
-      sarifProblem("output", `${where} names no tool driver`);
-    const results = run.results;
-    if (!Array.isArray(results)) sarifProblem("output", `${where} holds no results array`);
-    results.forEach((result: unknown, resultIndex) => {
-      if (
-        !isRecordV1(result) ||
-        (result.locations !== undefined && !Array.isArray(result.locations))
-      )
-        sarifProblem("output", `${where} result ${resultIndex} is malformed`);
-    });
-    const invocations = run.invocations;
-    if (!Array.isArray(invocations) || invocations.length === 0)
-      sarifProblem("output", `${where} reports no invocation`);
-    for (const invocation of invocations) {
-      if (!isRecordV1(invocation) || invocation.executionSuccessful !== true)
-        sarifProblem(
-          "execution",
-          `${where} reports an invocation that did not complete successfully`,
-        );
-      if (
-        hasErrorNotification(invocation.toolExecutionNotifications, where) ||
-        hasErrorNotification(invocation.toolConfigurationNotifications, where)
-      )
-        sarifProblem("execution", `${where} reports an error notification`);
-    }
-  });
+  try {
+    assertSarifCompletedV1(parsed);
+  } catch (error) {
+    if (error instanceof SarifCompletionErrorV1)
+      throw new CiscoJobSarifProblemV1(error.stage, `detector SARIF ${error.message}`);
+    throw error;
+  }
   return parsed as Record<string, unknown> & { runs: unknown[] };
 }
 

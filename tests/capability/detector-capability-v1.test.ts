@@ -51,7 +51,9 @@ function sourceFixture(): string {
 const sarif = (name: string) =>
   canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name } }, results: [] }],
+    runs: [
+      { tool: { driver: { name } }, results: [], invocations: [{ executionSuccessful: true }] },
+    ],
   }).toString("utf8");
 
 describe("DetectorCapabilityV1", () => {

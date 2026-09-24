@@ -149,3 +149,33 @@ describe("projectAnalyzerSarifFindingsV1", () => {
     );
   });
 });
+
+// S2e sweep: the projection no longer reads a run without a results array, or a log with no
+// runs, as zero findings.
+describe("projectAnalyzerSarifFindingsV1 fail-closed shape (S2e)", () => {
+  const projectDocument = (document: unknown) => {
+    const bytes = canonicalStrictJsonBytesV1(document as never);
+    return () =>
+      projectAnalyzerSarifFindingsV1({
+        detectorId: "detector.semgrep",
+        analyzer: "semgrep",
+        bytes,
+        annex: {
+          descriptorId: "annex/semgrep.json",
+          sha256: sha256(bytes),
+          byteLength: bytes.length,
+        },
+        sealedFiles,
+      } as never);
+  };
+
+  it("rejects a log with no runs", () => {
+    expect(projectDocument({ version: "2.1.0", runs: [] })).toThrow(/no runs/);
+  });
+
+  it("rejects a run without a results array", () => {
+    expect(
+      projectDocument({ version: "2.1.0", runs: [{ tool: { driver: { name: "x" } } }] }),
+    ).toThrow(/results list is not an array/);
+  });
+});

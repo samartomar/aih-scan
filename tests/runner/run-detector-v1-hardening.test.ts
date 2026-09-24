@@ -281,7 +281,13 @@ describe("runDetectorV1 caller-accepted SkillSpector image digests", () => {
   const acceptedB = `sha256:${"b".repeat(64)}`;
   const sarif = canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name: "skillspector" } }, results: [] }],
+    runs: [
+      {
+        tool: { driver: { name: "skillspector" } },
+        results: [],
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
   }).toString("utf8");
   const okay = (stdout: string) => ({ code: 0, stdout, stderr: "", truncated: false });
   const absent = { code: 1, stdout: "", stderr: "Error: No such image", truncated: false };

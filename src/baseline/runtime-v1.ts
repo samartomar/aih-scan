@@ -32,6 +32,10 @@ import {
   canonicalStrictJsonSha256V1,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
+import {
+  assertSarifCompletedV1,
+  SarifCompletionErrorV1,
+} from "../detectors/sarif-completion-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
 import { ciscoSourceRelativeSarifV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
@@ -528,14 +532,32 @@ type AnalyzerOutput = {
   readonly hostDocker?: HostDockerRuntimeV1;
 };
 
+/**
+ * The analyzer's SARIF, strict JSON that proves a completed analysis (S2e,
+ * {@link assertSarifCompletedV1}): a shortfall in the document is an `output` failure (the
+ * message names the observation); an invocation that reports its own failure, or an
+ * error-level notification, is an `execution` failure.
+ */
 function parsedSarif(text: string, analyzer: string): Record<string, unknown> {
+  let document: Record<string, unknown>;
   try {
-    return parseStrictJsonObjectV1(text, `${analyzer} observation`);
+    document = parseStrictJsonObjectV1(text, `${analyzer} observation`);
   } catch (error) {
     fail(
       `baseline ${analyzer} observation is invalid: ${error instanceof Error ? error.message : "JSON"}`,
     );
   }
+  try {
+    assertSarifCompletedV1(document);
+  } catch (error) {
+    if (!(error instanceof SarifCompletionErrorV1)) throw error;
+    fail(
+      error.stage === "output"
+        ? `baseline ${analyzer} observation SARIF ${error.message}`
+        : `${analyzer} analysis SARIF ${error.message}`,
+    );
+  }
+  return document;
 }
 
 function sarifOutput(

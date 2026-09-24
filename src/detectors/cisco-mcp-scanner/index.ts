@@ -406,9 +406,20 @@ export function parseCiscoMcpScannerSarifV1(
       if (total === undefined) fail("mcp-scanner JSON analyzer finding omitted a valid total");
       if (total === 0) continue;
 
-      const threats = Array.isArray(rawSummary.threat_names)
-        ? rawSummary.threat_names.filter((threat): threat is string => typeof threat === "string")
-        : [];
+      // Malformed threat fields fail rather than being filtered or ignored (S2e).
+      const rawThreats = rawSummary.threat_names;
+      if (
+        rawThreats !== undefined &&
+        rawThreats !== null &&
+        (!Array.isArray(rawThreats) || rawThreats.some((threat) => typeof threat !== "string"))
+      )
+        fail("mcp-scanner JSON analyzer finding carries malformed threat names");
+      for (const key of ["threat_summary", "severity"] as const) {
+        const value = rawSummary[key];
+        if (value !== undefined && value !== null && typeof value !== "string")
+          fail("mcp-scanner JSON included a malformed analyzer finding");
+      }
+      const threats: string[] = Array.isArray(rawThreats) ? rawThreats : [];
       if (threats.length > MAX_THREATS_PER_ANALYZER)
         fail("mcp-scanner JSON analyzer finding exceeds the threat bound");
       const findingNames = threats.length > 0 ? threats : [analyzer];

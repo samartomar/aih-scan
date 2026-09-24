@@ -242,17 +242,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 48,
+    line: 52,
     contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 710,
+    line: 732,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 217,
+    line: 221,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
@@ -262,7 +262,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 349,
+    line: 396,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {
@@ -288,7 +288,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/findings/scan-findings-v1.ts",
-    line: 575,
+    line: 576,
     contains: "export function readScanFindingsV1",
   },
 ];

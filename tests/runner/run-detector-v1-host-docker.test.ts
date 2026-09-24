@@ -66,6 +66,7 @@ const sarif = canonicalStrictJsonBytesV1({
   runs: [
     {
       tool: { driver: { name: "skillspector" } },
+      invocations: [{ executionSuccessful: true }],
       results: [
         {
           ruleId: "skillspector.prompt-injection",
@@ -408,7 +409,13 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 image identity (never 
     const empty = temporary("empty");
     const emptySarif = canonicalStrictJsonBytesV1({
       version: "2.1.0",
-      runs: [{ tool: { driver: { name: "skillspector" } }, results: [] }],
+      runs: [
+        {
+          tool: { driver: { name: "skillspector" } },
+          results: [],
+          invocations: [{ executionSuccessful: true }],
+        },
+      ],
     }).toString("utf8");
     const outcome = await runDetectorV1({
       ...request({ env: host.env, runner: dockerRunner(calls, async () => okay(emptySarif)) }),
@@ -419,5 +426,34 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 image identity (never 
     expect(outcome.findings.findings).toEqual([]);
     expect(outcome.sourceSeal.before.protocol).toBe("SourceObservationSealV1");
     expect(outcome.sourceSeal.before.entries).toEqual([]);
+  });
+});
+
+// S2e sweep: SkillSpector's own SARIF must prove a completed analysis (real SkillSpector
+// writes one run with invocations:[{executionSuccessful:true, …warning notifications}]).
+describe("runDetectorV1 docker-host-local-skillspector-v1 SARIF completion (S2e)", () => {
+  const run = (document: unknown) =>
+    runDetectorV1(
+      request({
+        env: hostFixture().env,
+        runner: dockerRunner([], async () =>
+          okay(canonicalStrictJsonBytesV1(document as never).toString("utf8")),
+        ),
+      }),
+    );
+  const tool = { driver: { name: "skillspector" } };
+
+  it("fails SARIF with no runs at output", async () => {
+    const outcome = await run({ version: "2.1.0", runs: [] });
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(/holds no runs/);
+  });
+
+  it("fails an invocation that did not complete at execution", async () => {
+    const outcome = await run({
+      version: "2.1.0",
+      runs: [{ tool, results: [], invocations: [{ executionSuccessful: false }] }],
+    });
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "execution" } });
   });
 });

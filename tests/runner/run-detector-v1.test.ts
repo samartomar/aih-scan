@@ -514,7 +514,9 @@ describe("runDetectorV1 hardened analyzer profiles", () => {
   const sarif = (name: string) =>
     canonicalStrictJsonBytesV1({
       version: "2.1.0",
-      runs: [{ tool: { driver: { name } }, results: [] }],
+      runs: [
+        { tool: { driver: { name } }, results: [], invocations: [{ executionSuccessful: true }] },
+      ],
     }).toString("utf8");
 
   function analyzerRunner(calls: { argv: readonly string[]; env: Record<string, string> }[]) {

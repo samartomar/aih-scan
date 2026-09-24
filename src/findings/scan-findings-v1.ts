@@ -427,10 +427,11 @@ export function projectAnalyzerSarifFindingsV1(
     return sarifFail("the SARIF annex is not strict JSON");
   }
   if (log.version !== "2.1.0" || !Array.isArray(log.runs)) sarifFail("not a SARIF 2.1.0 log");
+  // A log with no runs, or a run without a results list, reports no analysis (S2e).
+  if (log.runs.length === 0) sarifFail("the SARIF log holds no runs");
   const results: Record<string, unknown>[] = [];
   for (const run of log.runs as unknown[]) {
     const runRecord = sarifRecord(run) ?? sarifFail("a SARIF run is not an object");
-    if (runRecord.results === undefined) continue;
     if (!Array.isArray(runRecord.results)) sarifFail("a SARIF results list is not an array");
     for (const result of runRecord.results as unknown[])
       results.push(sarifRecord(result) ?? sarifFail("a SARIF result is not an object"));

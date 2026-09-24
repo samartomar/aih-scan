@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { deepFreezeStrictJsonV1 } from "../../contract/strict-json-v1.js";
+import { assertSarifCompletedV1, SarifCompletionErrorV1 } from "../sarif-completion-v1.js";
 import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
 import {
   hasUnsupportedDockerMountSourceCharV1,
@@ -383,8 +384,13 @@ export async function runSkillspectorScanV1(
   } catch {
     parsed = undefined;
   }
-  if (!isRecord(parsed) || !Array.isArray(parsed.runs))
-    return scanFailure("output", "detector did not emit valid SARIF");
+  if (!isRecord(parsed)) return scanFailure("output", "detector did not emit valid SARIF");
+  try {
+    assertSarifCompletedV1(parsed);
+  } catch (error) {
+    if (!(error instanceof SarifCompletionErrorV1)) throw error;
+    return scanFailure(error.stage, `detector SARIF ${error.message}`);
+  }
   rewriteSarifUrisV1(parsed);
   const sarif = deepFreezeStrictJsonV1(parsed) as SkillspectorSarifLogV1;
   return Object.freeze({
@@ -408,16 +414,21 @@ export interface SkillspectorSarifLogV1 {
 }
 
 /**
- * Output gate for detector stdout, mirroring Core's `parseSarifLog`: parseable
- * JSON whose root holds a `runs` array, or `undefined` — the caller classifies
- * `undefined` as "detector did not emit valid SARIF". Deeper SARIF validation,
- * rule mapping and grading stay with the caller (Core keeps them).
+ * Output gate for detector stdout: parseable JSON that proves a completed analysis
+ * ({@link assertSarifCompletedV1}, S2e; stricter than Core's `parseSarifLog`, which
+ * required only a `runs` array), or `undefined`. Rule mapping and grading stay with the
+ * caller (Core keeps them).
  */
 export function parseSkillspectorSarifLogV1(raw: string): SkillspectorSarifLogV1 | undefined {
   try {
     const parsed = JSON.parse(raw) as { runs?: unknown };
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
     if (!Array.isArray(parsed.runs)) return undefined;
+    try {
+      assertSarifCompletedV1(parsed);
+    } catch {
+      return undefined;
+    }
     return Object.freeze({ ...parsed, runs: Object.freeze([...parsed.runs]) });
   } catch {
     return undefined;
