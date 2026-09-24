@@ -21,6 +21,10 @@ import { assertSafeRelativePosixPathV1 } from "../contract/strict-json-v1.js";
  * and Node's ICU and Python may carry different Unicode versions, so a character whose
  * mapping differs between them does not bind. Every such miss fails closed; a mapping that
  * makes two sealed files equal (for example KELVIN SIGN and `k`) is an ambiguity and fails.
+ *
+ * Only a path whose original identity was verified may reach the binder (U1e review P1): the
+ * analyzer's own URI, checked safe before it was prefixed with its skill directory, never a
+ * substitute or placeholder. An unsafe original fails at `output` before this runs.
  */
 export function ciscoSealedPathBinderV1(
   sealedPaths: Iterable<string>,
