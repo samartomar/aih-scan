@@ -1,66 +1,163 @@
-name: Installed Semgrep parity (Linux)
+name: Installed host-profile proof and Semgrep parity
 
-# Evidence lane for WO-CROSS-REPO-CLEANUP Step 2 / deletion-ledger row B2b: Core's legacy
-# Semgrep execution versus Scan's `detector.semgrep` through the INSTALLED public
-# `runDetectorV1`, on identical fixtures, in a disposable consumer that installs only the
-# two packed tarballs. The CI smoke in ci.yml imports a private runtime module and is not
-# this proof. A green run here is evidence for ONE detector on ONE host class; it approves
-# no delegation, deletion, publication or promotion.
+# Evidence lanes for the separation candidates. Nothing here approves delegation, deletion,
+# publication or promotion, and nothing is compared against a default Core.
+#
+# host-profile: packs Scan from this checkout (or downloads the stated Scan candidate tarball and
+#   checks its sha256), installs it into a disposable consumer and calls the PUBLIC runDetectorV1
+#   for Semgrep and Cisco under host-process-uv-v1 on Linux, Windows and macOS runners
+#   (tools/installed-host-profile-proof.mjs). macOS evidence exists only from a green run of the
+#   macos-latest row; no local test substitutes for it.
+# parity: Core's legacy Semgrep execution versus Scan's detector.semgrep through the installed
+#   public runDetectorV1, on identical fixtures. Runs only when the dispatcher names a Core
+#   candidate (an exact ai-harness commit or a tarball URL with its sha256).
 
 on:
   workflow_dispatch:
     inputs:
       core_ref:
-        description: ai-harness git ref (full commit SHA) packed as the Core under test
+        description: ai-harness commit SHA packed as the Core candidate (leave empty when core_tarball_url is given)
         required: false
-        default: 67ba9a24d8e3925e3bb5362797280c7f60f79192
+        type: string
+      core_tarball_url:
+        description: URL of a packed @aihq/core candidate tarball (requires core_tarball_sha256)
+        required: false
+        type: string
+      core_tarball_sha256:
+        description: sha256 of the Core candidate tarball
+        required: false
+        type: string
+      scan_tarball_url:
+        description: URL of a packed @aihq/scan candidate tarball (empty = pack this checkout; requires scan_tarball_sha256)
+        required: false
+        type: string
+      scan_tarball_sha256:
+        description: sha256 of the Scan candidate tarball
+        required: false
         type: string
   pull_request:
     paths:
       - .github/workflows/installed-semgrep-parity.yml
+      - tools/installed-host-profile-proof.mjs
       - tools/installed-semgrep-parity.mjs
       - tools/installed-semgrep-parity-assertions.mjs
       - tools/installed-semgrep-parity-assertions.d.mts
       - tests/baseline/installed-semgrep-parity-assertions.test.ts
       - src/baseline/**
+      - src/cli/**
       - src/runner/**
       - src/capability/**
       - tools/baseline-analyzers/semgrep/**
+      - tools/baseline-analyzers/cisco-skill-scanner-host/**
 
 permissions:
   contents: read
 
 jobs:
-  parity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+  host-profile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     env:
-      CORE_REF: ${{ inputs.core_ref || '67ba9a24d8e3925e3bb5362797280c7f60f79192' }}
+      SCAN_TARBALL_URL: ${{ inputs.scan_tarball_url }}
+      SCAN_TARBALL_SHA256: ${{ inputs.scan_tarball_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - name: Scan candidate (stated tarball, or packed from this checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fetch_candidate() { # url sha256 destination
+            case "$2" in *[!0-9a-f]*|"") echo "a tarball URL needs its 64-hex sha256: $1" >&2; exit 1 ;; esac
+            test "${#2}" -eq 64 || { echo "a tarball URL needs its 64-hex sha256: $1" >&2; exit 1; }
+            curl --fail --silent --show-error --location --proto =https --output "$3" "$1"
+            actual="$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$3")"
+            if [ "$actual" != "$2" ]; then echo "$1 has sha256 $actual, which does not match the stated sha256 $2" >&2; exit 1; fi
+          }
+          mkdir -p "$RUNNER_TEMP/packed"
+          if [ -n "$SCAN_TARBALL_URL" ]; then
+            fetch_candidate "$SCAN_TARBALL_URL" "$SCAN_TARBALL_SHA256" "$RUNNER_TEMP/packed/aihq-scan-candidate.tgz"
+          else
+            npm ci --ignore-scripts
+            npm run build
+            npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
+          fi
+          ls -l "$RUNNER_TEMP/packed"
+      - name: Installed host-process-uv-v1 proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          scan_tgz="$(ls "$RUNNER_TEMP"/packed/aihq-scan-*.tgz)"
+          node tools/installed-host-profile-proof.mjs \
+            --scan-tgz "$scan_tgz" --work "$RUNNER_TEMP/host-profile" \
+            --out "$RUNNER_TEMP/installed-host-profile-${{ runner.os }}-${{ runner.arch }}.json"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-host-profile-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/installed-host-profile-*.json
+          if-no-files-found: error
+
+  parity:
+    if: github.event_name == 'workflow_dispatch' && (inputs.core_ref != '' || inputs.core_tarball_url != '')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, profile: linux-namespace-uv-v1 }
+          - { os: ubuntu-latest, profile: host-process-uv-v1 }
+          - { os: windows-latest, profile: host-process-uv-v1 }
+          - { os: macos-latest, profile: host-process-uv-v1 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CORE_REF: ${{ inputs.core_ref }}
+      CORE_TARBALL_URL: ${{ inputs.core_tarball_url }}
+      CORE_TARBALL_SHA256: ${{ inputs.core_tarball_sha256 }}
+      SCAN_TARBALL_URL: ${{ inputs.scan_tarball_url }}
+      SCAN_TARBALL_SHA256: ${{ inputs.scan_tarball_sha256 }}
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - if: env.CORE_TARBALL_URL == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           repository: samartomar/ai-harness
-          ref: ${{ env.CORE_REF }}
+          ref: ${{ inputs.core_ref }}
           path: .core-under-test
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
-      # Core's Semgrep project pins Python 3.12 (uv --python 3.12 --no-python-downloads);
-      # Scan's sandbox profile pins Python 3.13 under /usr/local. Both interpreters are needed.
+          node-version: 22
+      # Core's Semgrep project pins Python 3.12 (uv --python 3.12 --no-python-downloads), as does
+      # Scan's host profile. Scan's namespace profile pins Python 3.13 under /usr/local.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - if: matrix.profile == 'linux-namespace-uv-v1'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
-      - name: Prepare Scan's sandbox prerequisites (same steps as ci.yml)
+      - name: Prepare Scan's namespace sandbox prerequisites (same steps as ci.yml)
+        if: matrix.profile == 'linux-namespace-uv-v1'
         shell: bash
         run: |
           set -euo pipefail
@@ -82,53 +179,80 @@ jobs:
             /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
           sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
           sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
-      - name: Pack Scan from this checkout
+      - name: Scan candidate (stated tarball, or packed from this checkout)
         shell: bash
         run: |
           set -euo pipefail
-          npm ci --ignore-scripts
-          npm run build
+          fetch_candidate() { # url sha256 destination
+            case "$2" in *[!0-9a-f]*|"") echo "a tarball URL needs its 64-hex sha256: $1" >&2; exit 1 ;; esac
+            test "${#2}" -eq 64 || { echo "a tarball URL needs its 64-hex sha256: $1" >&2; exit 1; }
+            curl --fail --silent --show-error --location --proto =https --output "$3" "$1"
+            actual="$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$3")"
+            if [ "$actual" != "$2" ]; then echo "$1 has sha256 $actual, which does not match the stated sha256 $2" >&2; exit 1; fi
+          }
           mkdir -p "$RUNNER_TEMP/packed"
-          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
-          ls -l "$RUNNER_TEMP/packed"
-      - name: Pack Core from the pinned ref
-        shell: bash
-        working-directory: .core-under-test
-        run: |
-          set -euo pipefail
-          git rev-parse HEAD
-          npm ci --ignore-scripts
-          npm run build
-          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
-          ls -l "$RUNNER_TEMP/packed"
-      - name: Remove the Core checkout (only the packed tarball is used from here on)
+          if [ -n "$SCAN_TARBALL_URL" ]; then
+            fetch_candidate "$SCAN_TARBALL_URL" "$SCAN_TARBALL_SHA256" "$RUNNER_TEMP/packed/aihq-scan-candidate.tgz"
+          else
+            npm ci --ignore-scripts
+            npm run build
+            npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
+          fi
+      - name: Core candidate (stated tarball, or packed from the stated commit)
         shell: bash
         run: |
           set -euo pipefail
-          test -d "$GITHUB_WORKSPACE/.core-under-test"
-          rm -rf -- "$GITHUB_WORKSPACE/.core-under-test"
+          fetch_candidate() { # url sha256 destination
+            case "$2" in *[!0-9a-f]*|"") echo "a tarball URL needs its 64-hex sha256: $1" >&2; exit 1 ;; esac
+            test "${#2}" -eq 64 || { echo "a tarball URL needs its 64-hex sha256: $1" >&2; exit 1; }
+            curl --fail --silent --show-error --location --proto =https --output "$3" "$1"
+            actual="$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$3")"
+            if [ "$actual" != "$2" ]; then echo "$1 has sha256 $actual, which does not match the stated sha256 $2" >&2; exit 1; fi
+          }
+          if [ -n "$CORE_TARBALL_URL" ]; then
+            fetch_candidate "$CORE_TARBALL_URL" "$CORE_TARBALL_SHA256" "$RUNNER_TEMP/packed/aihq-core-candidate.tgz"
+          else
+            case "$CORE_REF" in
+              *[!0-9a-f]*|"") echo "core_ref must be a full commit SHA: $CORE_REF" >&2; exit 1 ;;
+            esac
+            test "${#CORE_REF}" -eq 40 || { echo "core_ref must be a full commit SHA: $CORE_REF" >&2; exit 1; }
+            cd .core-under-test
+            test "$(git rev-parse HEAD)" = "$CORE_REF"
+            npm ci --ignore-scripts
+            npm run build
+            npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packed"
+            cd "$GITHUB_WORKSPACE"
+            rm -rf -- .core-under-test
+          fi
+          ls -l "$RUNNER_TEMP/packed"
       - name: Installed Semgrep parity
         shell: bash
         run: |
           set -euo pipefail
           core_tgz="$(ls "$RUNNER_TEMP"/packed/aihq-core-*.tgz)"
           scan_tgz="$(ls "$RUNNER_TEMP"/packed/aihq-scan-*.tgz)"
-          sha256sum "$core_tgz" "$scan_tgz"
+          uv_path="$(command -v uv)"
+          if [ "${{ matrix.profile }}" = linux-namespace-uv-v1 ]; then uv_path=/usr/local/bin/uv; fi
           set +e
           node tools/installed-semgrep-parity.mjs \
             --core-tgz "$core_tgz" --scan-tgz "$scan_tgz" \
             --work "$RUNNER_TEMP/parity" --out "$RUNNER_TEMP/parity-report.json" \
-            --uv /usr/local/bin/uv --python 3.12
+            --uv "$uv_path" --python 3.12 --execution-profile "${{ matrix.profile }}"
           status=$?
           set -e
           {
-            echo '## Installed Semgrep parity (Linux amd64)'
+            echo "## Installed Semgrep parity (${{ matrix.os }}, ${{ matrix.profile }})"
             echo
-            echo "Core ref: \`$CORE_REF\`; exit status: $status"
+            echo "Core: \`${CORE_REF:-$CORE_TARBALL_URL}\`; exit status: $status"
             echo
             echo '```json'
-            node -e 'const r=require(process.argv[1]); console.log(JSON.stringify({inputs:r.inputs,checks:r.checks,passed:r.passed,positive:{coreKeys:r.positive.coreKeys,scanKeys:r.positive.scanKeys,scanSummary:r.positive.scan.summary},clean:{coreKeys:r.clean.coreKeys,scanKeys:r.clean.scanKeys},empty:r.empty.scan.summary,meaning:r.meaning},null,2))' "$RUNNER_TEMP/parity-report.json"
+            node -e 'const r=require(process.argv[1]); console.log(JSON.stringify({inputs:r.inputs,checks:r.checks,passed:r.passed,meaning:r.meaning},null,2))' "$RUNNER_TEMP/parity-report.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          cat "$RUNNER_TEMP/parity-report.json"
           exit "$status"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-semgrep-parity-${{ matrix.os }}-${{ matrix.profile }}
+          path: ${{ runner.temp }}/parity-report.json
+          if-no-files-found: error

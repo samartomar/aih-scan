@@ -22,7 +22,16 @@ import {
  * argv, timeouts and cleanup behaviour.
  */
 
-const EMPTY_SARIF = { version: "2.1.0", runs: [{ results: [] }] };
+const EMPTY_SARIF = {
+  version: "2.1.0",
+  runs: [
+    {
+      tool: { driver: { name: "skillspector" } },
+      results: [],
+      invocations: [{ executionSuccessful: true }],
+    },
+  ],
+};
 const TREE = "/tmp/scan-root";
 
 type Handler = (
@@ -538,6 +547,8 @@ describe("runSkillspectorScanV1", () => {
       version: "2.1.0",
       runs: [
         {
+          tool: { driver: { name: "skillspector" } },
+          invocations: [{ executionSuccessful: true }],
           results: [
             {
               ruleId: "sc4",
@@ -601,9 +612,7 @@ describe("runSkillspectorScanV1", () => {
 
 describe("parseSkillspectorSarifLogV1", () => {
   it("accepts a SARIF log with a runs array", () => {
-    const parsed = parseSkillspectorSarifLogV1(
-      JSON.stringify({ version: "2.1.0", runs: [{ results: [] }] }),
-    );
+    const parsed = parseSkillspectorSarifLogV1(JSON.stringify(EMPTY_SARIF));
 
     expect(parsed?.version).toBe("2.1.0");
     expect(parsed?.runs).toHaveLength(1);
@@ -617,5 +626,39 @@ describe("parseSkillspectorSarifLogV1", () => {
     JSON.stringify({ runs: {} }),
   ])("rejects output Core would classify as 'detector did not emit valid SARIF': %s", (raw) => {
     expect(parseSkillspectorSarifLogV1(raw)).toBeUndefined();
+  });
+});
+
+// S2e sweep: the engine's SARIF gate requires completion evidence (shared validator).
+describe("SkillSpector engine SARIF completion (S2e)", () => {
+  it.each([
+    JSON.stringify({ version: "2.1.0", runs: [] }),
+    JSON.stringify({ version: "2.1.0", runs: [{ tool: { driver: { name: "s" } }, results: [] }] }),
+    JSON.stringify({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "s" } },
+          results: [],
+          invocations: [{ executionSuccessful: false }],
+        },
+      ],
+    }),
+  ])("rejects SARIF that does not prove completion: %s", (raw) => {
+    expect(parseSkillspectorSarifLogV1(raw)).toBeUndefined();
+  });
+
+  it("fails a scan whose SARIF holds no runs", async () => {
+    const outcome = await runSkillspectorScanV1({
+      run: fakeRunner((argv) =>
+        argv[1] === "run"
+          ? { code: 0, stdout: JSON.stringify({ version: "2.1.0", runs: [] }) }
+          : successfulSkillspector(argv),
+      ),
+      platform: "linux",
+      env: {},
+      tree: TREE,
+    });
+    expect(outcome).toMatchObject({ status: "failed", failure: { stage: "output" } });
   });
 });

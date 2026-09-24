@@ -17,7 +17,11 @@ import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/sou
 
 const tool = resolve("tools/prepare-aih-delivery-publication.mjs");
 const pin = "a".repeat(40);
-it("accepts only exact generated delivery roots and matching canonical requests", () => {
+// Each case spawns the publication tool in its own Node process: about 2.7 s alone on
+// Windows, and past vitest's 5 s default under full-suite load (S2 phase B2, 2026-09-24).
+it("accepts only exact generated delivery roots and matching canonical requests", {
+  timeout: 30_000,
+}, () => {
   const root = mkdtempSync(join(tmpdir(), "aih-delivery-publication-"));
   try {
     const material = join(root, "material");

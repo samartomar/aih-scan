@@ -27,16 +27,17 @@
 
 export {
   CISCO_SARIF_FALLBACK_URI_V1,
+  type CiscoJobSarifFailureStageV1,
+  type CiscoJobSarifV1,
   type CiscoSarifArtifactLocationV1,
   type CiscoSarifLocationV1,
   type CiscoSarifLogV1,
   type CiscoSarifPhysicalLocationV1,
   type CiscoSarifResultV1,
   type CiscoSarifRunV1,
+  ciscoJobSarifV1,
   MAX_CISCO_SARIF_BYTES_V1,
   mergedCiscoSarifTextV1,
-  parseCiscoSarifLogV1,
-  prefixCiscoSarifUrisV1,
   prefixSafeCiscoUriV1,
 } from "./merge-v1.js";
 export {

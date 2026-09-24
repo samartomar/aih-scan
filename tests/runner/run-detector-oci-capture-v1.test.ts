@@ -185,7 +185,7 @@ describe("runDetectorV1 OCI capture profile", () => {
     // The caller's declared selection and exclusion survive verbatim into coverage.
     expect(result.coverage).toEqual({
       kind: "selected-closure",
-      sha256: result.sourceSeal.before.selectedClosureSha256,
+      sha256: result.sourceSeal?.before.selectedClosureSha256,
       complete: true,
       coveredPaths: ["SKILL.md"],
       excludedPaths: ["NOTES.md"],
@@ -198,7 +198,10 @@ describe("runDetectorV1 OCI capture profile", () => {
     if (finding?.location.state !== "present") throw new Error("location must be present");
     expect(finding.location.value).toEqual({
       path: "SKILL.md",
-      fileSha256: result.sourceSeal.before.selectedFiles[0]?.sha256,
+      fileSha256:
+        result.sourceSeal.before.protocol === "SourceSealV2"
+          ? result.sourceSeal.before.selectedFiles[0]?.sha256
+          : undefined,
       startLine: 1,
     });
     if (finding.message.state !== "present") throw new Error("message must be present");

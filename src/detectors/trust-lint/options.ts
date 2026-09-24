@@ -67,6 +67,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
+/**
+ * The `internalScopes` rule on its own, for the runner's pre-seal options read: the
+ * refusal detail, or `undefined` when the value is valid. Never throws.
+ */
+export function trustLintInternalScopesProblemV1(value: unknown): string | undefined {
+  const problem = validateInternalScopes(value);
+  return problem === undefined || problem.ok ? undefined : problem.detail;
+}
+
 function validateInternalScopes(value: unknown): TrustLintOptionsValidationV1 | undefined {
   if (!Array.isArray(value)) return refusal("detectorOptions.internalScopes must be an array");
   if (value.length > MAX_INTERNAL_SCOPES) {

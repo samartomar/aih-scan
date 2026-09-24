@@ -314,6 +314,15 @@ interface RecordedSnykGoldenCaseV1 {
   readonly rawOccurrences: readonly GoldenRawOccurrenceV1[];
 }
 
+/**
+ * Recorded Core outcomes Scan deliberately does not reproduce (S2e, the owner principle):
+ * Core completes `{"findings":[]}` as clean, but an empty finding array proves no analysis
+ * of the root, so Scan fails it. Recorded for C2a §5.3 as "[Scan: S2e]".
+ */
+const SNYK_FAIL_CLOSED_DEVIATIONS_V1: Readonly<Record<string, RegExp>> = {
+  "snyk-clean-exit-0": /^snyk-agent-scan JSON shows no analysis of the scanned root; /,
+};
+
 describe("snyk-agent-scan parity (recorded outputs, C2a §5)", () => {
   const recorded = recordedSnykV1<{ cases: RecordedSnykCaseV1[] }>().cases;
   const goldens = recordedSnykGoldenV1<{ cases: RecordedSnykGoldenCaseV1[] }>().cases;
@@ -348,13 +357,21 @@ describe("snyk-agent-scan parity (recorded outputs, C2a §5)", () => {
         },
       );
 
-      if (golden.outcome === "completed") {
+      const deviation = SNYK_FAIL_CLOSED_DEVIATIONS_V1[recordedCase.id];
+      if (deviation !== undefined) {
+        expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+        expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(deviation);
+      } else if (golden.outcome === "completed") {
         if (outcome.kind !== "completed") throw new Error(JSON.stringify(outcome));
         expect(occurrences(outcome.sarif)).toEqual(goldenOccurrences(golden.rawOccurrences));
       } else {
         expect(outcome.kind).toBe("failed");
+        // Scan's detail is Core's fixed message plus the exit status and output byte
+        // counts; the analyzer's own text never reaches it.
         const detail = outcome.kind === "failed" ? outcome.detail : "";
-        expect(golden.reason).toContain(`(${detail})`);
+        const coreMessage = detail.replace(/; exit \S+, stdout \d+ bytes, stderr \d+ bytes$/, "");
+        expect(coreMessage).not.toBe(detail);
+        expect(golden.reason).toContain(`(${coreMessage})`);
       }
     });
   }

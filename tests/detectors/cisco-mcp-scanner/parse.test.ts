@@ -369,3 +369,32 @@ describe("parseCiscoMcpScannerSarifV1 fail-closed rules (parity: Core ~4333 and 
     ).toThrow("mcp-scanner marked a result unsafe without reporting a finding");
   });
 });
+
+// S2e sweep: malformed threat names fail instead of being filtered out.
+describe("parseCiscoMcpScannerSarifV1 malformed threat names (S2e)", () => {
+  const parse = (summary: Record<string, unknown>) => () =>
+    parseCiscoMcpScannerSarifV1(
+      JSON.stringify([
+        {
+          status: "completed",
+          is_safe: false,
+          findings: { yara_analyzer: { total_findings: 1, ...summary } },
+          tool_name: ".mcp.json:poisoned",
+        },
+      ]),
+      submitted([".mcp.json:poisoned", ".mcp.json"]),
+    );
+
+  it("fails a threat_names list holding a non-string", () => {
+    expect(parse({ threat_names: ["TOOL POISONING", 42] })).toThrow(/malformed threat names/);
+  });
+
+  it("fails a threat_names value that is not a list", () => {
+    expect(parse({ threat_names: "TOOL POISONING" })).toThrow(/malformed threat names/);
+  });
+
+  it("fails a non-string threat summary or severity", () => {
+    expect(parse({ threat_names: ["X"], threat_summary: 7 })).toThrow(/malformed analyzer finding/);
+    expect(parse({ threat_names: ["X"], severity: {} })).toThrow(/malformed analyzer finding/);
+  });
+});

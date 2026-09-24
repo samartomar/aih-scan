@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BASELINE_PYTHON_EXECUTABLE_V1,
   type BaselineProcessRunnerV1,
@@ -44,10 +44,17 @@ function sourceFixture(): string {
 const sarif = (name: string) =>
   canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name } }, results: [] }],
+    runs: [
+      { tool: { driver: { name } }, results: [], invocations: [{ executionSuccessful: true }] },
+    ],
   }).toString("utf8");
 
 describe("code-owned baseline analyzer runtime", () => {
+  // The hardened profiles run absolute Linux executables, so these tests declare a Linux host.
+  beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  });
+
   it("uses only fixed hardened Docker and lock-backed canonical uv profiles", async () => {
     const calls: Array<{
       argv: readonly string[];

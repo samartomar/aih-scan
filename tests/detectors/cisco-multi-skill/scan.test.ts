@@ -46,7 +46,26 @@ function skill(rel: string, body: string): void {
   writeFileSync(join(root, "SKILL.md"), body, "utf8");
 }
 
-const EMPTY_SARIF = { runs: [] };
+type SarifFixture = { runs: Array<Record<string, unknown>> };
+
+const EMPTY_SARIF: SarifFixture = { runs: [{ results: [] }] };
+
+/**
+ * A fixture completed to real skill-scanner 2.0.14's shape (S2e): SARIF 2.1.0 whose runs
+ * name the tool driver and report a successful invocation, which a job's SARIF must prove.
+ */
+function complete(sarif: SarifFixture) {
+  return {
+    version: "2.1.0",
+    runs: sarif.runs.map((run) => ({
+      tool: { driver: { name: "skill-scanner", version: "1.0.0" } },
+      invocations: [{ executionSuccessful: true }],
+      ...run,
+    })),
+  };
+}
+
+const CLEAN_RUN = complete(EMPTY_SARIF).runs[0];
 
 type FakeHandler = (
   argv: readonly string[],
@@ -66,7 +85,7 @@ function isCiscoSkillScannerArgv(argv: readonly string[]): boolean {
   return argv[0] === "uv" && argv[1] === "run" && argv.includes("skill-scanner");
 }
 
-function ciscoRunner(sarif: unknown, onScan?: FakeHandler): CiscoMultiSkillRunnerV1 {
+function ciscoRunner(sarif: SarifFixture, onScan?: FakeHandler): CiscoMultiSkillRunnerV1 {
   return fakeRunner((argv, opts) => {
     if (!isCiscoSkillScannerArgv(argv)) return { code: 127, stderr: "not found", spawnError: true };
     if (argv.includes("--version")) return { code: 0, stdout: "skill-scanner 2.1.0\n" };
@@ -74,7 +93,7 @@ function ciscoRunner(sarif: unknown, onScan?: FakeHandler): CiscoMultiSkillRunne
       onScan?.(argv, opts);
       const out = argv[argv.indexOf("--output-sarif") + 1];
       if (out === undefined) return { code: 1, stderr: "missing --output-sarif" };
-      writeFileSync(out, JSON.stringify(sarif), "utf8");
+      writeFileSync(out, JSON.stringify(complete(sarif)), "utf8");
       return { code: 0, stdout: `Report saved to: ${out}\n` };
     }
     return undefined;
@@ -154,7 +173,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
     const skillDir = realpathSync(join(dir, "skills", "clean"));
     expect(scanTargets).toEqual([skillDir]);
     expect(observed).toEqual([{ cwd: skillDir, timeoutMs: CISCO_MULTI_SKILL_SCAN_TIMEOUT_MS_V1 }]);
-    expect(JSON.parse(text)).toEqual({ version: "2.1.0", runs: [] });
+    expect(JSON.parse(text)).toEqual({ version: "2.1.0", runs: [CLEAN_RUN] });
   });
 
   it("scrubs the environment each skill scan sees", async () => {
@@ -209,35 +228,37 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
           }
           writeFileSync(
             out,
-            JSON.stringify({
-              runs: [
-                {
-                  invocations: [
-                    {
-                      executionSuccessful: true,
-                      startTimeUtc: `2026-07-30T00:00:0${tag}Z`,
-                      endTimeUtc: `2026-07-30T00:00:1${tag}Z`,
-                    },
-                  ],
-                  results: [
-                    {
-                      ruleId: "CISCO_FIXTURE",
-                      message: { text: "stable finding" },
-                      locations: [
-                        {
-                          physicalLocation: {
-                            artifactLocation: {
-                              uri: relative(opts?.cwd ?? process.cwd(), join(target, "SKILL.md")),
+            JSON.stringify(
+              complete({
+                runs: [
+                  {
+                    invocations: [
+                      {
+                        executionSuccessful: true,
+                        startTimeUtc: `2026-07-30T00:00:0${tag}Z`,
+                        endTimeUtc: `2026-07-30T00:00:1${tag}Z`,
+                      },
+                    ],
+                    results: [
+                      {
+                        ruleId: "CISCO_FIXTURE",
+                        message: { text: "stable finding" },
+                        locations: [
+                          {
+                            physicalLocation: {
+                              artifactLocation: {
+                                uri: relative(opts?.cwd ?? process.cwd(), join(target, "SKILL.md")),
+                              },
+                              region: { startLine: 1 },
                             },
-                            region: { startLine: 1 },
                           },
-                        },
-                      ],
-                    },
-                  ],
-                },
-              ],
-            }),
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              }),
+            ),
             "utf8",
           );
           return { code: 0, stdout: `Report saved to: ${out}\n`, stderr: "" };
@@ -295,7 +316,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
       seenTargets.push(target);
       try {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 15));
-        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        writeFileSync(output, JSON.stringify(complete(EMPTY_SARIF)), "utf8");
         return { code: 0, stdout: `Report saved to: ${output}\n`, stderr: "" };
       } finally {
         active--;
@@ -309,7 +330,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
       tree: realpathSync(dir),
     });
 
-    expect(JSON.parse(text)).toEqual({ version: "2.1.0", runs: [] });
+    expect(JSON.parse(text)).toEqual({ version: "2.1.0", runs: Array(7).fill(CLEAN_RUN) });
     expect(maxActive).toBeGreaterThan(1);
     expect(maxActive).toBeLessThanOrEqual(4);
     expect([...seenTargets].sort()).toEqual(expectedTargets.sort());
@@ -330,7 +351,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
       maxActive = Math.max(maxActive, active);
       try {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 15));
-        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        writeFileSync(output, JSON.stringify(complete(EMPTY_SARIF)), "utf8");
         return { code: 0, stdout: `Report saved to: ${output}\n`, stderr: "" };
       } finally {
         active--;
@@ -367,7 +388,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
           return { code: 2, stdout: "", stderr: "fixture Cisco failure" };
         }
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
-        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        writeFileSync(output, JSON.stringify(complete(EMPTY_SARIF)), "utf8");
         return { code: 0, stdout: `Report saved to: ${output}\n`, stderr: "" };
       } finally {
         active--;
@@ -404,7 +425,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
         return { code: 2, stdout: "", stderr: "failure-a" };
       }
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
-      writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+      writeFileSync(output, JSON.stringify(complete(EMPTY_SARIF)), "utf8");
       return { code: 0, stdout: "", stderr: "" };
     };
 
@@ -942,9 +963,11 @@ describe("runCiscoSourceTreeScanV1", () => {
       await new Promise((resolvePromise) => setTimeout(resolvePromise, delays.get(name) ?? 0));
       writeFileSync(
         output,
-        JSON.stringify({
-          runs: [{ results: [{ ruleId: "fixture", message: { text: name } }] }],
-        }),
+        JSON.stringify(
+          complete({
+            runs: [{ results: [{ ruleId: "fixture", message: { text: name } }] }],
+          }),
+        ),
         "utf8",
       );
       return { code: 0, stdout: "", stderr: "" };
@@ -987,7 +1010,7 @@ describe("runCiscoSourceTreeScanV1", () => {
       maxActive = Math.max(maxActive, active);
       try {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 15));
-        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        writeFileSync(output, JSON.stringify(complete(EMPTY_SARIF)), "utf8");
         return { code: 0, stdout: "", stderr: "" };
       } finally {
         active--;
@@ -1036,7 +1059,7 @@ describe("runCiscoSourceTreeScanV1", () => {
           return { code: 2, stdout: "", stderr: "failure-0" };
         }
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 40));
-        writeFileSync(output, JSON.stringify(EMPTY_SARIF), "utf8");
+        writeFileSync(output, JSON.stringify(complete(EMPTY_SARIF)), "utf8");
         return { code: 0, stdout: "", stderr: "" };
       } finally {
         active--;

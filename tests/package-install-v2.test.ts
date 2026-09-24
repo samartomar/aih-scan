@@ -78,6 +78,7 @@ const publicV2Exports = [
   "parseBaselineVetRequestV1Json",
   "parseDetectorRegistrationV1Json",
   "parseScanResultRecordV1",
+  "probeDetectorAvailabilityV1",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
   "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
@@ -89,6 +90,7 @@ const publicV2Exports = [
   "resolveBaselineVetDiscoveryV1",
   "resolveDetectorCapabilityV1",
   "resolveDetectorExecutionProfileDocumentV1",
+  "runCiscoShardV1",
   "runDetectorV1",
   "sealSourceV2",
   "signBaselineVetBundleV1",
@@ -509,10 +511,10 @@ describe("published V2 package installation", () => {
     ).toBe(false);
     expect(paths.some((path) => /(?:^|\/)\S+\.local(?:\.|\/|$)/i.test(path))).toBe(false);
     expect(readFileSync(tarball)).not.toContain(Buffer.from(root, "utf8"));
-    expect(basename(tarball)).toBe("aihq-scan-0.4.0.tgz");
+    expect(basename(tarball)).toBe("aihq-scan-0.5.0.tgz");
     expect(packedManifest(tarball)).toMatchObject({
       name: "@aihq/scan",
-      version: "0.4.0",
+      version: "0.5.0",
       bin: { "aih-scan": "./dist/cli.js" },
       ...npmDiscoveryMetadata,
     });
@@ -664,16 +666,24 @@ describe("published V2 package installation", () => {
     // The packed package must be able to run a detector, not merely name one.
     expect(consumer.detectorExecution).toEqual({
       detectorIds: [
+        "detector.aih-binding-gate",
         "detector.aih-native",
+        "detector.aih-trust-lint",
         "detector.cisco",
+        "detector.cisco-mcp-scanner",
         "detector.semgrep",
         "detector.skillspector",
+        "detector.snyk-agent-scan",
       ],
       profileDocumentIds: [
+        "in-process-binding-gate-v1",
         "in-process-native-v1",
+        "in-process-trust-lint-v1",
         "linux-namespace-uv-v1",
+        "host-process-uv-v1",
         "linux-namespace-uv-v1",
         "docker-hardened-skillspector-v1",
+        "host-process-uv-v1",
       ],
       profileDigestsMatchDocuments: true,
       refusal: { outcome: "refused", reason: "unknown-detector" },
@@ -684,7 +694,7 @@ describe("published V2 package installation", () => {
         analyzerVersionIsCapabilityIdentity: true,
         annexDigestNamesBytes: true,
         producerIsInstalledManifest: true,
-        producer: { name: "@aihq/scan", version: "0.4.0" },
+        producer: { name: "@aihq/scan", version: "0.5.0" },
         seams: { runner: "scan-owned-default", prerequisiteProbe: "scan-owned-default" },
         isolation: "none",
         network: "none",

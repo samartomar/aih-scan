@@ -46,7 +46,9 @@ export type ScanResultGapKindV1 =
   /** The caller supplied no annex bytes, so per-finding detail could not be read. */
   | "annex-bytes-not-supplied"
   /** The SARIF projection drops `properties.severity`, so only the SARIF level survives. */
-  | "vendor-severity-not-projected";
+  | "vendor-severity-not-projected"
+  /** A SARIF result names no sealed source file, so its location is reported unavailable. */
+  | "finding-location-not-a-sealed-file";
 
 export interface ScanResultGapV1 {
   readonly kind: ScanResultGapKindV1;

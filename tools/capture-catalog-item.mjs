@@ -112,7 +112,11 @@ import {
 import { installEnvironment, npmCliPath } from "./capture-catalog-item/catalog.mjs";
 import { Refusal, reasonOf } from "./capture-catalog-item/common.mjs";
 import { readDetectorInputs } from "./capture-catalog-item/detector-inputs.mjs";
-import { assertPlatform, assertSkillSourceRoot } from "./capture-catalog-item/preflight.mjs";
+import {
+  assertPlatform,
+  assertSkillSourceRoot,
+  BROKER_DOCKER_EXECUTABLE,
+} from "./capture-catalog-item/preflight.mjs";
 import { createRunDirectory, recordFailure } from "./capture-catalog-item/report.mjs";
 import { readCatalogSourceClosure } from "./capture-catalog-item/staging.mjs";
 
@@ -132,6 +136,7 @@ export {
   assertPlatform,
   assertSkillSourceRoot,
   attemptCapture,
+  BROKER_DOCKER_EXECUTABLE,
   createRunDirectory,
   installEnvironment,
   npmCliPath,

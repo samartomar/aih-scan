@@ -226,8 +226,9 @@ describe("availability", () => {
     });
   });
 
-  // Ported from Core tests/trust/scan.test.ts ~4033 (the spawn-failure reason).
-  it("reports the help probe's stderr when snyk-agent-scan cannot start", async () => {
+  // Ported from Core tests/trust/scan.test.ts ~4033 (the spawn-failure reason). The
+  // analyzer's own text never reaches a diagnostic: fixed text, exit code, byte counts.
+  it("reports a help probe that cannot start with fixed text, exit code and byte counts", async () => {
     const { run } = fakeRunner((argv) =>
       argv.includes("snyk-agent-scan")
         ? { code: 127, stdout: "", stderr: "snyk-agent-scan not found", spawnError: true }
@@ -239,7 +240,10 @@ describe("availability", () => {
         hostEnv: {},
         requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
       }),
-    ).resolves.toEqual({ status: "unavailable", detail: "snyk-agent-scan not found" });
+    ).resolves.toEqual({
+      status: "unavailable",
+      detail: "snyk-agent-scan help check failed; exit 127, stdout 0 bytes, stderr 25 bytes",
+    });
   });
 });
 
@@ -398,9 +402,24 @@ describe("run outcomes", () => {
     ]);
   });
 
-  // Ported from Core tests/trust/scan.test.ts ~3865-3892.
+  // Ported from Core tests/trust/scan.test.ts ~3865-3892. S2e: Core's report was
+  // `{findings: []}`, which proves nothing; a clean run is the root's own ScanPathResult.
   it("passes a clean Snyk Agent Scan exit 0 with no findings", async () => {
-    const { run } = snykRunner({ findings: [] }, { scanCode: 0 });
+    const { run } = snykRunner(
+      {
+        [root]: {
+          client: root,
+          path: root,
+          servers: [
+            { name: "clean", server: { path: join(root, "skills", "clean") }, error: null },
+          ],
+          issues: [],
+          labels: [],
+          error: null,
+        },
+      },
+      { scanCode: 0 },
+    );
 
     const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
@@ -429,7 +448,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan emitted no JSON on stdout",
+      detail: "snyk-agent-scan emitted no JSON on stdout; exit 0, stdout 0 bytes, stderr 0 bytes",
     });
   });
 
@@ -446,7 +465,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan emitted no JSON on stdout",
+      detail: "snyk-agent-scan emitted no JSON on stdout; exit 2, stdout 0 bytes, stderr 0 bytes",
     });
   });
 
@@ -464,11 +483,11 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan exited 1 without findings",
+      detail: "snyk-agent-scan exited 1 without findings; exit 1, stdout 15 bytes, stderr 0 bytes",
     });
   });
 
-  it("fails on an exit code outside {0, 1} with Core's detail rule", async () => {
+  it("fails on an exit code outside {0, 1} with fixed text, never the analyzer's", async () => {
     const crashing = fakeRunner((argv) =>
       argv.includes("scan") ? { code: 2, stdout: '{"findings":[]}', stderr: "boom" } : undefined,
     );
@@ -478,7 +497,11 @@ describe("run outcomes", () => {
       hostEnv: {},
       requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
-    expect(outcome).toEqual({ kind: "failed", stage: "execution", detail: "boom" });
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "execution",
+      detail: "snyk-agent-scan exited outside {0, 1}; exit 2, stdout 15 bytes, stderr 4 bytes",
+    });
 
     const silent = fakeRunner((argv) =>
       argv.includes("scan") ? { code: null, stdout: "", stderr: "", spawnError: true } : undefined,
@@ -492,11 +515,11 @@ describe("run outcomes", () => {
     expect(signaled).toEqual({
       kind: "failed",
       stage: "execution",
-      detail: "detector exit signal",
+      detail: "snyk-agent-scan could not start; exit signal, stdout 0 bytes, stderr 0 bytes",
     });
   });
 
-  it("fails on a spawn error with the scanner's own stderr", async () => {
+  it("fails on a spawn error with fixed text, never the scanner's stderr", async () => {
     const { run } = fakeRunner((argv) =>
       argv.includes("snyk-agent-scan")
         ? { code: 127, stdout: "", stderr: "snyk-agent-scan not found", spawnError: true }
@@ -513,7 +536,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "execution",
-      detail: "snyk-agent-scan not found",
+      detail: "snyk-agent-scan could not start; exit 127, stdout 0 bytes, stderr 25 bytes",
     });
   });
 
@@ -528,7 +551,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan did not emit parseable JSON",
+      detail: "snyk-agent-scan did not emit parseable JSON; exit 0, stdout 8 bytes, stderr 0 bytes",
     });
 
     const noFindings = snykRunner(null, { scanCode: 0, scanStdout: '{"something":1}' });
@@ -541,7 +564,8 @@ describe("run outcomes", () => {
     expect(outcome2).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan JSON did not include a findings array",
+      detail:
+        "snyk-agent-scan JSON did not include a findings array; exit 0, stdout 15 bytes, stderr 0 bytes",
     });
   });
 });
@@ -570,9 +594,10 @@ describe("parser report shapes and finding projection", () => {
     }
   });
 
-  it("treats an empty report object as zero findings", () => {
-    const sarif = parseSnykAgentScanSarifV1("{}", root);
-    expect(sarif.runs[0]?.results).toEqual([]);
+  it("rejects an empty report object: it proves no analysis (S2e)", () => {
+    expect(() => parseSnykAgentScanSarifV1("{}", root)).toThrow(
+      "snyk-agent-scan JSON shows no analysis of the scanned root",
+    );
   });
 
   it("rejects reports without a findings array with Core's message", () => {
@@ -632,7 +657,13 @@ describe("parser report shapes and finding projection", () => {
     const direct = join(root, "skills", "clean", "SKILL.md");
     const uri = (issue: Record<string, unknown>, pathResult: Record<string, unknown>) =>
       parseSnykAgentScanSarifV1(
-        JSON.stringify({ [root]: { ...pathResult, issues: [issue] } }),
+        JSON.stringify({
+          [root]: {
+            servers: [],
+            ...pathResult,
+            issues: [{ code: "E001", message: "m", ...issue }],
+          },
+        }),
         root,
       ).runs[0]?.results[0]?.locations[0]?.physicalLocation.artifactLocation.uri;
 
@@ -829,144 +860,162 @@ describe("C2a §5.1/§5.2 typed availability probe", () => {
   });
 });
 
-describe("request token redaction in every outward string", () => {
-  // The token is synthetic and assembled at runtime; assertions compare
-  // booleans so a failure never prints it.
+describe("request token never reaches an outward string", () => {
+  // The tokens are synthetic and assembled at runtime; assertions compare
+  // booleans only, so a failing test never prints a token.
   const TOKEN = ["synthetic", "review", "token", "7f3a9c"].join("-");
+  const QUOTED_TOKEN = ["synthetic-", '"review"', "-token-7f3a9c"].join("");
   const requestEnv = { SNYK_TOKEN: TOKEN };
 
-  function leaks(value: unknown): boolean {
+  /** Every recoverable form the review reproduced, decoded before comparison. */
+  function normalized(text: string): string {
+    let current = text;
+    for (let round = 0; round < 4; round += 1) {
+      const next = current
+        .replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        )
+        .replace(/%([0-9a-fA-F]{2})/g, (_m, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        );
+      if (next === current) break;
+      current = next;
+    }
+    return current.replace(/\s+/gu, "");
+  }
+
+  function leaks(value: unknown, token = TOKEN): boolean {
     const text = typeof value === "string" ? value : JSON.stringify(value);
-    return text.includes(TOKEN) || text.includes(TOKEN.slice(0, 12));
+    const forms = [text, normalized(text), normalized(text.replace(/\\"/g, '"'))];
+    return forms.some(
+      (form) =>
+        form.includes(token) ||
+        form.includes(token.slice(0, 12)) ||
+        form.includes(token.slice(-12)),
+    );
   }
 
   function scanFailing(result: SnykAgentScanProcessResultV1): SnykAgentScanRunnerV1 {
     return fakeRunner((argv) => (argv.includes("scan") ? result : undefined)).run;
   }
 
+  const percentEncoded = `%73${TOKEN.slice(1)}`;
+  const jsonEscaped = `{"token":"\\u0073${TOKEN.slice(1)}"}`;
+  const lineWrapped = `${TOKEN.slice(0, 17)}\n${TOKEN.slice(17)}`;
+
+  it("the reproductions really encode the token (checker self-test)", () => {
+    expect(leaks(percentEncoded)).toBe(true);
+    expect(leaks(jsonEscaped)).toBe(true);
+    expect(leaks(lineWrapped)).toBe(true);
+    expect(leaks(`title ${QUOTED_TOKEN}`, QUOTED_TOKEN)).toBe(true);
+  });
+
   it.each([
-    [
-      "stderr on an exit outside {0, 1}",
-      { code: 2, stdout: '{"findings":[]}', stderr: `authentication failed: ${TOKEN}` },
-      "execution",
-      `authentication failed: ${SNYK_TOKEN_REDACTION_V1}`,
-    ],
-    [
-      "stdout on a spawn error",
-      { code: null, stdout: `token=${TOKEN}`, stderr: "", spawnError: true },
-      "execution",
-      `token=${SNYK_TOKEN_REDACTION_V1}`,
-    ],
-    [
-      "stderr with empty stdout",
-      { code: 0, stdout: "", stderr: `bad token ${TOKEN}` },
-      "output",
-      `bad token ${SNYK_TOKEN_REDACTION_V1}`,
-    ],
-    [
-      "stderr on exit 1 without findings",
-      { code: 1, stdout: '{"findings":[]}', stderr: `${TOKEN} rejected` },
-      "output",
-      `${SNYK_TOKEN_REDACTION_V1} rejected`,
-    ],
-  ] as const)("redacts the token from %s", async (_label, result, stage, detail) => {
-    const outcome = await runSnykAgentScanRequestV1(scanFailing(result), {
-      platform: "linux",
-      tree: root,
-      hostEnv: {},
-      requestEnv,
-    });
-
-    expect(leaks(outcome)).toBe(false);
-    expect(outcome).toEqual({ kind: "failed", stage, detail });
+    ["percent-encoded", percentEncoded],
+    ["JSON-escaped", jsonEscaped],
+    ["line-wrapped", lineWrapped],
+    ["literal", TOKEN],
+  ] as const)("keeps a %s token in stderr out of every failure detail", async (_label, echoed) => {
+    const results: SnykAgentScanProcessResultV1[] = [
+      { code: 2, stdout: "{}", stderr: `authentication failed: ${echoed}` },
+      { code: null, stdout: `token=${echoed}`, stderr: echoed, spawnError: true },
+      { code: 0, stdout: "", stderr: `bad token ${echoed}` },
+      { code: 1, stdout: '{"findings":[]}', stderr: `${echoed} rejected` },
+      { code: 0, stdout: `not json ${echoed}`, stderr: echoed },
+    ];
+    for (const result of results) {
+      const outcome = await runSnykAgentScanRequestV1(scanFailing(result), {
+        platform: "linux",
+        tree: root,
+        hostEnv: {},
+        requestEnv,
+      });
+      expect(outcome.kind).toBe("failed");
+      expect(leaks(outcome)).toBe(false);
+      expect(JSON.stringify(outcome).includes("authentication")).toBe(false);
+    }
   });
 
-  it("redacts the token before truncation so no fragment survives the cut", async () => {
-    const stderr = `${"a".repeat(495)}${TOKEN}${"b".repeat(4000)}`;
-    const outcome = await runSnykAgentScanRequestV1(scanFailing({ code: 2, stdout: "", stderr }), {
-      platform: "linux",
-      tree: root,
-      hostEnv: {},
-      requestEnv,
-    });
-
-    expect(outcome.kind).toBe("failed");
-    expect(leaks(outcome)).toBe(false);
-    expect(JSON.stringify(outcome).includes(TOKEN.slice(0, 8))).toBe(false);
-  });
-
-  it("redacts the token from a thrown runner error", async () => {
+  it("replaces a thrown runner error with fixed text", async () => {
     const run: SnykAgentScanRunnerV1 = async () => {
-      throw new Error(`spawn failed for SNYK_TOKEN=${TOKEN}`);
+      throw new Error(`spawn failed for SNYK_TOKEN=${percentEncoded}`);
     };
-
     const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
       hostEnv: {},
       requestEnv,
     });
-
     expect(leaks(outcome)).toBe(false);
     expect(outcome).toEqual({
       kind: "failed",
       stage: "execution",
-      detail: `spawn failed for SNYK_TOKEN=${SNYK_TOKEN_REDACTION_V1}`,
+      detail: "snyk-agent-scan runner failed before an exit status was available",
     });
   });
 
-  it("redacts the token from SARIF rule ids, messages and URIs of a completed scan", async () => {
+  it("replaces every SARIF field that decodes to the token whole", async () => {
     const { run } = snykRunner({
       findings: [
         {
-          id: `rule-${TOKEN}`,
-          title: `Token ${TOKEN} echoed`,
-          description: `described ${TOKEN}`,
-          file: `leak-${TOKEN}.md`,
+          id: `rule-${percentEncoded}`,
+          title: `Token ${TOKEN.slice(0, 9)} ${TOKEN.slice(9)} echoed`,
+          description: `described\n${lineWrapped}`,
+          file: `leak-${percentEncoded}.md`,
           line: 2,
         },
+        { id: "clean-rule", title: "clean title", file: "clean.md", line: 3 },
       ],
     });
-
     const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
       hostEnv: {},
       requestEnv,
     });
-
     expect(outcome.kind).toBe("completed");
     if (outcome.kind !== "completed") return;
     expect(leaks(outcome.sarifText)).toBe(false);
     expect(leaks(outcome.sarif)).toBe(false);
-    expect(outcome.sarif.runs[0].results).toEqual([
-      {
-        ruleId: `rule-${SNYK_TOKEN_REDACTION_V1}`,
-        message: {
-          text: `Token ${SNYK_TOKEN_REDACTION_V1} echoed: described ${SNYK_TOKEN_REDACTION_V1}`,
-        },
-        locations: [
-          {
-            physicalLocation: {
-              // C2a §1.4: Snyk's fallback for a URI it cannot emit is ".".
-              artifactLocation: { uri: "." },
-              region: { startLine: 2 },
-            },
-          },
-        ],
-      },
-    ]);
+    const [redacted, clean] = outcome.sarif.runs[0].results;
+    expect(redacted?.ruleId === SNYK_TOKEN_REDACTION_V1).toBe(true);
+    expect(redacted?.message.text === SNYK_TOKEN_REDACTION_V1).toBe(true);
+    // C2a §1.4: Snyk's fallback for a URI it cannot emit is ".".
+    expect(redacted?.locations[0].physicalLocation.artifactLocation.uri === ".").toBe(true);
+    expect(redacted?.locations[0].physicalLocation.region.startLine).toBe(2);
+    expect(clean?.ruleId).toBe("clean-rule");
+    expect(clean?.message.text).toBe("clean title");
+    expect(clean?.locations[0].physicalLocation.artifactLocation.uri).toBe("clean.md");
     expect(JSON.parse(outcome.sarifText)).toEqual(outcome.sarif);
   });
 
-  it("redacts the token from the availability probe's diagnostics", async () => {
+  it("redacts a token containing quotes that JSON serialization escapes", async () => {
+    const { run } = snykRunner({
+      findings: [{ id: "quoted", title: `echo ${QUOTED_TOKEN}`, file: "a.md", line: 1 }],
+    });
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: QUOTED_TOKEN },
+    });
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    expect(leaks(outcome.sarif, QUOTED_TOKEN)).toBe(false);
+    expect(leaks(outcome.sarifText, QUOTED_TOKEN)).toBe(false);
+    expect(outcome.sarif.runs[0].results[0]?.message.text === SNYK_TOKEN_REDACTION_V1).toBe(true);
+    expect(outcome.sarif.runs[0].results[0]?.ruleId).toBe("quoted");
+  });
+
+  it("keeps the availability probe's diagnostics free of analyzer text", async () => {
     const thrown: SnykAgentScanRunnerV1 = async () => {
-      throw new Error(`help failed ${TOKEN}`);
+      throw new Error(`help failed ${lineWrapped}`);
     };
     const failing = fakeRunner((argv) =>
-      argv.includes("help") ? { code: 3, stdout: "", stderr: `help saw ${TOKEN}` } : undefined,
+      argv.includes("help")
+        ? { code: 3, stdout: "", stderr: `help saw ${jsonEscaped}` }
+        : undefined,
     ).run;
-
     const first = await probeSnykAgentScanAvailabilityV1(thrown, {
       platform: "linux",
       hostEnv: {},
@@ -977,229 +1026,231 @@ describe("request token redaction in every outward string", () => {
       hostEnv: {},
       requestEnv,
     });
-
     expect(leaks(first)).toBe(false);
     expect(leaks(second)).toBe(false);
     expect(first).toEqual({
       status: "unavailable",
-      detail: `help failed ${SNYK_TOKEN_REDACTION_V1}`,
+      detail: "snyk-agent-scan help check runner failed before an exit status was available",
     });
     expect(second).toEqual({
       status: "unavailable",
-      detail: `help saw ${SNYK_TOKEN_REDACTION_V1}`,
+      detail: `snyk-agent-scan help check failed; exit 3, stdout 0 bytes, stderr ${Buffer.byteLength(`help saw ${jsonEscaped}`)} bytes`,
     });
   });
 });
 
-// Fixtures for the 0.6.x `scan --json` ScanResponse. They are hand-built from the
-// snyk-agent-scan 0.6.4 sdist: the example in docs/json-output.md ("scan --json") and
-// the pydantic models in src/agent_scan/models/api/v20260710.py (ScanResponse,
-// ScanPathResponse, McpServerRiskResponse, SkillRiskResponse, RiskScore, Region). No
-// real Snyk run produced them: no SNYK_TOKEN exists on the development host.
-describe("snyk-agent-scan 0.6.x scan response (fixtures from the 0.6.4 sdist)", () => {
-  const docsExample = (scanPath: string) => ({
-    scan_path_responses: [
+// Owner principle (S2e): zero findings is a success only when the analyzer's own output
+// proves the scanned root was analyzed. The report model is snyk-agent-scan 0.5.17's
+// `{<path>: ScanPathResult}` (`agent_scan/models.py`): a ScanPathResult and each
+// ServerScanResult carry `error: ScanError | null`, and a ScanError is a failure unless its
+// `is_failure` is exactly false (a 401 or 429 from the analysis API lands there).
+describe("fail-closed analysis evidence (S2e)", () => {
+  const scanned = (stdout: string, code = 0) =>
+    runSnykAgentScanRequestV1(
+      fakeRunner((argv) => (argv.includes("scan") ? { code, stdout, stderr: "" } : undefined)).run,
       {
-        client: "cursor",
-        path: scanPath,
-        server_risks: [
-          {
-            name: "github",
-            entities: [
-              { name: "create_pull_request", type: "tool" },
-              { name: "search_code", type: "tool" },
-            ],
-            risk_indexes: {
-              prompt_injection_tool_desc: {
-                score: 1000,
-                evidence: "The tool description contains instructions directed at the agent.",
-                affected_tools: [0],
-              },
-            },
-          },
-          { name: "clean-server", entities: [], risk_indexes: {} },
-        ],
-        skill_risks: [
-          {
-            name: "release-helper",
-            files: [
-              { name: "SKILL.md", type: "instruction" },
-              { name: "scripts/install.sh", type: "script" },
-            ],
-            risk_indexes: {
-              suspicious_download_url: {
-                score: 600,
-                evidence: "The script downloads an executable from an untrusted host.",
-                locations: [{ start: { path: "scripts/install.sh", line: 12 } }],
-                malicious_urls: ["https://downloads.example.invalid/install.sh"],
-              },
-            },
-          },
-        ],
+        platform: "linux",
+        tree: root,
+        hostEnv: {},
+        requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
       },
-    ],
+    );
+  const failedWith = async (report: unknown, message: string, code = 0) => {
+    const stdout = JSON.stringify(report);
+    const outcome = await scanned(stdout, code);
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: `${message}; exit ${code}, stdout ${Buffer.byteLength(stdout)} bytes, stderr 0 bytes`,
+    });
+  };
+  const skillServer = () => ({
+    name: "clean",
+    config_path: null,
+    server: { path: join(root, "skills", "clean"), type: "skill" },
+    signature: { metadata: {}, tools: [] },
+    error: null,
+  });
+  const pathResult = (extra: Record<string, unknown> = {}) => ({
+    client: root,
+    path: root,
+    servers: [skillServer()],
+    issues: [],
+    labels: [],
+    error: null,
+    ...extra,
+  });
+  const ANALYZER_ERROR = "snyk-agent-scan JSON reported an analyzer error";
+  const NO_ANALYSIS = "snyk-agent-scan JSON shows no analysis of the scanned root";
+  const MALFORMED = "snyk-agent-scan JSON carries a malformed finding";
+  const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
+
+  beforeAll(() => {
+    write("skills/clean/SKILL.md", "# Clean\n");
   });
 
-  const at = (uri: string) => [
-    { physicalLocation: { artifactLocation: { uri }, region: { startLine: 1 } } },
-  ];
-
-  it("maps every present risk to one result named by its risk key", () => {
-    const sarif = parseSnykAgentScanSarifV1(JSON.stringify(docsExample(root)), root);
-    expect(sarif.runs[0].results).toEqual([
-      {
-        ruleId: "prompt_injection_tool_desc",
-        message: {
-          text: 'The tool description contains instructions directed at the agent. (MCP server "github"; score 1000/1000; affected tools: create_pull_request)',
-        },
-        locations: at("."),
-      },
-      {
-        ruleId: "suspicious_download_url",
-        message: {
-          text: 'The script downloads an executable from an untrusted host. (skill "release-helper"; score 600/1000; at scripts/install.sh:12 in the skill)',
-        },
-        locations: at("."),
-      },
-    ]);
+  it("fails a report-level error string with exit 0 (reviewer reproduction)", async () => {
+    await failedWith(
+      { " /scan": { issues: [], servers: [], error: "authentication failed" } },
+      ANALYZER_ERROR,
+    );
   });
 
-  it("points a result at the scanned path relative to the tree", () => {
-    const sub = join(root, "v06-sub");
-    mkdirSync(sub, { recursive: true });
-    const sarif = parseSnykAgentScanSarifV1(JSON.stringify(docsExample(sub)), root);
-    expect(
-      sarif.runs[0].results.map((r) => r.locations[0].physicalLocation.artifactLocation.uri),
-    ).toEqual(["v06-sub", "v06-sub"]);
+  it("fails an empty report object: nothing proves the root was analyzed", async () => {
+    await failedWith({}, NO_ANALYSIS);
   });
 
-  it("never emits a home-display path or an outside path as a URI", () => {
-    for (const scanPath of ["~/.cursor/mcp.json", "~", join(tmpdir(), "elsewhere")]) {
-      const sarif = parseSnykAgentScanSarifV1(JSON.stringify(docsExample(scanPath)), root);
-      for (const result of sarif.runs[0].results)
-        expect(result.locations[0].physicalLocation.artifactLocation.uri).toBe(".");
-    }
+  it("fails malformed findings instead of filtering them (reviewer reproduction)", async () => {
+    await failedWith({ findings: [null, 42] }, MALFORMED);
+    await failedWith([{ code: "E001", file: "skills/clean/SKILL.md" }, "junk"], MALFORMED, 1);
+    await failedWith({ issues: [{ code: "E001" }, []] }, MALFORMED, 1);
   });
 
-  it("treats clean components and an empty response list as zero findings", () => {
-    expect(
-      parseSnykAgentScanSarifV1(JSON.stringify({ scan_path_responses: [] }), root).runs[0].results,
-    ).toEqual([]);
-    const clean = {
-      scan_path_responses: [
-        {
-          path: root,
-          server_risks: [{ name: "s", entities: [], risk_indexes: {} }],
-          skill_risks: [{ name: "k", files: [] }],
-        },
-      ],
-    };
-    expect(parseSnykAgentScanSarifV1(JSON.stringify(clean), root).runs[0].results).toEqual([]);
+  it("fails empty finding arrays: they carry no analysis evidence", async () => {
+    await failedWith({ findings: [] }, NO_ANALYSIS);
+    await failedWith([], NO_ANALYSIS);
+    await failedWith({ vulnerabilities: [] }, NO_ANALYSIS);
   });
 
-  it("fails closed on a reported analysis failure at path, server or skill level", () => {
-    // verify_api.py `_analysis_error_response`: exit 0, every path carries this error.
-    const analysisError = {
-      message: "Could not reach analysis server",
+  it("fails report-level error or failure markers beside a findings array", async () => {
+    const finding = { code: "E001", file: "skills/clean/SKILL.md" };
+    await failedWith({ findings: [finding], error: "quota exceeded" }, ANALYZER_ERROR, 1);
+    await failedWith({ findings: [finding], is_failure: true }, ANALYZER_ERROR, 1);
+    await failedWith(
+      [{ ...finding, error: { message: "x", is_failure: true } }],
+      ANALYZER_ERROR,
+      1,
+    );
+  });
+
+  it("fails a ScanPathResult whose ScanError is a failure (analysis API 401 or 429)", async () => {
+    const quota = {
+      message: "Daily usage limit reached",
+      exception: null,
+      traceback: null,
       is_failure: true,
       category: "analysis_error",
+      server_output: null,
     };
-    const reports = [
-      { scan_path_responses: [{ path: root, error: analysisError }] },
-      {
-        scan_path_responses: [{ path: root, server_risks: [{ name: "s", error: analysisError }] }],
-      },
-      {
-        scan_path_responses: [
-          { path: root, skill_risks: [{ name: "k", error: { message: "x" } }] },
-        ],
-      },
-    ];
-    expect(() => parseSnykAgentScanSarifV1(JSON.stringify(reports[0]), root)).toThrow(
-      "snyk-agent-scan reported an analysis failure (analysis_error)",
-    );
-    expect(() => parseSnykAgentScanSarifV1(JSON.stringify(reports[1]), root)).toThrow(
-      "snyk-agent-scan reported an analysis failure (analysis_error)",
-    );
-    // is_failure defaults to true in models/errors.py when omitted.
-    expect(() => parseSnykAgentScanSarifV1(JSON.stringify(reports[2]), root)).toThrow(
-      "snyk-agent-scan reported an analysis failure (unknown)",
+    await failedWith({ [root]: pathResult({ error: quota }) }, ANALYZER_ERROR);
+    await failedWith(
+      { [root]: pathResult({ error: { message: "no is_failure field" } }) },
+      ANALYZER_ERROR,
     );
   });
 
-  it("accepts a benign skipped error (is_failure false)", () => {
-    const report = {
-      scan_path_responses: [
-        {
-          path: root,
-          error: { message: "not found", is_failure: false, category: "file_not_found" },
-        },
-      ],
+  it("fails a ServerScanResult whose ScanError is a failure, with or without issues", async () => {
+    const server = {
+      ...skillServer(),
+      signature: null,
+      error: { message: "Unauthorized", is_failure: true, category: "analysis_error" },
     };
-    expect(parseSnykAgentScanSarifV1(JSON.stringify(report), root).runs[0].results).toEqual([]);
+    await failedWith({ [root]: pathResult({ servers: [server] }) }, ANALYZER_ERROR);
+    await failedWith(
+      {
+        [root]: pathResult({
+          servers: [server],
+          issues: [{ code: "E004", message: "m", reference: [0, null] }],
+        }),
+      },
+      ANALYZER_ERROR,
+      1,
+    );
   });
 
-  it("rejects malformed responses instead of filtering them", () => {
-    const risk = (value: unknown) => ({
-      scan_path_responses: [
-        { path: root, skill_risks: [{ name: "k", risk_indexes: { r: value } }] },
-      ],
-    });
-    const malformed: unknown[] = [
-      { scan_path_responses: {} },
-      { scan_path_responses: [1] },
-      { scan_path_responses: [{}] },
-      { scan_path_responses: [{ path: root, server_risks: [{ entities: [] }] }] },
-      { scan_path_responses: [{ path: root, skill_risks: "x" }] },
-      risk(1),
-      risk({ score: 1001, evidence: "e" }),
-      risk({ score: 1.5, evidence: "e" }),
-      risk({ score: 5 }),
-      risk({ score: 5, evidence: "e", locations: [{ start: { line: 3 } }] }),
+  it("fails a failure-code issue (X001..X009 are agent-scan failure codes)", async () => {
+    await failedWith(
+      { [root]: pathResult({ issues: [{ code: "X007", message: "analysis", reference: null }] }) },
+      ANALYZER_ERROR,
+      1,
+    );
+  });
+
+  it("fails a non-failure ScanError when nothing was discovered (file_not_found)", async () => {
+    await failedWith(
       {
-        scan_path_responses: [
-          {
-            path: root,
-            server_risks: [
-              {
-                name: "s",
-                entities: [],
-                risk_indexes: { r: { score: 1, evidence: "e", affected_tools: [0] } },
-              },
-            ],
+        [root]: pathResult({
+          servers: [],
+          error: {
+            message: "File or folder not found",
+            is_failure: false,
+            category: "file_not_found",
           },
-        ],
+        }),
       },
-    ];
-    for (const report of malformed)
-      expect(() => parseSnykAgentScanSarifV1(JSON.stringify(report), root)).toThrow(
-        "snyk-agent-scan scan response is malformed",
-      );
+      NO_ANALYSIS,
+    );
   });
 
-  it("completes an exit-0 scan with risks and fails an exit-0 analysis error at output", async () => {
-    const input = {
-      platform: "linux" as const,
-      tree: root,
-      hostEnv: {},
-      requestEnv: { SNYK_TOKEN: "tok-v06" },
-    };
-    const completed = await runSnykAgentScanRequestV1(
-      snykRunner(docsExample(root), { scanCode: 0 }).run,
-      input,
+  it("fails a ScanPathResult whose servers are null (discovery failed)", async () => {
+    await failedWith({ [root]: pathResult({ servers: null }) }, NO_ANALYSIS);
+  });
+
+  it("fails reports whose entries never name the scanned root", async () => {
+    const elsewhere = join(tmpdir(), "aih-scan-snyk-elsewhere");
+    await failedWith(
+      {
+        [elsewhere]: pathResult({
+          client: elsewhere,
+          path: elsewhere,
+          servers: [{ ...skillServer(), server: { path: elsewhere, type: "skill" } }],
+        }),
+      },
+      NO_ANALYSIS,
     );
-    expect(completed.kind).toBe("completed");
-    const failed = await runSnykAgentScanRequestV1(
-      snykRunner(
-        {
-          scan_path_responses: [
-            { path: root, error: { is_failure: true, category: "analysis_error" } },
-          ],
-        },
-        { scanCode: 0 },
-      ).run,
-      input,
+    await failedWith(
+      { "relative/key": pathResult({ path: "relative/key", servers: [] }) },
+      NO_ANALYSIS,
     );
-    expect(failed).toMatchObject({ kind: "failed", stage: "output" });
+  });
+
+  it("fails malformed scan-path entries, issues and servers instead of skipping them", async () => {
+    await failedWith({ [root]: pathResult(), other: "junk" }, MALFORMED_ENTRY);
+    await failedWith({ [root]: pathResult({ servers: [skillServer(), 7] }) }, MALFORMED_ENTRY);
+    await failedWith({ [root]: pathResult({ issues: [null] }) }, MALFORMED, 1);
+    await failedWith(
+      { [root]: pathResult({ issues: [{ message: "no code", reference: null }] }) },
+      MALFORMED,
+      1,
+    );
+    await failedWith(
+      { [root]: pathResult({ issues: [{ code: "E004", reference: null }] }) },
+      MALFORMED,
+      1,
+    );
+  });
+
+  it("completes zero findings when the root's ScanPathResult proves analysis", async () => {
+    const clean = await scanned(JSON.stringify({ [root]: pathResult() }));
+    expect(clean).toMatchObject({ kind: "completed" });
+    if (clean.kind === "completed") expect(clean.sarif.runs[0]?.results).toEqual([]);
+
+    // Discovery ran on the root and found nothing to send: the analyzer's own statement.
+    const nothing = await scanned(JSON.stringify({ [root]: pathResult({ servers: [] }) }));
+    expect(nothing).toMatchObject({ kind: "completed" });
+
+    // A non-failure ScanError (a missing candidate config) beside analyzed servers is kept.
+    const partial = await scanned(
+      JSON.stringify({
+        [root]: pathResult({
+          error: { message: "not found", is_failure: false, category: "file_not_found" },
+        }),
+      }),
+    );
+    expect(partial).toMatchObject({ kind: "completed" });
+  });
+
+  it("accepts the root SKILL.md form: the entry names the parent, the server the root", async () => {
+    const parent = dirname(root);
+    const outcome = await scanned(
+      JSON.stringify({
+        [parent]: pathResult({
+          client: root,
+          path: parent,
+          servers: [{ ...skillServer(), server: { path: root, type: "skill" } }],
+        }),
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: "completed" });
   });
 });

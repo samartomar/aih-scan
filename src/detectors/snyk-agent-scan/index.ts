@@ -14,18 +14,21 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  * - environment: the caller environment is reduced to a fixed allow-list with every
  *   secret-looking key removed; `SNYK_TOKEN` (trimmed) is added only to the scan call,
  *   never to the help probe, and never to any other argv, env, log or diagnostic;
- * - parsing: the scanner's JSON is accepted in the four report shapes Core accepts
- *   (top-level finding array, `{findings|issues|results|vulnerabilities: [...]}`, a
- *   scan-path map whose issues recover their artifact path from the server `reference`
- *   index, and the empty object) and converted to SARIF 2.1.0 with the line defaulting
- *   to 1. The pinned 0.6.x analyzer prints a `{scan_path_responses: [...]}` risk
- *   response instead; it is validated strictly, a reported analysis failure fails the
- *   run, and every present risk becomes one result. Core's four shapes stay because the
- *   recorded parity outputs replayed against Core use them;
+ * - parsing: the scanner's JSON is accepted in Core's report shapes (top-level finding
+ *   array, `{findings|issues|results|vulnerabilities: [...]}`, and a scan-path map whose
+ *   issues recover their artifact path from the server `reference` index) and converted
+ *   to SARIF 2.1.0 with the line defaulting to 1. Unlike Core it fails closed (S2e, the
+ *   owner principle): zero findings completes only when a scan-path entry proves the root
+ *   was analyzed; an empty object or empty finding array, any failure ScanError at report,
+ *   entry or server level, an agent-scan X-code issue, and any malformed entry or finding
+ *   fail at stage `output`;
  * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
  *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
  *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
- *   findings completes, exactly as Core's `runSnykAgentScan` decides.
+ *   findings completes, exactly as Core's `runSnykAgentScan` decides. A failure detail
+ *   is fixed engine text plus the exit status and output byte counts: the analyzer's
+ *   stdout and stderr never reach a diagnostic, and every SARIF field whose decoded
+ *   comparison form carries the token is replaced whole.
  *
  * C2a §5.1 environment seam: the request-scoped entry points
  * ({@link planSnykAgentScanRequestV1}, {@link runSnykAgentScanRequestV1},
@@ -60,7 +63,6 @@ export const SNYK_AGENT_SCAN_PROJECT = resolve(
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_FINDINGS = 4096;
-const MAX_DETAIL_CHARACTERS = 1024;
 
 export type SnykAgentScanPlatformV1 = "windows" | "darwin" | "linux";
 
@@ -305,30 +307,139 @@ function snykScanPathIssueUri(
   return firstString(pathResult, ["path"]) ?? scanPath;
 }
 
-/** The four report shapes Core accepts, or `undefined` for anything else. */
-function snykFindingArray(report: unknown): Record<string, unknown>[] | undefined {
-  if (Array.isArray(report)) return report.filter(isRecord);
-  if (!isRecord(report)) return undefined;
-  for (const key of ["findings", "issues", "results", "vulnerabilities"] as const) {
-    const value = report[key];
-    if (Array.isArray(value)) return value.filter(isRecord);
+const ANALYZER_ERROR = "snyk-agent-scan JSON reported an analyzer error";
+const NO_ANALYSIS = "snyk-agent-scan JSON shows no analysis of the scanned root";
+const MALFORMED_FINDING = "snyk-agent-scan JSON carries a malformed finding";
+const MALFORMED_ENTRY = "snyk-agent-scan JSON carries a malformed scan-path entry";
+const NO_FINDINGS_ARRAY = "snyk-agent-scan JSON did not include a findings array";
+
+/** agent-scan's own failure codes (`FAILURE_CATEGORY_TO_CODE`), never an analysis finding. */
+const FAILURE_CODE = /^X\d{3}$/;
+
+/**
+ * A ScanError-style `error` value: absent or null is no error, an object whose `is_failure`
+ * is exactly `false` is agent-scan's non-failure note (a missing candidate config), and
+ * anything else — a failure ScanError, a bare string, an object without the flag — is an
+ * analyzer error.
+ */
+function errorKind(value: unknown): "none" | "note" | "failure" {
+  if (value === undefined || value === null) return "none";
+  return isRecord(value) && value.is_failure === false ? "note" : "failure";
+}
+
+/** An object carrying an analyzer error or failure marker of its own. */
+function carriesFailure(record: Record<string, unknown>): boolean {
+  if (errorKind(record.error) === "failure") return true;
+  if (record.errors !== undefined && record.errors !== null) {
+    if (!Array.isArray(record.errors) || record.errors.length > 0) return true;
   }
-  const pathFindings: Record<string, unknown>[] = [];
-  let sawScanPathResult = false;
-  for (const [scanPath, rawPathResult] of Object.entries(report)) {
-    if (!isRecord(rawPathResult)) continue;
-    if (!Array.isArray(rawPathResult.issues)) continue;
-    sawScanPathResult = true;
-    for (const rawIssue of rawPathResult.issues) {
-      if (!isRecord(rawIssue)) continue;
-      pathFindings.push({
-        ...rawIssue,
-        path: snykScanPathIssueUri(scanPath, rawPathResult, rawIssue),
-      });
+  if (record.is_failure !== undefined && record.is_failure !== false) return true;
+  return record.isFailure !== undefined && record.isFailure !== false;
+}
+
+/** A path inside the tree, or the tree itself; relative or scheme-less text never counts. */
+function namesTreePath(raw: unknown, tree: string): boolean {
+  if (typeof raw !== "string") return false;
+  const stripped = raw.replace(/^file:\/\//, "");
+  if (!isAbsolute(stripped)) return false;
+  const rel = relative(realpathIfExists(tree), realpathIfExists(stripped));
+  return rel === "" || (!isAbsolute(rel) && !toPosix(rel).split("/").includes(".."));
+}
+
+function serverNamesTree(server: Record<string, unknown>, tree: string): boolean {
+  const nested = isRecord(server.server) ? server.server : {};
+  return [
+    server.config_path,
+    server.configPath,
+    server.path,
+    nested.path,
+    nested.config_path,
+    nested.configPath,
+  ].some((value) => namesTreePath(value, tree));
+}
+
+/**
+ * A generic finding (top-level array or finding-key report): an object carrying no error or
+ * failure marker and no agent-scan failure code. The rule id, message, URI and line keep
+ * C2a §5.3's documented defaults.
+ */
+function validatedFinding(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new TypeError(MALFORMED_FINDING);
+  if (carriesFailure(value) || FAILURE_CODE.test(snykFindingRuleId(value)))
+    throw new TypeError(ANALYZER_ERROR);
+  return value;
+}
+
+/**
+ * The findings of a `{<scanPath>: ScanPathResult}` report (snyk-agent-scan 0.5.17's
+ * `--json` output, keyed by `ScanPathResult.path`). Every entry, server and issue is
+ * validated, never skipped: a failure ScanError anywhere or an X-code issue is an analyzer
+ * error; `servers: null`, or a non-failure ScanError with nothing discovered, means that
+ * entry was not analyzed. The scanned root must be named by an entry key or a server path
+ * (a root holding SKILL.md is reported under its parent, with the root as the skill's
+ * path), or nothing proves the root was analyzed.
+ */
+function scanPathFindings(
+  report: Record<string, unknown>,
+  tree: string,
+): Record<string, unknown>[] {
+  const findings: Record<string, unknown>[] = [];
+  let namesRoot = false;
+  for (const [scanPath, entry] of Object.entries(report)) {
+    if (!isRecord(entry) || !Array.isArray(entry.issues)) throw new TypeError(MALFORMED_ENTRY);
+    const error = errorKind(entry.error);
+    if (error === "failure" || carriesFailure(entry)) throw new TypeError(ANALYZER_ERROR);
+    if (!Array.isArray(entry.servers)) throw new TypeError(NO_ANALYSIS);
+    if (error === "note" && entry.servers.length === 0) throw new TypeError(NO_ANALYSIS);
+    if (namesTreePath(scanPath, tree)) namesRoot = true;
+    for (const server of entry.servers) {
+      if (!isRecord(server)) throw new TypeError(MALFORMED_ENTRY);
+      if (carriesFailure(server)) throw new TypeError(ANALYZER_ERROR);
+      if (serverNamesTree(server, tree)) namesRoot = true;
+    }
+    for (const issue of entry.issues) {
+      if (!isRecord(issue)) throw new TypeError(MALFORMED_FINDING);
+      const code = issue.code;
+      if (typeof code !== "string" || code.trim().length === 0 || typeof issue.message !== "string")
+        throw new TypeError(MALFORMED_FINDING);
+      if (FAILURE_CODE.test(code.trim()) || carriesFailure(issue))
+        throw new TypeError(ANALYZER_ERROR);
+      findings.push({ ...issue, path: snykScanPathIssueUri(scanPath, entry, issue) });
     }
   }
-  if (sawScanPathResult || Object.keys(report).length === 0) return pathFindings;
-  return undefined;
+  if (!namesRoot) throw new TypeError(NO_ANALYSIS);
+  return findings;
+}
+
+/**
+ * The report shapes of C2a §5.3, validated whole. A finding array must be non-empty to prove
+ * analysis (an empty one, like `{}`, says nothing about the root); a report-level error or
+ * failure marker beside it is an analyzer error; every finding is validated, none filtered.
+ */
+function snykFindingArray(report: unknown, tree: string): Record<string, unknown>[] {
+  const findingList = (value: unknown[]): Record<string, unknown>[] => {
+    const findings = value.map(validatedFinding);
+    if (findings.length === 0) throw new TypeError(NO_ANALYSIS);
+    return findings;
+  };
+  if (Array.isArray(report)) return findingList(report);
+  if (!isRecord(report)) throw new TypeError(NO_FINDINGS_ARRAY);
+  for (const key of ["findings", "issues", "results", "vulnerabilities"] as const) {
+    const value = report[key];
+    if (!Array.isArray(value)) continue;
+    if (carriesFailure(report)) throw new TypeError(ANALYZER_ERROR);
+    return findingList(value);
+  }
+  const entries = Object.values(report);
+  if (entries.length === 0) throw new TypeError(NO_ANALYSIS);
+  // A map in which no value is a ScanPathResult is no report shape at all (Core's message);
+  // once one is, every other value must be one too.
+  if (!entries.some((entry) => isRecord(entry) && Array.isArray(entry.issues))) {
+    if (carriesFailure(report) || entries.some((entry) => isRecord(entry) && carriesFailure(entry)))
+      throw new TypeError(ANALYZER_ERROR);
+    throw new TypeError(NO_FINDINGS_ARRAY);
+  }
+  return scanPathFindings(report, tree);
 }
 
 function snykFindingRuleId(finding: Record<string, unknown>): string {
@@ -370,174 +481,6 @@ function snykFindingLine(finding: Record<string, unknown>): number {
   return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : 1;
 }
 
-// ---------------------------------------------------------------------------
-// snyk-agent-scan 0.6.x `scan --json`: the ScanResponse root (models/api/v20260710.py)
-// ---------------------------------------------------------------------------
-
-const SNYK_RISK_SCORE_MAX = 1000;
-const MALFORMED_SCAN_RESPONSE = "snyk-agent-scan scan response is malformed";
-
-function malformedScanResponse(): never {
-  throw new TypeError(MALFORMED_SCAN_RESPONSE);
-}
-
-function optionalRecordArray(value: unknown): readonly Record<string, unknown>[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || !value.every(isRecord)) return malformedScanResponse();
-  return value;
-}
-
-function requiredName(record: Record<string, unknown>): string {
-  const name = record.name;
-  return typeof name === "string" && name.length > 0 ? name : malformedScanResponse();
-}
-
-/**
- * A `ScanError` whose `is_failure` is not literally `false` means the analysis did not
- * happen for that path, server or skill (0.6.4 reports an unreachable analysis API as
- * exit 0 with a path-level `analysis_error`). Treating it as zero findings would report
- * an unanalysed tree as clean, so it fails the run instead.
- */
-function refuseReportedFailure(record: Record<string, unknown>): void {
-  const error = record.error;
-  if (error === undefined) return;
-  if (!isRecord(error)) malformedScanResponse();
-  if (error.is_failure === false) return;
-  const category =
-    typeof error.category === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(error.category)
-      ? error.category
-      : "unknown";
-  throw new TypeError(`snyk-agent-scan reported an analysis failure (${category})`);
-}
-
-interface SnykRiskV1 {
-  readonly name: string;
-  readonly score: number;
-  readonly evidence: string;
-  readonly value: Record<string, unknown>;
-}
-
-function riskEntries(record: Record<string, unknown>): readonly SnykRiskV1[] {
-  const indexes = record.risk_indexes;
-  if (indexes === undefined) return [];
-  if (!isRecord(indexes)) return malformedScanResponse();
-  return Object.entries(indexes).map(([name, value]): SnykRiskV1 => {
-    if (!isRecord(value)) return malformedScanResponse();
-    const { score, evidence } = value;
-    if (
-      typeof score !== "number" ||
-      !Number.isInteger(score) ||
-      score < 0 ||
-      score > SNYK_RISK_SCORE_MAX ||
-      typeof evidence !== "string"
-    )
-      return malformedScanResponse();
-    return { name, score, evidence, value };
-  });
-}
-
-function riskText(risk: SnykRiskV1): string {
-  return risk.evidence.trim().length > 0 ? risk.evidence : "Snyk Agent Scan finding";
-}
-
-function affectedToolNames(server: Record<string, unknown>, risk: SnykRiskV1): string[] {
-  const affected = risk.value.affected_tools;
-  if (affected === undefined) return [];
-  const entities = optionalRecordArray(server.entities);
-  if (!Array.isArray(affected)) return malformedScanResponse();
-  return affected.map((index) => {
-    const entity =
-      typeof index === "number" && Number.isInteger(index) ? entities[index] : undefined;
-    return entity === undefined ? malformedScanResponse() : requiredName(entity);
-  });
-}
-
-/** The first skill-relative location of a skill risk, as `path[:line]`. */
-function skillRiskLocationText(risk: SnykRiskV1): string | undefined {
-  const locations = risk.value.locations;
-  if (locations === undefined) return undefined;
-  const regions = optionalRecordArray(locations);
-  for (const region of regions) {
-    const start = region.start;
-    if (!isRecord(start) || typeof start.path !== "string") return malformedScanResponse();
-    const line = start.line;
-    if (line !== undefined && (typeof line !== "number" || !Number.isInteger(line) || line < 0))
-      return malformedScanResponse();
-  }
-  const first = regions[0]?.start as Record<string, unknown> | undefined;
-  if (first === undefined) return undefined;
-  const path = toPosix(first.path as string);
-  return typeof first.line === "number" && first.line > 0 ? `${path}:${first.line}` : path;
-}
-
-/** A display path (`~/…`) or anything outside the tree maps to the C2a §1.4 fallback `.`. */
-function scanPathUri(path: string, tree: string): string {
-  return path.startsWith("~") ? "." : snykSafeSarifUri(path, tree);
-}
-
-function scanResponseResult(ruleId: string, uri: string, text: string): SnykAgentScanSarifResultV1 {
-  return {
-    ruleId,
-    message: { text },
-    locations: [{ physicalLocation: { artifactLocation: { uri }, region: { startLine: 1 } } }],
-  };
-}
-
-/**
- * The 0.6.x scan response: one entry per analysed path, MCP server risks and skill
- * risks keyed by risk name in `risk_indexes`. Every present risk becomes one SARIF
- * result whose rule id is the risk name. Skill risk locations are relative to the
- * skill directory, which the response does not name, so they are carried in the
- * message and the result points at the scanned path (line 1) rather than at a guessed
- * file. Malformed entries and reported analysis failures throw.
- */
-function snykScanResponseResults(
-  report: Record<string, unknown>,
-  tree: string,
-): SnykAgentScanSarifResultV1[] {
-  const responses = report.scan_path_responses;
-  if (!Array.isArray(responses) || !responses.every(isRecord)) return malformedScanResponse();
-  const results: SnykAgentScanSarifResultV1[] = [];
-  for (const response of responses) {
-    if (typeof response.path !== "string" || response.path.length === 0) malformedScanResponse();
-    refuseReportedFailure(response);
-    const uri = scanPathUri(response.path as string, tree);
-    for (const server of optionalRecordArray(response.server_risks)) {
-      const serverName = requiredName(server);
-      refuseReportedFailure(server);
-      for (const risk of riskEntries(server)) {
-        const tools = affectedToolNames(server, risk);
-        const toolsText = tools.length > 0 ? `; affected tools: ${tools.join(", ")}` : "";
-        results.push(
-          scanResponseResult(
-            risk.name,
-            uri,
-            `${riskText(risk)} (MCP server "${serverName}"; score ${risk.score}/${SNYK_RISK_SCORE_MAX}${toolsText})`,
-          ),
-        );
-      }
-    }
-    for (const skill of optionalRecordArray(response.skill_risks)) {
-      const skillName = requiredName(skill);
-      refuseReportedFailure(skill);
-      for (const risk of riskEntries(skill)) {
-        const location = skillRiskLocationText(risk);
-        const locationText = location === undefined ? "" : `; at ${location} in the skill`;
-        results.push(
-          scanResponseResult(
-            risk.name,
-            uri,
-            `${riskText(risk)} (skill "${skillName}"; score ${risk.score}/${SNYK_RISK_SCORE_MAX}${locationText})`,
-          ),
-        );
-      }
-    }
-    if (results.length > MAX_FINDINGS)
-      throw new TypeError("snyk-agent-scan JSON exceeds the bounded finding count");
-  }
-  return results;
-}
-
 function parseReportJson(raw: string): unknown {
   if (Buffer.byteLength(raw, "utf8") > MAX_OUTPUT_BYTES)
     throw new TypeError("snyk-agent-scan output exceeds the bounded size");
@@ -553,19 +496,12 @@ function parseReportJson(raw: string): unknown {
 /**
  * Converts the scanner's JSON stdout to the SARIF 2.1.0 projection Core emits, frozen.
  * Throws `TypeError` with Core's exact messages when the output is not parseable JSON or
- * holds no findings array.
+ * holds no findings array, and with the engine's fixed messages when the report carries an
+ * analyzer error, a malformed entry or finding, or no evidence that the root was analyzed.
  */
 export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentScanSarifV1 {
   const parsed = parseReportJson(raw);
-  if (isRecord(parsed) && Object.hasOwn(parsed, "scan_path_responses")) {
-    return deepFreezeStrictJsonV1({
-      version: "2.1.0" as const,
-      runs: [{ results: snykScanResponseResults(parsed, tree) }],
-    });
-  }
-  const findings = snykFindingArray(parsed);
-  if (findings === undefined)
-    throw new TypeError("snyk-agent-scan JSON did not include a findings array");
+  const findings = snykFindingArray(parsed, tree);
   if (findings.length > MAX_FINDINGS)
     throw new TypeError("snyk-agent-scan JSON exceeds the bounded finding count");
   const results = findings.map((finding): SnykAgentScanSarifResultV1 => {
@@ -588,63 +524,103 @@ export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentS
   });
 }
 
-/** The fixed marker that replaces the request token in every outward string. */
+/** The fixed marker that replaces a SARIF field carrying the request token. */
 export const SNYK_TOKEN_REDACTION_V1 = "[redacted SNYK_TOKEN]";
 
-/** Replaces every occurrence of the request token; applied before any bounding. */
-function redactToken(value: string, token: string | undefined): string {
-  return token === undefined || token.length === 0
-    ? value
-    : value.split(token).join(SNYK_TOKEN_REDACTION_V1);
+const MAX_DECODE_ROUNDS = 8;
+
+/** Decodes each valid run of percent-encoded UTF-8 octets; invalid runs stay as they are. */
+function percentDecodeValid(value: string): string {
+  return value.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run;
+    }
+  });
+}
+
+/** Decodes literal `\uXXXX` escapes, the form a JSON string escape takes once echoed as text. */
+function unicodeEscapeDecode(value: string): string {
+  return value.replace(/\\u([0-9A-Fa-f]{4})/g, (_escape, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
 }
 
 /**
- * The SARIF projection with the request token removed: rule ids and messages
- * carry the marker; a URI holding the token is replaced with Snyk's C2a §1.4
- * fallback `.`, since a redacted path would name no real file.
+ * The comparison form of a string: valid percent-encoding and `\u` escapes decoded
+ * (repeatedly, so a double encoding is seen through), then all whitespace removed,
+ * so encoded and line-wrapped echoes of the token are recognized.
+ */
+function tokenComparisonForm(value: string): string {
+  let current = value;
+  for (let round = 0; round < MAX_DECODE_ROUNDS; round += 1) {
+    const next = unicodeEscapeDecode(percentDecodeValid(current));
+    if (next === current) break;
+    current = next;
+  }
+  return current.replace(/\s+/gu, "");
+}
+
+/**
+ * The SARIF projection with every field that carries the request token replaced
+ * whole: rule ids and messages by the marker, a URI by Snyk's C2a §1.4 fallback
+ * `.`, since a redacted path would name no real file. Each decoded field is
+ * compared on its own comparison form; nothing relies on the serialized SARIF.
  */
 function redactSarif(sarif: SnykAgentScanSarifV1, token: string | undefined): SnykAgentScanSarifV1 {
-  if (token === undefined || token.length === 0 || !JSON.stringify(sarif).includes(token)) {
-    return sarif;
-  }
-  const results = sarif.runs[0].results.map(
-    (result): SnykAgentScanSarifResultV1 => ({
-      ruleId: redactToken(result.ruleId, token),
-      message: { text: redactToken(result.message.text, token) },
+  if (token === undefined) return sarif;
+  const normalizedToken = tokenComparisonForm(token);
+  const carriesToken = (value: string): boolean =>
+    tokenComparisonForm(value).includes(normalizedToken);
+  const results = sarif.runs[0].results.map((result): SnykAgentScanSarifResultV1 => {
+    const location = result.locations[0].physicalLocation;
+    return {
+      ruleId: carriesToken(result.ruleId) ? SNYK_TOKEN_REDACTION_V1 : result.ruleId,
+      message: {
+        text: carriesToken(result.message.text) ? SNYK_TOKEN_REDACTION_V1 : result.message.text,
+      },
       locations: [
         {
           physicalLocation: {
             artifactLocation: {
-              uri: result.locations[0].physicalLocation.artifactLocation.uri.includes(token)
+              uri: carriesToken(location.artifactLocation.uri)
                 ? "."
-                : result.locations[0].physicalLocation.artifactLocation.uri,
+                : location.artifactLocation.uri,
             },
-            region: { startLine: result.locations[0].physicalLocation.region.startLine },
+            region: { startLine: location.region.startLine },
           },
         },
       ],
-    }),
-  );
+    };
+  });
   return deepFreezeStrictJsonV1({ version: "2.1.0" as const, runs: [{ results }] });
 }
 
-/** Bounded, control-character-encoded diagnostic text; engine messages pass through as-is. */
-function boundedDetail(value: string): string {
-  const encoded = JSON.stringify(value).slice(1, -1);
-  if (encoded.length <= MAX_DETAIL_CHARACTERS) return encoded;
-  const marker = "… middle omitted …";
-  const retained = MAX_DETAIL_CHARACTERS - marker.length;
-  const headLength = Math.ceil(retained / 2);
-  return `${encoded.slice(0, headLength)}${marker}${encoded.slice(-(retained - headLength))}`;
+/**
+ * A failure detail: fixed engine text plus the exit status and output byte
+ * counts. The analyzer's stdout and stderr never reach an outward diagnostic,
+ * because an echoed request token cannot be reliably recognized in free text.
+ */
+function processDetail(message: string, result: SnykAgentScanProcessResultV1): string {
+  const stdoutBytes = Buffer.byteLength(result.stdout, "utf8");
+  const stderrBytes = Buffer.byteLength(result.stderr, "utf8");
+  return `${message}; exit ${result.code ?? "signal"}, stdout ${stdoutBytes} bytes, stderr ${stderrBytes} bytes`;
 }
 
-function boundedRedactedDetail(value: string, token: string | undefined): string {
-  return boundedDetail(redactToken(value, token));
-}
+/** The engine's own parse messages; any other thrown text is replaced by fixed text. */
+const SNYK_OUTPUT_MESSAGES: ReadonlySet<string> = new Set([
+  "snyk-agent-scan output exceeds the bounded size",
+  "snyk-agent-scan did not emit parseable JSON",
+  "snyk-agent-scan JSON did not include a findings array",
+  "snyk-agent-scan JSON exceeds the bounded finding count",
+  ANALYZER_ERROR,
+  NO_ANALYSIS,
+  MALFORMED_FINDING,
+  MALFORMED_ENTRY,
+]);
 
-function exitLabel(code: number | null): string {
-  return `detector exit ${code ?? "signal"}`;
-}
+const RUNNER_FAILED = "runner failed before an exit status was available";
 
 /**
  * Executes one scan plan through the injected runner and classifies the outcome with
@@ -658,33 +634,30 @@ async function executeSnykAgentScanPlanV1(
   plan: SnykAgentScanPlanV1,
   tree: string,
 ): Promise<SnykAgentScanRunOutcomeV1> {
-  // Every outward string is redacted before bounding: the scanner, the runner
-  // and the report may all echo the request token.
+  // The analyzer's output never reaches a diagnostic (fixed text, exit status and
+  // byte counts only), and every SARIF field is checked for the request token.
   const token = plan.env.SNYK_TOKEN;
-  const redactedDetail = (value: string): string => boundedRedactedDetail(value, token);
   let scan: SnykAgentScanProcessResultV1;
   try {
     scan = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
-  } catch (error) {
+  } catch {
     return Object.freeze({
       kind: "failed" as const,
       stage: "execution" as const,
-      detail: redactedDetail(
-        error instanceof Error ? error.message : "snyk-agent-scan runner failed",
-      ),
+      detail: `snyk-agent-scan ${RUNNER_FAILED}`,
     });
   }
   if (scan.spawnError)
     return Object.freeze({
       kind: "failed" as const,
       stage: "execution" as const,
-      detail: redactedDetail(scan.stderr || scan.stdout || exitLabel(scan.code)),
+      detail: processDetail("snyk-agent-scan could not start", scan),
     });
   if (scan.stdout.trim().length === 0)
     return Object.freeze({
       kind: "failed" as const,
       stage: "output" as const,
-      detail: redactedDetail(scan.stderr || "snyk-agent-scan emitted no JSON on stdout"),
+      detail: processDetail("snyk-agent-scan emitted no JSON on stdout", scan),
     });
   // Snyk Agent Scan documents --ci as the mode that exits non-zero for findings, but
   // --ci requires --dangerously-run-mcp-servers, which never appears in the planned
@@ -693,25 +666,30 @@ async function executeSnykAgentScanPlanV1(
     return Object.freeze({
       kind: "failed" as const,
       stage: "execution" as const,
-      detail: redactedDetail(scan.stderr || scan.stdout || exitLabel(scan.code)),
+      detail: processDetail("snyk-agent-scan exited outside {0, 1}", scan),
     });
   let sarif: SnykAgentScanSarifV1;
   try {
     sarif = redactSarif(parseSnykAgentScanSarifV1(scan.stdout, tree), token);
   } catch (error) {
+    // An exit 1 whose report proves nothing keeps Core's exit-1 message (§5.3).
+    const message =
+      error instanceof TypeError && SNYK_OUTPUT_MESSAGES.has(error.message)
+        ? scan.code === 1 && error.message === NO_ANALYSIS
+          ? "snyk-agent-scan exited 1 without findings"
+          : error.message
+        : "invalid snyk-agent-scan JSON";
     return Object.freeze({
       kind: "failed" as const,
       stage: "output" as const,
-      detail: redactedDetail(
-        error instanceof Error ? error.message : "invalid snyk-agent-scan JSON",
-      ),
+      detail: processDetail(message, scan),
     });
   }
   if (scan.code === 1 && !sarif.runs.some((run0) => run0.results.length > 0))
     return Object.freeze({
       kind: "failed" as const,
       stage: "output" as const,
-      detail: redactedDetail(scan.stderr || "snyk-agent-scan exited 1 without findings"),
+      detail: processDetail("snyk-agent-scan exited 1 without findings", scan),
     });
   return Object.freeze({ kind: "completed" as const, sarif, sarifText: JSON.stringify(sarif) });
 }
@@ -864,24 +842,21 @@ export async function probeSnykAgentScanAvailabilityV1(
   const env = validateSnykAgentScanRequestEnvV1(input.requestEnv);
   if (!env.ok) return Object.freeze({ status: "refused" as const, refusal: env.refusal });
   const plan = planSnykAgentScanHelpV1({ platform: input.platform, env: input.hostEnv });
-  // The help call never receives the token, but its diagnostics are redacted
-  // all the same: nothing outward may carry the request token.
-  const redactedDetail = (value: string): string => boundedRedactedDetail(value, env.token);
+  // The help call never receives the token, and its output never reaches a
+  // diagnostic all the same: fixed text, exit status and byte counts only.
   let help: SnykAgentScanProcessResultV1;
   try {
     help = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
-  } catch (error) {
+  } catch {
     return Object.freeze({
       status: "unavailable" as const,
-      detail: redactedDetail(
-        error instanceof Error ? error.message : "snyk-agent-scan runner failed",
-      ),
+      detail: `snyk-agent-scan help check ${RUNNER_FAILED}`,
     });
   }
   if (help.spawnError || help.code !== 0)
     return Object.freeze({
       status: "unavailable" as const,
-      detail: redactedDetail(help.stderr || help.stdout || `uvx exit ${help.code ?? "signal"}`),
+      detail: processDetail("snyk-agent-scan help check failed", help),
     });
   if (`${help.stdout}${help.stderr}`.trim().length === 0)
     return Object.freeze({
