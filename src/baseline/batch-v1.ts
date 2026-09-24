@@ -33,6 +33,7 @@ import {
 } from "../contract/strict-json-v1.js";
 import {
   attachScanCompletionV1,
+  SCAN_COMPLETION_PROPERTY_V1,
   scanCompletionEvidenceV1,
   scanCompletionSubjectFilesV1,
 } from "../detectors/completion-evidence-v1.js";
@@ -888,6 +889,79 @@ export async function executeBaselineVetBatchV1(
   return Object.freeze({ receipt, annexArtifacts: Object.freeze(annexArtifacts) });
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+/**
+ * D24: whether a published SARIF annex still proves what the batch wrote into it. Every run
+ * passes the S2e completion rule and carries, only in its first invocation, one equal
+ * completion-evidence-v1 object for this analyzer's detector, the receipt's analyzer
+ * version and a lock one of the detector's observation profiles installs (null only where
+ * one installs none). The subject itself is recomputed by whoever holds the source.
+ */
+function carriesBaselineCompletion(
+  analyzerName: BaselineAnalyzerV1,
+  analyzerVersion: string,
+  bytes: Buffer,
+): boolean {
+  const capability = resolveDetectorCapabilityV1(BASELINE_DETECTOR_IDS_V1[analyzerName]);
+  if (capability === undefined) return false;
+  const locks = new Set(
+    capability.executionProfiles
+      .filter((profile) => profile.evidence === "BaselineAnalyzerObservationV1")
+      .map((profile) => profile.analyzerLock?.sha256 ?? null),
+  );
+  let log: Record<string, unknown>;
+  try {
+    log = parseStrictJsonObjectV1(bytes.toString("utf8"), "SARIF");
+    assertSarifCompletedV1(log);
+  } catch {
+    return false;
+  }
+  let first: Buffer | undefined;
+  for (const run of log.runs as unknown[]) {
+    const invocations = isRecord(run) ? run.invocations : undefined;
+    if (!Array.isArray(invocations)) return false;
+    const [head, ...rest] = invocations as unknown[];
+    const properties = isRecord(head) ? head.properties : undefined;
+    const evidence = isRecord(properties) ? properties[SCAN_COMPLETION_PROPERTY_V1] : undefined;
+    if (
+      rest.some(
+        (invocation) =>
+          isRecord(invocation) &&
+          isRecord(invocation.properties) &&
+          Object.hasOwn(invocation.properties, SCAN_COMPLETION_PROPERTY_V1),
+      ) ||
+      !isRecord(evidence) ||
+      !hasExactKeys(evidence, ["detectorId", "subjectTreeSha256", "analyzedFileCount", "analyzer"])
+    )
+      return false;
+    const analyzer = evidence.analyzer;
+    const count = evidence.analyzedFileCount;
+    if (
+      evidence.detectorId !== capability.detectorId ||
+      typeof evidence.subjectTreeSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(evidence.subjectTreeSha256) ||
+      typeof count !== "number" ||
+      !Number.isSafeInteger(count) ||
+      count < 0 ||
+      (count === 0 && capability.emptySource !== "completes") ||
+      !isRecord(analyzer) ||
+      !hasExactKeys(analyzer, ["version", "lockSha256"]) ||
+      analyzer.version !== analyzerVersion ||
+      !(analyzer.lockSha256 === null || typeof analyzer.lockSha256 === "string") ||
+      !locks.has(analyzer.lockSha256)
+    )
+      return false;
+    const canonical = canonicalStrictJsonBytesV1(evidence);
+    if (first === undefined) first = canonical;
+    else if (!first.equals(canonical)) return false;
+  }
+  return true;
+}
+
 function sameRequest(receipt: BaselineVetReceiptV1, request: BaselineVetRequestV1): boolean {
   const expectedAnalyzers = analyzerOrder(
     request.components.flatMap((component) => component.analyzers),
@@ -962,6 +1036,11 @@ export function verifyBaselineVetReceiptV1(
         bytes,
         analyzerVersion: item.analyzerVersion,
       });
+      if (
+        item.annex.mediaType === "application/sarif+json" &&
+        !carriesBaselineCompletion(item.analyzer, item.analyzerVersion, bytes)
+      )
+        return { kind: "required", reason: "annex-mismatch" };
     }
     return { kind: "complete" };
   } catch {
