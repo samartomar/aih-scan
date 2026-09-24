@@ -37,6 +37,7 @@ import {
   canonicalStrictJsonBytesV1,
   codeUnitCompare,
 } from "../contract/strict-json-v1.js";
+import { validateSnykAgentScanRequestEnvV1 } from "../detectors/snyk-agent-scan/index.js";
 import {
   buildScanFindingsV1,
   digestBoundAnalyzerFindingsV1,
@@ -1361,8 +1362,22 @@ export async function probeDetectorAvailabilityV1(
     const signal = input.signal as AbortSignal | undefined;
     if (signal?.aborted)
       return unavailable("availability-failed", "The probe was cancelled before it started.");
-    const env = (input.env as Readonly<NodeJS.ProcessEnv> | undefined) ?? process.env;
-    const probed = probeStates(profile.prerequisites, input.prerequisiteProbe, env);
+    // As for a run: Snyk's env is the request env of SNYK_TOKEN alone, and its uv is found
+    // on the host environment; every other detector's env is the host environment.
+    if (capability.detectorId === "detector.snyk-agent-scan") {
+      const snyk = validateSnykAgentScanRequestEnvV1(input.env);
+      if (!snyk.ok) return unavailable(snyk.refusal.reason, snyk.refusal.detail);
+    }
+    const environments = engineEnvironmentsV1(
+      capability.detectorId,
+      input.env as Readonly<NodeJS.ProcessEnv> | undefined,
+    );
+    const probed = probeStates(
+      profile.prerequisites,
+      input.prerequisiteProbe,
+      environments.host,
+      environments.prerequisites,
+    );
     if (probed.failure !== undefined) return unavailable("availability-failed", probed.failure);
     const missing = profile.prerequisites.find(
       (prerequisite, index) => prerequisite.required && probed.states[index]?.state === "missing",
