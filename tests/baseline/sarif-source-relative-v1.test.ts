@@ -201,6 +201,32 @@ describe("sourceRelativeSarifV1", () => {
     ).toThrow(/outside the declared source root/);
   });
 
+  it("resolves a relative reference against its base before percent-decoding once", () => {
+    const spaced = sourceRelativeSarifV1(
+      based({ SRC: { uri: "file:///scan/" } }, "a%20b.md", "SRC"),
+      ["/scan"],
+    );
+    expect(artifactLocation(spaced.document)).toEqual({ uri: "a b.md" });
+    const nested = sourceRelativeSarifV1(
+      based({ SRC: { uri: "file:///scan/my%20skills/" } }, "x%2Fy.md", "SRC"),
+      ["/scan"],
+    );
+    expect(artifactLocation(nested.document)).toEqual({ uri: "my skills/x/y.md" });
+    // Decoding happens once: %2520 is a literal "%20" in the name (which the safe-path
+    // rule refuses), never a second decoding to "a b.md".
+    expect(() =>
+      sourceRelativeSarifV1(based({ SRC: { uri: "file:///scan/" } }, "a%2520b.md", "SRC"), [
+        "/scan",
+      ]),
+    ).toThrow(/safe path/);
+    // Containment is enforced on the decoded result.
+    expect(() =>
+      sourceRelativeSarifV1(based({ SRC: { uri: "file:///scan/" } }, "%2E%2E/x.md", "SRC"), [
+        "/scan",
+      ]),
+    ).toThrow(/safe path|outside/);
+  });
+
   it("does not modify the document it was given", () => {
     const document = sarif(result("/aih/source/a.md"));
     const before = JSON.stringify(document);
@@ -292,5 +318,62 @@ describe("ciscoSourceRelativeSarifV1", () => {
     ],
   ])("fails closed on %s between the SARIF and JSON reports", (_label, document, json) => {
     expect(() => ciscoSourceRelativeSarifV1(document, json, [root])).toThrow(/Cisco/);
+  });
+
+  const basedCisco = (
+    baseIds: Record<string, unknown> | undefined,
+    uri: string,
+    uriBaseId: string,
+  ) => {
+    const document = cisco(["R", uri, 1]);
+    const run = document.runs[0] as unknown as Record<string, unknown> & {
+      results: {
+        locations: { physicalLocation: { artifactLocation: Record<string, unknown> } }[];
+      }[];
+    };
+    if (baseIds !== undefined) run.originalUriBaseIds = baseIds;
+    const artifact = run.results[0]?.locations[0]?.physicalLocation.artifactLocation;
+    if (artifact !== undefined) artifact.uriBaseId = uriBaseId;
+    return document;
+  };
+
+  it.each([
+    ["a base outside the root", { EXTERNAL: { uri: "file:///outside/" } }, "EXTERNAL"],
+    [
+      "a declared %SRCROOT% outside the root",
+      { "%SRCROOT%": { uri: "file:///outside/" } },
+      "%SRCROOT%",
+    ],
+    ["an undeclared base", undefined, "EXTERNAL"],
+    ["a cyclic base", { A: { uri: "a/", uriBaseId: "B" }, B: { uri: "b/", uriBaseId: "A" } }, "A"],
+    ["a relative base naming no base", { REL: { uri: "sub/" } }, "REL"],
+    [
+      "a base inside the root naming another file than the JSON finding",
+      { OTHER: { uri: "file:///scan/elsewhere/" } },
+      "OTHER",
+    ],
+  ])("validates each Cisco location's base: fails closed on %s", (_label, baseIds, baseId) => {
+    expect(() =>
+      ciscoSourceRelativeSarifV1(
+        basedCisco(baseIds, "SKILL.md", baseId),
+        report(["/scan", [["R", "SKILL.md", 1]]]),
+        ["/scan"],
+      ),
+    ).toThrow(/Cisco/);
+  });
+
+  it("accepts a declared Cisco base that resolves to the paired JSON finding", () => {
+    const normalized = ciscoSourceRelativeSarifV1(
+      basedCisco({ SKILL: { uri: "file:///scan/skills/a/" } }, "SKILL.md", "SKILL"),
+      report(["/scan/skills/a", [["R", "SKILL.md", 1]]]),
+      ["/scan"],
+    );
+    expect(uris(normalized.document)).toEqual(["skills/a/SKILL.md"]);
+    const spaced = ciscoSourceRelativeSarifV1(
+      basedCisco({ SKILL: { uri: "file:///scan/skills/a/" } }, "my%20notes.md", "SKILL"),
+      report(["/scan/skills/a", [["R", "my notes.md", 1]]]),
+      ["/scan"],
+    );
+    expect(uris(spaced.document)).toEqual(["skills/a/my notes.md"]);
   });
 });

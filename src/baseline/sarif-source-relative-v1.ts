@@ -120,7 +120,13 @@ function artifactLocations(document: Json): Record<string, Json>[] {
 /** The analyzer's conventional name for the root it was given; it may go undeclared. */
 const SOURCE_ROOT_BASE_ID = "%SRCROOT%";
 
-/** Where a `uriBaseId` points: an absolute path, or a path relative to the source root. */
+/**
+ * Where a `uriBaseId` points: an absolute location, or a path relative to the root the
+ * analyzer was given. A `file:` base is kept URI-encoded, so a relative reference is joined
+ * to it in URI space and the joined URI is percent-decoded exactly once, in `relativeTo`;
+ * containment is decided on that decoded path. A base given as a plain path is taken
+ * literally, as a plain artifact path is.
+ */
 type Base = Readonly<{ absolute: string }> | Readonly<{ underRoot: string }>;
 
 function isAbsoluteLocation(uri: string): boolean {
@@ -159,7 +165,8 @@ function baseResolver(declared: Json | undefined): (id: string) => Base {
       if (uri.includes("\0")) fail(`base ${id} holds a NUL character`);
       if (/^[A-Za-z][A-Za-z0-9+.-]+:/u.test(uri) && !/^file:/iu.test(uri))
         fail(`base ${id} is not a file location`);
-      if (isAbsoluteLocation(uri)) base = { absolute: decodedPath(uri).replaceAll("\\", "/") };
+      if (isAbsoluteLocation(uri))
+        base = { absolute: /^file:/iu.test(uri) ? uri : uri.replaceAll("\\", "/") };
       else if (entry.uriBaseId === undefined) fail(`base ${id} is relative and names no base`);
       else if (typeof entry.uriBaseId !== "string") fail(`base ${id} names a malformed base`);
       else {
@@ -302,11 +309,42 @@ function ciscoFindings(
 }
 
 /**
+ * The source-relative identity of one original Cisco location. Cisco writes URIs relative
+ * to the skill directory it scanned, which is what its undeclared `%SRCROOT%` names; any
+ * other base is resolved through the run's `originalUriBaseIds` first, so an undeclared,
+ * cyclic or malformed base, or one that resolves outside the source root, fails closed. An
+ * absolute URI is not a Cisco location and fails too.
+ */
+function ciscoLocationIdentity(
+  target: Record<string, Json>,
+  skill: string,
+  base: (id: string) => Base,
+  candidates: readonly Root[],
+  index: number,
+): string {
+  const uri = target.uri as string;
+  const baseId = target.uriBaseId;
+  try {
+    if (baseId !== undefined && typeof baseId !== "string")
+      fail("an artifact uriBaseId is not a string");
+    if (isAbsoluteLocation(uri)) fail(`${JSON.stringify(uri)} is not relative`);
+    const resolved = baseId === undefined ? { underRoot: "" } : base(baseId);
+    if ("absolute" in resolved) return relativeTo(joined(resolved, uri), candidates);
+    const relative = relativeTo(joined(resolved, uri), [], false);
+    return skill === "" ? relative : `${skill}/${relative}`;
+  } catch (error) {
+    ciscoFail(`SARIF result ${index} location: ${(error as Error).message}`);
+  }
+}
+
+/**
  * Cisco `scan-all` merges every skill's results into one SARIF run whose URIs are relative
  * to each skill's own directory, so `SKILL.md` can mean any skill. Its JSON report lists the
  * same findings in the same order under each skill's absolute path. Each SARIF result is
  * paired with its JSON finding (rule, file and line must agree, or the run fails closed) and
- * rewritten as `<skill directory relative to the source root>/<file>`.
+ * rewritten as `<skill directory relative to the source root>/<file>`. Every location's base
+ * is validated before it is settled (`ciscoLocationIdentity`); a declared base must resolve
+ * to the file the paired JSON finding names.
  */
 export function ciscoSourceRelativeSarifV1(
   sarif: Record<string, unknown>,
@@ -317,23 +355,29 @@ export function ciscoSourceRelativeSarifV1(
   const findings = ciscoFindings(report, candidates);
   const copy = clone(sarif);
   if (!isRecord(copy) || !Array.isArray(copy.runs)) ciscoFail("the SARIF log holds no runs");
-  const results: Record<string, Json>[] = [];
+  const results: { result: Record<string, Json>; base: (id: string) => Base }[] = [];
   // Result locations this mapper settles from the JSON report; their bases are not re-applied.
   const settled = new Set<object>();
   for (const run of copy.runs) {
     if (!isRecord(run)) ciscoFail("a SARIF run is malformed");
     if (run.results === undefined) continue;
     if (!Array.isArray(run.results)) ciscoFail("a SARIF results list is malformed");
+    let base: (id: string) => Base;
+    try {
+      base = baseResolver(run.originalUriBaseIds);
+    } catch (error) {
+      ciscoFail((error as Error).message);
+    }
     for (const result of run.results) {
       if (!isRecord(result)) ciscoFail("a SARIF result is malformed");
-      results.push(result);
+      results.push({ result, base });
     }
   }
   if (results.length !== findings.length)
     ciscoFail(
       `the SARIF report holds ${results.length} results but the JSON report ${findings.length} findings`,
     );
-  results.forEach((result, index) => {
+  results.forEach(({ result, base }, index) => {
     const finding = findings[index] as CiscoFinding;
     const locations = result.locations;
     if (!Array.isArray(locations) || locations.length === 0)
@@ -344,23 +388,21 @@ export function ciscoSourceRelativeSarifV1(
     const region = isRecord(physical) ? physical.region : undefined;
     if (!isRecord(artifact) || typeof artifact.uri !== "string")
       ciscoFail(`SARIF result ${index} has no artifact URI`);
-    let file: string;
-    try {
-      file = relativeTo(artifact.uri, [], false);
-    } catch {
-      ciscoFail(`SARIF result ${index} URI ${JSON.stringify(artifact.uri)} is not relative`);
-    }
+    const identity = ciscoLocationIdentity(artifact, finding.skill, base, candidates, index);
+    const expected = finding.skill === "" ? finding.file : `${finding.skill}/${finding.file}`;
     const line = isRecord(region) && typeof region.startLine === "number" ? region.startLine : null;
-    if (result.ruleId !== finding.ruleId || file !== finding.file || line !== finding.line)
+    if (result.ruleId !== finding.ruleId || identity !== expected || line !== finding.line)
       ciscoFail(
-        `SARIF result ${index} (${String(result.ruleId)} ${file}:${String(line)}) does not match JSON finding ${index} (${finding.ruleId} ${finding.file}:${String(finding.line)})`,
+        `SARIF result ${index} (${String(result.ruleId)} ${identity}:${String(line)}) does not match JSON finding ${index} (${finding.ruleId} ${expected}:${String(finding.line)})`,
       );
     for (const location of locations) {
       const entry = isRecord(location) ? location.physicalLocation : undefined;
       const target = isRecord(entry) ? entry.artifactLocation : undefined;
       if (!isRecord(target) || typeof target.uri !== "string") continue;
-      const relative = relativeTo(target.uri, [], false);
-      target.uri = finding.skill === "" ? relative : `${finding.skill}/${relative}`;
+      target.uri =
+        target === artifact
+          ? identity
+          : ciscoLocationIdentity(target, finding.skill, base, candidates, index);
       settled.add(target);
     }
   });
