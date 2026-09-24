@@ -43,7 +43,10 @@ import {
   type SourceObservationSealV1,
   sealSourceObservationV1,
 } from "../observation/source-observation-seal-v1.js";
-import { createBaselineAnalyzerExecutionV1 } from "./runtime-v1.js";
+import {
+  BASELINE_BATCH_EXECUTION_PROFILES_V1,
+  createBaselineAnalyzerExecutionV1,
+} from "./runtime-v1.js";
 
 export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "cisco"] as const;
 export type BaselineAnalyzerV1 = (typeof BASELINE_ANALYZERS_V1)[number];
@@ -148,9 +151,9 @@ export type BaselineAnalyzerExecutionV1 = (input: {
   readonly bytes: Uint8Array;
   readonly analyzerVersion: string;
   /**
-   * The execution profile the analyzer actually ran under, one of its detector's
-   * observation profiles. Its published `analyzerLock` is the lock the SARIF annex's
-   * completion evidence names (D24).
+   * The execution profile the analyzer ran under. It must be the batch's own profile for the
+   * analyzer (`BASELINE_BATCH_EXECUTION_PROFILES_V1`), whose published `analyzerLock` the
+   * SARIF annex's completion evidence names (D24); any other declaration is refused (S2k).
    */
   readonly executionProfileId: string;
 }>;
@@ -787,17 +790,55 @@ const BASELINE_DETECTOR_IDS_V1: Readonly<Record<BaselineAnalyzerV1, string>> = O
   cisco: "detector.cisco",
 });
 
-/** The declared profile, which must be one of the detector's observation profiles. */
-function executedProfile(analyzerName: BaselineAnalyzerV1, executionProfileId: unknown) {
+/**
+ * The profile a batch annex names (S2k): Scan's own batch profile for the analyzer, never
+ * the executor's returned metadata. A declaration that is not exactly that profile is refused.
+ */
+function batchProfile(analyzerName: BaselineAnalyzerV1) {
+  const id = BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzerName];
   const capability = resolveDetectorCapabilityV1(BASELINE_DETECTOR_IDS_V1[analyzerName]);
   const profile = capability?.executionProfiles.find(
-    (item) => item.id === executionProfileId && item.evidence === "BaselineAnalyzerObservationV1",
+    (item) => item.id === id && item.evidence === "BaselineAnalyzerObservationV1",
   );
   if (capability === undefined || profile === undefined)
-    fail(
-      `${analyzerName} execution profile ${JSON.stringify(executionProfileId)} is not one it runs under`,
-    );
+    fail(`${analyzerName} has no batch execution profile`);
   return { capability, profile };
+}
+
+function executedProfile(analyzerName: BaselineAnalyzerV1, executionProfileId: unknown) {
+  const executed = batchProfile(analyzerName);
+  if (executionProfileId !== executed.profile.id)
+    fail(
+      `${analyzerName} execution profile ${JSON.stringify(executionProfileId)} contradicts the batch profile ${executed.profile.id}`,
+    );
+  return executed;
+}
+
+const lockSuffix = /\+uvlock\.[0-9a-f]{12}$/;
+
+/**
+ * S2k: a uv-backed profile's analyzer version ends `+uvlock.<first 12 hex of its lock>`; a
+ * profile that installs no lock carries no such suffix. Checked on write and on read.
+ */
+function versionNamesLock(analyzerVersion: string, lockSha256: string | null): boolean {
+  return lockSha256 === null
+    ? !analyzerVersion.includes("+uvlock.")
+    : lockSuffix.test(analyzerVersion) &&
+        analyzerVersion.endsWith(`+uvlock.${lockSha256.slice(0, 12)}`);
+}
+
+function assertVersionNamesLock(
+  analyzerName: BaselineAnalyzerV1,
+  analyzerVersion: string,
+  executed: ReturnType<typeof batchProfile>,
+): void {
+  const lock = executed.profile.analyzerLock?.sha256 ?? null;
+  if (!versionNamesLock(analyzerVersion, lock))
+    fail(
+      lock === null
+        ? `${analyzerName} analyzer version ${JSON.stringify(analyzerVersion)} names a lock, but ${executed.profile.id} installs none`
+        : `${analyzerName} analyzer version ${JSON.stringify(analyzerVersion)} does not name the lock of ${executed.profile.id}`,
+    );
 }
 
 /** The analyzer snapshot's seal: what every analyzer received, top-level `.git` never among it. */
@@ -835,6 +876,7 @@ export async function executeBaselineVetBatchV1(
       });
       const executed = executedProfile(analyzerName, result.executionProfileId);
       const observed = normalizedObservation(analyzerName, result);
+      assertVersionNamesLock(analyzerName, observed.analyzerVersion, executed);
       // S2e: the analyzer's own completion proof, before anything is published from it.
       if (observed.mediaType === "application/sarif+json")
         assertSarifCompletedV1(parseStrictJsonObjectV1(observed.bytes.toString("utf8"), "SARIF"));
@@ -931,21 +973,17 @@ const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): 
  * D24: whether a published SARIF annex still proves what the batch wrote into it. Every run
  * passes the S2e completion rule and carries, only in its first invocation, one equal
  * completion-evidence-v1 object for this analyzer's detector, the receipt's analyzer
- * version and a lock one of the detector's observation profiles installs (null only where
- * one installs none). The subject itself is recomputed by whoever holds the source.
+ * version and exactly the lock of the batch profile (S2k: null where it installs none),
+ * which that version names. The subject itself is recomputed by whoever holds the source.
  */
 function carriesBaselineCompletion(
   analyzerName: BaselineAnalyzerV1,
   analyzerVersion: string,
   bytes: Buffer,
 ): boolean {
-  const capability = resolveDetectorCapabilityV1(BASELINE_DETECTOR_IDS_V1[analyzerName]);
-  if (capability === undefined) return false;
-  const locks = new Set(
-    capability.executionProfiles
-      .filter((profile) => profile.evidence === "BaselineAnalyzerObservationV1")
-      .map((profile) => profile.analyzerLock?.sha256 ?? null),
-  );
+  const { capability, profile } = batchProfile(analyzerName);
+  const lock = profile.analyzerLock?.sha256 ?? null;
+  if (!versionNamesLock(analyzerVersion, lock)) return false;
   let log: Record<string, unknown>;
   try {
     log = parseStrictJsonObjectV1(bytes.toString("utf8"), "SARIF");
@@ -984,8 +1022,7 @@ function carriesBaselineCompletion(
       !isRecord(analyzer) ||
       !hasExactKeys(analyzer, ["version", "lockSha256"]) ||
       analyzer.version !== analyzerVersion ||
-      !(analyzer.lockSha256 === null || typeof analyzer.lockSha256 === "string") ||
-      !locks.has(analyzer.lockSha256)
+      analyzer.lockSha256 !== lock
     )
       return false;
     const canonical = canonicalStrictJsonBytesV1(evidence);

@@ -28,6 +28,7 @@ import {
   canonicalStrictJsonSha256V1,
 } from "../../src/contract/strict-json-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./batch-version-support.js";
 
 const temporaryDirectories: string[] = [];
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -227,7 +228,7 @@ describe("baseline batch execution", () => {
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
             executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
@@ -264,7 +265,7 @@ describe("baseline batch execution", () => {
           : {
               mediaType: "application/sarif+json",
               bytes: sarif(analyzer),
-              analyzerVersion: `${analyzer}.0123456789ab`,
+              analyzerVersion: batchAnalyzerVersion(analyzer),
               executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             };
       };
@@ -403,7 +404,7 @@ describe("baseline batch execution", () => {
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
             executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
@@ -481,7 +482,7 @@ describe("baseline batch execution", () => {
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
             executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
@@ -525,7 +526,7 @@ describe("baseline batch execution", () => {
             analyzer === "aih-native"
               ? canonicalStrictJsonBytesV1({ protocol: "BaselineNativeObservationV1", files: [] })
               : Buffer.from("{}", "utf8"),
-          analyzerVersion: `${analyzer}.0123456789ab`,
+          analyzerVersion: batchAnalyzerVersion(analyzer),
           executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
         }),
       },
@@ -547,7 +548,7 @@ describe("baseline batch execution", () => {
             : {
                 mediaType: "application/sarif+json",
                 bytes: sarif(analyzer),
-                analyzerVersion: `${analyzer}.0123456789ab`,
+                analyzerVersion: batchAnalyzerVersion(analyzer),
                 executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
               };
         },
@@ -572,7 +573,7 @@ describe("baseline batch execution", () => {
             : {
                 mediaType: "application/sarif+json",
                 bytes: sarif(analyzer),
-                analyzerVersion: `${analyzer}.0123456789ab`,
+                analyzerVersion: batchAnalyzerVersion(analyzer),
                 executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
               });
       await expect(
@@ -598,7 +599,7 @@ describe("baseline batch execution", () => {
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
             executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     const result = await executeBaselineVetBatchV1(request, { sourceRoot: root, execute });
@@ -686,7 +687,7 @@ describe("baseline batch execution", () => {
           : {
               mediaType: "application/sarif+json",
               bytes: sarif(analyzer),
-              analyzerVersion: `${analyzer}.0123456789ab`,
+              analyzerVersion: batchAnalyzerVersion(analyzer),
               executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             },
     });

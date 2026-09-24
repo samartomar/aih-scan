@@ -30,6 +30,7 @@ import {
 } from "../src/observation/observation-evidence-v1.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
 
 const root = resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
@@ -841,7 +842,7 @@ describe("published V2 package installation", () => {
                 },
               ],
             }),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
             executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     const baselineResult = await executeBaselineVetBatchV1(baselineRequest, {

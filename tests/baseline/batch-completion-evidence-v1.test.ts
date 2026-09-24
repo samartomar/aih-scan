@@ -36,6 +36,7 @@ import {
 } from "../../src/contract/strict-json-v1.js";
 import { ed25519KeyIdV2 } from "../../src/observation/scan-attestation-v2.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./batch-version-support.js";
 
 /**
  * D24 [Scan: S2j]: every baseline-vet SARIF annex carries completion evidence v1 (C2a §1.6)
@@ -69,6 +70,8 @@ function handSubject(files: readonly (readonly [string, string])[]) {
 
 const readLock = (project: string) =>
   sha(readFileSync(join("tools", "baseline-analyzers", project, "uv.lock")));
+/** The fake versions: a uv-backed analyzer's names its batch profile's lock (S2k). */
+const testVersion = (analyzer: string) => batchAnalyzerVersion(analyzer, `${analyzer}-test`);
 
 const DEFAULT_PROFILE: Readonly<Record<BaselineAnalyzerV1, string>> = {
   "aih-native": "in-process-native-v1",
@@ -142,7 +145,7 @@ function fakeExecution(
         : {
             mediaType: "application/sarif+json",
             bytes: analyzerSarif(analyzer),
-            analyzerVersion: `${analyzer}-test`,
+            analyzerVersion: testVersion(analyzer),
             executionProfileId: DEFAULT_PROFILE[analyzer],
           };
     return { ...base, ...(override[analyzer]?.(sourceRoot) ?? {}) };
@@ -173,7 +176,7 @@ describe("baseline-vet completion evidence (D24)", () => {
         detectorId: "detector.semgrep",
         subjectTreeSha256: VECTOR_SUBJECT_SHA256,
         analyzedFileCount: VECTOR_COUNT,
-        analyzer: { version: "semgrep-test", lockSha256: readLock("semgrep") },
+        analyzer: { version: testVersion("semgrep"), lockSha256: readLock("semgrep") },
       },
       skillspector: {
         detectorId: "detector.skillspector",
@@ -185,7 +188,10 @@ describe("baseline-vet completion evidence (D24)", () => {
         detectorId: "detector.cisco",
         subjectTreeSha256: VECTOR_SUBJECT_SHA256,
         analyzedFileCount: VECTOR_COUNT,
-        analyzer: { version: "cisco-test", lockSha256: readLock("cisco-skill-scanner") },
+        analyzer: {
+          version: testVersion("cisco"),
+          lockSha256: readLock("cisco-skill-scanner"),
+        },
       },
     };
     for (const [name, evidence] of Object.entries(expected)) {
@@ -209,26 +215,12 @@ describe("baseline-vet completion evidence (D24)", () => {
     expect(verifyBaselineVetReceiptV1(request, result)).toEqual({ kind: "complete" });
   });
 
-  it("names the lock of the profile that actually ran", async () => {
-    const { root, request } = vectorTree();
-    const result = await executeBaselineVetBatchV1(request, {
-      sourceRoot: root,
-      execute: fakeExecution({
-        cisco: () => ({ executionProfileId: "host-process-uv-v1" }),
-        skillspector: () => ({ executionProfileId: "docker-host-local-skillspector-v1" }),
-      }),
-    });
-    const lock = (name: string) =>
-      (JSON.parse(annexOf(result, name).bytes.toString("utf8")) as SarifShape).runs[0]
-        ?.invocations[0]?.properties as { aihScanCompletionV1: { analyzer: unknown } };
-    expect(lock("cisco").aihScanCompletionV1.analyzer).toEqual({
-      version: "cisco-test",
-      lockSha256: readLock("cisco-skill-scanner-host"),
-    });
-    expect(lock("skillspector").aihScanCompletionV1.analyzer).toEqual({
-      version: "skillspector-test",
-      lockSha256: null,
-    });
+  it("names the batch profile's lock, which the fake versions agree with", () => {
+    expect(testVersion("semgrep")).toBe(`semgrep-test+uvlock.${readLock("semgrep").slice(0, 12)}`);
+    expect(testVersion("cisco")).toBe(
+      `cisco-test+uvlock.${readLock("cisco-skill-scanner").slice(0, 12)}`,
+    );
+    expect(testVersion("skillspector")).toBe("skillspector-test");
   });
 
   it("gives every run of a multi-run log an equal object", async () => {
@@ -259,7 +251,7 @@ describe("baseline-vet completion evidence (D24)", () => {
                 detectorId: "detector.semgrep",
                 subjectTreeSha256: VECTOR_SUBJECT_SHA256,
                 analyzedFileCount: VECTOR_COUNT,
-                analyzer: { version: "semgrep-test", lockSha256: null },
+                analyzer: { version: testVersion("semgrep"), lockSha256: null },
               },
             },
           }),
@@ -475,16 +467,27 @@ function withAnnex(result: BatchResult, name: string, bytes: Buffer): BatchResul
 }
 
 /** Re-binds the receipt (annex digest, component bindings, receipt digest) to new annex bytes. */
-function rebound(result: BatchResult, name: string, bytes: Buffer): BatchResult {
+function rebound(
+  result: BatchResult,
+  name: string,
+  bytes: Buffer,
+  analyzerVersion?: string,
+): BatchResult {
   const digest = sha(bytes);
   const { receiptSha256: _old, ...authoring } = structuredClone(result.receipt) as unknown as {
     receiptSha256: string;
-    observations: { analyzer: string; annex: { sha256: string; byteLength: number } }[];
+    observations: {
+      analyzer: string;
+      analyzerVersion: string;
+      annex: { sha256: string; byteLength: number };
+    }[];
     components: { observations: { analyzer: string; annexSha256: string }[] }[];
   };
   for (const item of authoring.observations)
-    if (item.analyzer === name)
+    if (item.analyzer === name) {
       item.annex = { ...item.annex, sha256: digest, byteLength: bytes.byteLength };
+      if (analyzerVersion !== undefined) item.analyzerVersion = analyzerVersion;
+    }
   for (const component of authoring.components)
     for (const item of component.observations)
       if (item.analyzer === name) item.annexSha256 = digest;
@@ -632,6 +635,100 @@ describe("baseline-vet annex consumers keep the evidence (D24)", () => {
       },
     });
     const candidate = rebound(result, "semgrep", canonicalStrictJsonBytesV1(log));
+    expect(verifyBaselineVetReceiptV1(request, candidate)).toEqual({
+      kind: "required",
+      reason: "annex-mismatch",
+    });
+  });
+});
+
+/** Cisco's host lock: the reviewer's case runs the host profile and claims the namespace one. */
+const HOST_CISCO_VERSION = `2.0.14+uvlock.${readLock("cisco-skill-scanner-host").slice(0, 12)}`;
+
+describe("S2k: a batch annex names the batch profile, never the executor's claim", () => {
+  it.each<[string, Parameters<typeof fakeExecution>[0], RegExp]>([
+    [
+      "Cisco's host-lock version declared as linux-namespace-uv-v1 (the reviewer's case)",
+      { cisco: () => ({ analyzerVersion: HOST_CISCO_VERSION }) },
+      /cisco analyzer version .* does not name the lock of linux-namespace-uv-v1/,
+    ],
+    [
+      "Cisco declaring the host profile",
+      {
+        cisco: () => ({
+          executionProfileId: "host-process-uv-v1",
+          analyzerVersion: HOST_CISCO_VERSION,
+        }),
+      },
+      /cisco execution profile "host-process-uv-v1" contradicts the batch profile linux-namespace-uv-v1/,
+    ],
+    [
+      "SkillSpector declaring the host-Docker profile",
+      { skillspector: () => ({ executionProfileId: "docker-host-local-skillspector-v1" }) },
+      /contradicts the batch profile docker-hardened-skillspector-v1/,
+    ],
+    [
+      "a Semgrep version without the lock suffix",
+      { semgrep: () => ({ analyzerVersion: "1.173.0" }) },
+      /semgrep analyzer version .* does not name the lock/,
+    ],
+    [
+      "a Semgrep version naming another lock",
+      { semgrep: () => ({ analyzerVersion: "1.173.0+uvlock.000000000000" }) },
+      /semgrep analyzer version .* does not name the lock/,
+    ],
+    [
+      "a lock suffix on a profile that installs no lock",
+      { skillspector: () => ({ analyzerVersion: "rev@sha256:abc+uvlock.0123456789ab" }) },
+      /skillspector analyzer version .* names a lock/,
+    ],
+  ])("publishes nothing for %s", async (_label, override, message) => {
+    const { root, request } = vectorTree();
+    await expect(
+      executeBaselineVetBatchV1(request, { sourceRoot: root, execute: fakeExecution(override) }),
+    ).rejects.toThrow(message);
+  });
+
+  it.each<[string, BaselineAnalyzerV1, Change, string | undefined]>([
+    [
+      "Cisco's host lock, although a Cisco profile installs it",
+      "cisco",
+      (evidence) => ({
+        ...evidence,
+        analyzer: { ...evidence.analyzer, lockSha256: readLock("cisco-skill-scanner-host") },
+      }),
+      undefined,
+    ],
+    [
+      "the namespace lock under a host-lock version (the reviewer's case)",
+      "cisco",
+      (evidence) => ({
+        ...evidence,
+        analyzer: { ...evidence.analyzer, version: HOST_CISCO_VERSION },
+      }),
+      HOST_CISCO_VERSION,
+    ],
+    [
+      "a lock suffix on SkillSpector's version",
+      "skillspector",
+      (evidence) => ({
+        ...evidence,
+        analyzer: { ...evidence.analyzer, version: "skillspector-test+uvlock.0123456789ab" },
+      }),
+      "skillspector-test+uvlock.0123456789ab",
+    ],
+  ])("a receipt re-bound over %s is refused on read", async (_label, name, change, version) => {
+    const { root, request } = vectorTree();
+    const result = await executeBaselineVetBatchV1(request, {
+      sourceRoot: root,
+      execute: fakeExecution(),
+    });
+    const candidate = rebound(
+      result,
+      name,
+      rewriteEvidence(annexOf(result, name).bytes, change),
+      version,
+    );
     expect(verifyBaselineVetReceiptV1(request, candidate)).toEqual({
       kind: "required",
       reason: "annex-mismatch",

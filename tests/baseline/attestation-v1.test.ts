@@ -18,6 +18,7 @@ import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../../src/baseline/runtime
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { ed25519KeyIdV2 } from "../../src/observation/scan-attestation-v2.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./batch-version-support.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -73,7 +74,7 @@ async function fixture() {
               },
             ],
           }),
-          analyzerVersion: `${analyzer}.0123456789ab`,
+          analyzerVersion: batchAnalyzerVersion(analyzer),
           executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
         };
   return {
