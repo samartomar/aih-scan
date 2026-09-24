@@ -198,6 +198,26 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "export async function runCiscoShardV1",
   },
   {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 84,
+    contains: "export function assertCiscoSingleSkillReportSkillV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 119,
+    contains: "export function assertCiscoScanAllSkillInventoryV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 199,
+    contains: "export function assertCiscoSingleSkillAnalyzersCompleteV1",
+  },
+  {
+    path: "src/baseline/bounded-output-read-v1.ts",
+    line: 55,
+    contains: "export function readBoundedAnalyzerOutputV1",
+  },
+  {
     path: "src/baseline/cisco-analyzer-failures-v1.ts",
     line: 106,
     contains: "export function assertCiscoAnalyzersCompleteV1",
