@@ -1,8 +1,12 @@
 [project]
 name = "aih-cisco-skill-scanner-runtime"
 version = "0.0.0"
-requires-python = ">=3.10"
-dependencies = ["cisco-ai-skill-scanner==2.0.14"]
+requires-python = ">=3.11,<3.15"
+dependencies = ["cisco-ai-skill-scanner==2.1.0"]
 
 [tool.uv]
 package = false
+# pcodedmp (via oletools) declares win-unicode-console on win32, but only
+# imports it optionally for TTY output; the package is sdist-only and cannot
+# install under the runtime's `uv sync --no-build`. Exclude it from the lock.
+override-dependencies = ["win-unicode-console; python_version < '0'"]

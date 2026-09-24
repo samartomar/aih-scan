@@ -409,6 +409,9 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).toContain(
       "`@aihq/scan@0.4.0` advances the bundled Cisco analyzer to `2.0.14+uvlock.aaba1f326049`",
     );
+    expect(readme).toContain(
+      "The `0.5.0` candidate bundles Cisco `2.1.0+uvlock.1e98c5679994` as one lock",
+    );
     expect(readme).toContain("version=X.Y.Z");
     expect(readme).toContain('npm install --save-exact "@aihq/scan@$version"');
     expect(readme).toContain('gh attestation verify "$release_root/aihq-scan-$version.tgz"');
