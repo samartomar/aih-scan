@@ -1,13 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTrustLintTreeV1 } from "../../../src/detectors/trust-lint/inventory.js";
 import {
-  collectIncomingMcpConfigFilesV1,
   scanMcpConfigSecretsV1,
   scanPlaintextSecretsV1,
 } from "../../../src/detectors/trust-lint/secrets.js";
+import { coreMcpConfigPathsV1, coreSelectionV1 } from "./support.js";
 
 /**
  * Parity port of the secrets cases in Core's `tests/trust/scan.test.ts`
@@ -89,7 +89,7 @@ describe("scanMcpConfigSecretsV1 (parity: Core mcpConfigSecretChecks)", () => {
     );
 
     const tree = buildTrustLintTreeV1(dir);
-    const checks = scanMcpConfigSecretsV1(tree, collectIncomingMcpConfigFilesV1(tree));
+    const checks = scanMcpConfigSecretsV1(tree, coreMcpConfigPathsV1(dir, coreSelectionV1(tree)));
 
     expect(checks).toEqual([
       expect.objectContaining({
@@ -118,7 +118,7 @@ describe("scanMcpConfigSecretsV1 (parity: Core mcpConfigSecretChecks)", () => {
     );
 
     const tree = buildTrustLintTreeV1(dir);
-    const checks = scanMcpConfigSecretsV1(tree, collectIncomingMcpConfigFilesV1(tree));
+    const checks = scanMcpConfigSecretsV1(tree, coreMcpConfigPathsV1(dir, coreSelectionV1(tree)));
 
     expect(checks).toEqual([
       expect.objectContaining({
@@ -148,7 +148,7 @@ describe("scanMcpConfigSecretsV1 (parity: Core mcpConfigSecretChecks)", () => {
     );
 
     const tree = buildTrustLintTreeV1(dir);
-    const checks = scanMcpConfigSecretsV1(tree, collectIncomingMcpConfigFilesV1(tree));
+    const checks = scanMcpConfigSecretsV1(tree, coreMcpConfigPathsV1(dir, coreSelectionV1(tree)));
 
     expect(checks).toEqual(
       expect.arrayContaining([
@@ -186,6 +186,54 @@ describe("scanMcpConfigSecretsV1 (parity: Core mcpConfigSecretChecks)", () => {
 
     const tree = buildTrustLintTreeV1(dir);
 
-    expect(scanMcpConfigSecretsV1(tree, collectIncomingMcpConfigFilesV1(tree))).toEqual([]);
+    expect(scanMcpConfigSecretsV1(tree, coreMcpConfigPathsV1(dir, coreSelectionV1(tree)))).toEqual(
+      [],
+    );
+  });
+
+  it("skips a declared path that is absent and reports a directory as config-invalid", () => {
+    mkdirSync(join(dir, ".mcp.json"));
+    const tree = buildTrustLintTreeV1(dir);
+
+    expect(scanMcpConfigSecretsV1(tree, ["mcp.json", ".mcp.json"])).toEqual([
+      {
+        name: "mcp-config-invalid",
+        verdict: "fail",
+        detail:
+          ".mcp.json could not be safely inspected: MCP config path is not a contained regular file",
+        code: "mcp.config-invalid",
+        location: { uri: ".mcp.json", startLine: 1 },
+        fingerprint: "mcp.config-invalid:.mcp.json:",
+      },
+    ]);
+  });
+});
+
+describe("symlinks (parity: Core lstat-based discovery)", () => {
+  function trySymlink(target: string, rel: string): boolean {
+    try {
+      symlinkSync(target, join(dir, rel), "file");
+      return true;
+    } catch {
+      return false; // no symlink privilege on this host
+    }
+  }
+
+  it("never flags a symlinked .env, and reports a symlinked MCP config as config-invalid", (ctx) => {
+    write("real.env.txt", "API_TOKEN=abc123\n");
+    write(
+      "real-mcp.txt",
+      JSON.stringify({ mcpServers: { gh: { env: { GITHUB_TOKEN: `ghp_${"a".repeat(36)}` } } } }),
+    );
+    if (!trySymlink("real.env.txt", ".env") || !trySymlink("real-mcp.txt", ".mcp.json")) {
+      ctx.skip();
+      return;
+    }
+    const tree = buildTrustLintTreeV1(dir);
+
+    expect(scanPlaintextSecretsV1(tree)).toEqual([]);
+    expect(scanMcpConfigSecretsV1(tree, [".mcp.json"]).map((check) => check.code)).toEqual([
+      "mcp.config-invalid",
+    ]);
   });
 });

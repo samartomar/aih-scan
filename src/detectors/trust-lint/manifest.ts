@@ -320,8 +320,16 @@ function toFinding(
   };
 }
 
-/** Port of Core's `scanTrustManifests` over the tree seam. */
-export function scanTrustManifestsV1(tree: TrustLintTreeV1): TrustLintFindingV1[] {
+/**
+ * Port of Core's `scanTrustManifests` over the tree seam (C2a §2.2(2)): the
+ * `.claude/hooks` directory check runs against the TREE first (an empty
+ * directory counts, a symlink does not), then each SELECTED file in
+ * selection order.
+ */
+export function scanTrustManifestsV1(
+  tree: TrustLintTreeV1,
+  selection: readonly string[],
+): TrustLintFindingV1[] {
   const drafts: ManifestCheckDraft[] = [];
   // .claude/hooks directory can auto-execute hook commands.
   if (tree.isDirectory(".claude/hooks")) {
@@ -332,8 +340,7 @@ export function scanTrustManifestsV1(tree: TrustLintTreeV1): TrustLintFindingV1[
       detail: ".claude/hooks directory can auto-execute hook commands",
     });
   }
-  for (const entry of tree.files) {
-    const rel = entry.relativePath;
+  for (const rel of selection) {
     if (isDocumentationMirror(rel)) continue;
     const name = rel.split("/").at(-1) ?? "";
     const scansFrontmatter = isFrontmatterDoc(rel);

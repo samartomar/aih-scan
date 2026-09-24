@@ -2,20 +2,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  internalScopesFromEnvV1,
-  scanTrustDependencyNamesV1,
-} from "../../../src/detectors/trust-lint/depnames.js";
+import { scanTrustDependencyNamesV1 } from "../../../src/detectors/trust-lint/depnames.js";
 import { buildTrustLintTreeV1 } from "../../../src/detectors/trust-lint/inventory.js";
+import { coreSelectionV1 } from "./support.js";
 
 /**
  * Parity port of Core's `tests/trust/depnames.test.ts` against
- * `scanTrustDependencyNamesV1(buildTrustLintTreeV1(dir), scopes)`.
+ * `scanTrustDependencyNamesV1(tree, selection, scopes)`, the selection being
+ * Core's trust inventory of the fixture tree.
  *
  * Not ported (Core-owned policy, not detection): the two
- * `resolveInternalScopes` cases that union org-policy `trust.internalScopes`
- * and degrade on a malformed policy file. The env-scope normalization case is
- * ported against `internalScopesFromEnvV1`. The `posture` argument is gone
+ * `resolveInternalScopes` cases (org-policy union, malformed policy file, env
+ * normalization): Core resolves the scopes and sends them normalized in
+ * `detectorOptions.internalScopes` (C2a §2.1, decision 8), which the options
+ * validator checks. The `posture` argument is gone
  * with Core's grading; it is identity for these codes, so the "every posture"
  * assertions run once against the raw findings.
  */
@@ -44,17 +44,9 @@ function lockfile(): void {
 }
 
 function scan(internalScopes: readonly string[]) {
-  return scanTrustDependencyNamesV1(buildTrustLintTreeV1(dir), internalScopes);
+  const tree = buildTrustLintTreeV1(dir);
+  return scanTrustDependencyNamesV1(tree, coreSelectionV1(tree), internalScopes);
 }
-
-describe("internalScopesFromEnvV1 (parity: Core resolveInternalScopes, env half)", () => {
-  it("normalizes comma-separated env scopes and defaults empty", () => {
-    expect(internalScopesFromEnvV1({})).toEqual([]);
-    expect(
-      internalScopesFromEnvV1({ AIH_TRUST_INTERNAL_SCOPES: "acme, @internal ,,tools" }),
-    ).toEqual(["@acme", "@internal", "@tools"]);
-  });
-});
 
 describe("scanTrustDependencyNamesV1 (parity: Core scanTrustDependencyNames)", () => {
   it("flags direct dependencies under configured internal scopes", () => {

@@ -4,11 +4,12 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTrustLintTreeV1 } from "../../../src/detectors/trust-lint/inventory.js";
 import { scanNativeMaliciousCodeV1 } from "../../../src/detectors/trust-lint/malicious-code.js";
+import { coreSelectionV1 } from "./support.js";
 
 /**
  * Parity port of the native malicious-code cases in Core's
  * `tests/trust/scan.test.ts` (~lines 4915-5107) against
- * `scanNativeMaliciousCodeV1(buildTrustLintTreeV1(dir))`. Core drove them
+ * `scanNativeMaliciousCodeV1(tree, selection)` (the selection being Core's trust inventory of the fixture tree). Core drove them
  * through `scanTrustTree`; the malicious-code checks are produced unchanged
  * by this module, and the only dropped assertion is the Core plan-level
  * "trust runtime advisory" digest (runtime plan wiring, not detection).
@@ -30,7 +31,8 @@ function write(rel: string, content: string): void {
 }
 
 function scan() {
-  return scanNativeMaliciousCodeV1(buildTrustLintTreeV1(dir));
+  const tree = buildTrustLintTreeV1(dir);
+  return scanNativeMaliciousCodeV1(tree, coreSelectionV1(tree));
 }
 
 describe("scanNativeMaliciousCodeV1 (parity: Core scanTrustTree native checks)", () => {
