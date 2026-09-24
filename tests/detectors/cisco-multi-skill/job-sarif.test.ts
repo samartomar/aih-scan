@@ -541,3 +541,73 @@ describe.each(BOTH)("Cisco job strict analyzer output (%s, U1g)", (_label, execu
     expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
   });
 });
+
+// U1h (review of U1g, P1): a job's result names every location it holds and every location
+// of the run-level objects it references (`run.threadFlowLocations[i]` by `index`,
+// `run.graphs[i]` by `runGraphIndex`). Each is resolved for that result and must lie in the
+// job's skill directory, on the source-tree scan and the shard alike.
+describe.each(
+  BOTH,
+)("Cisco job shared references resolve per result (%s, U1h)", (_label, execute) => {
+  const rootBase = () => ({ ROOT: { uri: `${pathToFileURL(root).href}/` } });
+  const at = (uri: string) => ({
+    physicalLocation: { artifactLocation: { uri, uriBaseId: "ROOT" } },
+  });
+  const outcomeOf = (fields: Record<string, unknown>, run: Record<string, unknown>) =>
+    execute(
+      runner((name) =>
+        name === "alpha"
+          ? sarif([
+              {
+                ...cleanRun([{ ...result("SKILL.md"), ...fields }]),
+                originalUriBaseIds: rootBase(),
+                ...run,
+              },
+            ])
+          : sarif([cleanRun()]),
+      ),
+    );
+  const flowTo = (index: unknown) => ({
+    codeFlows: [{ threadFlows: [{ locations: [{ index }] }] }],
+  });
+  const graph = (uri: string) => ({ nodes: [{ id: "n", location: at(uri) }], edges: [] });
+
+  it("fails a shared thread-flow location or run graph in a sibling skill", async () => {
+    for (const [fields, run] of [
+      [flowTo(0), { threadFlowLocations: [{ location: at("skills/beta/SKILL.md") }] }],
+      [{ graphTraversals: [{ runGraphIndex: 0 }] }, { graphs: [graph("skills/beta/SKILL.md")] }],
+    ] as const) {
+      const outcome = await outcomeOf(fields, run);
+      expect(outcome, JSON.stringify(fields)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(
+        /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
+      );
+    }
+  });
+
+  it("fails an unresolved or ambiguous shared reference", async () => {
+    for (const [fields, run, reason] of [
+      [flowTo(1), { threadFlowLocations: [] }, /thread-flow location index 1 resolves to no/],
+      [
+        { graphTraversals: [{ runGraphIndex: 0, resultGraphIndex: 0 }] },
+        { graphs: [graph("skills/alpha/SKILL.md")] },
+        /exactly one of runGraphIndex and resultGraphIndex/,
+      ],
+    ] as const) {
+      const outcome = await outcomeOf(fields, run);
+      expect(outcome, JSON.stringify(fields)).toMatchObject({ kind: "failed", stage: "output" });
+      expect(outcome.kind === "failed" ? outcome.detail : "").toMatch(reason);
+    }
+  });
+
+  it("keeps shared references inside the job's skill", async () => {
+    const outcome = await outcomeOf(
+      { ...flowTo(0), graphTraversals: [{ runGraphIndex: 0 }] },
+      {
+        threadFlowLocations: [{ location: at("skills/alpha/SKILL.md") }],
+        graphs: [graph("skills/alpha/SKILL.md")],
+      },
+    );
+    expect(outcome.kind === "failed" ? outcome.detail : outcome.kind).toBe("completed");
+  });
+});

@@ -3,6 +3,7 @@ import {
   sarifArtifactLocationTargetV1,
   sarifDetachedArtifactLocationsV1,
   sarifResultArtifactLocationsV1,
+  sarifResultSharedArtifactLocationsV1,
   sarifRunArtifactLocationsV1,
 } from "./sarif-source-relative-v1.js";
 
@@ -116,7 +117,9 @@ function locationArtifactV1(location: unknown): unknown {
  * (exact, case-sensitive, root-relative); every other artifact location of the result (S2h:
  * related locations, code flows, stacks, fixes, the analysis target; never a property bag)
  * and of the run's shared `threadFlowLocations` and `graphs` must name such a file too, by
- * `uri` or by `index` (`sarifArtifactLocationTargetV1`). `owner` names the file set in the
+ * `uri` or by `index` (`sarifArtifactLocationTargetV1`). U1h: each result's references to
+ * those shared objects are resolved for that result (`sarifResultSharedArtifactLocationsV1`),
+ * and a malformed, out-of-range or ambiguous one is refused. `owner` names the file set in the
  * reason: "job" for a shard job, "subject" for a `runDetectorV1` run. Returns why a result
  * is unbound, or `undefined` when all are bound.
  */
@@ -165,6 +168,22 @@ export function unboundCiscoSarifResultV1(
         if (primary.has(artifactLocation) || artifactLocation === analysisTarget) continue;
         const problem = unbound(
           `SARIF result ${index} related location`,
+          artifactLocation,
+          runRecord.artifacts,
+        );
+        if (problem !== undefined) return problem;
+      }
+      // U1h (review of U1g, P1): the shared thread-flow locations and graphs this result
+      // references, resolved for this result; an unresolved reference is refused.
+      let shared: Record<string, unknown>[];
+      try {
+        shared = sarifResultSharedArtifactLocationsV1(result, runRecord);
+      } catch (error) {
+        return `SARIF result ${index}: ${error instanceof Error ? error.message : "a shared reference is unresolved"}`;
+      }
+      for (const artifactLocation of shared) {
+        const problem = unbound(
+          `SARIF result ${index} shared location`,
           artifactLocation,
           runRecord.artifacts,
         );

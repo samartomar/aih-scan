@@ -1,5 +1,9 @@
 import { relative } from "node:path";
-import { rewriteSarifRunLocationsV1 } from "../../baseline/sarif-source-relative-v1.js";
+import {
+  rewriteSarifRunLocationsV1,
+  sarifPathInsideDirectoryV1,
+  sarifResultFilesV1,
+} from "../../baseline/sarif-source-relative-v1.js";
 import {
   decodeStrictUtf8V1,
   deepFreezeStrictJsonV1,
@@ -164,7 +168,9 @@ export function prefixSafeCiscoUriV1(prefix: string, raw: unknown, directory = f
  * the job at stage `output`; a base inside the root yields a URI relative to the root; a URI
  * under the analyzer's own `%SRCROOT%` (the job directory) is prefixed with the job's
  * source-relative directory ({@link prefixSafeCiscoUriV1}, C2a §3.4). Obsolete base
- * references and `originalUriBaseIds` are removed. The returned log is deeply frozen. The
+ * references and `originalUriBaseIds` are removed. U1h: every file a result names, directly
+ * or through a shared reference (`sarifResultFilesV1`), must lie in the job's skill
+ * directory, or the job fails at `output`. The returned log is deeply frozen. The
  * source-tree scan and the shard both take each job's SARIF through here.
  */
 export function ciscoJobSarifV1(
@@ -201,6 +207,19 @@ export function ciscoJobSarifV1(
         ),
       );
     }
+    // U1h (review of U1g, P1): every file a result names (its own locations and those of the
+    // shared thread-flow locations and graphs it references, resolved for this result) lies
+    // in this job's skill directory, on the source-tree scan and the shard alike.
+    let index = 0;
+    for (const run of runs)
+      for (const result of run.results as unknown[]) {
+        for (const file of sarifResultFilesV1(result, run))
+          if (!sarifPathInsideDirectoryV1(prefix, file))
+            throw new TypeError(
+              `SARIF result ${index} names ${JSON.stringify(file)}, which is not in the job's skill ${prefix === "" ? "." : prefix}`,
+            );
+        index += 1;
+      }
   } catch (error) {
     return Object.freeze({
       ok: false as const,

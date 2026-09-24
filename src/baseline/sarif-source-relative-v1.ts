@@ -325,6 +325,101 @@ export function sarifArtifactLocationTargetV1(
   return { uri: location.uri };
 }
 
+/** The object `owner[key][index]` a reference names; anything else throws `TypeError`. */
+function referencedEntry(
+  owner: Json,
+  key: "threadFlowLocations" | "graphs",
+  index: Json | undefined,
+  what: string,
+): Record<string, Json> {
+  if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)
+    fail(`${what} ${JSON.stringify(index)} is malformed`);
+  const list = isRecord(owner) ? owner[key] : undefined;
+  const entry = Array.isArray(list) ? list[index] : undefined;
+  if (!isRecord(entry)) fail(`${what} ${index} resolves to no ${key} entry`);
+  return entry;
+}
+
+function arrayOrNone(value: Json | undefined, what: string): Json[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail(`${what} is not an array`);
+  return value;
+}
+
+/**
+ * U1h (review of U1g, P1): every artifact location inside the run-level objects one result
+ * references, resolved for that result: `run.threadFlowLocations[i]` through a thread-flow
+ * location's `index` (in `codeFlows[].threadFlows[].locations[]`), and `run.graphs[i]` through
+ * a graph traversal's `runGraphIndex`. A traversal must name exactly one of `runGraphIndex`
+ * and `resultGraphIndex`, and a `resultGraphIndex` must name one of the result's own `graphs`
+ * (whose locations are the result's own). A reference that is malformed, out of range or
+ * names nothing, a shared thread-flow location that names another index, and a code flow,
+ * thread flow or traversal list that is not an array throw `TypeError`. No other SARIF
+ * reference from a result reaches an artifact location: addresses, logical locations, rules,
+ * taxa and web requests hold none, and `provenance.invocationIndex` names the tool's
+ * invocation, not a location of the result.
+ */
+export function sarifResultSharedArtifactLocationsV1(
+  result: unknown,
+  run: unknown,
+): Record<string, unknown>[] {
+  if (!isRecord(result)) fail("a SARIF result is not an object");
+  const reached = new Set<Record<string, Json>>();
+  for (const codeFlow of arrayOrNone(result.codeFlows, "codeFlows")) {
+    if (!isRecord(codeFlow)) fail("a code flow is not an object");
+    for (const threadFlow of arrayOrNone(codeFlow.threadFlows, "threadFlows")) {
+      if (!isRecord(threadFlow)) fail("a thread flow is not an object");
+      for (const step of arrayOrNone(threadFlow.locations, "a thread flow's locations")) {
+        if (!isRecord(step)) fail("a thread-flow location is not an object");
+        if (step.index === undefined) continue;
+        const what = "thread-flow location index";
+        const entry = referencedEntry(run as Json, "threadFlowLocations", step.index, what);
+        if (entry.index !== undefined && entry.index !== step.index)
+          fail(`${what} ${String(step.index)} resolves to an entry that names another index`);
+        reached.add(entry);
+      }
+    }
+  }
+  for (const traversal of arrayOrNone(result.graphTraversals, "graphTraversals")) {
+    if (!isRecord(traversal)) fail("a graph traversal is not an object");
+    const { runGraphIndex, resultGraphIndex } = traversal;
+    if ((runGraphIndex === undefined) === (resultGraphIndex === undefined))
+      fail("a graph traversal must name exactly one of runGraphIndex and resultGraphIndex");
+    if (runGraphIndex !== undefined)
+      reached.add(referencedEntry(run as Json, "graphs", runGraphIndex, "run graph index"));
+    else referencedEntry(result, "graphs", resultGraphIndex, "result graph index");
+  }
+  return [...reached].flatMap((entry) =>
+    artifactLocations(entry, "detached").map(({ location }) => location),
+  );
+}
+
+/**
+ * Whether source-relative `path` lies in source-relative `directory` ("" is the root, which
+ * holds everything). A nested skill's directory lies inside its parent's.
+ */
+export function sarifPathInsideDirectoryV1(directory: string, path: string): boolean {
+  return directory === "" || path.startsWith(`${directory}/`);
+}
+
+/**
+ * U1h: the source-relative file every artifact location one result of a normalized run
+ * reaches names: its own ({@link sarifResultArtifactLocationsV1}) and those of the shared
+ * objects it references ({@link sarifResultSharedArtifactLocationsV1}), each resolved by
+ * {@link sarifArtifactLocationTargetV1}. Throws `TypeError` on anything unresolved.
+ */
+export function sarifResultFilesV1(result: unknown, run: unknown): string[] {
+  const artifacts = isRecord(run) ? run.artifacts : undefined;
+  return [
+    ...sarifResultArtifactLocationsV1(result),
+    ...sarifResultSharedArtifactLocationsV1(result, run),
+  ].map((location) => {
+    const target = sarifArtifactLocationTargetV1(location, artifacts);
+    if ("problem" in target) fail(target.problem);
+    return target.uri;
+  });
+}
+
 /**
  * U1g (review of S2i, P1): every `index` of an already normalized scope resolves by
  * {@link sarifArtifactLocationTargetV1} against the run's own `artifacts`; outside a run no
@@ -659,19 +754,22 @@ export function ciscoSourceRelativeSarifV1(
   // skill that reported it. A relative URI was already read in that skill's directory; a
   // based URI or an index could still name a sibling skill's file. A nested skill's file is
   // inside its parent's directory, which Cisco's scan of the parent covers, so it is kept.
-  const inside = (directory: string, path: string) =>
-    directory === "" || path.startsWith(`${directory}/`);
+  // U1h (review of U1g, P1): so must every location of the run's shared thread-flow
+  // locations and graphs the result references, resolved for this result.
   const shown = (directory: string) => (directory === "" ? "." : directory);
   results.forEach(({ result, run }, index) => {
     const skill = (findings[index] as CiscoFinding).skill;
-    for (const { location } of artifactLocations(result, "result")) {
-      const target = sarifArtifactLocationTargetV1(location, run.artifacts);
-      if ("problem" in target) ciscoFail(`SARIF result ${index} location: ${target.problem}`);
-      if (!inside(skill, target.uri))
-        ciscoFail(
-          `SARIF result ${index} names ${JSON.stringify(target.uri)}, which is not in the reporting skill ${shown(skill)}`,
-        );
+    let files: string[];
+    try {
+      files = sarifResultFilesV1(result, run);
+    } catch (error) {
+      ciscoFail(`SARIF result ${index} location: ${(error as Error).message}`);
     }
+    for (const file of files)
+      if (!sarifPathInsideDirectoryV1(skill, file))
+        ciscoFail(
+          `SARIF result ${index} names ${JSON.stringify(file)}, which is not in the reporting skill ${shown(skill)}`,
+        );
   });
   return normalized;
 }

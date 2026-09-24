@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bindCiscoSarifToSealedFilesV1,
   ciscoSealedPathBinderV1,
+  unboundCiscoSarifResultV1,
 } from "../../src/baseline/cisco-sealed-case-binding-v1.js";
 
 const sarif = (...uris: string[]) => ({
@@ -130,4 +131,45 @@ describe("Cisco sealed-file case binding off win32", () => {
       ).not.toThrow();
     });
   }
+});
+
+// U1h (review of U1g, P1): the result binding resolves each result's references to the run's
+// shared thread-flow locations and graphs, and refuses one that resolves to nothing.
+describe("unboundCiscoSarifResultV1 shared references (U1h)", () => {
+  const log = (fields: Record<string, unknown>, run: Record<string, unknown>) => ({
+    runs: [
+      {
+        ...run,
+        results: [
+          {
+            locations: [{ physicalLocation: { artifactLocation: { uri: "skills/a/SKILL.md" } } }],
+            ...fields,
+          },
+        ],
+      },
+    ],
+  });
+  const sealed = new Set(["skills/a/SKILL.md"]);
+  const shared = {
+    threadFlowLocations: [
+      { location: { physicalLocation: { artifactLocation: { uri: "skills/a/SKILL.md" } } } },
+    ],
+  };
+  const flowTo = (index: unknown) => ({
+    codeFlows: [{ threadFlows: [{ locations: [{ index }] }] }],
+  });
+
+  it("binds a resolved shared reference", () => {
+    expect(unboundCiscoSarifResultV1(log(flowTo(0), shared), sealed, "subject")).toBeUndefined();
+  });
+
+  it("refuses an unresolved, malformed or ambiguous shared reference", () => {
+    for (const [fields, reason] of [
+      [flowTo(3), /SARIF result 0: .*thread-flow location index 3 resolves to no/],
+      [flowTo(1.5), /thread-flow location index 1\.5 is malformed/],
+      [{ graphTraversals: [{}] }, /exactly one of runGraphIndex and resultGraphIndex/],
+      [{ graphTraversals: [{ runGraphIndex: 0 }] }, /run graph index 0 resolves to no/],
+    ] as const)
+      expect(unboundCiscoSarifResultV1(log(fields, shared), sealed, "subject")).toMatch(reason);
+  });
 });

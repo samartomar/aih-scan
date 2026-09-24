@@ -1076,3 +1076,115 @@ describe("Cisco scan-all nested locations stay in the reporting skill (U1g)", ()
     ]);
   });
 });
+
+// U1h (review of U1g, P1): a result also names every location of the run-level objects it
+// references: `run.threadFlowLocations[i]` through a thread-flow location's `index`, and
+// `run.graphs[i]` through a graph traversal's `runGraphIndex`. Each reference is resolved for
+// that result and the file it names must lie in the reporting skill; an unresolved,
+// out-of-range, malformed or ambiguous reference fails.
+describe("Cisco scan-all shared references resolve per result (U1h)", () => {
+  const report = {
+    results: [
+      {
+        skill_path: "/scan/skills/alpha",
+        findings: [{ rule_id: "R", file_path: "SKILL.md", line_number: 1 }],
+      },
+      { skill_path: "/scan/skills/beta", findings: [] },
+    ],
+  };
+  const at = (uri: string) => ({
+    physicalLocation: { artifactLocation: { uri, uriBaseId: "ROOT" } },
+  });
+  const log = (fields: Record<string, unknown>, run: Record<string, unknown> = {}) => ({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "skill-scanner" } },
+        originalUriBaseIds: { ROOT: { uri: "file:///scan/" } },
+        ...run,
+        results: [
+          {
+            ruleId: "R",
+            message: { text: "R" },
+            locations: [
+              {
+                physicalLocation: {
+                  artifactLocation: { uri: "SKILL.md" },
+                  region: { startLine: 1 },
+                },
+              },
+            ],
+            ...fields,
+          },
+        ],
+      },
+    ],
+  });
+  const flowTo = (index: unknown) => ({
+    codeFlows: [{ threadFlows: [{ locations: [{ index }] }] }],
+  });
+  const graph = (uri: string) => ({ nodes: [{ id: "n", location: at(uri) }], edges: [] });
+  const scan = (fields: Record<string, unknown>, run: Record<string, unknown> = {}) =>
+    ciscoSourceRelativeSarifV1(log(fields, run), report, ["/scan"]);
+
+  it("refuses a shared thread-flow location in a sibling skill (reviewer case)", () => {
+    expect(() =>
+      scan(flowTo(0), { threadFlowLocations: [{ location: at("skills/beta/SKILL.md") }] }),
+    ).toThrow(/skills\/beta\/SKILL\.md.*not in the reporting skill skills\/alpha/);
+  });
+
+  it("refuses a run graph in a sibling skill, reached through runGraphIndex", () => {
+    expect(() =>
+      scan(
+        { graphTraversals: [{ runGraphIndex: 0 }] },
+        { graphs: [graph("skills/beta/SKILL.md")] },
+      ),
+    ).toThrow(/skills\/beta\/SKILL\.md.*not in the reporting skill skills\/alpha/);
+  });
+
+  it("keeps shared references inside the reporting skill", () => {
+    const normalized = scan(
+      { ...flowTo(0), graphTraversals: [{ runGraphIndex: 0 }] },
+      {
+        threadFlowLocations: [{ location: at("skills/alpha/SKILL.md") }],
+        graphs: [graph("skills/alpha/notes.md")],
+      },
+    );
+    const run = (normalized.document.runs as Record<string, unknown>[])[0] as {
+      threadFlowLocations: { location: { physicalLocation: { artifactLocation: unknown } } }[];
+    };
+    expect(run.threadFlowLocations[0]?.location.physicalLocation.artifactLocation).toEqual({
+      uri: "skills/alpha/SKILL.md",
+    });
+  });
+
+  it("refuses an unresolved, out-of-range, malformed or ambiguous reference", () => {
+    const shared = { threadFlowLocations: [{ location: at("skills/alpha/SKILL.md") }] };
+    const cases: [Record<string, unknown>, Record<string, unknown>, RegExp][] = [
+      [flowTo(1), shared, /thread-flow location index 1 resolves to no/],
+      [flowTo(0), {}, /thread-flow location index 0 resolves to no/],
+      [flowTo(-1), shared, /thread-flow location index -1 is malformed/],
+      [flowTo("0"), shared, /thread-flow location index "0" is malformed/],
+      [
+        flowTo(0),
+        { threadFlowLocations: [{ index: 1, location: at("skills/alpha/SKILL.md") }] },
+        /names another index/,
+      ],
+      [
+        { graphTraversals: [{ runGraphIndex: 1 }] },
+        { graphs: [graph("skills/alpha/SKILL.md")] },
+        /run graph index 1 resolves to no/,
+      ],
+      [{ graphTraversals: [{ resultGraphIndex: 0 }] }, {}, /result graph index 0 resolves to no/],
+      [
+        { graphTraversals: [{ runGraphIndex: 0, resultGraphIndex: 0 }], graphs: [{ nodes: [] }] },
+        { graphs: [graph("skills/alpha/SKILL.md")] },
+        /exactly one of runGraphIndex and resultGraphIndex/,
+      ],
+      [{ graphTraversals: [{}] }, {}, /exactly one of runGraphIndex and resultGraphIndex/],
+      [{ codeFlows: { threadFlows: [] } }, {}, /codeFlows is not an array/],
+    ];
+    for (const [fields, run, reason] of cases)
+      expect(() => scan(fields, run), JSON.stringify(fields)).toThrow(reason);
+  });
+});

@@ -689,7 +689,8 @@ describe("runCiscoShardV1", () => {
           ],
           run: () => ({ originalUriBaseIds: { ROOT: { uri: rootUri } } }),
         },
-        /skills\/alpha: .*skills\/beta\/SKILL\.md/,
+        // U1h: the job containment rule refuses it before the sealed-file binding.
+        /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
       );
     });
 
@@ -865,7 +866,7 @@ describe("runCiscoShardV1", () => {
         await failsAtOutput(
           root,
           { run: otherJobArtifact(root), result: () => ({ relatedLocations: byIndex(0) }) },
-          /skills\/alpha: .*related .*skills\/beta\/SKILL\.md/,
+          /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
         );
       });
 
@@ -876,6 +877,15 @@ describe("runCiscoShardV1", () => {
         await failsAtOutput(
           root,
           { run, locations: () => [...at("SKILL.md"), ...byIndex(0)] },
+          other,
+        );
+        // An index-only primary location naming the job's own file still has no URI.
+        await failsAtOutput(
+          root,
+          {
+            run: () => ({ artifacts: [{ location: { uri: "SKILL.md" } }] }),
+            locations: () => [...at("SKILL.md"), ...byIndex(0)],
+          },
           /a location has no URI/,
         );
         await failsAtOutput(
@@ -1050,7 +1060,7 @@ describe("runCiscoShardV1", () => {
             run: () => ({ originalUriBaseIds: rootBase(root) }),
             result: () => ({ analysisTarget: { uri: "skills/beta/SKILL.md", uriBaseId: "ROOT" } }),
           },
-          /skills\/alpha: .*skills\/beta\/SKILL\.md/,
+          /skills\/beta\/SKILL\.md.*not in the job's skill skills\/alpha/,
         );
       });
     });
