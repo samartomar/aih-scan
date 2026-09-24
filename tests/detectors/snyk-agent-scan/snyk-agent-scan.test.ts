@@ -1687,4 +1687,105 @@ describe("server records must prove analysis (S2f)", () => {
     const parent = dirname(root);
     await completed(entry(parent, { client: root, servers: [analyzedSkillServer(root)] }));
   });
+
+  // S2g (review of S2f): every claimed analysis record is bound to the submitted subject. An
+  // existing entry key never vouches for a server path that is missing or names something
+  // else, and the root-only empty-discovery rule applies to every entry, not to the report.
+  it("fails a root entry whose signed skill server names a path that does not exist (reviewer)", async () => {
+    await failedWith(
+      entry(root, { servers: [analyzedSkillServer(join(root, "ghost-skill"))] }),
+      NO_ANALYSIS,
+    );
+    await failedWith(
+      entry(root, { servers: [server(), analyzedSkillServer(join(root, "ghost-skill"))] }),
+      NO_ANALYSIS,
+    );
+  });
+
+  it("fails a root entry whose server names an existing path outside the subject", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "aih-scan-snyk-outside-"));
+    try {
+      await failedWith(entry(root, { servers: [analyzedSkillServer(outside)] }), NO_ANALYSIS);
+      await failedWith(
+        entry(root, { servers: [server(), analyzedSkillServer(outside)] }),
+        NO_ANALYSIS,
+      );
+      // An existing key outside the subject never vouches for servers inside it either.
+      await failedWith(entry(outside, { client: outside }), NO_ANALYSIS);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("fails an unrelated empty entry beside a valid root entry (reviewer)", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "aih-scan-snyk-outside-"));
+    try {
+      await failedWith(
+        { ...entry(root), ...entry(join(root, "skills"), { servers: [] }) },
+        NO_ANALYSIS,
+      );
+      await failedWith({ ...entry(root), ...entry(outside, { servers: [] }) }, NO_ANALYSIS);
+      await failedWith(
+        { ...entry(root, { servers: [] }), ...entry(dirname(root), { servers: [] }) },
+        NO_ANALYSIS,
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts the parent key only in 0.5.17's root-SKILL.md form (the server is the root)", async () => {
+    const parent = dirname(root);
+    await failedWith(entry(parent, { client: root, servers: [server()] }), NO_ANALYSIS);
+    await failedWith(
+      entry(parent, {
+        client: root,
+        servers: [analyzedSkillServer(root), analyzedSkillServer(join(root, "ghost"))],
+      }),
+      NO_ANALYSIS,
+    );
+    const stdio = server({
+      server: { command: "node", args: [], type: "stdio" },
+      config_path: root,
+    });
+    await failedWith(entry(parent, { client: root, servers: [stdio] }), NO_ANALYSIS);
+  });
+
+  // S2g, coordinator decision: 0.5.17's verify_api.py installs a server-side recovered
+  // signature and downgrades the retained ScanError to `is_failure: false`. No real recovery
+  // output has been captured, so a server carrying any note still fails as not analyzed.
+  it("fails the verify_api.py recovered-signature shape: a signed server with a note", async () => {
+    const recovered = server({
+      error: {
+        message: "could not inspect skill",
+        exception: "neither SKILL.md nor skill.md file found",
+        traceback: null,
+        is_failure: false,
+        category: "skill_scan_error",
+        server_output: null,
+      },
+    });
+    await failedWith(entry(root, { servers: [recovered] }), NO_ANALYSIS);
+    await failedWith(
+      entry(root, {
+        servers: [recovered],
+        issues: [{ code: "E004", message: "m", reference: [0, null] }],
+      }),
+      NO_ANALYSIS,
+      1,
+    );
+  });
+
+  it("binds a server without a skill path by its existing config file inside the subject", async () => {
+    const config = write("mcp/.mcp.json", "{}\n");
+    const stdio = (config_path: unknown) =>
+      server({ server: { command: "node", args: [], type: "stdio" }, config_path });
+    await completed(entry(root, { servers: [stdio(config)] }));
+    await failedWith(entry(root, { servers: [stdio(null)] }), NO_ANALYSIS);
+    await failedWith(
+      entry(root, { servers: [stdio(join(root, "mcp", "gone.json"))] }),
+      NO_ANALYSIS,
+    );
+    await failedWith(entry(root, { servers: [stdio(dirname(root))] }), NO_ANALYSIS);
+  });
 });

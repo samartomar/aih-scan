@@ -513,9 +513,9 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
     ]);
   });
 
-  it("rewrites unsafe Cisco SARIF artifact URIs to cisco.sarif", async () => {
-    // C2a §3.4: Core fails closed on a non-source-relative URI, so the merge
-    // applies Core's downstream fallback (`normalizeSarifUri`) itself.
+  it("fails unsafe Cisco SARIF artifact URIs at output, never naming cisco.sarif (S2g)", async () => {
+    // S2g (review of U1d): the legacy fallback name could bind a finding to an unrelated
+    // sealed root-level cisco.sarif, so an unsafe URI fails the job instead.
     skill("skills/clean", "# Clean\n");
     const sarif = {
       runs: [
@@ -550,26 +550,45 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
       ],
     };
 
-    const text = await runTree({
-      run: ciscoRunner(sarif),
-      platform: "linux",
-      env: {},
-      tree: realpathSync(dir),
-    });
-
-    const results = (
-      mergedRuns(text)[0] as {
-        results: Array<{
-          locations: Array<{ physicalLocation: { artifactLocation: { uri: string } } }>;
-        }>;
-      }
-    ).results;
-    expect(
-      results.map((result) => result.locations[0]?.physicalLocation.artifactLocation.uri),
-    ).toEqual(["cisco.sarif", "cisco.sarif"]);
+    await expect(
+      runTree({ run: ciscoRunner(sarif), platform: "linux", env: {}, tree: realpathSync(dir) }),
+    ).rejects.toThrow(/detector SARIF location: .*not a safe source-relative/);
   });
 
-  it("strips authority-free file:// prefixes and falls back for absolute file URIs", async () => {
+  it("fails the reviewer's ../outside.md beside a sealed root-level cisco.sarif (S2g)", async () => {
+    skill("skills/clean", "# Clean\n");
+    writeFileSync(join(dir, "cisco.sarif"), "{}\n");
+    const escaping = {
+      runs: [
+        {
+          results: [
+            {
+              ruleId: "CISCO_UNKNOWN_RULE",
+              message: { text: "escape" },
+              locations: [{ physicalLocation: { artifactLocation: { uri: "../outside.md" } } }],
+            },
+          ],
+        },
+      ],
+    };
+    const tree = realpathSync(dir);
+    const scanner = ciscoRunner(escaping);
+    const outcome = await runCiscoSourceTreeScanV1({
+      run: async (argv, opts) =>
+        argv.includes("--version")
+          ? { code: 0, stdout: "skill-scanner 2.1.0\n", stderr: "" }
+          : scanner(argv, opts),
+      platform: "linux",
+      env: {},
+      sourceRoot: tree,
+      selectedClosurePaths: inventory(tree),
+      detectorOptions: { concurrency: 1 },
+    });
+    expect(outcome).toMatchObject({ kind: "failed", stage: "output" });
+    if (outcome.kind === "failed") expect(outcome.detail).toMatch(/not a safe source-relative/);
+  });
+
+  it("strips authority-free file:// prefixes and fails absolute file URIs", async () => {
     skill("skills/clean", "# Clean\n");
     const sarif = {
       runs: [
@@ -592,13 +611,17 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
       ],
     };
 
+    await expect(
+      runTree({ run: ciscoRunner(sarif), platform: "linux", env: {}, tree: realpathSync(dir) }),
+    ).rejects.toThrow(/detector SARIF location: .*not a safe source-relative/);
+
+    const safe = { runs: [{ results: sarif.runs[0]?.results.slice(0, 1) ?? [] }] };
     const text = await runTree({
-      run: ciscoRunner(sarif),
+      run: ciscoRunner(safe),
       platform: "linux",
       env: {},
       tree: realpathSync(dir),
     });
-
     const results = (
       mergedRuns(text)[0] as {
         results: Array<{
@@ -608,7 +631,7 @@ describe("runCiscoSourceTreeScanV1 (ported Core runCiscoSkillScan cases)", () =>
     ).results;
     expect(
       results.map((result) => result.locations[0]?.physicalLocation.artifactLocation.uri),
-    ).toEqual(["skills/clean/SKILL.md", "cisco.sarif"]);
+    ).toEqual(["skills/clean/SKILL.md"]);
   });
 
   it("fails when a skill scan emits no valid SARIF", async () => {

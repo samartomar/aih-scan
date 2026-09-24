@@ -26,7 +26,6 @@
  */
 
 export {
-  CISCO_SARIF_FALLBACK_URI_V1,
   type CiscoJobSarifFailureStageV1,
   type CiscoJobSarifV1,
   type CiscoSarifArtifactLocationV1,

@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
+import { attachScanCompletionV1, scanCompletionEvidenceV1 } from "../completion-evidence-v1.js";
 import {
   ciscoJobDirectoryProblemTextV1,
   resolveContainedCiscoJobDirectoryV1,
 } from "./job-dir-v1.js";
+import type { CiscoSarifLogV1 } from "./merge-v1.js";
 import {
   CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
   type CiscoMultiSkillPlatformV1,
@@ -145,6 +147,53 @@ class CiscoShardJobFailureV1 extends Error {
     this.name = "CiscoShardJobFailureV1";
     this.stage = stage;
   }
+}
+
+const isRecordV1 = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The source-relative URI a SARIF location names, when it names one. */
+function locationUriV1(location: unknown): unknown {
+  const physical = isRecordV1(location) ? location.physicalLocation : undefined;
+  const artifact = isRecordV1(physical) ? physical.artifactLocation : undefined;
+  return isRecordV1(artifact) ? artifact.uri : undefined;
+}
+
+/**
+ * S2g (review of U1d): the tree hashes prove a job's input did not change, not that its
+ * results name files it analyzed. Every result of the job's normalized SARIF must carry at
+ * least one location, every one of its `locations` must name a file of the job's own sealed
+ * inventory (exact, case-sensitive, root-relative), and so must every related location that
+ * names a file. Returns why a result is unbound, or `undefined` when all are bound.
+ */
+function unboundShardResultV1(
+  log: CiscoSarifLogV1,
+  sealedFiles: ReadonlySet<string>,
+): string | undefined {
+  let index = 0;
+  for (const run of log.runs ?? []) {
+    for (const result of run.results ?? []) {
+      const record = result as Record<string, unknown>;
+      const locations = Array.isArray(record.locations) ? record.locations : [];
+      if (locations.length === 0)
+        return `SARIF result ${index} names no sealed file of the job (no location)`;
+      for (const location of locations) {
+        const uri = locationUriV1(location);
+        if (typeof uri !== "string")
+          return `SARIF result ${index} names no sealed file of the job (a location has no URI)`;
+        if (!sealedFiles.has(uri))
+          return `SARIF result ${index} names ${JSON.stringify(uri)}, which is not a sealed file of the job`;
+      }
+      const related = Array.isArray(record.relatedLocations) ? record.relatedLocations : [];
+      for (const location of related) {
+        const uri = locationUriV1(location);
+        if (uri !== undefined && (typeof uri !== "string" || !sealedFiles.has(uri)))
+          return `SARIF result ${index} related location names ${JSON.stringify(uri)}, which is not a sealed file of the job`;
+      }
+      index += 1;
+    }
+  }
+  return undefined;
 }
 
 /** Boundary shape validation of a shard run request; never throws. */
@@ -351,7 +400,8 @@ export async function runCiscoShardV1(
           throw new CiscoShardJobFailureV1("coverage", `source changed before scan: ${job.path}`);
         }
         const skillDir = resolved.skillDir;
-        if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
+        const sealed = hashComponentTreeV1(safeRoot, [job.path]);
+        if (sealed.treeSha256 !== job.inputSha256) {
           throw new CiscoShardJobFailureV1("coverage", `source changed before scan: ${job.path}`);
         }
         const outcome = await scanCiscoSkillDirectoryOutcomeV1({
@@ -368,7 +418,39 @@ export async function runCiscoShardV1(
         if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
           throw new CiscoShardJobFailureV1("coverage", `source changed during scan: ${job.path}`);
         }
-        const sarif: Uint8Array = Buffer.from(JSON.stringify(outcome.log), "utf8");
+        const unbound = unboundShardResultV1(
+          outcome.log,
+          new Set(sealed.files.map((file) => file.path)),
+        );
+        if (unbound !== undefined) {
+          throw new CiscoShardJobFailureV1(
+            "output",
+            boundedCiscoDetailV1(`Cisco shard job ${job.path}: ${unbound}`),
+          );
+        }
+        // C2a §1.6: with completion proven, the tree unchanged and every result bound, the
+        // job's SARIF names the files the job sealed; a forged completion key fails the job.
+        let sarif: Uint8Array;
+        try {
+          const log = attachScanCompletionV1(
+            JSON.parse(JSON.stringify(outcome.log)),
+            scanCompletionEvidenceV1({
+              detectorId: "detector.cisco",
+              files: sealed.files.map((file) => ({ path: file.path, sha256: file.sha256 })),
+              emptyAllowed: false,
+              analyzer: { version: expectedVersion, lockSha256: localLockSha256 },
+            }),
+            { scanBuilt: false },
+          );
+          sarif = Buffer.from(JSON.stringify(log), "utf8");
+        } catch (error) {
+          throw new CiscoShardJobFailureV1(
+            "output",
+            boundedCiscoDetailV1(
+              `Cisco shard job ${job.path}: ${error instanceof Error ? error.message : "completion evidence"}`,
+            ),
+          );
+        }
         return Object.freeze({
           jobId: job.id,
           path: job.path,

@@ -40,6 +40,12 @@ import {
   codeUnitCompare,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
+import {
+  attachScanCompletionV1,
+  type ScanCompletionSubjectEngineV1,
+  scanCompletionEvidenceV1,
+  scanCompletionSubjectFilesV1,
+} from "../detectors/completion-evidence-v1.js";
 import { validateSnykAgentScanRequestEnvV1 } from "../detectors/snyk-agent-scan/index.js";
 import {
   buildScanFindingsV1,
@@ -62,6 +68,7 @@ import {
 import {
   ENGINE_MAX_RESULTS_V1,
   type EngineAnalyzerV1,
+  type EngineV1,
   engineEnvironmentsV1,
   engineForV1,
   engineObservationAnalyzerV1,
@@ -112,6 +119,17 @@ const ANALYZER_BY_DETECTOR: Readonly<Record<string, BaselineAnalyzerV1>> = Objec
  * analyzers are given the tree without its top-level `.git`, and their coverage says so.
  */
 const WHOLE_TREE_ANALYZERS: ReadonlySet<BaselineAnalyzerV1> = new Set(["semgrep", "skillspector"]);
+
+/**
+ * Engines whose SARIF Scan builds from the analyzer's own records (C2a §1.6): their runs carry
+ * no analyzer invocation, so the completion evidence brings its own successful one.
+ */
+const SCAN_BUILT_SARIF_ENGINES: ReadonlySet<EngineV1> = new Set([
+  "aih-trust-lint",
+  "aih-binding-gate",
+  "cisco-mcp-scanner",
+  "snyk-agent-scan",
+]);
 
 /** The shortest and longest whole-run budget a caller may set, in milliseconds. */
 const MIN_TIMEOUT_MS = 100;
@@ -1197,6 +1215,37 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
             ...normalized,
             bytes: Buffer.from(canonicalStrictJsonBytesV1(bound.document)),
           };
+      } catch (error) {
+        return failed("output", error);
+      }
+    }
+    // C2a §1.6: only now, with the analyzer's own completion proven and the source re-sealed
+    // unchanged, does every SARIF run name the files the analyzer received.
+    if (normalized.mediaType === "application/sarif+json") {
+      try {
+        const sealed = before as SourceObservationSealV1;
+        const evidence = scanCompletionEvidenceV1({
+          detectorId: capability.detectorId,
+          files: scanCompletionSubjectFilesV1({
+            engine: (engineAnalyzer ?? analyzer) as ScanCompletionSubjectEngineV1,
+            entries: sealed.entries,
+            selectedClosurePaths: sealed.selectedClosurePaths,
+            detectorOptions,
+          }),
+          emptyAllowed: capability.emptySource === "completes",
+          analyzer: {
+            version: normalized.analyzerVersion,
+            lockSha256: profile.analyzerLock?.sha256 ?? null,
+          },
+        });
+        const log = attachScanCompletionV1(
+          parseStrictJsonObjectV1(normalized.bytes.toString("utf8"), `${analyzer} SARIF`),
+          evidence,
+          {
+            scanBuilt: engineAnalyzer !== undefined && SCAN_BUILT_SARIF_ENGINES.has(engineAnalyzer),
+          },
+        );
+        normalized = { ...normalized, bytes: Buffer.from(canonicalStrictJsonBytesV1(log)) };
       } catch (error) {
         return failed("output", error);
       }

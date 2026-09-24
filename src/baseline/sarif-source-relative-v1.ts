@@ -61,11 +61,26 @@ function decodedPath(uri: string): string {
 
 /**
  * One URI relative to the declared source root. With `allowRoot`, the root itself maps to
- * the empty string (Cisco reports a top-level skill directory that way).
+ * the empty string (Cisco reports a top-level skill directory that way). With
+ * `allowDirectory` (S2g: notification and run-artifact locations only), a URI ending in
+ * exactly one `/` names a directory: the path before that slash must pass every rule a file
+ * path passes, and the result keeps its trailing slash (`node_modules/`). The root itself is
+ * never a directory URI.
  */
-function relativeTo(uri: string, candidates: readonly Root[], allowRoot = false): string {
+function relativeTo(
+  uri: string,
+  candidates: readonly Root[],
+  allowRoot = false,
+  allowDirectory = false,
+): string {
   if (typeof uri !== "string" || uri.length === 0) fail("an empty artifact URI");
   if (uri.includes("\0")) fail("an artifact URI holds a NUL character");
+  if (allowDirectory && uri.endsWith("/")) {
+    const trimmed = uri.slice(0, -1);
+    if (trimmed === "" || trimmed === "." || trimmed.endsWith("/") || /^file:\/*$/iu.test(trimmed))
+      fail(`${JSON.stringify(uri)} does not name a directory under the source root`);
+    return `${relativeTo(trimmed, candidates)}/`;
+  }
   const path = decodedPath(uri).replaceAll("\\", "/");
   const absolute = path.startsWith("/") || /^[A-Za-z]:\//u.test(path);
   let relative: string;
@@ -98,22 +113,60 @@ function isRecord(value: unknown): value is Record<string, Json> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Every SARIF `artifactLocation`, and every run artifact's `location`, in the document. */
-function artifactLocations(document: Json): Record<string, Json>[] {
-  const found: Record<string, Json>[] = [];
+/** One artifact location, and whether it may name a directory (S2g). */
+type FoundLocation = Readonly<{ location: Record<string, Json>; directory: boolean }>;
+
+const NOTIFICATION_KEYS: ReadonlySet<string> = new Set([
+  "toolExecutionNotifications",
+  "toolConfigurationNotifications",
+]);
+
+/**
+ * Whether a location at `path` (property names and array indices from a run) may name a
+ * directory: anything under `invocations[i].toolExecutionNotifications` or
+ * `invocations[i].toolConfigurationNotifications`, and a run artifact's own `location`
+ * (`artifacts[i].location`). Result locations, related locations, code flows and any
+ * notification nested elsewhere must name files.
+ */
+function directoryScope(path: readonly (string | number)[]): boolean {
+  if (path[0] === "invocations" && typeof path[1] === "number")
+    return typeof path[2] === "string" && NOTIFICATION_KEYS.has(path[2]);
+  return (
+    path.length === 3 &&
+    path[0] === "artifacts" &&
+    typeof path[1] === "number" &&
+    path[2] === "location"
+  );
+}
+
+/**
+ * Every SARIF `artifactLocation`, and every run artifact's `location`, in the document.
+ * With `run`, the document is one SARIF run, and the locations its notifications and run
+ * artifacts hold may name directories ({@link directoryScope}); otherwise none may.
+ */
+function artifactLocations(document: Json, run = false): FoundLocation[] {
+  const found: FoundLocation[] = [];
   // `key` names the property holding `value`; `owner` names the nearest property above it,
   // so an entry of `artifacts: [{ location }]` sees its location with owner "artifacts".
-  const visit = (value: Json, key: string | undefined, owner: string | undefined): void => {
+  const visit = (
+    value: Json,
+    key: string | undefined,
+    owner: string | undefined,
+    path: readonly (string | number)[],
+  ): void => {
     if (Array.isArray(value)) {
-      for (const item of value) visit(item, undefined, key ?? owner);
+      value.forEach((item, index) => {
+        visit(item, undefined, key ?? owner, [...path, index]);
+      });
       return;
     }
     if (!isRecord(value)) return;
     if (key === "artifactLocation" || (key === "location" && owner === "artifacts"))
-      found.push(value);
-    for (const [childKey, child] of Object.entries(value)) visit(child, childKey, key ?? owner);
+      found.push({ location: value, directory: run && directoryScope(path) });
+    for (const [childKey, child] of Object.entries(value))
+      visit(child, childKey, key ?? owner, [...path, childKey]);
   };
-  visit(document, undefined, undefined);
+  visit(document, undefined, undefined, []);
   return found;
 }
 
@@ -191,9 +244,10 @@ function normalizeScope(
   candidates: readonly Root[],
   settled: ReadonlySet<object>,
   counts: Normalization,
+  run = false,
 ): void {
   const base = baseResolver(declared);
-  for (const location of artifactLocations(scope)) {
+  for (const { location, directory } of artifactLocations(scope, run)) {
     const baseId = location.uriBaseId;
     if (baseId !== undefined && typeof baseId !== "string")
       fail("an artifact uriBaseId is not a string");
@@ -203,7 +257,7 @@ function normalizeScope(
       if (!settled.has(location)) {
         const target =
           baseId === undefined || isAbsoluteLocation(uri) ? uri : joined(base(baseId), uri);
-        location.uri = relativeTo(target, candidates);
+        location.uri = relativeTo(target, candidates, false, directory);
       }
       counts.rewritten += 1;
     } else if (baseId !== undefined) base(baseId);
@@ -229,7 +283,7 @@ function normalize(
           normalizeScope(run, undefined, candidates, settled, counts);
           continue;
         }
-        normalizeScope(run, run.originalUriBaseIds, candidates, settled, counts);
+        normalizeScope(run, run.originalUriBaseIds, candidates, settled, counts, true);
         if ("originalUriBaseIds" in run) {
           delete run.originalUriBaseIds;
           counts.removedBaseUris += 1;
@@ -260,9 +314,9 @@ export function sourceRelativeSarifV1(
 /** Where one artifact location of a run points once its `uriBaseId` is resolved. */
 export type SarifLocationTargetV1 =
   /** No base, the analyzer's own `%SRCROOT%` (or a chain rooted there), or an absolute URI. */
-  | Readonly<{ kind: "analyzer-relative"; uri: unknown }>
+  | Readonly<{ kind: "analyzer-relative"; uri: unknown; directory: boolean }>
   /** A base resolving to an absolute location inside the source root, related to it. */
-  | Readonly<{ kind: "source-relative"; uri: string }>;
+  | Readonly<{ kind: "source-relative"; uri: string; directory: boolean }>;
 
 /**
  * Rewrites every artifact location of one SARIF run in place (the run must be a mutable
@@ -283,7 +337,7 @@ export function rewriteSarifRunLocationsV1(
 ): void {
   const candidates = roots(sourceRoots);
   const base = baseResolver(run.originalUriBaseIds as Json | undefined);
-  for (const location of artifactLocations(run as Json)) {
+  for (const { location, directory } of artifactLocations(run as Json, true)) {
     const baseId = location.uriBaseId;
     if (baseId !== undefined && typeof baseId !== "string")
       fail("an artifact uriBaseId is not a string");
@@ -291,12 +345,16 @@ export function rewriteSarifRunLocationsV1(
     if ("uri" in location) {
       const uri: unknown = location.uri;
       let target: SarifLocationTargetV1;
-      if (resolved === undefined) target = { kind: "analyzer-relative", uri };
+      if (resolved === undefined) target = { kind: "analyzer-relative", uri, directory };
       else if (typeof uri !== "string") fail("an artifact URI is not a string");
-      else if (isAbsoluteLocation(uri)) target = { kind: "analyzer-relative", uri };
+      else if (isAbsoluteLocation(uri)) target = { kind: "analyzer-relative", uri, directory };
       else if ("absolute" in resolved)
-        target = { kind: "source-relative", uri: relativeTo(joined(resolved, uri), candidates) };
-      else target = { kind: "analyzer-relative", uri: joined(resolved, uri) };
+        target = {
+          kind: "source-relative",
+          uri: relativeTo(joined(resolved, uri), candidates, false, directory),
+          directory,
+        };
+      else target = { kind: "analyzer-relative", uri: joined(resolved, uri), directory };
       location.uri = rewrite(target) as Json;
     }
     if (baseId !== undefined && baseId !== SOURCE_ROOT_BASE_ID) delete location.uriBaseId;

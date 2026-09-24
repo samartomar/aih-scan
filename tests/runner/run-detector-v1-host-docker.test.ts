@@ -10,6 +10,11 @@ import {
 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { runDetectorV1 } from "../../src/runner/run-detector-v1.js";
+import {
+  completionOfObservationV1,
+  diskFilesV1,
+  diskSubjectV1,
+} from "./completion-evidence-support.js";
 
 const PROFILE = "docker-host-local-skillspector-v1";
 const LOCAL_TAG = "skillspector:aih-c7958a3268d9";
@@ -455,5 +460,81 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 SARIF completion (S2e)
       runs: [{ tool, results: [], invocations: [{ executionSuccessful: false }] }],
     });
     expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "execution" } });
+  });
+});
+
+// S2g (C2a §1.6): SkillSpector receives the whole tree, and its profile installs no lock.
+describe("runDetectorV1 docker-host-local-skillspector-v1 completion evidence v1", () => {
+  it("names every file, .git and a skipped node_modules included, with no lock", async () => {
+    const host = hostFixture();
+    const sourceRoot = sourceFixture();
+    mkdirSync(join(sourceRoot, ".git"));
+    writeFileSync(join(sourceRoot, ".git", "HEAD"), "ref: refs/heads/main\n");
+    mkdirSync(join(sourceRoot, "node_modules", "dep"), { recursive: true });
+    writeFileSync(join(sourceRoot, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+    // The pinned image's shape: a warning that names the skipped directory.
+    const noted = canonicalStrictJsonBytesV1({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "skillspector" } },
+          results: [],
+          invocations: [
+            {
+              executionSuccessful: true,
+              toolExecutionNotifications: [
+                {
+                  level: "warning",
+                  message: { text: "skipped a dependency directory" },
+                  locations: [
+                    { physicalLocation: { artifactLocation: { uri: "/scan/node_modules/" } } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }).toString("utf8");
+
+    const outcome = await runDetectorV1({
+      ...request({ env: host.env, runner: dockerRunner([], async () => okay(noted)) }),
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: ["README.md"] },
+    });
+
+    const evidence = completionOfObservationV1(outcome);
+    expect(diskFilesV1(sourceRoot)).toHaveLength(3);
+    expect(evidence).toEqual({
+      detectorId: "detector.skillspector",
+      ...diskSubjectV1(sourceRoot, diskFilesV1(sourceRoot)),
+      analyzer: {
+        version:
+          outcome.outcome === "succeeded" &&
+          outcome.evidence.kind === "baseline-analyzer-observation-v1"
+            ? outcome.evidence.observation.analyzerVersion
+            : undefined,
+        lockSha256: null,
+      },
+    });
+  });
+
+  it("gives an empty source root a zero count", async () => {
+    const host = hostFixture();
+    const emptySarif = canonicalStrictJsonBytesV1({
+      version: "2.1.0",
+      runs: [
+        {
+          tool: { driver: { name: "skillspector" } },
+          results: [],
+          invocations: [{ executionSuccessful: true }],
+        },
+      ],
+    }).toString("utf8");
+    const outcome = await runDetectorV1({
+      ...request({ env: host.env, runner: dockerRunner([], async () => okay(emptySarif)) }),
+      subject: { kind: "source-tree", sourceRoot: temporary("empty"), selectedClosurePaths: [] },
+    });
+
+    expect(completionOfObservationV1(outcome)).toMatchObject({ analyzedFileCount: 0 });
   });
 });

@@ -12,7 +12,7 @@ import { isSourceRelativeArtifactUriV1 } from "../source-relative-uri-v1.js";
  *
  * The per-skill SARIF log is evidence: it passes through structurally
  * untouched except that artifact URIs are prefixed with the source-relative
- * skill directory (unsafe URIs rewritten to `cisco.sarif`, C2a §3.4) and
+ * skill directory (an unsafe URI fails the job at `output`, S2g; C2a §3.4) and
  * volatile invocation timestamps are removed, so merged output is projection-
  * and time-independent. Rule mapping, grading and verdicts stay with the
  * caller (Core keeps them).
@@ -59,13 +59,6 @@ export interface CiscoSarifLogV1 {
  * closed past this size with the same "did not emit valid SARIF" outcome.
  */
 export const MAX_CISCO_SARIF_BYTES_V1 = 16 * 1024 * 1024;
-
-/**
- * Core's fallback artifact URI for this detector (C2a §1.4 and §3.4): an
- * analyzer URI that cannot be made a safe source-relative path is rewritten
- * to it, exactly as legacy Core's `normalizeSarifUri` mapped it downstream.
- */
-export const CISCO_SARIF_FALLBACK_URI_V1 = "cisco.sarif";
 
 /** Where a job's SARIF fell short: the analyzer's own failure report, or unusable output. */
 export type CiscoJobSarifFailureStageV1 = "execution" | "output";
@@ -120,21 +113,28 @@ function toPosixV1(path: string): string {
  * `file://` prefix is stripped and backslashes become `/` first (C2a §3.4);
  * the analyzer URI and the FINAL prefixed URI must then satisfy the complete C2a §1.4 rule
  * ({@link isSourceRelativeArtifactUriV1}: no `.`, `..` or empty segment, no
- * scheme, drive letter or leading `/`), or it is rewritten to
- * {@link CISCO_SARIF_FALLBACK_URI_V1}, because Core fails the whole detector
- * on any URI that is not source-relative. A missing URI stays missing (Core's
- * boundary maps it to the same fallback); any other non-string value becomes
- * the fallback.
+ * scheme, drive letter or leading `/`). S2g (review of U1d): anything else throws, and the
+ * job fails at stage `output`; no file name is ever substituted, because a substitute such
+ * as legacy Core's `cisco.sarif` can bind a finding to an unrelated sealed file of that
+ * name. With `directory` (a notification or run-artifact location), a URI ending in one
+ * `/` names a contained directory and keeps its slash. A missing URI stays missing; any
+ * other non-string value throws.
  */
-export function prefixSafeCiscoUriV1(prefix: string, raw: unknown): unknown {
+export function prefixSafeCiscoUriV1(prefix: string, raw: unknown, directory = false): unknown {
   if (raw === undefined) return raw;
-  if (typeof raw !== "string") return CISCO_SARIF_FALLBACK_URI_V1;
+  if (typeof raw !== "string") throw new TypeError("a Cisco artifact URI is not a string");
+  const unsafe = (): never => {
+    throw new TypeError(`${JSON.stringify(raw)} is not a safe source-relative artifact URI`);
+  };
   const stripped = toPosixV1(raw.replace(/^file:\/\//, ""));
+  const slash = directory && stripped.endsWith("/") ? "/" : "";
+  const path = slash === "" ? stripped : stripped.slice(0, -1);
   // The analyzer's own URI must be a safe relative path (a scheme or drive is
   // only visible before prefixing), and so must the final prefixed URI.
-  if (!isSourceRelativeArtifactUriV1(stripped)) return CISCO_SARIF_FALLBACK_URI_V1;
-  const prefixed = prefix.length > 0 ? `${prefix}/${stripped}` : stripped;
-  return isSourceRelativeArtifactUriV1(prefixed) ? prefixed : CISCO_SARIF_FALLBACK_URI_V1;
+  if (!isSourceRelativeArtifactUriV1(path)) unsafe();
+  const prefixed = prefix.length > 0 ? `${prefix}/${path}` : path;
+  if (!isSourceRelativeArtifactUriV1(prefixed)) unsafe();
+  return `${prefixed}${slash}`;
 }
 
 /**
@@ -176,7 +176,11 @@ export function ciscoJobSarifV1(
         return stableInvocation;
       });
       rewriteSarifRunLocationsV1(run, [root], (target) =>
-        prefixSafeCiscoUriV1(target.kind === "source-relative" ? "" : prefix, target.uri),
+        prefixSafeCiscoUriV1(
+          target.kind === "source-relative" ? "" : prefix,
+          target.uri,
+          target.directory,
+        ),
       );
     }
   } catch (error) {

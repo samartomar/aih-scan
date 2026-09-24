@@ -161,7 +161,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 172,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 127, contains: "RunDetectorRefusalReasonV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 145, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/observation/source-observation-seal-v1.ts",
     line: 144,
@@ -174,7 +174,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 223,
+    line: 241,
     contains: "readonly detectorOptions?: DetectorOptionsV1",
   },
   {
@@ -184,12 +184,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1322,
+    line: 1371,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1281,
+    line: 1330,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
@@ -204,40 +204,40 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 150,
+    line: 168,
     contains: "export type RunDetectorFailureCauseV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 152, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 170, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 769,
+    line: 787,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 272,
+    line: 290,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 248,
+    line: 266,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 188,
+    line: 206,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 190,
+    line: 208,
     contains: "readonly hostRuntime?: HostProcessRuntimeV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 225, contains: "readonly signal?: AbortSignal" },
-  { path: "src/runner/run-detector-v1.ts", line: 230, contains: "readonly timeoutMs?: number" },
+  { path: "src/runner/run-detector-v1.ts", line: 243, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 248, contains: "readonly timeoutMs?: number" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 321,
+    line: 339,
     contains: "      sourceSeal:",
   },
   {
@@ -257,12 +257,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 253,
+    line: 307,
     contains: "export function sourceRelativeSarifV1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 396,
+    line: 454,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {
@@ -274,6 +274,21 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     path: "src/cli/residual-processes.ts",
     line: 221,
     contains: "export async function sweepResidualProcessesV1",
+  },
+  {
+    path: "src/detectors/completion-evidence-v1.ts",
+    line: 18,
+    contains: "export const SCAN_COMPLETION_PROPERTY_V1",
+  },
+  {
+    path: "src/detectors/completion-evidence-v1.ts",
+    line: 57,
+    contains: "export function subjectFilesDigestV1",
+  },
+  {
+    path: "src/detectors/completion-evidence-v1.ts",
+    line: 178,
+    contains: "export function attachScanCompletionV1",
   },
   { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },
   {
@@ -392,6 +407,24 @@ describe("published contract inventory", () => {
       expect(line, reference).toBeDefined();
       expect(line, reference).toContain(anchor.contains);
     }
+  });
+
+  // S2g: a `$\`` in a String.replace replacement once spliced the whole preceding document
+  // into the "Detector options" row, so the title, the prose and the tables appeared twice.
+  it("states the title once and every contract row once, each heading on its own line", () => {
+    const document = contracts();
+    expect(document.split("# Contracts published by").length - 1).toBe(1);
+    expect(document.split("Every format this package produces").length - 1).toBe(1);
+    const lines = document.split("\n");
+    for (const line of lines.filter((candidate) => candidate.includes("# ")))
+      expect(line.startsWith("#") || !/(?:^|[^#])#{1,6} [A-Z]/u.test(line), line.slice(0, 80)).toBe(
+        true,
+      );
+    const rowNames = lines
+      .filter((line) => line.startsWith("| ") && !/^| (?:---|Contract |)/u.test(line))
+      .map((line) => line.split(" | ")[0]);
+    expect(rowNames.length).toBe(new Set(rowNames).size);
+    expect(document).toContain("normalized npm scopes (`^@[a-z0-9][a-z0-9._~-]*$`)");
   });
 
   it("anchors every source reference it publishes", () => {
