@@ -184,6 +184,16 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
+    line: 1190,
+    contains: "export async function probeDetectorAvailabilityV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 1149,
+    contains: "export type DetectorAvailabilityV1Result",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
     line: 131,
     contains: "export type RunDetectorFailureCauseV1",
   },

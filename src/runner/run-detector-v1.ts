@@ -1136,3 +1136,156 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   }
   return analyzed;
 }
+
+const PROBE_FIELDS = [
+  "detectorId",
+  "executionProfileId",
+  "env",
+  "signal",
+  "prerequisiteProbe",
+  "acceptedImageDigests",
+] as const;
+
+export type DetectorAvailabilityV1Result =
+  | Readonly<{
+      available: true;
+      detectorId: string;
+      /** The pinned analyzer version the capability targets; nothing was executed. */
+      analyzerVersion: string;
+      /** Exactly the profile that was named. */
+      executionProfile: DetectorExecutionProfileV1;
+      /**
+       * Every prerequisite of that profile. `not-probed` ones (a container image, a
+       * uv-discoverable Python, a reachable index) are settled only by a run.
+       */
+      prerequisites: readonly DetectorPrerequisiteStateV1[];
+      seams: Readonly<{ prerequisiteProbe: RunDetectorSeamsV1["prerequisiteProbe"] }>;
+    }>
+  | Readonly<{
+      available: false;
+      reason: RunDetectorRefusalReasonV1 | "availability-failed";
+      /** One actionable sentence; bounded and control-character encoded. */
+      detail: string;
+    }>;
+
+function unavailable(
+  reason: RunDetectorRefusalReasonV1 | "availability-failed",
+  detail: string,
+): DetectorAvailabilityV1Result {
+  return Object.freeze({
+    available: false as const,
+    reason,
+    detail: boundedDiagnosticDetailV1(detail),
+  });
+}
+
+/**
+ * Probes whether a detector could run under the named profile on this host, without a
+ * subject and without spawning, pulling or executing anything (C2a §3.8). It applies the
+ * same request-field, profile, platform and prerequisite gates as `runDetectorV1` and
+ * answers with the same refusal reasons, or `availability-failed` when the caller's signal
+ * is already aborted or its `prerequisiteProbe` misbehaves. `available: true` means no
+ * required prerequisite is known to be missing. Never throws.
+ */
+export async function probeDetectorAvailabilityV1(
+  request: unknown,
+): Promise<DetectorAvailabilityV1Result> {
+  try {
+    if (typeof request !== "object" || request === null || Array.isArray(request))
+      return unavailable(
+        "unknown-detector",
+        "A probe request must be an object naming a detector.",
+      );
+    const read = snapshotFields(request as Record<string, unknown>, PROBE_FIELDS, "");
+    if ("field" in read)
+      return unavailable(
+        "unknown-detector",
+        `The probe request could not be read: reading ${read.field} threw: ${
+          thrownMessage(read.error) ?? "unknown failure"
+        }.`,
+      );
+    const input = read.value;
+    const capability = resolveDetectorCapabilityV1(input.detectorId);
+    if (capability === undefined)
+      return unavailable(
+        "unknown-detector",
+        `Scan owns no detector ${
+          typeof input.detectorId === "string" ? input.detectorId : "of that shape"
+        }. Known detectors: ${listDetectorCapabilitiesV1()
+          .map((entry) => entry.detectorId)
+          .join(", ")}.`,
+      );
+    const available = capability.executionProfiles.map((entry) => entry.id).join(", ");
+    if (input.executionProfileId === undefined)
+      return unavailable(
+        "execution-profile-unavailable",
+        `A probe names the execution profile it asks about; ${capability.detectorId} has ${available}.`,
+      );
+    const fieldRefusal = executionFieldRefusal(capability, input);
+    if (fieldRefusal !== undefined)
+      return unavailable("execution-profile-unavailable", fieldRefusal);
+    const profile = capability.executionProfiles.find(
+      (entry) => entry.id === input.executionProfileId,
+    );
+    if (profile === undefined)
+      return unavailable(
+        "execution-profile-unavailable",
+        `${capability.detectorId} has no execution profile ${String(
+          input.executionProfileId,
+        )}. Available profiles: ${available}.`,
+      );
+    if (input.acceptedImageDigests !== undefined) {
+      if (
+        profile.id !== "docker-hardened-skillspector-v1" &&
+        profile.id !== "docker-host-local-skillspector-v1"
+      )
+        return unavailable(
+          "execution-profile-unavailable",
+          `acceptedImageDigests applies only to the docker-hardened-skillspector-v1 and docker-host-local-skillspector-v1 profiles; ${capability.detectorId} runs ${profile.id}, so remove it.`,
+        );
+      const digestRefusal = skillspectorAcceptedImageDigestsRefusalV1(input.acceptedImageDigests);
+      if (digestRefusal !== undefined)
+        return unavailable("execution-profile-unavailable", digestRefusal);
+    }
+    const platform = capabilityPlatform();
+    if (
+      platform === undefined ||
+      !profile.supportedPlatforms.some(
+        (entry) => entry.os === platform.os && entry.architecture === platform.architecture,
+      )
+    )
+      return unavailable("unsupported-platform", platformRefusal(capability, profile));
+    const signal = input.signal as AbortSignal | undefined;
+    if (signal?.aborted)
+      return unavailable("availability-failed", "The probe was cancelled before it started.");
+    const env = (input.env as Readonly<NodeJS.ProcessEnv> | undefined) ?? process.env;
+    const probed = probeStates(profile.prerequisites, input.prerequisiteProbe, env);
+    if (probed.failure !== undefined) return unavailable("availability-failed", probed.failure);
+    const missing = profile.prerequisites.find(
+      (prerequisite, index) => prerequisite.required && probed.states[index]?.state === "missing",
+    );
+    if (missing !== undefined)
+      return unavailable(
+        "prerequisite-missing",
+        `${capability.detectorId} needs ${missing.kind} ${missing.id}, which is not present. ${missing.detail}`,
+      );
+    return Object.freeze({
+      available: true as const,
+      detectorId: capability.detectorId,
+      analyzerVersion: capability.analyzerVersion,
+      executionProfile: profile,
+      prerequisites: probed.states,
+      seams: Object.freeze({
+        prerequisiteProbe:
+          input.prerequisiteProbe === undefined
+            ? ("scan-owned-default" as const)
+            : ("caller-supplied" as const),
+      }),
+    });
+  } catch (error) {
+    return unavailable(
+      "unknown-detector",
+      `The probe request could not be read: ${thrownMessage(error) ?? "unknown failure"}.`,
+    );
+  }
+}

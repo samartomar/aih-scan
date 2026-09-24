@@ -54,6 +54,7 @@ describe("Strict V2 public boundary", () => {
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
       "parseScanResultRecordV1",
+      "probeDetectorAvailabilityV1",
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
