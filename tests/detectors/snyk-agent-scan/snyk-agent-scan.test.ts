@@ -21,6 +21,7 @@ import {
   probeSnykAgentScanAvailabilityV1,
   runSnykAgentScanRequestV1,
   SNYK_AGENT_SCAN_PROJECT,
+  SNYK_TOKEN_REDACTION_V1,
   type SnykAgentScanProcessResultV1,
   type SnykAgentScanRunnerV1,
   validateSnykAgentScanRequestEnvV1,
@@ -824,6 +825,168 @@ describe("C2a §5.1/§5.2 typed availability probe", () => {
     expect(outcome).toEqual({
       status: "unavailable",
       detail: "snyk-agent-scan help check emitted no output",
+    });
+  });
+});
+
+describe("request token redaction in every outward string", () => {
+  // The token is synthetic and assembled at runtime; assertions compare
+  // booleans so a failure never prints it.
+  const TOKEN = ["synthetic", "review", "token", "7f3a9c"].join("-");
+  const requestEnv = { SNYK_TOKEN: TOKEN };
+
+  function leaks(value: unknown): boolean {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return text.includes(TOKEN) || text.includes(TOKEN.slice(0, 12));
+  }
+
+  function scanFailing(result: SnykAgentScanProcessResultV1): SnykAgentScanRunnerV1 {
+    return fakeRunner((argv) => (argv.includes("scan") ? result : undefined)).run;
+  }
+
+  it.each([
+    [
+      "stderr on an exit outside {0, 1}",
+      { code: 2, stdout: '{"findings":[]}', stderr: `authentication failed: ${TOKEN}` },
+      "execution",
+      `authentication failed: ${SNYK_TOKEN_REDACTION_V1}`,
+    ],
+    [
+      "stdout on a spawn error",
+      { code: null, stdout: `token=${TOKEN}`, stderr: "", spawnError: true },
+      "execution",
+      `token=${SNYK_TOKEN_REDACTION_V1}`,
+    ],
+    [
+      "stderr with empty stdout",
+      { code: 0, stdout: "", stderr: `bad token ${TOKEN}` },
+      "output",
+      `bad token ${SNYK_TOKEN_REDACTION_V1}`,
+    ],
+    [
+      "stderr on exit 1 without findings",
+      { code: 1, stdout: '{"findings":[]}', stderr: `${TOKEN} rejected` },
+      "output",
+      `${SNYK_TOKEN_REDACTION_V1} rejected`,
+    ],
+  ] as const)("redacts the token from %s", async (_label, result, stage, detail) => {
+    const outcome = await runSnykAgentScanRequestV1(scanFailing(result), {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv,
+    });
+
+    expect(leaks(outcome)).toBe(false);
+    expect(outcome).toEqual({ kind: "failed", stage, detail });
+  });
+
+  it("redacts the token before truncation so no fragment survives the cut", async () => {
+    const stderr = `${"a".repeat(495)}${TOKEN}${"b".repeat(4000)}`;
+    const outcome = await runSnykAgentScanRequestV1(scanFailing({ code: 2, stdout: "", stderr }), {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv,
+    });
+
+    expect(outcome.kind).toBe("failed");
+    expect(leaks(outcome)).toBe(false);
+    expect(JSON.stringify(outcome).includes(TOKEN.slice(0, 8))).toBe(false);
+  });
+
+  it("redacts the token from a thrown runner error", async () => {
+    const run: SnykAgentScanRunnerV1 = async () => {
+      throw new Error(`spawn failed for SNYK_TOKEN=${TOKEN}`);
+    };
+
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv,
+    });
+
+    expect(leaks(outcome)).toBe(false);
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "execution",
+      detail: `spawn failed for SNYK_TOKEN=${SNYK_TOKEN_REDACTION_V1}`,
+    });
+  });
+
+  it("redacts the token from SARIF rule ids, messages and URIs of a completed scan", async () => {
+    const { run } = snykRunner({
+      findings: [
+        {
+          id: `rule-${TOKEN}`,
+          title: `Token ${TOKEN} echoed`,
+          description: `described ${TOKEN}`,
+          file: `leak-${TOKEN}.md`,
+          line: 2,
+        },
+      ],
+    });
+
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv,
+    });
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    expect(leaks(outcome.sarifText)).toBe(false);
+    expect(leaks(outcome.sarif)).toBe(false);
+    expect(outcome.sarif.runs[0].results).toEqual([
+      {
+        ruleId: `rule-${SNYK_TOKEN_REDACTION_V1}`,
+        message: {
+          text: `Token ${SNYK_TOKEN_REDACTION_V1} echoed: described ${SNYK_TOKEN_REDACTION_V1}`,
+        },
+        locations: [
+          {
+            physicalLocation: {
+              // C2a §1.4: Snyk's fallback for a URI it cannot emit is ".".
+              artifactLocation: { uri: "." },
+              region: { startLine: 2 },
+            },
+          },
+        ],
+      },
+    ]);
+    expect(JSON.parse(outcome.sarifText)).toEqual(outcome.sarif);
+  });
+
+  it("redacts the token from the availability probe's diagnostics", async () => {
+    const thrown: SnykAgentScanRunnerV1 = async () => {
+      throw new Error(`help failed ${TOKEN}`);
+    };
+    const failing = fakeRunner((argv) =>
+      argv.includes("help") ? { code: 3, stdout: "", stderr: `help saw ${TOKEN}` } : undefined,
+    ).run;
+
+    const first = await probeSnykAgentScanAvailabilityV1(thrown, {
+      platform: "linux",
+      hostEnv: {},
+      requestEnv,
+    });
+    const second = await probeSnykAgentScanAvailabilityV1(failing, {
+      platform: "linux",
+      hostEnv: {},
+      requestEnv,
+    });
+
+    expect(leaks(first)).toBe(false);
+    expect(leaks(second)).toBe(false);
+    expect(first).toEqual({
+      status: "unavailable",
+      detail: `help failed ${SNYK_TOKEN_REDACTION_V1}`,
+    });
+    expect(second).toEqual({
+      status: "unavailable",
+      detail: `help saw ${SNYK_TOKEN_REDACTION_V1}`,
     });
   });
 });
