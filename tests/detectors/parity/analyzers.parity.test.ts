@@ -348,8 +348,12 @@ describe("snyk-agent-scan parity (recorded outputs, C2a §5)", () => {
         expect(occurrences(outcome.sarif)).toEqual(goldenOccurrences(golden.rawOccurrences));
       } else {
         expect(outcome.kind).toBe("failed");
+        // Scan's detail is Core's fixed message plus the exit status and output byte
+        // counts; the analyzer's own text never reaches it.
         const detail = outcome.kind === "failed" ? outcome.detail : "";
-        expect(golden.reason).toContain(`(${detail})`);
+        const coreMessage = detail.replace(/; exit \S+, stdout \d+ bytes, stderr \d+ bytes$/, "");
+        expect(coreMessage).not.toBe(detail);
+        expect(golden.reason).toContain(`(${coreMessage})`);
       }
     });
   }

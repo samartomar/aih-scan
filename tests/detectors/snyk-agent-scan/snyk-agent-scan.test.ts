@@ -226,8 +226,9 @@ describe("availability", () => {
     });
   });
 
-  // Ported from Core tests/trust/scan.test.ts ~4033 (the spawn-failure reason).
-  it("reports the help probe's stderr when snyk-agent-scan cannot start", async () => {
+  // Ported from Core tests/trust/scan.test.ts ~4033 (the spawn-failure reason). The
+  // analyzer's own text never reaches a diagnostic: fixed text, exit code, byte counts.
+  it("reports a help probe that cannot start with fixed text, exit code and byte counts", async () => {
     const { run } = fakeRunner((argv) =>
       argv.includes("snyk-agent-scan")
         ? { code: 127, stdout: "", stderr: "snyk-agent-scan not found", spawnError: true }
@@ -239,7 +240,10 @@ describe("availability", () => {
         hostEnv: {},
         requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
       }),
-    ).resolves.toEqual({ status: "unavailable", detail: "snyk-agent-scan not found" });
+    ).resolves.toEqual({
+      status: "unavailable",
+      detail: "snyk-agent-scan help check failed; exit 127, stdout 0 bytes, stderr 25 bytes",
+    });
   });
 });
 
@@ -429,7 +433,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan emitted no JSON on stdout",
+      detail: "snyk-agent-scan emitted no JSON on stdout; exit 0, stdout 0 bytes, stderr 0 bytes",
     });
   });
 
@@ -446,7 +450,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan emitted no JSON on stdout",
+      detail: "snyk-agent-scan emitted no JSON on stdout; exit 2, stdout 0 bytes, stderr 0 bytes",
     });
   });
 
@@ -464,11 +468,11 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan exited 1 without findings",
+      detail: "snyk-agent-scan exited 1 without findings; exit 1, stdout 15 bytes, stderr 0 bytes",
     });
   });
 
-  it("fails on an exit code outside {0, 1} with Core's detail rule", async () => {
+  it("fails on an exit code outside {0, 1} with fixed text, never the analyzer's", async () => {
     const crashing = fakeRunner((argv) =>
       argv.includes("scan") ? { code: 2, stdout: '{"findings":[]}', stderr: "boom" } : undefined,
     );
@@ -478,7 +482,11 @@ describe("run outcomes", () => {
       hostEnv: {},
       requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
-    expect(outcome).toEqual({ kind: "failed", stage: "execution", detail: "boom" });
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "execution",
+      detail: "snyk-agent-scan exited outside {0, 1}; exit 2, stdout 15 bytes, stderr 4 bytes",
+    });
 
     const silent = fakeRunner((argv) =>
       argv.includes("scan") ? { code: null, stdout: "", stderr: "", spawnError: true } : undefined,
@@ -492,11 +500,11 @@ describe("run outcomes", () => {
     expect(signaled).toEqual({
       kind: "failed",
       stage: "execution",
-      detail: "detector exit signal",
+      detail: "snyk-agent-scan could not start; exit signal, stdout 0 bytes, stderr 0 bytes",
     });
   });
 
-  it("fails on a spawn error with the scanner's own stderr", async () => {
+  it("fails on a spawn error with fixed text, never the scanner's stderr", async () => {
     const { run } = fakeRunner((argv) =>
       argv.includes("snyk-agent-scan")
         ? { code: 127, stdout: "", stderr: "snyk-agent-scan not found", spawnError: true }
@@ -513,7 +521,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "execution",
-      detail: "snyk-agent-scan not found",
+      detail: "snyk-agent-scan could not start; exit 127, stdout 0 bytes, stderr 25 bytes",
     });
   });
 
@@ -528,7 +536,7 @@ describe("run outcomes", () => {
     expect(outcome).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan did not emit parseable JSON",
+      detail: "snyk-agent-scan did not emit parseable JSON; exit 0, stdout 8 bytes, stderr 0 bytes",
     });
 
     const noFindings = snykRunner(null, { scanCode: 0, scanStdout: '{"something":1}' });
@@ -541,7 +549,8 @@ describe("run outcomes", () => {
     expect(outcome2).toEqual({
       kind: "failed",
       stage: "output",
-      detail: "snyk-agent-scan JSON did not include a findings array",
+      detail:
+        "snyk-agent-scan JSON did not include a findings array; exit 0, stdout 15 bytes, stderr 0 bytes",
     });
   });
 });
@@ -829,144 +838,162 @@ describe("C2a §5.1/§5.2 typed availability probe", () => {
   });
 });
 
-describe("request token redaction in every outward string", () => {
-  // The token is synthetic and assembled at runtime; assertions compare
-  // booleans so a failure never prints it.
+describe("request token never reaches an outward string", () => {
+  // The tokens are synthetic and assembled at runtime; assertions compare
+  // booleans only, so a failing test never prints a token.
   const TOKEN = ["synthetic", "review", "token", "7f3a9c"].join("-");
+  const QUOTED_TOKEN = ["synthetic-", '"review"', "-token-7f3a9c"].join("");
   const requestEnv = { SNYK_TOKEN: TOKEN };
 
-  function leaks(value: unknown): boolean {
+  /** Every recoverable form the review reproduced, decoded before comparison. */
+  function normalized(text: string): string {
+    let current = text;
+    for (let round = 0; round < 4; round += 1) {
+      const next = current
+        .replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        )
+        .replace(/%([0-9a-fA-F]{2})/g, (_m, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        );
+      if (next === current) break;
+      current = next;
+    }
+    return current.replace(/\s+/gu, "");
+  }
+
+  function leaks(value: unknown, token = TOKEN): boolean {
     const text = typeof value === "string" ? value : JSON.stringify(value);
-    return text.includes(TOKEN) || text.includes(TOKEN.slice(0, 12));
+    const forms = [text, normalized(text), normalized(text.replace(/\\"/g, '"'))];
+    return forms.some(
+      (form) =>
+        form.includes(token) ||
+        form.includes(token.slice(0, 12)) ||
+        form.includes(token.slice(-12)),
+    );
   }
 
   function scanFailing(result: SnykAgentScanProcessResultV1): SnykAgentScanRunnerV1 {
     return fakeRunner((argv) => (argv.includes("scan") ? result : undefined)).run;
   }
 
+  const percentEncoded = `%73${TOKEN.slice(1)}`;
+  const jsonEscaped = `{"token":"\\u0073${TOKEN.slice(1)}"}`;
+  const lineWrapped = `${TOKEN.slice(0, 17)}\n${TOKEN.slice(17)}`;
+
+  it("the reproductions really encode the token (checker self-test)", () => {
+    expect(leaks(percentEncoded)).toBe(true);
+    expect(leaks(jsonEscaped)).toBe(true);
+    expect(leaks(lineWrapped)).toBe(true);
+    expect(leaks(`title ${QUOTED_TOKEN}`, QUOTED_TOKEN)).toBe(true);
+  });
+
   it.each([
-    [
-      "stderr on an exit outside {0, 1}",
-      { code: 2, stdout: '{"findings":[]}', stderr: `authentication failed: ${TOKEN}` },
-      "execution",
-      `authentication failed: ${SNYK_TOKEN_REDACTION_V1}`,
-    ],
-    [
-      "stdout on a spawn error",
-      { code: null, stdout: `token=${TOKEN}`, stderr: "", spawnError: true },
-      "execution",
-      `token=${SNYK_TOKEN_REDACTION_V1}`,
-    ],
-    [
-      "stderr with empty stdout",
-      { code: 0, stdout: "", stderr: `bad token ${TOKEN}` },
-      "output",
-      `bad token ${SNYK_TOKEN_REDACTION_V1}`,
-    ],
-    [
-      "stderr on exit 1 without findings",
-      { code: 1, stdout: '{"findings":[]}', stderr: `${TOKEN} rejected` },
-      "output",
-      `${SNYK_TOKEN_REDACTION_V1} rejected`,
-    ],
-  ] as const)("redacts the token from %s", async (_label, result, stage, detail) => {
-    const outcome = await runSnykAgentScanRequestV1(scanFailing(result), {
-      platform: "linux",
-      tree: root,
-      hostEnv: {},
-      requestEnv,
-    });
-
-    expect(leaks(outcome)).toBe(false);
-    expect(outcome).toEqual({ kind: "failed", stage, detail });
+    ["percent-encoded", percentEncoded],
+    ["JSON-escaped", jsonEscaped],
+    ["line-wrapped", lineWrapped],
+    ["literal", TOKEN],
+  ] as const)("keeps a %s token in stderr out of every failure detail", async (_label, echoed) => {
+    const results: SnykAgentScanProcessResultV1[] = [
+      { code: 2, stdout: "{}", stderr: `authentication failed: ${echoed}` },
+      { code: null, stdout: `token=${echoed}`, stderr: echoed, spawnError: true },
+      { code: 0, stdout: "", stderr: `bad token ${echoed}` },
+      { code: 1, stdout: '{"findings":[]}', stderr: `${echoed} rejected` },
+      { code: 0, stdout: `not json ${echoed}`, stderr: echoed },
+    ];
+    for (const result of results) {
+      const outcome = await runSnykAgentScanRequestV1(scanFailing(result), {
+        platform: "linux",
+        tree: root,
+        hostEnv: {},
+        requestEnv,
+      });
+      expect(outcome.kind).toBe("failed");
+      expect(leaks(outcome)).toBe(false);
+      expect(JSON.stringify(outcome).includes("authentication")).toBe(false);
+    }
   });
 
-  it("redacts the token before truncation so no fragment survives the cut", async () => {
-    const stderr = `${"a".repeat(495)}${TOKEN}${"b".repeat(4000)}`;
-    const outcome = await runSnykAgentScanRequestV1(scanFailing({ code: 2, stdout: "", stderr }), {
-      platform: "linux",
-      tree: root,
-      hostEnv: {},
-      requestEnv,
-    });
-
-    expect(outcome.kind).toBe("failed");
-    expect(leaks(outcome)).toBe(false);
-    expect(JSON.stringify(outcome).includes(TOKEN.slice(0, 8))).toBe(false);
-  });
-
-  it("redacts the token from a thrown runner error", async () => {
+  it("replaces a thrown runner error with fixed text", async () => {
     const run: SnykAgentScanRunnerV1 = async () => {
-      throw new Error(`spawn failed for SNYK_TOKEN=${TOKEN}`);
+      throw new Error(`spawn failed for SNYK_TOKEN=${percentEncoded}`);
     };
-
     const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
       hostEnv: {},
       requestEnv,
     });
-
     expect(leaks(outcome)).toBe(false);
     expect(outcome).toEqual({
       kind: "failed",
       stage: "execution",
-      detail: `spawn failed for SNYK_TOKEN=${SNYK_TOKEN_REDACTION_V1}`,
+      detail: "snyk-agent-scan runner failed before an exit status was available",
     });
   });
 
-  it("redacts the token from SARIF rule ids, messages and URIs of a completed scan", async () => {
+  it("replaces every SARIF field that decodes to the token whole", async () => {
     const { run } = snykRunner({
       findings: [
         {
-          id: `rule-${TOKEN}`,
-          title: `Token ${TOKEN} echoed`,
-          description: `described ${TOKEN}`,
-          file: `leak-${TOKEN}.md`,
+          id: `rule-${percentEncoded}`,
+          title: `Token ${TOKEN.slice(0, 9)} ${TOKEN.slice(9)} echoed`,
+          description: `described\n${lineWrapped}`,
+          file: `leak-${percentEncoded}.md`,
           line: 2,
         },
+        { id: "clean-rule", title: "clean title", file: "clean.md", line: 3 },
       ],
     });
-
     const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
       hostEnv: {},
       requestEnv,
     });
-
     expect(outcome.kind).toBe("completed");
     if (outcome.kind !== "completed") return;
     expect(leaks(outcome.sarifText)).toBe(false);
     expect(leaks(outcome.sarif)).toBe(false);
-    expect(outcome.sarif.runs[0].results).toEqual([
-      {
-        ruleId: `rule-${SNYK_TOKEN_REDACTION_V1}`,
-        message: {
-          text: `Token ${SNYK_TOKEN_REDACTION_V1} echoed: described ${SNYK_TOKEN_REDACTION_V1}`,
-        },
-        locations: [
-          {
-            physicalLocation: {
-              // C2a §1.4: Snyk's fallback for a URI it cannot emit is ".".
-              artifactLocation: { uri: "." },
-              region: { startLine: 2 },
-            },
-          },
-        ],
-      },
-    ]);
+    const [redacted, clean] = outcome.sarif.runs[0].results;
+    expect(redacted?.ruleId === SNYK_TOKEN_REDACTION_V1).toBe(true);
+    expect(redacted?.message.text === SNYK_TOKEN_REDACTION_V1).toBe(true);
+    // C2a §1.4: Snyk's fallback for a URI it cannot emit is ".".
+    expect(redacted?.locations[0].physicalLocation.artifactLocation.uri === ".").toBe(true);
+    expect(redacted?.locations[0].physicalLocation.region.startLine).toBe(2);
+    expect(clean?.ruleId).toBe("clean-rule");
+    expect(clean?.message.text).toBe("clean title");
+    expect(clean?.locations[0].physicalLocation.artifactLocation.uri).toBe("clean.md");
     expect(JSON.parse(outcome.sarifText)).toEqual(outcome.sarif);
   });
 
-  it("redacts the token from the availability probe's diagnostics", async () => {
+  it("redacts a token containing quotes that JSON serialization escapes", async () => {
+    const { run } = snykRunner({
+      findings: [{ id: "quoted", title: `echo ${QUOTED_TOKEN}`, file: "a.md", line: 1 }],
+    });
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: QUOTED_TOKEN },
+    });
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    expect(leaks(outcome.sarif, QUOTED_TOKEN)).toBe(false);
+    expect(leaks(outcome.sarifText, QUOTED_TOKEN)).toBe(false);
+    expect(outcome.sarif.runs[0].results[0]?.message.text === SNYK_TOKEN_REDACTION_V1).toBe(true);
+    expect(outcome.sarif.runs[0].results[0]?.ruleId).toBe("quoted");
+  });
+
+  it("keeps the availability probe's diagnostics free of analyzer text", async () => {
     const thrown: SnykAgentScanRunnerV1 = async () => {
-      throw new Error(`help failed ${TOKEN}`);
+      throw new Error(`help failed ${lineWrapped}`);
     };
     const failing = fakeRunner((argv) =>
-      argv.includes("help") ? { code: 3, stdout: "", stderr: `help saw ${TOKEN}` } : undefined,
+      argv.includes("help")
+        ? { code: 3, stdout: "", stderr: `help saw ${jsonEscaped}` }
+        : undefined,
     ).run;
-
     const first = await probeSnykAgentScanAvailabilityV1(thrown, {
       platform: "linux",
       hostEnv: {},
@@ -977,16 +1004,15 @@ describe("request token redaction in every outward string", () => {
       hostEnv: {},
       requestEnv,
     });
-
     expect(leaks(first)).toBe(false);
     expect(leaks(second)).toBe(false);
     expect(first).toEqual({
       status: "unavailable",
-      detail: `help failed ${SNYK_TOKEN_REDACTION_V1}`,
+      detail: "snyk-agent-scan help check runner failed before an exit status was available",
     });
     expect(second).toEqual({
       status: "unavailable",
-      detail: `help saw ${SNYK_TOKEN_REDACTION_V1}`,
+      detail: `snyk-agent-scan help check failed; exit 3, stdout 0 bytes, stderr ${Buffer.byteLength(`help saw ${jsonEscaped}`)} bytes`,
     });
   });
 });

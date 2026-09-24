@@ -22,7 +22,10 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
  *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
  *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
- *   findings completes, exactly as Core's `runSnykAgentScan` decides.
+ *   findings completes, exactly as Core's `runSnykAgentScan` decides. A failure detail
+ *   is fixed engine text plus the exit status and output byte counts: the analyzer's
+ *   stdout and stderr never reach a diagnostic, and every SARIF field whose decoded
+ *   comparison form carries the token is replaced whole.
  *
  * C2a §5.1 environment seam: the request-scoped entry points
  * ({@link planSnykAgentScanRequestV1}, {@link runSnykAgentScanRequestV1},
@@ -57,7 +60,6 @@ export const SNYK_AGENT_SCAN_PROJECT = resolve(
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const MAX_FINDINGS = 4096;
-const MAX_DETAIL_CHARACTERS = 1024;
 
 export type SnykAgentScanPlatformV1 = "windows" | "darwin" | "linux";
 
@@ -411,63 +413,99 @@ export function parseSnykAgentScanSarifV1(raw: string, tree: string): SnykAgentS
   });
 }
 
-/** The fixed marker that replaces the request token in every outward string. */
+/** The fixed marker that replaces a SARIF field carrying the request token. */
 export const SNYK_TOKEN_REDACTION_V1 = "[redacted SNYK_TOKEN]";
 
-/** Replaces every occurrence of the request token; applied before any bounding. */
-function redactToken(value: string, token: string | undefined): string {
-  return token === undefined || token.length === 0
-    ? value
-    : value.split(token).join(SNYK_TOKEN_REDACTION_V1);
+const MAX_DECODE_ROUNDS = 8;
+
+/** Decodes each valid run of percent-encoded UTF-8 octets; invalid runs stay as they are. */
+function percentDecodeValid(value: string): string {
+  return value.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run;
+    }
+  });
+}
+
+/** Decodes literal `\uXXXX` escapes, the form a JSON string escape takes once echoed as text. */
+function unicodeEscapeDecode(value: string): string {
+  return value.replace(/\\u([0-9A-Fa-f]{4})/g, (_escape, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
 }
 
 /**
- * The SARIF projection with the request token removed: rule ids and messages
- * carry the marker; a URI holding the token is replaced with Snyk's C2a §1.4
- * fallback `.`, since a redacted path would name no real file.
+ * The comparison form of a string: valid percent-encoding and `\u` escapes decoded
+ * (repeatedly, so a double encoding is seen through), then all whitespace removed,
+ * so encoded and line-wrapped echoes of the token are recognized.
+ */
+function tokenComparisonForm(value: string): string {
+  let current = value;
+  for (let round = 0; round < MAX_DECODE_ROUNDS; round += 1) {
+    const next = unicodeEscapeDecode(percentDecodeValid(current));
+    if (next === current) break;
+    current = next;
+  }
+  return current.replace(/\s+/gu, "");
+}
+
+/**
+ * The SARIF projection with every field that carries the request token replaced
+ * whole: rule ids and messages by the marker, a URI by Snyk's C2a §1.4 fallback
+ * `.`, since a redacted path would name no real file. Each decoded field is
+ * compared on its own comparison form; nothing relies on the serialized SARIF.
  */
 function redactSarif(sarif: SnykAgentScanSarifV1, token: string | undefined): SnykAgentScanSarifV1 {
-  if (token === undefined || token.length === 0 || !JSON.stringify(sarif).includes(token)) {
-    return sarif;
-  }
-  const results = sarif.runs[0].results.map(
-    (result): SnykAgentScanSarifResultV1 => ({
-      ruleId: redactToken(result.ruleId, token),
-      message: { text: redactToken(result.message.text, token) },
+  if (token === undefined) return sarif;
+  const normalizedToken = tokenComparisonForm(token);
+  const carriesToken = (value: string): boolean =>
+    tokenComparisonForm(value).includes(normalizedToken);
+  const results = sarif.runs[0].results.map((result): SnykAgentScanSarifResultV1 => {
+    const location = result.locations[0].physicalLocation;
+    return {
+      ruleId: carriesToken(result.ruleId) ? SNYK_TOKEN_REDACTION_V1 : result.ruleId,
+      message: {
+        text: carriesToken(result.message.text) ? SNYK_TOKEN_REDACTION_V1 : result.message.text,
+      },
       locations: [
         {
           physicalLocation: {
             artifactLocation: {
-              uri: result.locations[0].physicalLocation.artifactLocation.uri.includes(token)
+              uri: carriesToken(location.artifactLocation.uri)
                 ? "."
-                : result.locations[0].physicalLocation.artifactLocation.uri,
+                : location.artifactLocation.uri,
             },
-            region: { startLine: result.locations[0].physicalLocation.region.startLine },
+            region: { startLine: location.region.startLine },
           },
         },
       ],
-    }),
-  );
+    };
+  });
   return deepFreezeStrictJsonV1({ version: "2.1.0" as const, runs: [{ results }] });
 }
 
-/** Bounded, control-character-encoded diagnostic text; engine messages pass through as-is. */
-function boundedDetail(value: string): string {
-  const encoded = JSON.stringify(value).slice(1, -1);
-  if (encoded.length <= MAX_DETAIL_CHARACTERS) return encoded;
-  const marker = "… middle omitted …";
-  const retained = MAX_DETAIL_CHARACTERS - marker.length;
-  const headLength = Math.ceil(retained / 2);
-  return `${encoded.slice(0, headLength)}${marker}${encoded.slice(-(retained - headLength))}`;
+/**
+ * A failure detail: fixed engine text plus the exit status and output byte
+ * counts. The analyzer's stdout and stderr never reach an outward diagnostic,
+ * because an echoed request token cannot be reliably recognized in free text.
+ */
+function processDetail(message: string, result: SnykAgentScanProcessResultV1): string {
+  const stdoutBytes = Buffer.byteLength(result.stdout, "utf8");
+  const stderrBytes = Buffer.byteLength(result.stderr, "utf8");
+  return `${message}; exit ${result.code ?? "signal"}, stdout ${stdoutBytes} bytes, stderr ${stderrBytes} bytes`;
 }
 
-function boundedRedactedDetail(value: string, token: string | undefined): string {
-  return boundedDetail(redactToken(value, token));
-}
+/** The engine's own parse messages; any other thrown text is replaced by fixed text. */
+const SNYK_OUTPUT_MESSAGES: ReadonlySet<string> = new Set([
+  "snyk-agent-scan output exceeds the bounded size",
+  "snyk-agent-scan did not emit parseable JSON",
+  "snyk-agent-scan JSON did not include a findings array",
+  "snyk-agent-scan JSON exceeds the bounded finding count",
+]);
 
-function exitLabel(code: number | null): string {
-  return `detector exit ${code ?? "signal"}`;
-}
+const RUNNER_FAILED = "runner failed before an exit status was available";
 
 /**
  * Executes one scan plan through the injected runner and classifies the outcome with
@@ -481,33 +519,30 @@ async function executeSnykAgentScanPlanV1(
   plan: SnykAgentScanPlanV1,
   tree: string,
 ): Promise<SnykAgentScanRunOutcomeV1> {
-  // Every outward string is redacted before bounding: the scanner, the runner
-  // and the report may all echo the request token.
+  // The analyzer's output never reaches a diagnostic (fixed text, exit status and
+  // byte counts only), and every SARIF field is checked for the request token.
   const token = plan.env.SNYK_TOKEN;
-  const redactedDetail = (value: string): string => boundedRedactedDetail(value, token);
   let scan: SnykAgentScanProcessResultV1;
   try {
     scan = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
-  } catch (error) {
+  } catch {
     return Object.freeze({
       kind: "failed" as const,
       stage: "execution" as const,
-      detail: redactedDetail(
-        error instanceof Error ? error.message : "snyk-agent-scan runner failed",
-      ),
+      detail: `snyk-agent-scan ${RUNNER_FAILED}`,
     });
   }
   if (scan.spawnError)
     return Object.freeze({
       kind: "failed" as const,
       stage: "execution" as const,
-      detail: redactedDetail(scan.stderr || scan.stdout || exitLabel(scan.code)),
+      detail: processDetail("snyk-agent-scan could not start", scan),
     });
   if (scan.stdout.trim().length === 0)
     return Object.freeze({
       kind: "failed" as const,
       stage: "output" as const,
-      detail: redactedDetail(scan.stderr || "snyk-agent-scan emitted no JSON on stdout"),
+      detail: processDetail("snyk-agent-scan emitted no JSON on stdout", scan),
     });
   // Snyk Agent Scan documents --ci as the mode that exits non-zero for findings, but
   // --ci requires --dangerously-run-mcp-servers, which never appears in the planned
@@ -516,25 +551,27 @@ async function executeSnykAgentScanPlanV1(
     return Object.freeze({
       kind: "failed" as const,
       stage: "execution" as const,
-      detail: redactedDetail(scan.stderr || scan.stdout || exitLabel(scan.code)),
+      detail: processDetail("snyk-agent-scan exited outside {0, 1}", scan),
     });
   let sarif: SnykAgentScanSarifV1;
   try {
     sarif = redactSarif(parseSnykAgentScanSarifV1(scan.stdout, tree), token);
   } catch (error) {
+    const message =
+      error instanceof TypeError && SNYK_OUTPUT_MESSAGES.has(error.message)
+        ? error.message
+        : "invalid snyk-agent-scan JSON";
     return Object.freeze({
       kind: "failed" as const,
       stage: "output" as const,
-      detail: redactedDetail(
-        error instanceof Error ? error.message : "invalid snyk-agent-scan JSON",
-      ),
+      detail: processDetail(message, scan),
     });
   }
   if (scan.code === 1 && !sarif.runs.some((run0) => run0.results.length > 0))
     return Object.freeze({
       kind: "failed" as const,
       stage: "output" as const,
-      detail: redactedDetail(scan.stderr || "snyk-agent-scan exited 1 without findings"),
+      detail: processDetail("snyk-agent-scan exited 1 without findings", scan),
     });
   return Object.freeze({ kind: "completed" as const, sarif, sarifText: JSON.stringify(sarif) });
 }
@@ -687,24 +724,21 @@ export async function probeSnykAgentScanAvailabilityV1(
   const env = validateSnykAgentScanRequestEnvV1(input.requestEnv);
   if (!env.ok) return Object.freeze({ status: "refused" as const, refusal: env.refusal });
   const plan = planSnykAgentScanHelpV1({ platform: input.platform, env: input.hostEnv });
-  // The help call never receives the token, but its diagnostics are redacted
-  // all the same: nothing outward may carry the request token.
-  const redactedDetail = (value: string): string => boundedRedactedDetail(value, env.token);
+  // The help call never receives the token, and its output never reaches a
+  // diagnostic all the same: fixed text, exit status and byte counts only.
   let help: SnykAgentScanProcessResultV1;
   try {
     help = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
-  } catch (error) {
+  } catch {
     return Object.freeze({
       status: "unavailable" as const,
-      detail: redactedDetail(
-        error instanceof Error ? error.message : "snyk-agent-scan runner failed",
-      ),
+      detail: `snyk-agent-scan help check ${RUNNER_FAILED}`,
     });
   }
   if (help.spawnError || help.code !== 0)
     return Object.freeze({
       status: "unavailable" as const,
-      detail: redactedDetail(help.stderr || help.stdout || `uvx exit ${help.code ?? "signal"}`),
+      detail: processDetail("snyk-agent-scan help check failed", help),
     });
   if (`${help.stdout}${help.stderr}`.trim().length === 0)
     return Object.freeze({
