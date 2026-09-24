@@ -122,6 +122,9 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
     expect(sarif).toEqual({ version: "2.1.0", runs: [{ results: [] }] });
   });
 
+  // S2f deviation from Core: Core named a positive total without threat names after its
+  // analyzer; mcp-scanner always names a threat type ("unknown" at worst), so Scan fails that
+  // contradiction instead (see "validates every summary before a zero total" below).
   it("emits one result per threat across every analyzer entry, in Core's order", () => {
     const report = [
       {
@@ -135,7 +138,7 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
             total_findings: 2,
           },
           static_analyzer: {
-            threat_names: [],
+            threat_names: ["unknown"],
             total_findings: 3,
           },
         },
@@ -151,7 +154,7 @@ describe("parseCiscoMcpScannerSarifV1 mapping", () => {
     expect(sarif.runs[0]?.results.map((result) => result.ruleId)).toEqual([
       "tool-poisoning",
       "rug-pull",
-      "static-analyzer",
+      "unknown",
     ]);
     expect(sarif.runs[0]?.results[2]?.message.text).toBe(
       "3 finding(s) from static_analyzer; analyzer static_analyzer; count 3",
@@ -396,5 +399,84 @@ describe("parseCiscoMcpScannerSarifV1 malformed threat names (S2e)", () => {
   it("fails a non-string threat summary or severity", () => {
     expect(parse({ threat_names: ["X"], threat_summary: 7 })).toThrow(/malformed analyzer finding/);
     expect(parse({ threat_names: ["X"], severity: {} })).toThrow(/malformed analyzer finding/);
+  });
+});
+
+// S2f (review of S2e): every analyzer summary field is validated before a zero total is
+// skipped, and contradictory summaries fail. mcp-scanner's own report generator
+// (`core/report_generator.py`, `core/result.py`) writes a zero total with no threat names, a
+// positive total with one threat name per distinct threat type (never more names than
+// findings), and `is_safe` exactly when no analyzer reports a finding.
+describe("parseCiscoMcpScannerSarifV1 validates every summary before a zero total (S2f)", () => {
+  const parse = (summary: Record<string, unknown>, isSafe: boolean) => () =>
+    parseCiscoMcpScannerSarifV1(
+      JSON.stringify([
+        {
+          status: "completed",
+          is_safe: isSafe,
+          tool_name: "t",
+          findings: { yara_analyzer: summary },
+        },
+      ]),
+      submitted(["t", ".mcp.json"]),
+    );
+
+  it("fails the reviewer's zero-total summary with malformed fields", () => {
+    expect(parse({ total_findings: 0, threat_names: [42], severity: 42 }, true)).toThrow(
+      /malformed threat names/,
+    );
+  });
+
+  it("fails malformed fields on a zero total, one at a time", () => {
+    expect(parse({ total_findings: 0, threat_names: "X" }, true)).toThrow(/malformed threat names/);
+    expect(parse({ total_findings: 0, threat_names: [], severity: 42 }, true)).toThrow(
+      /malformed analyzer finding/,
+    );
+    expect(parse({ total_findings: 0, threat_names: [], threat_summary: {} }, true)).toThrow(
+      /malformed analyzer finding/,
+    );
+  });
+
+  it("fails a zero total that names threats", () => {
+    expect(parse({ total_findings: 0, threat_names: ["TOOL POISONING"] }, true)).toThrow(
+      "mcp-scanner JSON analyzer finding contradicts its total",
+    );
+  });
+
+  it("fails a positive total without the threat names that evidence it", () => {
+    for (const threatNames of [undefined, null, []])
+      expect(parse({ total_findings: 2, threat_names: threatNames }, false)).toThrow(
+        "mcp-scanner JSON analyzer finding contradicts its total",
+      );
+  });
+
+  it("fails more threat names than findings", () => {
+    expect(parse({ total_findings: 1, threat_names: ["A", "B"] }, false)).toThrow(
+      "mcp-scanner JSON analyzer finding contradicts its total",
+    );
+  });
+
+  it("fails a result marked safe that reports a finding", () => {
+    expect(parse({ total_findings: 1, threat_names: ["A"] }, true)).toThrow(
+      "mcp-scanner marked a result safe while reporting a finding",
+    );
+  });
+
+  it("keeps real clean and positive summaries", () => {
+    expect(
+      parse(
+        {
+          severity: "SAFE",
+          threat_names: [],
+          threat_summary: "No threats detected",
+          total_findings: 0,
+        },
+        true,
+      )(),
+    ).toEqual({ version: "2.1.0", runs: [{ results: [] }] });
+    expect(
+      parse({ severity: "HIGH", threat_names: ["PROMPT INJECTION"], total_findings: 3 }, false)()
+        .runs[0]?.results,
+    ).toHaveLength(1);
   });
 });
