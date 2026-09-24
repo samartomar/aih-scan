@@ -14,14 +14,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  checkSnykAgentScanAvailableV1,
   parseSnykAgentScanSarifV1,
   planSnykAgentScanHelpV1,
+  planSnykAgentScanRequestV1,
   planSnykAgentScanV1,
-  runSnykAgentScanV1,
+  probeSnykAgentScanAvailabilityV1,
+  runSnykAgentScanRequestV1,
   SNYK_AGENT_SCAN_PROJECT,
   type SnykAgentScanProcessResultV1,
   type SnykAgentScanRunnerV1,
+  validateSnykAgentScanRequestEnvV1,
 } from "../../../src/detectors/snyk-agent-scan/index.js";
 
 let root: string;
@@ -170,14 +172,21 @@ describe("availability", () => {
   it("reports a missing SNYK_TOKEN before running anything", async () => {
     const { run, calls } = fakeRunner(() => undefined);
     await expect(
-      checkSnykAgentScanAvailableV1(run, { platform: "linux", env: { PATH: "bin" } }),
-    ).resolves.toBe("SNYK_TOKEN is not set");
+      probeSnykAgentScanAvailabilityV1(run, { platform: "linux", hostEnv: { PATH: "bin" } }),
+    ).resolves.toEqual({
+      status: "refused",
+      refusal: { reason: "prerequisite-missing", detail: "SNYK_TOKEN is not set" },
+    });
     await expect(
-      checkSnykAgentScanAvailableV1(run, {
+      probeSnykAgentScanAvailabilityV1(run, {
         platform: "linux",
-        env: { SNYK_TOKEN: "   " },
+        hostEnv: {},
+        requestEnv: { SNYK_TOKEN: "   " },
       }),
-    ).resolves.toBe("SNYK_TOKEN is not set");
+    ).resolves.toEqual({
+      status: "refused",
+      refusal: { reason: "prerequisite-missing", detail: "SNYK_TOKEN is not set" },
+    });
     expect(calls).toHaveLength(0);
   });
 
@@ -186,11 +195,12 @@ describe("availability", () => {
     const { run, calls } = snykRunner({ findings: [] });
 
     await expect(
-      checkSnykAgentScanAvailableV1(run, {
+      probeSnykAgentScanAvailabilityV1(run, {
         platform: "linux",
-        env: { PATH: "bin", SNYK_TOKEN: "  snyk-token-for-scanner  " },
+        hostEnv: { PATH: "bin", SNYK_TOKEN: "host-token-must-not-leak" },
+        requestEnv: { SNYK_TOKEN: "  snyk-token-for-scanner  " },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ status: "available" });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.argv).toContain("help");
@@ -204,11 +214,15 @@ describe("availability", () => {
       argv.includes("help") ? { code: 0, stdout: "", stderr: "" } : undefined,
     );
     await expect(
-      checkSnykAgentScanAvailableV1(run, {
+      probeSnykAgentScanAvailabilityV1(run, {
         platform: "linux",
-        env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+        hostEnv: {},
+        requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
       }),
-    ).resolves.toBe("snyk-agent-scan help check emitted no output");
+    ).resolves.toEqual({
+      status: "unavailable",
+      detail: "snyk-agent-scan help check emitted no output",
+    });
   });
 
   // Ported from Core tests/trust/scan.test.ts ~4033 (the spawn-failure reason).
@@ -219,11 +233,12 @@ describe("availability", () => {
         : undefined,
     );
     await expect(
-      checkSnykAgentScanAvailableV1(run, {
+      probeSnykAgentScanAvailabilityV1(run, {
         platform: "linux",
-        env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+        hostEnv: {},
+        requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
       }),
-    ).resolves.toBe("snyk-agent-scan not found");
+    ).resolves.toEqual({ status: "unavailable", detail: "snyk-agent-scan not found" });
   });
 });
 
@@ -258,14 +273,11 @@ describe("run outcomes", () => {
     };
     const { run, calls } = snykRunner(report);
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: {
-        GITHUB_TOKEN: "ghp_secret_should_not_escape",
-        PATH: "bin",
-        SNYK_TOKEN: "snyk-token-for-scanner",
-      },
+      hostEnv: { GITHUB_TOKEN: "ghp_secret_should_not_escape", PATH: "bin" },
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     if (outcome.kind !== "completed") throw new Error(`unexpected ${outcome.kind}`);
@@ -323,10 +335,11 @@ describe("run outcomes", () => {
       },
     ]);
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     if (outcome.kind !== "completed") throw new Error(`unexpected ${outcome.kind}`);
@@ -360,10 +373,11 @@ describe("run outcomes", () => {
       ],
     });
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     if (outcome.kind !== "completed") throw new Error(`unexpected ${outcome.kind}`);
@@ -387,10 +401,11 @@ describe("run outcomes", () => {
   it("passes a clean Snyk Agent Scan exit 0 with no findings", async () => {
     const { run } = snykRunner({ findings: [] }, { scanCode: 0 });
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     expect(outcome.kind).toBe("completed");
@@ -399,18 +414,20 @@ describe("run outcomes", () => {
     expect(outcome.sarifText).toBe('{"version":"2.1.0","runs":[{"results":[]}]}');
   });
 
-  // Ported from Core tests/trust/scan.test.ts ~3894-3916.
-  it("treats Snyk Agent Scan empty stdout as unavailable", async () => {
+  // Ported from Core tests/trust/scan.test.ts ~3894-3916; C2a §5.3 stages it `output`.
+  it("fails Snyk Agent Scan empty stdout at the output stage", async () => {
     const { run } = snykRunner({ findings: [] }, { scanCode: 0, scanStdout: "" });
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     expect(outcome).toEqual({
-      kind: "unavailable",
+      kind: "failed",
+      stage: "output",
       detail: "snyk-agent-scan emitted no JSON on stdout",
     });
   });
@@ -418,30 +435,34 @@ describe("run outcomes", () => {
   it("checks stdout before the exit code, as Core does", async () => {
     const { run } = snykRunner(null, { scanCode: 2, scanStdout: "" });
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     expect(outcome).toEqual({
-      kind: "unavailable",
+      kind: "failed",
+      stage: "output",
       detail: "snyk-agent-scan emitted no JSON on stdout",
     });
   });
 
-  // Ported from Core tests/trust/scan.test.ts ~3918-3940.
-  it("treats Snyk Agent Scan exit 1 without findings as unavailable", async () => {
+  // Ported from Core tests/trust/scan.test.ts ~3918-3940; C2a §5.3 stages it `output`.
+  it("fails Snyk Agent Scan exit 1 without findings at the output stage", async () => {
     const { run } = snykRunner({ findings: [] });
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
     expect(outcome).toEqual({
-      kind: "unavailable",
+      kind: "failed",
+      stage: "output",
       detail: "snyk-agent-scan exited 1 without findings",
     });
   });
@@ -450,22 +471,28 @@ describe("run outcomes", () => {
     const crashing = fakeRunner((argv) =>
       argv.includes("scan") ? { code: 2, stdout: '{"findings":[]}', stderr: "boom" } : undefined,
     );
-    const outcome = await runSnykAgentScanV1(crashing.run, {
+    const outcome = await runSnykAgentScanRequestV1(crashing.run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
-    expect(outcome).toEqual({ kind: "failed", detail: "boom" });
+    expect(outcome).toEqual({ kind: "failed", stage: "execution", detail: "boom" });
 
     const silent = fakeRunner((argv) =>
       argv.includes("scan") ? { code: null, stdout: "", stderr: "", spawnError: true } : undefined,
     );
-    const signaled = await runSnykAgentScanV1(silent.run, {
+    const signaled = await runSnykAgentScanRequestV1(silent.run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
-    expect(signaled).toEqual({ kind: "failed", detail: "detector exit signal" });
+    expect(signaled).toEqual({
+      kind: "failed",
+      stage: "execution",
+      detail: "detector exit signal",
+    });
   });
 
   it("fails on a spawn error with the scanner's own stderr", async () => {
@@ -475,13 +502,46 @@ describe("run outcomes", () => {
         : undefined,
     );
 
-    const outcome = await runSnykAgentScanV1(run, {
+    const outcome = await runSnykAgentScanRequestV1(run, {
       platform: "linux",
       tree: root,
-      env: { SNYK_TOKEN: "snyk-token-for-scanner" },
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
     });
 
-    expect(outcome).toEqual({ kind: "failed", detail: "snyk-agent-scan not found" });
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "execution",
+      detail: "snyk-agent-scan not found",
+    });
+  });
+
+  it("fails unparseable or findings-less stdout at the output stage", async () => {
+    const notJson = snykRunner(null, { scanCode: 0, scanStdout: "not json" });
+    const outcome = await runSnykAgentScanRequestV1(notJson.run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+    });
+    expect(outcome).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: "snyk-agent-scan did not emit parseable JSON",
+    });
+
+    const noFindings = snykRunner(null, { scanCode: 0, scanStdout: '{"something":1}' });
+    const outcome2 = await runSnykAgentScanRequestV1(noFindings.run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+    });
+    expect(outcome2).toEqual({
+      kind: "failed",
+      stage: "output",
+      detail: "snyk-agent-scan JSON did not include a findings array",
+    });
   });
 });
 
@@ -625,5 +685,145 @@ describe("parser report shapes and finding projection", () => {
     expect(Object.isFrozen(sarif.runs)).toBe(true);
     expect(Object.isFrozen(sarif.runs[0]?.results)).toBe(true);
     expect(Object.isFrozen(sarif.runs[0]?.results[0]?.message)).toBe(true);
+  });
+});
+
+describe("C2a §5.1 request environment seam", () => {
+  it("accepts exactly { SNYK_TOKEN } and returns the trimmed token", () => {
+    expect(validateSnykAgentScanRequestEnvV1({ SNYK_TOKEN: "  snyk-token-for-scanner  " })).toEqual(
+      { ok: true, token: "snyk-token-for-scanner" },
+    );
+  });
+
+  it("refuses a missing or blank token naming the variable (prerequisite-missing)", () => {
+    for (const env of [undefined, {}, { SNYK_TOKEN: "   " }]) {
+      expect(validateSnykAgentScanRequestEnvV1(env)).toEqual({
+        ok: false,
+        refusal: { reason: "prerequisite-missing", detail: "SNYK_TOKEN is not set" },
+      });
+    }
+  });
+
+  it("refuses any other caller variable (detector-options-invalid)", () => {
+    for (const env of [
+      { SNYK_TOKEN: "snyk-token-for-scanner", PATH: "bin" },
+      { OTHER: "x" },
+      "SNYK_TOKEN=x",
+      [{ SNYK_TOKEN: "x" }],
+      { SNYK_TOKEN: 42 },
+    ]) {
+      const outcome = validateSnykAgentScanRequestEnvV1(env);
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.refusal.reason).toBe("detector-options-invalid");
+    }
+  });
+
+  it("never leaks the token value into a refusal detail", () => {
+    const outcome = validateSnykAgentScanRequestEnvV1({ SNYK_TOKEN: 42 });
+    if (outcome.ok) throw new Error("expected refusal");
+    expect(outcome.refusal.detail).not.toContain("42");
+  });
+
+  it("plans the scan with the request token even when the host env carries one", () => {
+    const planned = planSnykAgentScanRequestV1({
+      platform: "linux",
+      tree: "/scan-root",
+      hostEnv: { PATH: "bin", SNYK_TOKEN: "host-token-must-not-escape" },
+      requestEnv: { SNYK_TOKEN: " request-token " },
+    });
+    expect(planned.status).toBe("planned");
+    if (planned.status !== "planned") return;
+    expect(planned.plan.env).toHaveProperty("SNYK_TOKEN", "request-token");
+    expect(planned.plan.env).toHaveProperty("PATH", "bin");
+    expect(planned.plan.argv).toContain("--suppress-mcpserver-io=true");
+    expect(planned.plan.argv).not.toContain("--ci");
+    expect(planned.plan.argv).not.toContain("--dangerously-run-mcp-servers");
+  });
+
+  it("refuses the request before any spawn when the token is missing", async () => {
+    const { run, calls } = fakeRunner(() => undefined);
+
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: { PATH: "bin" },
+    });
+
+    expect(outcome).toEqual({
+      kind: "refused",
+      refusal: { reason: "prerequisite-missing", detail: "SNYK_TOKEN is not set" },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("runs the scan to completion through the request seam", async () => {
+    const { run, calls } = snykRunner(
+      [{ code: "E001", message: "Prompt injection in tool description", file: "SKILL.md" }],
+      { scanCode: 1 },
+    );
+
+    const outcome = await runSnykAgentScanRequestV1(run, {
+      platform: "linux",
+      tree: root,
+      hostEnv: { PATH: "bin", GITHUB_TOKEN: "ghp_secret_should_not_escape" },
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+    });
+
+    expect(outcome).toMatchObject({ kind: "completed" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.argv).toContain("scan");
+    expect(calls[0]?.env).toHaveProperty("SNYK_TOKEN", "snyk-token-for-scanner");
+    expect(calls[0]?.env).not.toHaveProperty("GITHUB_TOKEN");
+  });
+});
+
+describe("C2a §5.1/§5.2 typed availability probe", () => {
+  it("refuses a missing token before probing", async () => {
+    const { run, calls } = fakeRunner(() => undefined);
+
+    const outcome = await probeSnykAgentScanAvailabilityV1(run, {
+      platform: "linux",
+      hostEnv: { PATH: "bin" },
+      requestEnv: {},
+    });
+
+    expect(outcome).toEqual({
+      status: "refused",
+      refusal: { reason: "prerequisite-missing", detail: "SNYK_TOKEN is not set" },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("probes help with a token-free environment", async () => {
+    const { run, calls } = snykRunner({ findings: [] });
+
+    const outcome = await probeSnykAgentScanAvailabilityV1(run, {
+      platform: "linux",
+      hostEnv: { PATH: "bin", SNYK_TOKEN: "host-token-must-not-escape" },
+      requestEnv: { SNYK_TOKEN: "request-token" },
+    });
+
+    expect(outcome).toEqual({ status: "available" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.argv).toContain("help");
+    expect(calls[0]?.env).not.toHaveProperty("SNYK_TOKEN");
+    expect(JSON.stringify(calls[0]?.env)).not.toContain("token");
+  });
+
+  it("reports an unanswerable help probe as unavailable", async () => {
+    const { run } = fakeRunner((argv) =>
+      argv.includes("help") ? { code: 0, stdout: "", stderr: "" } : undefined,
+    );
+
+    const outcome = await probeSnykAgentScanAvailabilityV1(run, {
+      platform: "linux",
+      hostEnv: {},
+      requestEnv: { SNYK_TOKEN: "snyk-token-for-scanner" },
+    });
+
+    expect(outcome).toEqual({
+      status: "unavailable",
+      detail: "snyk-agent-scan help check emitted no output",
+    });
   });
 });

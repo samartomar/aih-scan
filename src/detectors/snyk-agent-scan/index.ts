@@ -19,9 +19,18 @@ import { deepFreezeStrictJsonV1, parseStrictJsonObjectV1 } from "../../contract/
  *   scan-path map whose issues recover their artifact path from the server `reference`
  *   index, and the empty object) and converted to SARIF 2.1.0 with the line defaulting
  *   to 1;
- * - classification: a spawn failure or an exit code outside `{0, 1}` is a failure, empty
- *   stdout is unavailable, exit 1 with no findings is unavailable, and exit 1 with
+ * - classification (C2a §5.3): a spawn failure or an exit code outside `{0, 1}` is a
+ *   failure at stage `execution`; empty stdout, unparseable stdout, a missing findings
+ *   array and an exit 1 without findings are failures at stage `output`; exit 1 with
  *   findings completes, exactly as Core's `runSnykAgentScan` decides.
+ *
+ * C2a §5.1 environment seam: the request-scoped entry points
+ * ({@link planSnykAgentScanRequestV1}, {@link runSnykAgentScanRequestV1},
+ * {@link probeSnykAgentScanAvailabilityV1}) accept a caller `env` carrying only
+ * `SNYK_TOKEN` — any other key is a typed refusal (`detector-options-invalid`) — and a
+ * missing or blank token is a typed refusal (`prerequisite-missing`) naming the
+ * variable, before anything spawns. The validated, trimmed token reaches only the scan
+ * invocation's environment; never the help probe, acquisition, logs or diagnostics.
  *
  * The engine spawns nothing itself; every process runs through the injected
  * `SnykAgentScanRunnerV1` seam the runtime supplies. Grading, posture, policy and
@@ -89,10 +98,12 @@ export interface SnykAgentScanSarifV1 {
   readonly runs: readonly [Readonly<{ results: readonly SnykAgentScanSarifResultV1[] }>];
 }
 
+/** C2a §5.3 failure stages: `execution` for spawn/exit shortfalls, `output` for stdout ones. */
+export type SnykAgentScanFailureStageV1 = "execution" | "output";
+
 export type SnykAgentScanRunOutcomeV1 = Readonly<
   | { kind: "completed"; sarif: SnykAgentScanSarifV1; sarifText: string }
-  | { kind: "unavailable"; detail: string }
-  | { kind: "failed"; detail: string }
+  | { kind: "failed"; stage: SnykAgentScanFailureStageV1; detail: string }
 >;
 
 // The environment allow-list and secret-key rule are Core's `scrubFetchEnv`, verbatim:
@@ -415,52 +426,24 @@ function exitLabel(code: number | null): string {
 }
 
 /**
- * Core's availability probe: a missing `SNYK_TOKEN` is reported before anything runs,
- * then the help argv runs with the scrubbed, token-free environment. Returns the reason
- * the detector is unavailable, or `undefined` when it answered.
+ * Executes one scan plan through the injected runner and classifies the outcome with
+ * Core's exact rules and messages, staged per C2a §5.3: spawn error or an exit outside
+ * `{0, 1}` fails at `execution`; empty stdout, unparseable JSON, a missing findings
+ * array and an exit 1 without findings fail at `output`; exit 1 with findings
+ * completes.
  */
-export async function checkSnykAgentScanAvailableV1(
+async function executeSnykAgentScanPlanV1(
   run: SnykAgentScanRunnerV1,
-  input: {
-    readonly platform: SnykAgentScanPlatformV1;
-    readonly env: NodeJS.ProcessEnv;
-  },
-): Promise<string | undefined> {
-  if (snykToken(input.env) === undefined) return "SNYK_TOKEN is not set";
-  const plan = planSnykAgentScanHelpV1(input);
-  let help: SnykAgentScanProcessResultV1;
-  try {
-    help = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
-  } catch (error) {
-    return boundedDetail(error instanceof Error ? error.message : "snyk-agent-scan runner failed");
-  }
-  if (help.spawnError || help.code !== 0)
-    return boundedDetail(help.stderr || help.stdout || `uvx exit ${help.code ?? "signal"}`);
-  if (`${help.stdout}${help.stderr}`.trim().length === 0)
-    return "snyk-agent-scan help check emitted no output";
-  return undefined;
-}
-
-/**
- * Runs the scan through the injected runner and classifies the outcome with Core's exact
- * rules and messages: spawn error or an exit outside `{0, 1}` fails, empty stdout is
- * unavailable, exit 1 without findings is unavailable, exit 1 with findings completes.
- */
-export async function runSnykAgentScanV1(
-  run: SnykAgentScanRunnerV1,
-  input: {
-    readonly platform: SnykAgentScanPlatformV1;
-    readonly tree: string;
-    readonly env: NodeJS.ProcessEnv;
-  },
+  plan: SnykAgentScanPlanV1,
+  tree: string,
 ): Promise<SnykAgentScanRunOutcomeV1> {
-  const plan = planSnykAgentScanV1(input);
   let scan: SnykAgentScanProcessResultV1;
   try {
     scan = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
   } catch (error) {
     return Object.freeze({
       kind: "failed" as const,
+      stage: "execution" as const,
       detail: boundedDetail(
         error instanceof Error ? error.message : "snyk-agent-scan runner failed",
       ),
@@ -469,11 +452,13 @@ export async function runSnykAgentScanV1(
   if (scan.spawnError)
     return Object.freeze({
       kind: "failed" as const,
+      stage: "execution" as const,
       detail: boundedDetail(scan.stderr || scan.stdout || exitLabel(scan.code)),
     });
   if (scan.stdout.trim().length === 0)
     return Object.freeze({
-      kind: "unavailable" as const,
+      kind: "failed" as const,
+      stage: "output" as const,
       detail: boundedDetail(scan.stderr || "snyk-agent-scan emitted no JSON on stdout"),
     });
   // Snyk Agent Scan documents --ci as the mode that exits non-zero for findings, but
@@ -482,14 +467,16 @@ export async function runSnykAgentScanV1(
   if (scan.code !== 0 && scan.code !== 1)
     return Object.freeze({
       kind: "failed" as const,
+      stage: "execution" as const,
       detail: boundedDetail(scan.stderr || scan.stdout || exitLabel(scan.code)),
     });
   let sarif: SnykAgentScanSarifV1;
   try {
-    sarif = parseSnykAgentScanSarifV1(scan.stdout, input.tree);
+    sarif = parseSnykAgentScanSarifV1(scan.stdout, tree);
   } catch (error) {
     return Object.freeze({
       kind: "failed" as const,
+      stage: "output" as const,
       detail: boundedDetail(
         error instanceof Error ? error.message : "invalid snyk-agent-scan JSON",
       ),
@@ -497,8 +484,181 @@ export async function runSnykAgentScanV1(
   }
   if (scan.code === 1 && !sarif.runs.some((run0) => run0.results.length > 0))
     return Object.freeze({
-      kind: "unavailable" as const,
+      kind: "failed" as const,
+      stage: "output" as const,
       detail: boundedDetail(scan.stderr || "snyk-agent-scan exited 1 without findings"),
     });
   return Object.freeze({ kind: "completed" as const, sarif, sarifText: JSON.stringify(sarif) });
+}
+
+// ---------------------------------------------------------------------------
+// C2a §5.1: the request environment seam (SNYK_TOKEN only, typed refusals)
+// ---------------------------------------------------------------------------
+
+/** The only caller environment variable this detector accepts (C2a §5.1). */
+export const SNYK_TOKEN_ENV_VAR_V1 = "SNYK_TOKEN";
+
+/**
+ * Why a `detector.snyk-agent-scan` request was refused before anything spawned.
+ * The B2 wiring maps both reasons to Core's refusal reasons of the same names
+ * (`prerequisite-missing` for the absent token, `detector-options-invalid` for
+ * a malformed environment seam).
+ */
+export type SnykAgentScanRefusalReasonV1 = "detector-options-invalid" | "prerequisite-missing";
+
+export interface SnykAgentScanRefusalV1 {
+  readonly reason: SnykAgentScanRefusalReasonV1;
+  /** One actionable sentence; never carries the token value. */
+  readonly detail: string;
+}
+
+export type SnykAgentScanRequestEnvOutcomeV1 =
+  | Readonly<{ ok: true; token: string }>
+  | Readonly<{ ok: false; refusal: SnykAgentScanRefusalV1 }>;
+
+/**
+ * Validates the caller's request `env` (C2a §5.1): it must be a plain object
+ * whose only key is `SNYK_TOKEN`, holding a string that is non-blank once
+ * trimmed. A missing or blank token is a `prerequisite-missing` refusal naming
+ * the variable (Core's exact "SNYK_TOKEN is not set"); any other key or a
+ * non-string value is a `detector-options-invalid` refusal. Never throws, and
+ * the token value never appears in a refusal detail.
+ */
+export function validateSnykAgentScanRequestEnvV1(env: unknown): SnykAgentScanRequestEnvOutcomeV1 {
+  const invalid = (detail: string): SnykAgentScanRequestEnvOutcomeV1 =>
+    Object.freeze({
+      ok: false as const,
+      refusal: Object.freeze({ reason: "detector-options-invalid" as const, detail }),
+    });
+  const missingToken = (): SnykAgentScanRequestEnvOutcomeV1 =>
+    Object.freeze({
+      ok: false as const,
+      refusal: Object.freeze({
+        reason: "prerequisite-missing" as const,
+        detail: "SNYK_TOKEN is not set",
+      }),
+    });
+  if (env === undefined) return missingToken();
+  if (!isRecord(env))
+    return invalid(`env must be an object with exactly the key ${SNYK_TOKEN_ENV_VAR_V1}.`);
+  for (const key of Object.keys(env)) {
+    if (key !== SNYK_TOKEN_ENV_VAR_V1)
+      return invalid(
+        `env may carry only ${SNYK_TOKEN_ENV_VAR_V1}; unexpected key ${JSON.stringify(key)}.`,
+      );
+  }
+  const raw: unknown = env[SNYK_TOKEN_ENV_VAR_V1];
+  if (raw === undefined) return missingToken();
+  if (typeof raw !== "string")
+    return invalid(`env.${SNYK_TOKEN_ENV_VAR_V1} must be a string when present.`);
+  const token = raw.trim();
+  if (token.length === 0) return missingToken();
+  return Object.freeze({ ok: true as const, token });
+}
+
+/** The C2a §5 request inputs: subject root, host environment, caller token env. */
+export interface SnykAgentScanRequestInputV1 {
+  readonly platform: SnykAgentScanPlatformV1;
+  /** `subject.sourceRoot`: the absolute realpath of the scanned root. */
+  readonly tree: string;
+  /** Host environment; scrubbed to the safe-key allow list before any spawn. */
+  readonly hostEnv: NodeJS.ProcessEnv;
+  /** The caller's `env` field; only `SNYK_TOKEN` is accepted (§5.1). */
+  readonly requestEnv?: unknown;
+}
+
+export type SnykAgentScanRequestPlanOutcomeV1 =
+  | Readonly<{ status: "planned"; plan: SnykAgentScanPlanV1 }>
+  | Readonly<{ status: "refused"; refusal: SnykAgentScanRefusalV1 }>;
+
+/**
+ * Plans the scan from a C2a request: validates the env seam (§5.1), then plans
+ * the §5.2 argv. The validated token is added to the scan environment only,
+ * alongside the scrubbed host environment; a token in the host environment is
+ * scrubbed away like any other secret-shaped key.
+ */
+export function planSnykAgentScanRequestV1(
+  input: SnykAgentScanRequestInputV1,
+): SnykAgentScanRequestPlanOutcomeV1 {
+  const env = validateSnykAgentScanRequestEnvV1(input.requestEnv);
+  if (!env.ok) return Object.freeze({ status: "refused" as const, refusal: env.refusal });
+  if (typeof input.tree !== "string" || input.tree.length === 0)
+    return Object.freeze({
+      status: "refused" as const,
+      refusal: Object.freeze({
+        reason: "detector-options-invalid" as const,
+        detail: "snyk-agent-scan requires a non-empty source root path.",
+      }),
+    });
+  return Object.freeze({
+    status: "planned" as const,
+    plan: planSnykAgentScanV1({
+      platform: input.platform,
+      tree: input.tree,
+      env: { ...input.hostEnv, [SNYK_TOKEN_ENV_VAR_V1]: env.token },
+    }),
+  });
+}
+
+export type SnykAgentScanRequestRunOutcomeV1 =
+  | Readonly<{ kind: "refused"; refusal: SnykAgentScanRefusalV1 }>
+  | SnykAgentScanRunOutcomeV1;
+
+/**
+ * The full C2a §5 run: validate the env seam (a refusal spawns nothing), then
+ * execute the plan and classify per §5.3.
+ */
+export async function runSnykAgentScanRequestV1(
+  run: SnykAgentScanRunnerV1,
+  input: SnykAgentScanRequestInputV1,
+): Promise<SnykAgentScanRequestRunOutcomeV1> {
+  const planned = planSnykAgentScanRequestV1(input);
+  if (planned.status === "refused")
+    return Object.freeze({ kind: "refused" as const, refusal: planned.refusal });
+  return executeSnykAgentScanPlanV1(run, planned.plan, input.tree);
+}
+
+/**
+ * Typed availability probe (C2a §5.1/§5.2): a refused env seam spawns nothing;
+ * otherwise `snyk-agent-scan help` runs with the scrubbed, token-free host
+ * environment and must exit 0 with non-empty output.
+ */
+export type SnykAgentScanAvailabilityOutcomeV1 =
+  | Readonly<{ status: "available" }>
+  | Readonly<{ status: "refused"; refusal: SnykAgentScanRefusalV1 }>
+  | Readonly<{ status: "unavailable"; detail: string }>;
+
+export async function probeSnykAgentScanAvailabilityV1(
+  run: SnykAgentScanRunnerV1,
+  input: Readonly<{
+    platform: SnykAgentScanPlatformV1;
+    hostEnv: NodeJS.ProcessEnv;
+    requestEnv?: unknown;
+  }>,
+): Promise<SnykAgentScanAvailabilityOutcomeV1> {
+  const env = validateSnykAgentScanRequestEnvV1(input.requestEnv);
+  if (!env.ok) return Object.freeze({ status: "refused" as const, refusal: env.refusal });
+  const plan = planSnykAgentScanHelpV1({ platform: input.platform, env: input.hostEnv });
+  let help: SnykAgentScanProcessResultV1;
+  try {
+    help = await run(plan.argv, { env: plan.env, timeoutMs: plan.timeoutMs });
+  } catch (error) {
+    return Object.freeze({
+      status: "unavailable" as const,
+      detail: boundedDetail(
+        error instanceof Error ? error.message : "snyk-agent-scan runner failed",
+      ),
+    });
+  }
+  if (help.spawnError || help.code !== 0)
+    return Object.freeze({
+      status: "unavailable" as const,
+      detail: boundedDetail(help.stderr || help.stdout || `uvx exit ${help.code ?? "signal"}`),
+    });
+  if (`${help.stdout}${help.stderr}`.trim().length === 0)
+    return Object.freeze({
+      status: "unavailable" as const,
+      detail: "snyk-agent-scan help check emitted no output",
+    });
+  return Object.freeze({ status: "available" as const });
 }
