@@ -3,6 +3,10 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { hashComponentTreeV1 } from "../../observation/source-hash-v1.js";
 import {
+  ciscoJobDirectoryProblemTextV1,
+  resolveContainedCiscoJobDirectoryV1,
+} from "./job-dir-v1.js";
+import {
   CISCO_MULTI_SKILL_SCANNER_PROJECT_V1,
   type CiscoMultiSkillPlatformV1,
   type CiscoMultiSkillRunnerV1,
@@ -239,9 +243,18 @@ export async function runCiscoShardV1(
     return refusedShardRunV1("shard-request-invalid", "sourceRoot must be a readable directory");
   }
   for (const job of request.jobs) {
+    // Every job path is a real directory chain inside the root: a linked
+    // ancestor would pass the component hash and escape the declared source.
+    const resolved = resolveContainedCiscoJobDirectoryV1(safeRoot, job.path);
+    if (!resolved.ok) {
+      return refusedShardRunV1(
+        "shard-request-invalid",
+        `Cisco shard job path ${ciscoJobDirectoryProblemTextV1(resolved.problem)}: ${job.path}`,
+      );
+    }
     let holdsSkill = false;
     try {
-      holdsSkill = statSync(join(safeRoot, ...job.path.split("/"), "SKILL.md")).isFile();
+      holdsSkill = statSync(join(resolved.skillDir, "SKILL.md")).isFile();
     } catch {
       holdsSkill = false;
     }
@@ -290,7 +303,11 @@ export async function runCiscoShardV1(
       request.jobs,
       request.concurrency,
       async (job): Promise<CiscoShardJobSarifOutputV1> => {
-        const skillDir = join(safeRoot, ...job.path.split("/"));
+        const resolved = resolveContainedCiscoJobDirectoryV1(safeRoot, job.path);
+        if (!resolved.ok) {
+          throw new CiscoShardJobFailureV1("coverage", `source changed before scan: ${job.path}`);
+        }
+        const skillDir = resolved.skillDir;
         if (hashComponentTreeV1(safeRoot, [job.path]).treeSha256 !== job.inputSha256) {
           throw new CiscoShardJobFailureV1("coverage", `source changed before scan: ${job.path}`);
         }

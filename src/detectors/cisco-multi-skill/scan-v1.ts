@@ -2,6 +2,10 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ciscoJobDirectoryProblemTextV1,
+  resolveContainedCiscoJobDirectoryV1,
+} from "./job-dir-v1.js";
+import {
   type CiscoSarifLogV1,
   type CiscoSarifRunV1,
   mergedCiscoSarifTextV1,
@@ -343,6 +347,19 @@ export async function runCiscoSourceTreeScanV1(
       "no SKILL.md directories found for Cisco scan",
     );
   }
+  // Every job directory must be a real directory chain inside the root: a
+  // linked ancestor (symlink or junction) would send the analyzer outside it.
+  for (const job of jobs) {
+    const resolved = resolveContainedCiscoJobDirectoryV1(request.sourceRoot, job.path);
+    if (!resolved.ok) {
+      return refusedSourceTreeScanV1(
+        "subject-requirement-unmet",
+        boundedCiscoDetailV1(
+          `Cisco job path ${ciscoJobDirectoryProblemTextV1(resolved.problem)}: ${job.path}`,
+        ),
+      );
+    }
+  }
   const probe = await probeCiscoSkillScannerV1({
     run: request.run,
     platform: request.platform,
@@ -351,6 +368,14 @@ export async function runCiscoSourceTreeScanV1(
   });
   if (probe.kind !== "available") return failedSourceTreeScanV1(probe.stage, probe.detail);
   const scanJob = async (job: CiscoSourceTreeJobV1): Promise<CiscoSarifRunV1[]> => {
+    // Re-proven immediately before the scan: a link swapped in after the
+    // boundary check must not redirect the analyzer.
+    if (!resolveContainedCiscoJobDirectoryV1(request.sourceRoot, job.path).ok) {
+      throw new CiscoJobFailureV1(
+        "execution",
+        boundedCiscoDetailV1(`Cisco job directory changed before its scan: ${job.path}`),
+      );
+    }
     const outcome = await scanCiscoSkillDirectoryOutcomeV1({
       run: request.run,
       platform: request.platform,

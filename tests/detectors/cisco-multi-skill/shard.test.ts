@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -344,6 +345,92 @@ describe("runCiscoShardV1", () => {
       kind: "refused",
       reason: "shard-request-invalid",
       detail: "Cisco shard job path holds no SKILL.md: docs",
+    });
+  });
+
+  describe("job directory containment", () => {
+    // A job path must be a real directory chain inside sourceRoot. The
+    // component hash only inspects the job directory and its descendants, so
+    // a symlinked (or, on Windows, junction) ANCESTOR used to pass the
+    // identity check and send the analyzer outside the declared root.
+    function outsideSkill(): string {
+      const outside = fixtureRoot("aih-cisco-shard-v1-outside-");
+      skill(outside, "skill", "# outside\n");
+      return outside;
+    }
+
+    /** Creates a directory link, or returns false where the OS refuses it. */
+    function directoryLink(target: string, path: string): boolean {
+      try {
+        symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function probeOnlyRunner(calls: string[][]): CiscoMultiSkillRunnerV1 {
+      const inner = scanningRunner();
+      return async (argv, options) => {
+        calls.push([...argv]);
+        return inner(argv, options);
+      };
+    }
+
+    it.for<[string, string, string]>([
+      ["a parent component", "link", "link/skill"],
+      ["the job directory itself", "link", "link"],
+      ["a nested parent component", "skills/link", "skills/link/skill"],
+    ])("refuses a job path whose chain crosses a directory link at %s", async ([
+      _label,
+      linkPath,
+      jobPath,
+    ], ctx) => {
+      const root = fixtureRoot("aih-cisco-shard-v1-link-");
+      skill(root, join("skills", "alpha"), "# alpha\n");
+      const outside = outsideSkill();
+      const target = jobPath === linkPath ? join(outside, "skill") : outside;
+      if (!directoryLink(target, join(root, ...linkPath.split("/")))) {
+        // This OS/account cannot create a directory link; nothing to prove here.
+        ctx.skip();
+        return;
+      }
+      const safeRoot = realpathSync(root);
+      // Before the repair this identity matched, because the walker never
+      // inspected the linked ancestor.
+      const inputSha256 =
+        jobPath === linkPath ? "a".repeat(64) : hashComponentTreeV1(safeRoot, [jobPath]).treeSha256;
+      const calls: string[][] = [];
+
+      const outcome = await runCiscoShardV1(
+        shardRequest(root, {
+          jobs: [{ id: "link-job", path: jobPath, inputSha256 }],
+          run: probeOnlyRunner(calls),
+        }),
+      );
+
+      expect(outcome).toEqual({
+        kind: "refused",
+        reason: "shard-request-invalid",
+        detail: `Cisco shard job path crosses a symbolic link or junction: ${jobPath}`,
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it("refuses a job path whose component is a file, not a directory", async () => {
+      const root = fixtureRoot("aih-cisco-shard-v1-filecomp-");
+      writeFileSync(join(root, "plain"), "not a directory\n", "utf8");
+
+      const outcome = await runCiscoShardV1(
+        shardRequest(root, {
+          jobs: [{ id: "file-job", path: "plain/skill", inputSha256: "a".repeat(64) }],
+        }),
+      );
+
+      expect(outcome.kind).toBe("refused");
+      if (outcome.kind !== "refused") return;
+      expect(outcome.reason).toBe("shard-request-invalid");
+      expect(outcome.detail).toContain("plain/skill");
     });
   });
 

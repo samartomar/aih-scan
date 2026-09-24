@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -774,6 +782,74 @@ describe("runCiscoSourceTreeScanV1", () => {
       kind: "refused",
       reason: "subject-requirement-unmet",
       detail: "no SKILL.md directories found for Cisco scan",
+    });
+    expect(invoked).toBe(false);
+  });
+
+  it("refuses a selected skill directory reached through a directory link, before any runner call", async (ctx) => {
+    // The selection names paths; a linked (or junction) ancestor would send
+    // the analyzer outside the declared root. Every job directory must be a
+    // real directory chain inside sourceRoot.
+    skill("skills/clean", "# Clean\n");
+    const outside = mkdtempSync(join(tmpdir(), "aih-scan-cisco-outside-"));
+    try {
+      mkdirSync(join(outside, "skill"), { recursive: true });
+      writeFileSync(join(outside, "skill", "SKILL.md"), "# Outside\n", "utf8");
+      try {
+        symlinkSync(outside, join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
+      } catch {
+        // This OS/account cannot create a directory link; nothing to prove here.
+        ctx.skip();
+        return;
+      }
+      let invoked = false;
+      const run: CiscoMultiSkillRunnerV1 = async () => {
+        invoked = true;
+        return { code: 0, stdout: "", stderr: "" };
+      };
+
+      const outcome = await runCiscoSourceTreeScanV1({
+        run,
+        platform: "linux",
+        env: {},
+        sourceRoot: realpathSync(dir),
+        selectedClosurePaths: selectionOf("skills/clean", "link/skill"),
+      });
+
+      expect(outcome).toEqual({
+        kind: "refused",
+        reason: "subject-requirement-unmet",
+        detail: "Cisco job path crosses a symbolic link or junction: link/skill",
+      });
+      expect(invoked).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["../escape/SKILL.md", "../escape"],
+    ["a//b/SKILL.md", "a//b"],
+  ])("refuses the unsafe selected path %j before any runner call", async (entry, jobPath) => {
+    skill("skills/clean", "# Clean\n");
+    let invoked = false;
+    const run: CiscoMultiSkillRunnerV1 = async () => {
+      invoked = true;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+    const outcome = await runCiscoSourceTreeScanV1({
+      run,
+      platform: "linux",
+      env: {},
+      sourceRoot: realpathSync(dir),
+      selectedClosurePaths: [entry],
+    });
+
+    expect(outcome).toEqual({
+      kind: "refused",
+      reason: "subject-requirement-unmet",
+      detail: `Cisco job path is not a safe POSIX source-relative path: ${jobPath}`,
     });
     expect(invoked).toBe(false);
   });
