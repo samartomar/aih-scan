@@ -44,6 +44,11 @@ import {
   type ScanFindingsV1,
 } from "../findings/scan-findings-v1.js";
 import { type SourceSealV2, sealSourceV2 } from "../observation/source-seal-v2.js";
+import {
+  type DetectorOptionsV1,
+  detectorOptionsSealRefusalV1,
+  readDetectorOptionsV1,
+} from "./detector-options-v1.js";
 
 /**
  * Runs one Scan-owned detector without the caller writing any execution code.
@@ -102,7 +107,8 @@ export type RunDetectorRefusalReasonV1 =
   | "unsupported-subject-kind"
   | "subject-requirement-unmet"
   | "prerequisite-missing"
-  | "execution-profile-unavailable";
+  | "execution-profile-unavailable"
+  | "detector-options-invalid";
 
 export type RunDetectorFailureStageV1 =
   | "acquisition"
@@ -184,6 +190,14 @@ export interface RunDetectorV1Request {
    * the user cache directory) and never pass it to an analyzer.
    */
   readonly env?: Readonly<NodeJS.ProcessEnv>;
+  /**
+   * Per-detector options (C2a §2.1, §3.3, §4.1), validated strictly and snapshotted once:
+   * `detector.cisco` `{ concurrency }` (optional), `detector.aih-trust-lint`
+   * `{ internalScopes, mcpConfigPaths }` and `detector.cisco-mcp-scanner` `{ mcpConfigPaths }`
+   * (required). Any other detector must not carry them. A violation is refused
+   * `detector-options-invalid` before the source is read.
+   */
+  readonly detectorOptions?: DetectorOptionsV1;
   /** Aborting ends the analyzer's whole process tree and fails the run `cancelled`. */
   readonly signal?: AbortSignal;
   /**
@@ -569,6 +583,7 @@ const REQUEST_FIELDS = [
   "prerequisiteProbe",
   "ociCapture",
   "acceptedImageDigests",
+  "detectorOptions",
 ] as const;
 const SUBJECT_FIELDS = ["kind", "sourceRoot", "selectedClosurePaths", "excludedPaths"] as const;
 const OCI_CAPTURE_FIELDS = ["layout", "runtime", "broker", "annexPayloads", "runner"] as const;
@@ -811,6 +826,14 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       capability,
     );
 
+  const optionsRead = readDetectorOptionsV1(
+    capability.detectorId,
+    top.value.detectorOptions,
+    Array.isArray(subject.selectedClosurePaths) ? subject.selectedClosurePaths : [],
+  );
+  if (!optionsRead.ok) return refuse("detector-options-invalid", optionsRead.detail, capability);
+  const detectorOptions = optionsRead.options;
+
   const fieldRefusal = executionFieldRefusal(capability, top.value);
   if (fieldRefusal !== undefined)
     return refuse("execution-profile-unavailable", fieldRefusal, capability);
@@ -861,6 +884,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         "An empty source root has nothing to exclude; remove excludedPaths.",
         capability,
       );
+    const optionsSealRefusal = detectorOptionsSealRefusalV1(detectorOptions, []);
+    if (optionsSealRefusal !== undefined)
+      return refuse("detector-options-invalid", optionsSealRefusal, capability);
   } else {
     try {
       before = sealSourceV2({
@@ -874,6 +900,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         capability,
       );
     }
+    const optionsSealRefusal = detectorOptionsSealRefusalV1(detectorOptions, before.entries);
+    if (optionsSealRefusal !== undefined)
+      return refuse("detector-options-invalid", optionsSealRefusal, capability);
     const requirement = subjectRefusal(capability, before, input, profile);
     if (requirement !== undefined)
       return refuse("subject-requirement-unmet", requirement, capability);
