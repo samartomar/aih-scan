@@ -132,6 +132,11 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "function assertEveryResultLocation(",
   },
   {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 510,
+    contains: "export function assertSarifResultFilesSealedV1(",
+  },
+  {
     path: "src/observation/source-hash-v1.ts",
     line: 93,
     contains: "export function hashSourceTreeV1(",
