@@ -96,42 +96,42 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 102,
+    line: 104,
     contains: 'protocol: z.literal("BaselineVetRequestV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 139,
+    line: 141,
     contains: 'protocol: z.literal("BaselineVetReceiptV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 996,
+    line: 1042,
     contains: "attachScanCompletionV1(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 1061,
+    line: 1127,
     contains: "function carriesBaselineCompletion(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 819,
+    line: 825,
     contains: "function executedProfile(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 834,
+    line: 840,
     contains: "function versionNamesLock(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 889,
+    line: 895,
     contains: "function assertAnnexLocations(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 868,
+    line: 874,
     contains: "function assertEveryResultLocation(",
   },
   {
@@ -419,6 +419,31 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 62,
     contains: "fail(`overlapping paths within component",
   },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 955,
+    contains: "export async function executeBaselineVetBatchSetV1(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 61,
+    contains: "export const BASELINE_REQUEST_SET_MAX_V1 = 1_000;",
+  },
+  {
+    path: "src/baseline/request-set-v1.ts",
+    line: 132,
+    contains: "export async function runBaselineVetRequestSetV1(",
+  },
+  {
+    path: "src/baseline/request-set-v1.ts",
+    line: 39,
+    contains: "export function parseBaselineVetRequestSetArgumentsV1(",
+  },
+  {
+    path: "tools/verify-baseline-publication-reuse.mjs",
+    line: 366,
+    contains: "`partial request set: ",
+  },
 ];
 
 /**
@@ -475,7 +500,7 @@ const BOUNDS: readonly Readonly<{
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 60,
+    line: 62,
     contains: "maxAnnexBytes = 16 * 1024 * 1024",
     phrase: "16 MiB per annex",
   },
@@ -706,6 +731,19 @@ describe("published contract inventory", () => {
       "overlap-modes.json",
     );
     for (const mode of Object.values(record)) expect(mode).toBe("compiler-catalog");
+  });
+
+  it("states that baseline-vet runs each analyzer once per request set (SV1, D49)", () => {
+    const sentences = prose();
+    expect(sentences).toContain("**[Scan: SV1]**");
+    expect(sentences).toContain("Baseline vet request set execution (D49)");
+    expect(sentences).toContain(
+      "`baseline-vet --request-set <directory> --source <directory> --output-root <new-directory>`",
+    );
+    expect(sentences).toContain("byte-identical annex");
+    expect(sentences).toContain("`baseline request set source differs`");
+    expect(sentences).toContain("`baseline vet request set changed during execution`");
+    expect(sentences).toContain("dispatch a fresh `publication_generation`");
   });
 
   it("states that evidence carries no authority and that the document is not the contract", () => {
