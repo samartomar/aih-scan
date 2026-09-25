@@ -11,14 +11,17 @@ import {
   readdirSync,
   readlinkSync,
   readSync,
+  realpathSync,
   rmSync,
   type Stats,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { z } from "zod";
+import { resolveDetectorCapabilityV1 } from "../capability/detector-capability-v1.js";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
@@ -28,7 +31,27 @@ import {
   deepFreezeStrictJsonV1,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
+import {
+  attachScanCompletionV1,
+  SCAN_COMPLETION_PROPERTY_V1,
+  scanCompletionEvidenceV1,
+  scanCompletionSubjectFilesV1,
+} from "../detectors/completion-evidence-v1.js";
+import { assertSarifCompletedV1 } from "../detectors/sarif-completion-v1.js";
+import { projectAnalyzerSarifFindingsV1 } from "../findings/scan-findings-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../observation/source-hash-v1.js";
+import {
+  type SourceObservationSealV1,
+  sealSourceObservationV1,
+} from "../observation/source-observation-seal-v1.js";
+import {
+  BASELINE_BATCH_EXECUTION_PROFILES_V1,
+  createBaselineAnalyzerExecutionV1,
+} from "./runtime-v1.js";
+import {
+  assertSarifResultFilesSealedV1,
+  sourceRelativeSarifV1,
+} from "./sarif-source-relative-v1.js";
 
 export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "cisco"] as const;
 export type BaselineAnalyzerV1 = (typeof BASELINE_ANALYZERS_V1)[number];
@@ -37,6 +60,12 @@ const maxComponents = 100;
 const maxAnnexBytes = 16 * 1024 * 1024;
 const maxSourceEntries = 100_000;
 const maxSourceBytes = 256 * 1024 * 1024;
+/**
+ * The most results the §1.4 location check reads from one annex (S2k): more than a 16 MiB
+ * annex can hold, since a result the check accepts takes at least 82 canonical bytes, so the
+ * annex byte bound stays the batch's resource bound.
+ */
+const maxAnnexResults = Math.floor(maxAnnexBytes / 64);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 const gitCommit = z.string().regex(/^[0-9a-f]{40}$/);
 const safeId = z
@@ -132,6 +161,12 @@ export type BaselineAnalyzerExecutionV1 = (input: {
   readonly mediaType: "application/sarif+json" | "application/vnd.aih.baseline-native+json";
   readonly bytes: Uint8Array;
   readonly analyzerVersion: string;
+  /**
+   * The execution profile the analyzer ran under. It must be the batch's own profile for the
+   * analyzer (`BASELINE_BATCH_EXECUTION_PROFILES_V1`), whose published `analyzerLock` the
+   * SARIF annex's completion evidence names (D24); any other declaration is refused (S2k).
+   */
+  readonly executionProfileId: string;
 }>;
 
 export type BaselineVetVerificationV1 =
@@ -321,9 +356,18 @@ export function parseBaselineVetReceiptV1Json(text: string): BaselineVetReceiptV
   }
 }
 
-function normalizedObservation(
+/**
+ * Contract-checks one analyzer result and returns its canonical annex bytes.
+ *
+ * Exported for Scan's own single-detector runner so both paths apply the same
+ * media-type, protocol and byte bounds; it is not part of the package API.
+ */
+export function normalizedObservation(
   analyzerName: BaselineAnalyzerV1,
-  value: Awaited<ReturnType<BaselineAnalyzerExecutionV1>>,
+  value: Pick<
+    Awaited<ReturnType<BaselineAnalyzerExecutionV1>>,
+    "mediaType" | "bytes" | "analyzerVersion"
+  >,
 ): { bytes: Buffer; mediaType: typeof value.mediaType; analyzerVersion: string } {
   const bytes = Buffer.from(value.bytes);
   if (bytes.byteLength === 0 || bytes.byteLength > maxAnnexBytes) fail("observation byte bounds");
@@ -359,8 +403,13 @@ function normalizedObservation(
   };
 }
 
-function sourceAndComponentsMatch(request: BaselineVetRequestV1, sourceRoot: string): void {
-  const source = hashSourceTreeV1(sourceRoot);
+/**
+ * The snapshot, with the directory links it left out put back as links (D26), must hash to the
+ * request's source digest; every component must hash to its own.
+ */
+function sourceAndComponentsMatch(request: BaselineVetRequestV1, snapshot: AnalyzerSnapshot): void {
+  const sourceRoot = snapshot.root;
+  const source = hashSourceTreeV1(sourceRoot, snapshot.omittedDirectoryLinks);
   if (source.treeSha256 !== request.source.treeSha256) fail("baseline source digest mismatch");
   for (const component of request.components) {
     const current = hashComponentTreeV1(sourceRoot, component.paths);
@@ -403,30 +452,115 @@ function readBoundedSourceFile(path: string, beforePath: Stats): Buffer {
   }
 }
 
-type SafeAnalyzerSourceSymlink = Readonly<{
-  target: string;
-  targetType: "directory" | "file";
+type SafeAnalyzerSourceSymlink =
+  | Readonly<{ rule: "relative"; target: string; targetType: "directory" | "file" }>
+  | Readonly<{ rule: "observation"; targetType: "directory" }>
+  | Readonly<{ rule: "observation"; targetType: "file"; real: string; identity: Stats }>;
+
+/**
+ * What an analyzer snapshot copies. By default a top-level `.git` is left out, as the
+ * batch receipts have always done; a single-detector run for an analyzer that scans the
+ * whole tree (Semgrep, SkillSpector) copies it too.
+ */
+export type BaselineAnalyzerSnapshotOptionsV1 = Readonly<{
+  includeGitDirectory?: boolean;
+  /**
+   * The largest single file the snapshot copies, at most the 256 MiB tree budget; 16 MiB
+   * (the batch receipts' bound) when absent.
+   */
+  maxFileBytes?: number;
+  /**
+   * Which symbolic links the snapshot accepts. `"relative"` (the default, the batch
+   * receipts' rule) accepts a relative target that resolves through real directories inside
+   * the root and recreates a file link as the same link. `"observation"` accepts exactly what
+   * `SourceObservationSealV1` accepts, any link whose real target is inside the root
+   * (absolute targets and chains included): a file link becomes a regular file holding the
+   * target's bytes at the link path. An observation snapshot then holds no link at all.
+   * Under either rule a directory link (D26) is recorded but never recreated: no analyzer
+   * snapshot holds one, so its in-root target is analyzed only at its real path.
+   */
+  links?: "relative" | "observation";
 }>;
+
+/** The link rule for a tree: a snapshot taken under "observation" may hold no link. */
+type LinkRule = "relative" | "observation" | "none";
+
+function snapshotLinkRule(options: BaselineAnalyzerSnapshotOptionsV1): LinkRule {
+  if (options.links === undefined || options.links === "relative") return "relative";
+  if (options.links === "observation") return "observation";
+  return fail("baseline source link rule");
+}
+
+/** The seal's containment: the real target, relative to the real root, never escaping it. */
+function containedRealTarget(realRoot: string, real: string): void {
+  const child = relative(realRoot, real);
+  if (child === "") return;
+  if (
+    child === ".." ||
+    child.startsWith(`..${sep}`) ||
+    isAbsolute(child) ||
+    /^[A-Za-z]:/.test(child)
+  )
+    fail("baseline source symbolic link target");
+}
+
+function snapshotFileBound(options: BaselineAnalyzerSnapshotOptionsV1): number {
+  const bound = options.maxFileBytes ?? maxAnnexBytes;
+  if (!Number.isSafeInteger(bound) || bound < 0 || bound > maxSourceBytes)
+    fail("baseline source file bound");
+  return bound;
+}
+
+function topLevelNames(root: string, options: BaselineAnalyzerSnapshotOptionsV1): string[] {
+  return readdirSync(root)
+    .filter((value) => options.includeGitDirectory === true || value !== ".git")
+    .sort(codeUnitCompare);
+}
 
 function inspectSafeAnalyzerSource(
   sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+  rule: LinkRule = snapshotLinkRule(options),
 ): ReadonlyMap<string, SafeAnalyzerSourceSymlink> {
   const root = resolve(sourceRoot);
   const rootStat = lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("baseline source directory shape");
+  const realRoot = realpathSync.native(root);
   const budget = { entries: 0, bytes: 0 };
   const entries = new Map<string, "directory" | "file">();
   const symlinks = new Map<string, string>();
+  const observed = new Map<string, SafeAnalyzerSourceSymlink>();
   const visit = (path: string): void => {
     const stat = lstatSync(path);
     budget.entries += 1;
     if (budget.entries > maxSourceEntries) fail("baseline source entry bound");
     if (stat.isSymbolicLink()) {
+      if (rule === "none") fail("baseline analyzer snapshot holds a symbolic link");
       const target = readlinkSync(path);
+      if (rule === "observation") {
+        let real: string;
+        try {
+          real = realpathSync.native(path);
+        } catch {
+          fail("baseline source symbolic link target");
+        }
+        containedRealTarget(realRoot, real);
+        const targetStat = statSync(real);
+        if (targetStat.isDirectory()) observed.set(path, { rule, targetType: "directory" });
+        else if (targetStat.isFile()) {
+          if (targetStat.nlink !== 1) fail("baseline source file shape");
+          if (
+            targetStat.size > snapshotFileBound(options) ||
+            targetStat.size > maxSourceBytes - budget.bytes
+          )
+            fail("baseline source byte bound");
+          budget.bytes += targetStat.size;
+          observed.set(path, { rule, targetType: "file", real, identity: targetStat });
+        } else fail("baseline source symbolic link target");
+      } else symlinks.set(path, target);
       const after = lstatSync(path);
       if (!sameIdentity(stat, after) || target !== readlinkSync(path))
         fail("baseline source symbolic link replacement");
-      symlinks.set(path, target);
       return;
     }
     if (stat.isDirectory()) {
@@ -438,19 +572,18 @@ function inspectSafeAnalyzerSource(
       return;
     }
     if (!stat.isFile() || stat.nlink !== 1) fail("baseline source file shape");
-    if (stat.size > maxAnnexBytes || stat.size > maxSourceBytes - budget.bytes)
+    if (stat.size > snapshotFileBound(options) || stat.size > maxSourceBytes - budget.bytes)
       fail("baseline source byte bound");
     budget.bytes += stat.size;
     entries.set(path, "file");
   };
-  for (const name of readdirSync(root)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    visit(join(root, name));
+  for (const name of topLevelNames(root, options)) visit(join(root, name));
   const rootAfter = lstatSync(root);
   if (!rootAfter.isDirectory() || rootAfter.isSymbolicLink() || !sameIdentity(rootStat, rootAfter))
     fail("baseline source directory replacement");
-  if (budget.entries === 0) fail("baseline source has no content");
+  // An observation snapshot may be empty: the seal accepts a tree of directory links only.
+  if (budget.entries === 0 && rule !== "none") fail("baseline source has no content");
+  if (rule !== "relative") return observed;
 
   const safeSymlinks = new Map<string, SafeAnalyzerSourceSymlink>();
   const directoriesContainingSymlinks = new Set<string>();
@@ -471,7 +604,10 @@ function inspectSafeAnalyzerSource(
       fail("baseline source symbolic link target");
     return pathRelative === "" ? "directory" : entries.get(path);
   };
-  for (const [path, target] of symlinks) {
+  for (const [path, stored] of symlinks) {
+    // Windows stores a relative link target with its own separator; the check below is on
+    // the portable form, and the link is still copied with the target as stored.
+    const target = process.platform === "win32" ? stored.replaceAll("\\", "/") : stored;
     if (
       !target ||
       target.includes("\\") ||
@@ -492,16 +628,24 @@ function inspectSafeAnalyzerSource(
     if (targetType === undefined) fail("baseline source symbolic link target");
     if (targetType === "directory" && directoriesContainingSymlinks.has(targetPath))
       fail("baseline source symbolic link cycle");
-    safeSymlinks.set(path, { target, targetType });
+    safeSymlinks.set(path, { rule: "relative", target: stored, targetType });
   }
   return safeSymlinks;
 }
 
-function copyAnalyzerSource(source: string, snapshot: string): void {
+/**
+ * Copies the source into the snapshot and returns the directory links it left out (D26), by
+ * source-relative POSIX path with their stored targets.
+ */
+function copyAnalyzerSource(
+  source: string,
+  snapshot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): ReadonlyMap<string, string> {
   const rootBefore = lstatSync(source);
   if (!rootBefore.isDirectory() || rootBefore.isSymbolicLink())
     fail("baseline source directory shape");
-  const safeSymlinks = inspectSafeAnalyzerSource(source);
+  const safeSymlinks = inspectSafeAnalyzerSource(source, options);
   const rootAfterInspection = lstatSync(source);
   if (
     !rootAfterInspection.isDirectory() ||
@@ -510,6 +654,7 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
   )
     fail("baseline source directory replacement");
   const budget = { entries: 0, bytes: 0 };
+  const omittedDirectoryLinks = new Map<string, string>();
   const copy = (from: string, to: string): void => {
     const before = lstatSync(from);
     budget.entries += 1;
@@ -520,12 +665,30 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
       const after = lstatSync(from);
       if (
         expected === undefined ||
-        target !== expected.target ||
+        (expected.rule === "relative" && target !== expected.target) ||
         target !== readlinkSync(from) ||
         !sameIdentity(before, after)
       )
         fail("baseline source symbolic link replacement");
-      symlinkSync(target, to, expected.targetType === "directory" ? "dir" : "file");
+      // D26: a directory link is recorded (by the seal, and by the source digest through the
+      // omitted links) and never recreated; its in-root target is analyzed at its real path.
+      if (expected.targetType === "directory") {
+        omittedDirectoryLinks.set(relative(source, from).split(sep).join("/"), target);
+        return;
+      }
+      if (expected.rule === "relative") {
+        symlinkSync(target, to, "file");
+        return;
+      }
+      if (realpathSync.native(from) !== expected.real)
+        fail("baseline source symbolic link replacement");
+      const targetStat = lstatSync(expected.real);
+      if (!targetStat.isFile() || !sameIdentity(expected.identity, targetStat))
+        fail("baseline source file replacement");
+      if (targetStat.size > maxSourceBytes - budget.bytes) fail("baseline source byte bound");
+      const bytes = readBoundedSourceFile(expected.real, targetStat);
+      budget.bytes += bytes.byteLength;
+      writeFileSync(to, bytes, { flag: "wx", mode: 0o600 });
       return;
     }
     if (before.isDirectory()) {
@@ -538,16 +701,13 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
       return;
     }
     if (!before.isFile() || before.nlink !== 1) fail("baseline source file shape");
-    if (before.size > maxAnnexBytes || before.size > maxSourceBytes - budget.bytes)
+    if (before.size > snapshotFileBound(options) || before.size > maxSourceBytes - budget.bytes)
       fail("baseline source byte bound");
     const bytes = readBoundedSourceFile(from, before);
     budget.bytes += bytes.byteLength;
     writeFileSync(to, bytes, { flag: "wx", mode: 0o600 });
   };
-  for (const name of readdirSync(source)
-    .filter((value) => value !== ".git")
-    .sort(codeUnitCompare))
-    copy(join(source, name), join(snapshot, name));
+  for (const name of topLevelNames(source, options)) copy(join(source, name), join(snapshot, name));
   const rootAfter = lstatSync(source);
   if (
     !rootAfter.isDirectory() ||
@@ -556,13 +716,44 @@ function copyAnalyzerSource(source: string, snapshot: string): void {
   )
     fail("baseline source directory replacement");
   if (budget.entries === 0) fail("baseline source has no content");
+  return omittedDirectoryLinks;
 }
 
-function assertSafeAnalyzerSource(sourceRoot: string): void {
-  inspectSafeAnalyzerSource(sourceRoot);
+/** A snapshot taken under the observation rule holds no link; one taken as relative, safe ones. */
+function assertSafeAnalyzerSnapshot(
+  snapshotRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
+  inspectSafeAnalyzerSource(
+    snapshotRoot,
+    options,
+    snapshotLinkRule(options) === "observation" ? "none" : "relative",
+  );
 }
 
-function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: string): string {
+/**
+ * Copies the source root into a private analyzer snapshot and proves the copy is safe.
+ *
+ * Exported for Scan's own single-detector runner so the snapshot, symbolic-link and
+ * byte-bound rules are one implementation; it is not part of the package API.
+ */
+export function createBaselineAnalyzerSnapshotV1(
+  sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): string {
+  return snapshotAnalyzerSource(sourceRoot, options).root;
+}
+
+/** A snapshot and the directory links it left out (D26), which the source digest still binds. */
+type AnalyzerSnapshot = Readonly<{
+  root: string;
+  omittedDirectoryLinks: ReadonlyMap<string, string>;
+}>;
+
+function snapshotAnalyzerSource(
+  sourceRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1,
+): AnalyzerSnapshot {
   const source = resolve(sourceRoot);
   const snapshot = mkdtempSync(join(tmpdir(), "aih-scan-baseline-source-"));
   try {
@@ -571,53 +762,258 @@ function createAnalyzerSnapshot(request: BaselineVetRequestV1, sourceRoot: strin
     // Windows ACLs are platform-managed; mkdtemp remains the private creation boundary.
   }
   try {
-    copyAnalyzerSource(source, snapshot);
-    assertSafeAnalyzerSource(snapshot);
-    sourceAndComponentsMatch(request, snapshot);
-    return snapshot;
+    const omittedDirectoryLinks = copyAnalyzerSource(source, snapshot, options);
+    assertSafeAnalyzerSnapshot(snapshot, options);
+    return { root: snapshot, omittedDirectoryLinks };
   } catch (error) {
     rmSync(snapshot, { recursive: true, force: true });
     throw error;
   }
 }
 
+/** Re-proves that a snapshot still matches the source shape it was taken from. */
+export function assertBaselineAnalyzerSnapshotUnchangedV1(
+  snapshotRoot: string,
+  options: BaselineAnalyzerSnapshotOptionsV1 = {},
+): void {
+  assertSafeAnalyzerSnapshot(snapshotRoot, options);
+}
+
+function createAnalyzerSnapshot(
+  request: BaselineVetRequestV1,
+  sourceRoot: string,
+): AnalyzerSnapshot {
+  const snapshot = snapshotAnalyzerSource(sourceRoot, {});
+  try {
+    sourceAndComponentsMatch(request, snapshot);
+    return snapshot;
+  } catch (error) {
+    rmSync(snapshot.root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** The detector a baseline analyzer is, for its capability and its completion evidence. */
+const BASELINE_DETECTOR_IDS_V1: Readonly<Record<BaselineAnalyzerV1, string>> = Object.freeze({
+  "aih-native": "detector.aih-native",
+  skillspector: "detector.skillspector",
+  semgrep: "detector.semgrep",
+  cisco: "detector.cisco",
+});
+
+/**
+ * The profile a batch annex names (S2k): Scan's own batch profile for the analyzer, never
+ * the executor's returned metadata. A declaration that is not exactly that profile is refused.
+ */
+function batchProfile(analyzerName: BaselineAnalyzerV1) {
+  const id = BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzerName];
+  const capability = resolveDetectorCapabilityV1(BASELINE_DETECTOR_IDS_V1[analyzerName]);
+  const profile = capability?.executionProfiles.find(
+    (item) => item.id === id && item.evidence === "BaselineAnalyzerObservationV1",
+  );
+  if (capability === undefined || profile === undefined)
+    fail(`${analyzerName} has no batch execution profile`);
+  return { capability, profile };
+}
+
+function executedProfile(analyzerName: BaselineAnalyzerV1, executionProfileId: unknown) {
+  const executed = batchProfile(analyzerName);
+  if (executionProfileId !== executed.profile.id)
+    fail(
+      `${analyzerName} execution profile ${JSON.stringify(executionProfileId)} contradicts the batch profile ${executed.profile.id}`,
+    );
+  return executed;
+}
+
+const lockSuffix = /\+uvlock\.[0-9a-f]{12}$/;
+
+/**
+ * S2k: a uv-backed profile's analyzer version ends `+uvlock.<first 12 hex of its lock>`; a
+ * profile that installs no lock carries no such suffix. Checked on write and on read.
+ */
+function versionNamesLock(analyzerVersion: string, lockSha256: string | null): boolean {
+  return lockSha256 === null
+    ? !analyzerVersion.includes("+uvlock.")
+    : lockSuffix.test(analyzerVersion) &&
+        analyzerVersion.endsWith(`+uvlock.${lockSha256.slice(0, 12)}`);
+}
+
+function assertVersionNamesLock(
+  analyzerName: BaselineAnalyzerV1,
+  analyzerVersion: string,
+  executed: ReturnType<typeof batchProfile>,
+): void {
+  const lock = executed.profile.analyzerLock?.sha256 ?? null;
+  if (!versionNamesLock(analyzerVersion, lock))
+    fail(
+      lock === null
+        ? `${analyzerName} analyzer version ${JSON.stringify(analyzerVersion)} names a lock, but ${executed.profile.id} installs none`
+        : `${analyzerName} analyzer version ${JSON.stringify(analyzerVersion)} does not name the lock of ${executed.profile.id}`,
+    );
+}
+
+/**
+ * SI1 (review of S2k, P2): every location each result reaches, by U1g's one all-locations
+ * rule. The annex must already be in its source-relative normal form: normalizing it
+ * (`sourceRelativeSarifV1`, which resolves every `uriBaseId` through its run's
+ * `originalUriBaseIds` and resolves every artifact `index`, refusing a URI/index
+ * contradiction, a bad `parentIndex` chain or an unsafe path) must not change a byte, so a
+ * base, an absolute, `file:` or backslash URI is refused rather than certified in a form a
+ * consumer would read differently. Then every file each result reaches
+ * (`sarifResultFilesV1`: `locations[*]`, `relatedLocations`, code flows and the shared
+ * `threadFlowLocations` they reference, stacks, graphs and the run graphs they traverse,
+ * fixes, attachments, `analysisTarget` at its schema position only, every artifact named
+ * by index with its ancestry; never a property bag) must be a sealed file of the snapshot.
+ */
+function assertEveryResultLocation(
+  bytes: Buffer,
+  sealedFiles: ReadonlyMap<string, string>,
+  snapshotRoot: string,
+): void {
+  const log = parseStrictJsonObjectV1(bytes.toString("utf8"), "SARIF");
+  const normalized = sourceRelativeSarifV1(log, [snapshotRoot]).document;
+  if (!canonicalStrictJsonBytesV1(normalized).equals(bytes))
+    throw new TypeError(
+      "a location is not in source-relative normal form (a uriBaseId other than %SRCROOT%, an absolute, file: or backslash URI)",
+    );
+  assertSarifResultFilesSealedV1(log, sealedFiles, "snapshot");
+}
+
+/**
+ * S2k: the §1.4 location rules the delegated path applies to the same analyzers, through the
+ * same projection: every result names a rule and a first location that is a sealed file of
+ * the snapshot, by a safe source-relative POSIX path. SI1: and every other location a result
+ * reaches passes the same rules ({@link assertEveryResultLocation}). A refusal publishes
+ * nothing.
+ */
+function assertAnnexLocations(
+  analyzerName: BaselineAnalyzerV1,
+  observed: ReturnType<typeof normalizedObservation>,
+  sealed: SourceObservationSealV1,
+  snapshotRoot: string,
+): void {
+  const sealedFiles = new Map(
+    sealed.entries.flatMap((entry) =>
+      entry.kind === "file" || entry.kind === "file-link"
+        ? [[entry.path, entry.sha256] as const]
+        : [],
+    ),
+  );
+  try {
+    projectAnalyzerSarifFindingsV1({
+      detectorId: BASELINE_DETECTOR_IDS_V1[analyzerName],
+      analyzer: analyzerName,
+      analyzerIdentity: `${analyzerName}@${observed.analyzerVersion}`,
+      annex: {
+        descriptorId: `annex/${analyzerName}.json`,
+        sha256: createHash("sha256").update(observed.bytes).digest("hex"),
+        byteLength: observed.bytes.byteLength,
+      },
+      bytes: observed.bytes,
+      sealedFiles,
+      maxResults: maxAnnexResults,
+    });
+    assertEveryResultLocation(observed.bytes, sealedFiles, snapshotRoot);
+  } catch (error) {
+    fail(
+      `${analyzerName} SARIF fails the §1.4 location rules (output): ${error instanceof Error ? error.message : "SARIF"}`,
+    );
+  }
+}
+
+/** The analyzer snapshot's seal: what every analyzer received, top-level `.git` never among it. */
+function sealAnalyzerSnapshot(snapshotRoot: string): SourceObservationSealV1 {
+  return sealSourceObservationV1({ sourceRoot: snapshotRoot, selectedClosurePaths: [] });
+}
+
 export async function executeBaselineVetBatchV1(
   request: BaselineVetRequestV1,
-  runtime: { readonly sourceRoot: string; readonly execute: BaselineAnalyzerExecutionV1 },
+  runtime: {
+    readonly sourceRoot: string;
+    /** Optional: Scan's own hardened analyzer execution is the default. */
+    readonly execute?: BaselineAnalyzerExecutionV1;
+  },
 ): Promise<BaselineVetBatchResultV1> {
   canonicalBaselineVetRequestV1Bytes(request);
-  const snapshotRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
+  const execute = runtime.execute ?? createBaselineAnalyzerExecutionV1();
+  const snapshot = createAnalyzerSnapshot(request, runtime.sourceRoot);
+  const snapshotRoot = snapshot.root;
   const selected = analyzerOrder(request.components.flatMap((component) => component.analyzers));
   const observations: z.infer<typeof observation>[] = [];
   const annexArtifacts: BaselineVetAnnexArtifactV1[] = [];
   try {
+    const sealed = sealAnalyzerSnapshot(snapshotRoot);
+    const ran: {
+      analyzer: BaselineAnalyzerV1;
+      observed: ReturnType<typeof normalizedObservation>;
+      executed: ReturnType<typeof executedProfile>;
+    }[] = [];
     for (const analyzerName of selected) {
-      const observed = normalizedObservation(
-        analyzerName,
-        await runtime.execute({
-          analyzer: analyzerName,
-          sourceRoot: snapshotRoot,
-          source: request.source,
-        }),
-      );
+      const result = await execute({
+        analyzer: analyzerName,
+        sourceRoot: snapshotRoot,
+        source: request.source,
+      });
+      const executed = executedProfile(analyzerName, result.executionProfileId);
+      const observed = normalizedObservation(analyzerName, result);
+      assertVersionNamesLock(analyzerName, observed.analyzerVersion, executed);
+      // S2e: the analyzer's own completion proof, before anything is published from it.
+      if (observed.mediaType === "application/sarif+json") {
+        assertSarifCompletedV1(parseStrictJsonObjectV1(observed.bytes.toString("utf8"), "SARIF"));
+        assertAnnexLocations(analyzerName, observed, sealed, snapshotRoot);
+      }
+      ran.push({ analyzer: analyzerName, observed, executed });
+    }
+    assertSafeAnalyzerSnapshot(snapshotRoot);
+    if (
+      !canonicalStrictJsonBytesV1(sealAnalyzerSnapshot(snapshotRoot)).equals(
+        canonicalStrictJsonBytesV1(sealed),
+      )
+    )
+      fail("baseline analyzer snapshot changed during the run");
+    sourceAndComponentsMatch(request, snapshot);
+    const reobserved = createAnalyzerSnapshot(request, runtime.sourceRoot);
+    rmSync(reobserved.root, { recursive: true, force: true });
+    // C2a §1.6 (D24): only now, every proof passed, does each SARIF run name the files of the
+    // snapshot the analyzer received, under the lock of the profile that ran.
+    for (const { analyzer: analyzerName, observed, executed } of ran) {
+      let bytes = observed.bytes;
+      if (observed.mediaType === "application/sarif+json") {
+        const evidence = scanCompletionEvidenceV1({
+          detectorId: executed.capability.detectorId,
+          files: scanCompletionSubjectFilesV1({
+            engine: analyzerName as "semgrep" | "skillspector" | "cisco",
+            entries: sealed.entries,
+            selectedClosurePaths: sealed.selectedClosurePaths,
+          }),
+          emptyAllowed: executed.capability.emptySource === "completes",
+          analyzer: {
+            version: observed.analyzerVersion,
+            lockSha256: executed.profile.analyzerLock?.sha256 ?? null,
+          },
+        });
+        bytes = canonicalStrictJsonBytesV1(
+          attachScanCompletionV1(
+            parseStrictJsonObjectV1(bytes.toString("utf8"), `${analyzerName} SARIF`),
+            evidence,
+            { scanBuilt: false },
+          ),
+        );
+        normalizedObservation(analyzerName, { ...observed, bytes });
+      }
       const path = `annex/${analyzerName}.json`;
-      const digest = createHash("sha256").update(observed.bytes).digest("hex");
       observations.push({
         analyzer: analyzerName,
         analyzerVersion: observed.analyzerVersion,
         annex: {
           path,
           mediaType: observed.mediaType,
-          sha256: digest,
-          byteLength: observed.bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          byteLength: bytes.byteLength,
         },
       });
-      annexArtifacts.push({ path, bytes: observed.bytes });
+      annexArtifacts.push({ path, bytes });
     }
-    assertSafeAnalyzerSource(snapshotRoot);
-    sourceAndComponentsMatch(request, snapshotRoot);
-    const reobservedRoot = createAnalyzerSnapshot(request, runtime.sourceRoot);
-    rmSync(reobservedRoot, { recursive: true, force: true });
   } finally {
     rmSync(snapshotRoot, { recursive: true, force: true });
   }
@@ -648,6 +1044,74 @@ export async function executeBaselineVetBatchV1(
     }),
   });
   return Object.freeze({ receipt, annexArtifacts: Object.freeze(annexArtifacts) });
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
+  Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+
+/**
+ * D24: whether a published SARIF annex still proves what the batch wrote into it. Every run
+ * passes the S2e completion rule and carries, only in its first invocation, one equal
+ * completion-evidence-v1 object for this analyzer's detector, the receipt's analyzer
+ * version and exactly the lock of the batch profile (S2k: null where it installs none),
+ * which that version names. The subject itself is recomputed by whoever holds the source.
+ */
+function carriesBaselineCompletion(
+  analyzerName: BaselineAnalyzerV1,
+  analyzerVersion: string,
+  bytes: Buffer,
+): boolean {
+  const { capability, profile } = batchProfile(analyzerName);
+  const lock = profile.analyzerLock?.sha256 ?? null;
+  if (!versionNamesLock(analyzerVersion, lock)) return false;
+  let log: Record<string, unknown>;
+  try {
+    log = parseStrictJsonObjectV1(bytes.toString("utf8"), "SARIF");
+    assertSarifCompletedV1(log);
+  } catch {
+    return false;
+  }
+  let first: Buffer | undefined;
+  for (const run of log.runs as unknown[]) {
+    const invocations = isRecord(run) ? run.invocations : undefined;
+    if (!Array.isArray(invocations)) return false;
+    const [head, ...rest] = invocations as unknown[];
+    const properties = isRecord(head) ? head.properties : undefined;
+    const evidence = isRecord(properties) ? properties[SCAN_COMPLETION_PROPERTY_V1] : undefined;
+    if (
+      rest.some(
+        (invocation) =>
+          isRecord(invocation) &&
+          isRecord(invocation.properties) &&
+          Object.hasOwn(invocation.properties, SCAN_COMPLETION_PROPERTY_V1),
+      ) ||
+      !isRecord(evidence) ||
+      !hasExactKeys(evidence, ["detectorId", "subjectTreeSha256", "analyzedFileCount", "analyzer"])
+    )
+      return false;
+    const analyzer = evidence.analyzer;
+    const count = evidence.analyzedFileCount;
+    if (
+      evidence.detectorId !== capability.detectorId ||
+      typeof evidence.subjectTreeSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(evidence.subjectTreeSha256) ||
+      typeof count !== "number" ||
+      !Number.isSafeInteger(count) ||
+      count < 0 ||
+      (count === 0 && capability.emptySource !== "completes") ||
+      !isRecord(analyzer) ||
+      !hasExactKeys(analyzer, ["version", "lockSha256"]) ||
+      analyzer.version !== analyzerVersion ||
+      analyzer.lockSha256 !== lock
+    )
+      return false;
+    const canonical = canonicalStrictJsonBytesV1(evidence);
+    if (first === undefined) first = canonical;
+    else if (!first.equals(canonical)) return false;
+  }
+  return true;
 }
 
 function sameRequest(receipt: BaselineVetReceiptV1, request: BaselineVetRequestV1): boolean {
@@ -724,6 +1188,11 @@ export function verifyBaselineVetReceiptV1(
         bytes,
         analyzerVersion: item.analyzerVersion,
       });
+      if (
+        item.annex.mediaType === "application/sarif+json" &&
+        !carriesBaselineCompletion(item.analyzer, item.analyzerVersion, bytes)
+      )
+        return { kind: "required", reason: "annex-mismatch" };
     }
     return { kind: "complete" };
   } catch {

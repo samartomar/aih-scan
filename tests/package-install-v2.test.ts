@@ -22,6 +22,7 @@ import {
   executeBaselineVetBatchV1,
 } from "../src/baseline/batch-v1.js";
 import { writeBaselineVetBundleV1 } from "../src/baseline/bundle-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../src/contract/strict-json-v1.js";
 import {
   createObservationKeyV1,
@@ -29,16 +30,27 @@ import {
 } from "../src/observation/observation-evidence-v1.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
 
 const root = resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const publicV2Exports = [
+  // The packed tarball must expose exactly the boundary src/index.ts declares,
+  // including Workstream D detector execution: the capability record, the production
+  // runner and the findings reader.
+  "AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
   "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+  "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
   "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
   "AI_HARNESS_STRICT_V2_COMMIT",
+  "AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
   "BASELINE_ANALYZERS_V1",
+  "SCAN_RESULT_RECORD_FORMAT_V1",
+  "SCAN_RESULT_RECORD_VERSION_V1",
+  "SCAN_RESULT_SUBJECT_NAME_V1",
   "assertCompleteScanAnnexArtifactsV2",
+  "baselineVetPublicationResultV1",
   "canonicalBaselineVetAttestationEnvelopeV1Bytes",
   "canonicalBaselineVetDiscoveryV1Bytes",
   "canonicalBaselineVetPublicationV1Bytes",
@@ -52,32 +64,42 @@ const publicV2Exports = [
   "canonicalSourceSealsV2Bytes",
   "captureCiscoOciCandidateV2",
   "captureRegisteredDetectorCandidateV2",
-  "createBaselineVetRequestV1",
+  "coreOrganizationEvidenceEnvelopeDigestV1",
   "createBaselineVetDiscoveryV1",
   "createBaselineVetPublicationV1",
+  "createBaselineVetRequestV1",
   "createDetectorRegistrationV1",
   "createScanCandidateV2",
   "ed25519KeyIdV2",
   "isVerifiedScanAttestationV2",
-  "parseBaselineVetReceiptV1Json",
-  "parseBaselineVetRequestV1Json",
+  "listDetectorCapabilitiesV1",
   "parseBaselineVetAttestationEnvelopeV1Json",
   "parseBaselineVetDiscoveryV1Json",
   "parseBaselineVetPublicationV1Json",
+  "parseBaselineVetReceiptV1Json",
+  "parseBaselineVetRequestV1Json",
+  "parseDetectorRegistrationV1Json",
+  "parseScanResultRecordV1",
+  "probeDetectorAvailabilityV1",
   "parseScanAttestationEnvelopeV2Json",
   "parseScanCandidateV2Json",
-  "parseDetectorRegistrationV1Json",
   "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
   "readBaselineVetBundleV1",
-  "resolveBaselineVetDiscoveryV1",
   "readScanCaptureBundleV2",
+  "readScanFindingsV1",
+  "readScanResultRecordV1",
+  "readScanResultSubjectBindingV1",
+  "resolveBaselineVetDiscoveryV1",
+  "resolveDetectorCapabilityV1",
+  "resolveDetectorExecutionProfileDocumentV1",
+  "runCiscoShardV1",
+  "runDetectorV1",
   "sealSourceV2",
   "signBaselineVetBundleV1",
   "signScanCandidateV2",
   "verifyAiHarnessCoreEvidenceContractV1",
-  "verifyBaselineVetAttestationV1",
-  "baselineVetPublicationResultV1",
   "verifyAiHarnessStrictV2Contract",
+  "verifyBaselineVetAttestationV1",
   "verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1",
   "verifyScanAttestationV2",
   "writeScanCaptureBundleV2",
@@ -157,13 +179,26 @@ function npmCliPath(environment: { readonly npm_execpath?: string } = process.en
   throw new Error("npm CLI entrypoint unavailable");
 }
 
-function runNpm(args: readonly string[], cwd: string): string {
+function runNpm(args: readonly string[], cwd: string, environment = process.env): string {
   const npmCli = npmCliPath();
   return execFileSync(process.execPath, [npmCli, ...args], {
     cwd,
     encoding: "utf8",
     stdio: "pipe",
+    env: environment,
   });
+}
+
+function isolatedNpmInstallEnvironment(
+  userconfig: string,
+  inherited: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const environment = { ...inherited };
+  for (const key of Object.keys(environment)) {
+    if (/^npm_config_(?:allow[-_]?scripts|userconfig)$/i.test(key)) delete environment[key];
+  }
+  environment.npm_config_userconfig = userconfig;
+  return environment;
 }
 
 function writeCandidateInput(path: string): void {
@@ -433,6 +468,27 @@ describe("npm CLI resolution", () => {
   });
 });
 
+describe("packed install npm configuration", () => {
+  it("drops only inherited script and userconfig overrides while retaining connection settings", () => {
+    const inherited = {
+      NPM_CONFIG_ALLOW_SCRIPTS: "true",
+      npm_config_userconfig: "poisoned.npmrc",
+      HTTPS_PROXY: "http://proxy.invalid",
+      NODE_EXTRA_CA_CERTS: "ca.pem",
+      npm_config_registry: "https://registry.invalid",
+    };
+    const isolated = isolatedNpmInstallEnvironment("empty.npmrc", inherited);
+    expect(isolated).toEqual({
+      HTTPS_PROXY: inherited.HTTPS_PROXY,
+      NODE_EXTRA_CA_CERTS: inherited.NODE_EXTRA_CA_CERTS,
+      npm_config_registry: inherited.npm_config_registry,
+      npm_config_userconfig: "empty.npmrc",
+    });
+    expect(inherited.NPM_CONFIG_ALLOW_SCRIPTS).toBe("true");
+    expect(inherited.npm_config_userconfig).toBe("poisoned.npmrc");
+  });
+});
+
 describe("published V2 package installation", () => {
   it("packs a minimal public boundary and signs then verifies a fully detached bundle", async () => {
     const directory = mkdtempSync(join(tmpdir(), "aih-scan-package-install-v2-"));
@@ -457,10 +513,10 @@ describe("published V2 package installation", () => {
     ).toBe(false);
     expect(paths.some((path) => /(?:^|\/)\S+\.local(?:\.|\/|$)/i.test(path))).toBe(false);
     expect(readFileSync(tarball)).not.toContain(Buffer.from(root, "utf8"));
-    expect(basename(tarball)).toBe("aihq-scan-0.4.0.tgz");
+    expect(basename(tarball)).toBe("aihq-scan-0.5.0.tgz");
     expect(packedManifest(tarball)).toMatchObject({
       name: "@aihq/scan",
-      version: "0.4.0",
+      version: "0.5.0",
       bin: { "aih-scan": "./dist/cli.js" },
       ...npmDiscoveryMetadata,
     });
@@ -468,7 +524,28 @@ describe("published V2 package installation", () => {
     writeFileSync(join(directory, "package.json"), JSON.stringify({ private: true }), {
       mode: 0o600,
     });
-    runNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], directory);
+    const poisonedUserconfig = join(directory, "poisoned.npmrc");
+    writeFileSync(poisonedUserconfig, "allow-scripts=true\n");
+    const emptyUserconfig = join(directory, "empty.npmrc");
+    writeFileSync(emptyUserconfig, "");
+    const inheritedEnvironment = {
+      ...process.env,
+      npm_config_userconfig: poisonedUserconfig,
+      npm_config_allow_scripts: "true",
+    };
+    runNpm(
+      [
+        "install",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--userconfig",
+        emptyUserconfig,
+        tarball,
+      ],
+      directory,
+      isolatedNpmInstallEnvironment(emptyUserconfig, inheritedEnvironment),
+    );
     const installedReadme = readFileSync(
       join(directory, "node_modules/@aihq/scan/README.md"),
       "utf8",
@@ -484,7 +561,9 @@ describe("published V2 package installation", () => {
       join(directory, "consumer.mjs"),
       [
         'import * as scan from "@aihq/scan";',
-        'import { readFileSync } from "node:fs";',
+        'import { createHash } from "node:crypto";',
+        'import { mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+        'import { resolve } from "node:path";',
         'const input = JSON.parse(readFileSync("candidate-input.json", "utf8"));',
         'const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json", "utf8"));',
         "const candidate = scan.createScanCandidateV2(input.candidate);",
@@ -504,9 +583,70 @@ describe("published V2 package installation", () => {
         "    return { specifier, code: error?.code };",
         "  }",
         "}));",
+        "const capabilities = scan.listDetectorCapabilitiesV1();",
+        "const refusal = await scan.runDetectorV1({",
+        '  detectorId: "detector.not-owned-by-scan",',
+        '  subject: { kind: "source-tree", sourceRoot: ".", selectedClosurePaths: ["consumer.mjs"] },',
+        "});",
+        // The installed package itself executes the in-process analyzer on this host.
+        'mkdirSync("native-subject/rules", { recursive: true });',
+        'writeFileSync("native-subject/README.md", "# native subject\\n");',
+        'writeFileSync("native-subject/rules/base.md", "# rule\\n");',
+        "const native = await scan.runDetectorV1({",
+        '  detectorId: "detector.aih-native",',
+        '  subject: { kind: "source-tree", sourceRoot: resolve("native-subject"), selectedClosurePaths: ["README.md", "rules/base.md"] },',
+        "});",
+        // An unreadable request must resolve to a refusal from the installed code too.
+        "const unreadableRequest = {};",
+        'Object.defineProperty(unreadableRequest, "detectorId", { enumerable: true, get() { throw new Error("hostile getter"); } });',
+        "const unreadable = await scan.runDetectorV1(unreadableRequest).then(",
+        '  (value) => ({ settled: "resolved", outcome: value.outcome, reason: value.reason }),',
+        '  () => ({ settled: "rejected" }),',
+        ");",
+        'const nativeCapability = capabilities.find((entry) => entry.detectorId === "detector.aih-native");',
+        "const nativeObservation = native.evidence?.observation;",
+        "const findings = scan.readScanFindingsV1({ verified: { facts: {} } });",
         "process.stdout.write(JSON.stringify({",
         "  exports: Object.keys(scan).sort(),",
         "  denied,",
+        "  detectorExecution: {",
+        "    detectorIds: capabilities.map((entry) => entry.detectorId),",
+        "    profileDocumentIds: capabilities.map((entry) =>",
+        "      scan.resolveDetectorExecutionProfileDocumentV1(entry.executionProfile.id)?.id ?? null,",
+        "    ),",
+        "    profileDigestsMatchDocuments: capabilities.every((entry) =>",
+        "      typeof scan.resolveDetectorExecutionProfileDocumentV1(entry.executionProfile.id) ===",
+        '      "object",',
+        "    ),",
+        "    refusal: { outcome: refusal.outcome, reason: refusal.reason },",
+        "    nativeRun: {",
+        "      outcome: native.outcome,",
+        "      executionProfileId: native.executionProfile?.id,",
+        "      profileDigestIsCapabilityProfile: native.executionProfile?.sha256 === nativeCapability?.executionProfile.sha256,",
+        "      analyzerVersionIsCapabilityIdentity: nativeObservation?.analyzerVersion === nativeCapability?.analyzerIdentity,",
+        '      annexDigestNamesBytes: nativeObservation?.annex.sha256 === createHash("sha256").update(nativeObservation.bytes).digest("hex"),',
+        "      producerIsInstalledManifest: native.producer?.name === manifest.name && native.producer?.version === manifest.version,",
+        "      producer: native.producer,",
+        "      seams: native.seams,",
+        "      isolation: native.executionProfile?.isolation,",
+        "      network: native.executionProfile?.network,",
+        "      analyzer: nativeObservation?.analyzer,",
+        "      mediaType: nativeObservation?.mediaType,",
+        "      annexByteLengthNamesBytes: nativeObservation?.annex.byteLength === nativeObservation?.bytes.length,",
+        "      coverage: {",
+        "        kind: native.coverage?.kind,",
+        "        complete: native.coverage?.complete,",
+        "        coveredPaths: native.coverage?.coveredPaths,",
+        "        excludedPaths: native.coverage?.excludedPaths,",
+        "        uncoveredPaths: native.coverage?.uncoveredPaths,",
+        "      },",
+        "      coverageNamesSealedSourceTree: native.coverage?.sha256 === native.sourceSeal?.before.sourceTreeSha256,",
+        "      sourceUnchangedByRun: native.sourceSeal?.before.sealedSnapshotSha256 === native.sourceSeal?.after.sealedSnapshotSha256,",
+        "      findingsSource: native.findings?.source,",
+        "    },",
+        "    unreadable,",
+        "    findingsStatus: findings.status,",
+        "  },",
         "  metadata: { repository: manifest.repository, homepage: manifest.homepage, bugs: manifest.bugs },",
         '}) + "\\n");',
       ].join("\n"),
@@ -521,9 +661,62 @@ describe("published V2 package installation", () => {
     ) as {
       exports?: unknown;
       denied?: readonly { code?: unknown }[];
+      detectorExecution?: unknown;
       metadata?: unknown;
     };
     expect(consumer.exports).toEqual(publicV2Exports);
+    // The packed package must be able to run a detector, not merely name one.
+    expect(consumer.detectorExecution).toEqual({
+      detectorIds: [
+        "detector.aih-binding-gate",
+        "detector.aih-native",
+        "detector.aih-trust-lint",
+        "detector.cisco",
+        "detector.cisco-mcp-scanner",
+        "detector.semgrep",
+        "detector.skillspector",
+        "detector.snyk-agent-scan",
+      ],
+      profileDocumentIds: [
+        "in-process-binding-gate-v1",
+        "in-process-native-v1",
+        "in-process-trust-lint-v1",
+        "linux-namespace-uv-v1",
+        "host-process-uv-v1",
+        "linux-namespace-uv-v1",
+        "docker-hardened-skillspector-v1",
+        "host-process-uv-v1",
+      ],
+      profileDigestsMatchDocuments: true,
+      refusal: { outcome: "refused", reason: "unknown-detector" },
+      nativeRun: {
+        outcome: "succeeded",
+        executionProfileId: "in-process-native-v1",
+        profileDigestIsCapabilityProfile: true,
+        analyzerVersionIsCapabilityIdentity: true,
+        annexDigestNamesBytes: true,
+        producerIsInstalledManifest: true,
+        producer: { name: "@aihq/scan", version: "0.5.0" },
+        seams: { runner: "scan-owned-default", prerequisiteProbe: "scan-owned-default" },
+        isolation: "none",
+        network: "none",
+        analyzer: "aih-native",
+        mediaType: "application/vnd.aih.baseline-native+json",
+        annexByteLengthNamesBytes: true,
+        coverage: {
+          kind: "source-tree",
+          complete: true,
+          coveredPaths: ["README.md", "rules/base.md"],
+          excludedPaths: [],
+          uncoveredPaths: [],
+        },
+        coverageNamesSealedSourceTree: true,
+        sourceUnchangedByRun: true,
+        findingsSource: "analyzer-output-digest-bound",
+      },
+      unreadable: { settled: "resolved", outcome: "refused", reason: "unknown-detector" },
+      findingsStatus: "unverified",
+    });
     expect(consumer.metadata).toEqual(npmDiscoveryMetadata);
     expect(consumer.denied?.map(({ code }) => code)).toEqual([
       "ERR_PACKAGE_PATH_NOT_EXPORTED",
@@ -635,14 +828,22 @@ describe("published V2 package installation", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: canonicalStrictJsonBytesV1({
               version: "2.1.0",
-              runs: [{ tool: { driver: { name: analyzer } }, results: [] }],
+              runs: [
+                {
+                  tool: { driver: { name: analyzer } },
+                  results: [],
+                  invocations: [{ executionSuccessful: true }],
+                },
+              ],
             }),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     const baselineResult = await executeBaselineVetBatchV1(baselineRequest, {
       sourceRoot: baselineRoot,

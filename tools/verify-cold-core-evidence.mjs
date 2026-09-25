@@ -28,8 +28,8 @@ const CORE_PACKAGE = {
 };
 const SCANNER_PACKAGE = {
   name: "@aihq/scan",
-  version: "0.4.0",
-  filename: "aihq-scan-0.4.0.tgz",
+  version: "0.5.0",
+  filename: "aihq-scan-0.5.0.tgz",
 };
 const CORE_SCHEMA_SHA256 = "88c0a36e9177201660e773351958d89059c7d5b54e1c437d0afd06f48c5288bc";
 const CORE_SCHEMA_PATH = "schemas/aih-organization-evidence-envelope-v1.schema.json";
@@ -268,6 +268,12 @@ const runner = async (argv) => {
       }],
     };
     writeFileSync(join(outputRoot, "result.sarif"), JSON.stringify(sarif), { mode: 0o600 });
+    // U1i, coordinator decision D30: the scanner also writes its single-skill JSON report.
+    writeFileSync(
+      join(outputRoot, "result.json"),
+      JSON.stringify({ skill_name: "candidate", skill_path: "/source", findings: [] }),
+      { mode: 0o600 },
+    );
     return { code: 0, stdout: "", stderr: "" };
   }
   if (argv[2] === "rm" || argv[2] === "ls") return { code: 0, stdout: "", stderr: "" };

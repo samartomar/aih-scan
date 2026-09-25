@@ -5,12 +5,21 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  readFileSync,
   rmSync,
   type Stats,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import {
+  AnalyzerOutputReadErrorV1,
+  readBoundedAnalyzerOutputV1,
+} from "../baseline/bounded-output-read-v1.js";
+import { ciscoSingleSkillReportV1 } from "../baseline/cisco-analyzer-failures-v1.js";
+import {
+  assertCiscoSingleSkillAnalyzersCompleteV1,
+  assertCiscoSingleSkillReportSkillV1,
+} from "../baseline/cisco-report-skills-v1.js";
+import { BASELINE_DOCKER_EXECUTABLE_V1 } from "../cli/process-runner.js";
 import {
   assertSafeRelativePosixPathV1,
   assertStrictJsonValueV1,
@@ -22,10 +31,9 @@ import {
 } from "../observation/native-observation-v1.js";
 import { createCiscoFactsOnlyV1 } from "./facts-only-v1.js";
 import { type CiscoOciLayoutV1, isCiscoOciLayoutV1 } from "./oci-layout-v1.js";
-import { parseCiscoSarifV1 } from "./sarif-v1.js";
+import { parseCiscoSarifWithIdentitiesV1 } from "./sarif-v1.js";
 
 const MAX_STDIO_BYTES = 64 * 1024;
-const MAX_SARIF_BYTES = 16 * 1024 * 1024;
 const TIMEOUT_MS = 120_000;
 const inputFields = [
   "protocol",
@@ -223,7 +231,8 @@ function readOwnedContainerId(path: string): string {
   const before = cidfileStats(path);
   let bytes: Buffer;
   try {
-    bytes = readFileSync(path);
+    // U1j: bounded like every file Scan reads back from the container run.
+    bytes = readBoundedAnalyzerOutputV1(path, "container ownership cidfile", 66);
   } catch {
     return fail("container ownership cidfile");
   }
@@ -235,29 +244,43 @@ function readOwnedContainerId(path: string): string {
   return normalizedContainerId(text, "container ownership cidfile");
 }
 
-function output(path: string): Buffer {
-  const names = readdirSync(path).sort();
-  if (names.length !== 1 || names[0] !== "result.sarif") fail("SARIF output stale or extra");
-  const stat: Stats = (() => {
-    try {
-      return lstatSync(join(path, "result.sarif"));
-    } catch {
-      return fail("SARIF output missing");
-    }
-  })();
-  if (
-    !stat.isFile() ||
-    stat.isSymbolicLink() ||
-    stat.nlink > 1 ||
-    stat.size < 0 ||
-    stat.size > MAX_SARIF_BYTES
-  )
-    fail("SARIF output invalid");
-  const bytes = readFileSync(join(path, "result.sarif"));
-  if (bytes.length !== stat.size) fail("SARIF output changed while reading");
+/** The files the scanner may leave in `/output`: its SARIF and (U1i, D30) its JSON report. */
+const OUTPUT_FILES: readonly string[] = ["result.json", "result.sarif"];
+
+/**
+ * One regular, unlinked, bounded UTF-8 output file; `label` names it in every failure. U1j:
+ * read by the one bounded analyzer-output read (the analyzer-output cap, never an unbounded
+ * read).
+ */
+function outputFile(path: string, name: string, label: string): Buffer {
+  let bytes: Buffer;
+  try {
+    bytes = readBoundedAnalyzerOutputV1(join(path, name), label);
+  } catch (error) {
+    if (!(error instanceof AnalyzerOutputReadErrorV1)) throw error;
+    return fail(
+      `${label} ${error.reason === "missing" ? "missing" : error.reason === "changed" ? "changed while reading" : "invalid"}`,
+    );
+  }
   const text = bytes.toString("utf8");
-  if (!Buffer.from(text, "utf8").equals(bytes)) fail("SARIF output UTF-8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) fail(`${label} UTF-8`);
   return bytes;
+}
+
+/**
+ * The scanner's SARIF and its single-skill JSON report. U1i, coordinator decision D30: the
+ * report is required; a missing or unusable one fails, named "Cisco JSON report" (stage
+ * `output`), and nothing falls back to the SARIF alone. Any other file fails.
+ */
+function output(path: string): Readonly<{ sarif: Buffer; json: Buffer }> {
+  const names = readdirSync(path).sort();
+  if (names.some((name) => !OUTPUT_FILES.includes(name))) fail("SARIF output stale or extra");
+  if (!names.includes("result.sarif")) fail("SARIF output missing");
+  if (!names.includes("result.json")) fail("Cisco JSON report output missing");
+  return {
+    sarif: outputFile(path, "result.sarif", "SARIF output"),
+    json: outputFile(path, "result.json", "Cisco JSON report output"),
+  };
 }
 
 function temporaryPath(path: string, label: string): void {
@@ -327,7 +350,14 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     const cidfile = join(clientRoot, "container.cid");
     temporaryPath(cidfile, "container ownership cidfile");
     const inspected = await invoke(
-      ["docker", "image", "inspect", "--format", "{{.Id}}", input.layout.configDigestSha256],
+      [
+        BASELINE_DOCKER_EXECUTABLE_V1,
+        "image",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        input.layout.configDigestSha256,
+      ],
       "image inspect",
     );
     if (
@@ -344,7 +374,7 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     try {
       created = await invoke(
         [
-          "docker",
+          BASELINE_DOCKER_EXECUTABLE_V1,
           "container",
           "create",
           "--cidfile",
@@ -379,8 +409,12 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
           "/source",
           "--format",
           "sarif",
+          "--format",
+          "json",
           "--output-sarif",
           "/output/result.sarif",
+          "--output-json",
+          "/output/result.json",
         ],
         "container create",
       );
@@ -404,7 +438,14 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     const claimedContainerId = normalizedContainerId(createResult.stdout, "container creation");
     if (claimedContainerId !== cidfileId) fail("container ownership mismatch");
     const inspectedContainer = await invoke(
-      ["docker", "container", "inspect", "--format", "{{.Id}}", claimedContainerId],
+      [
+        BASELINE_DOCKER_EXECUTABLE_V1,
+        "container",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        claimedContainerId,
+      ],
       "container identity",
     );
     if (
@@ -416,19 +457,35 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
     )
       fail("container identity mismatch");
     const run = await invoke(
-      ["docker", "container", "start", "--attach", claimedContainerId],
+      [BASELINE_DOCKER_EXECUTABLE_V1, "container", "start", "--attach", claimedContainerId],
       "container start",
     );
     if (run.truncated) fail("scanner run truncated");
     if (run.code !== 0) fail(`scanner run nonzero code ${run.code}`);
-    const rawSarif = output(outputRoot);
-    const parsedSarif = parseCiscoSarifV1(rawSarif.toString("utf8"), {
-      sourceRoot: input.sourceRoot,
-    });
+    const { sarif: rawSarif, json: rawReport } = output(outputRoot);
+    // U1j: each result's D28 identity is kept from before the projection drops it.
+    const { sarif: parsedSarif, identities } = parseCiscoSarifWithIdentitiesV1(
+      rawSarif.toString("utf8"),
+      {
+        sourceRoot: input.sourceRoot,
+      },
+    );
     for (const result of parsedSarif.runs[0]?.results ?? [])
       for (const location of result.locations)
         if (!Object.hasOwn(selectedFiles, location.physicalLocation.artifactLocation.uri))
           fail("SARIF path outside selected closure");
+    // U1i, coordinator decision D30 (revised 20:58Z): the capture scanned one skill, the
+    // source root; it is complete only when every failed analyzer Cisco reports is the
+    // matched skill_loader fallback (coverage otherwise; a malformed report is output).
+    // U1j (review of U1i, P1): the report must be the report of `/source` itself.
+    const report = ciscoSingleSkillReportV1(rawReport, "the capture");
+    assertCiscoSingleSkillReportSkillV1(report, {
+      label: "the capture",
+      sourceRoots: ["/source"],
+      skill: "",
+      platform: "linux",
+    });
+    assertCiscoSingleSkillAnalyzersCompleteV1(report, identities, "");
     const after = sealNativeObservationSourceV1(sourceInput);
     if (!sameSeal(before, after)) fail("source drift during run");
     const facts = createCiscoFactsOnlyV1({
@@ -459,12 +516,12 @@ export async function executeCiscoOciBrokerV1(value: unknown): Promise<any> {
   if (ownedContainerId !== undefined) {
     try {
       const removed = await invoke(
-        ["docker", "container", "rm", "--force", ownedContainerId],
+        [BASELINE_DOCKER_EXECUTABLE_V1, "container", "rm", "--force", ownedContainerId],
         "container rm",
       );
       const absent = await invoke(
         [
-          "docker",
+          BASELINE_DOCKER_EXECUTABLE_V1,
           "container",
           "ls",
           "--all",

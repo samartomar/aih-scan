@@ -9,10 +9,16 @@ const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 describe("Strict V2 public boundary", () => {
   it("exports only the bounded V2 evidence and compatibility contracts", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
+      "AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
       "AI_HARNESS_DECISION_V2_SCHEMA_SHA256",
+      "AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
       "AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
       "AI_HARNESS_STRICT_V2_COMMIT",
+      "AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
       "BASELINE_ANALYZERS_V1",
+      "SCAN_RESULT_RECORD_FORMAT_V1",
+      "SCAN_RESULT_RECORD_VERSION_V1",
+      "SCAN_RESULT_SUBJECT_NAME_V1",
       "assertCompleteScanAnnexArtifactsV2",
       "baselineVetPublicationResultV1",
       "canonicalBaselineVetAttestationEnvelopeV1Bytes",
@@ -28,6 +34,7 @@ describe("Strict V2 public boundary", () => {
       "canonicalSourceSealsV2Bytes",
       "captureCiscoOciCandidateV2",
       "captureRegisteredDetectorCandidateV2",
+      "coreOrganizationEvidenceEnvelopeDigestV1",
       "createBaselineVetDiscoveryV1",
       "createBaselineVetPublicationV1",
       "createBaselineVetRequestV1",
@@ -35,6 +42,9 @@ describe("Strict V2 public boundary", () => {
       "createScanCandidateV2",
       "ed25519KeyIdV2",
       "isVerifiedScanAttestationV2",
+      // Workstream D: Scan owns detector execution, so the capability record, the
+      // production runner and the findings reader are part of the public boundary.
+      "listDetectorCapabilitiesV1",
       "parseBaselineVetAttestationEnvelopeV1Json",
       "parseBaselineVetDiscoveryV1Json",
       "parseBaselineVetPublicationV1Json",
@@ -43,10 +53,19 @@ describe("Strict V2 public boundary", () => {
       "parseDetectorRegistrationV1Json",
       "parseScanAttestationEnvelopeV2Json",
       "parseScanCandidateV2Json",
+      "parseScanResultRecordV1",
+      "probeDetectorAvailabilityV1",
       "projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1",
       "readBaselineVetBundleV1",
       "readScanCaptureBundleV2",
+      "readScanFindingsV1",
+      "readScanResultRecordV1",
+      "readScanResultSubjectBindingV1",
       "resolveBaselineVetDiscoveryV1",
+      "resolveDetectorCapabilityV1",
+      "resolveDetectorExecutionProfileDocumentV1",
+      "runCiscoShardV1",
+      "runDetectorV1",
       "sealSourceV2",
       "signBaselineVetBundleV1",
       "signScanCandidateV2",
@@ -63,11 +82,14 @@ describe("Strict V2 public boundary", () => {
   it("makes the 0.x package boundary explicit without treating source as publication evidence", () => {
     const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
     expect(manifest.name).toBe("@aihq/scan");
-    expect(manifest.version).toBe("0.4.0");
+    expect(manifest.version).toBe("0.5.0");
     expect(manifest.private).toBeUndefined();
     expect(manifest.bin).toEqual({ "aih-scan": "./dist/cli.js" });
     expect(manifest.exports).toEqual({
       ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      // Additive and idiomatic: a consumer can locate the package root without deep
+      // importing anything. No dist subpath becomes reachable.
+      "./package.json": "./package.json",
     });
     const cli = read("src/cli.ts");
     expect(cli).toContain('command === "verify"');

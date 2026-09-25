@@ -1,0 +1,350 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "skill-scanner",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/cisco-ai-defense/skill-scanner",
+          "rules": [
+            {
+              "id": "LOW_ANALYZABILITY",
+              "name": "Low Analyzability",
+              "shortDescription": {
+                "text": "Critically low analyzability score"
+              },
+              "fullDescription": {
+                "text": "Only 64% of skill content could be analyzed. 3 of 8 files are opaque to the scanner. The safety assessment has low confidence."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "category": "policy_violation",
+                "severity": "HIGH",
+                "tags": [
+                  "policy_violation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Replace opaque files (binaries, encrypted content) with inspectable source code to improve scan confidence.",
+                "markdown": "**Remediation**: Replace opaque files (binaries, encrypted content) with inspectable source code to improve scan confidence."
+              }
+            },
+            {
+              "id": "UNANALYZABLE_BINARY",
+              "name": "Unanalyzable Binary",
+              "shortDescription": {
+                "text": "Unanalyzable binary file"
+              },
+              "fullDescription": {
+                "text": "Binary file 'assets\\blob.bin' cannot be inspected by the scanner. Reason: Binary file (.bin) - cannot inspect content. Binary files resist static analysis and may contain hidden functionality."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "policy_violation",
+                "severity": "MEDIUM",
+                "tags": [
+                  "policy_violation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Replace binary files with source code, or submit the binary to VirusTotal for independent verification (--use-virustotal).",
+                "markdown": "**Remediation**: Replace binary files with source code, or submit the binary to VirusTotal for independent verification (--use-virustotal)."
+              }
+            },
+            {
+              "id": "BINARY_FILE_DETECTED",
+              "name": "Binary File Detected",
+              "shortDescription": {
+                "text": "Binary file detected in skill package"
+              },
+              "fullDescription": {
+                "text": "Binary file found: assets\\blob.bin. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "policy_violation",
+                "severity": "INFO",
+                "tags": [
+                  "policy_violation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Review binary file necessity. Replace with auditable scripts if possible.",
+                "markdown": "**Remediation**: Review binary file necessity. Replace with auditable scripts if possible."
+              }
+            },
+            {
+              "id": "FILE_MAGIC_MISMATCH",
+              "name": "File Magic Mismatch",
+              "shortDescription": {
+                "text": "File extension does not match actual content type"
+              },
+              "fullDescription": {
+                "text": "File 'skill.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "obfuscation",
+                "severity": "MEDIUM",
+                "tags": [
+                  "obfuscation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Rename the file to match its actual content type, or remove it if it appears malicious.",
+                "markdown": "**Remediation**: Rename the file to match its actual content type, or remove it if it appears malicious."
+              }
+            },
+            {
+              "id": "SKILL_LOAD_FALLBACK_USED",
+              "name": "Skill Load Fallback Used",
+              "shortDescription": {
+                "text": "Strict manifest load failed; inert fallback scan used"
+              },
+              "fullDescription": {
+                "text": "SkillLoadError rejected malformed or missing manifest metadata. The bounded package body was still scanned as inert content; manifest capabilities were not trusted."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "policy_violation",
+                "severity": "INFO",
+                "tags": [
+                  "policy_violation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Repair the YAML frontmatter and provide the required manifest fields.",
+                "markdown": "**Remediation**: Repair the YAML frontmatter and provide the required manifest fields."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "LOW_ANALYZABILITY",
+          "level": "error",
+          "message": {
+            "text": "Only 64% of skill content could be analyzed. 3 of 8 files are opaque to the scanner. The safety assessment has low confidence."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "HIGH",
+            "remediation": "Replace opaque files (binaries, encrypted content) with inspectable source code to improve scan confidence."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "SKILL.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "LOW_ANALYZABILITY_CRITICAL"
+          }
+        },
+        {
+          "ruleId": "UNANALYZABLE_BINARY",
+          "level": "warning",
+          "message": {
+            "text": "Binary file 'assets\\blob.bin' cannot be inspected by the scanner. Reason: Binary file (.bin) - cannot inspect content. Binary files resist static analysis and may contain hidden functionality."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "MEDIUM",
+            "remediation": "Replace binary files with source code, or submit the binary to VirusTotal for independent verification (--use-virustotal)."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "assets/blob.bin",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "UNANALYZABLE_BINARY_assets\\blob.bin"
+          }
+        },
+        {
+          "ruleId": "BINARY_FILE_DETECTED",
+          "level": "note",
+          "message": {
+            "text": "Binary file found: assets\\blob.bin. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "INFO",
+            "remediation": "Review binary file necessity. Replace with auditable scripts if possible."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "assets/blob.bin",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "BINARY_FILE_DETECTED_366b23eabc"
+          }
+        },
+        {
+          "ruleId": "BINARY_FILE_DETECTED",
+          "level": "note",
+          "message": {
+            "text": "Binary file found: docs\\latin1.md. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "INFO",
+            "remediation": "Review binary file necessity. Replace with auditable scripts if possible."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "docs/latin1.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "BINARY_FILE_DETECTED_6799a40b2b"
+          }
+        },
+        {
+          "ruleId": "UNANALYZABLE_BINARY",
+          "level": "warning",
+          "message": {
+            "text": "Binary file 'scripts\\install-data.bin' cannot be inspected by the scanner. Reason: Binary file (.bin) - cannot inspect content. Binary files resist static analysis and may contain hidden functionality."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "MEDIUM",
+            "remediation": "Replace binary files with source code, or submit the binary to VirusTotal for independent verification (--use-virustotal)."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/install-data.bin",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "UNANALYZABLE_BINARY_scripts\\install-data.bin"
+          }
+        },
+        {
+          "ruleId": "BINARY_FILE_DETECTED",
+          "level": "note",
+          "message": {
+            "text": "Binary file found: scripts\\install-data.bin. Binary files cannot be inspected by static analysis. Consider using Python or Bash scripts for transparency."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "INFO",
+            "remediation": "Review binary file necessity. Replace with auditable scripts if possible."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scripts/install-data.bin",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "BINARY_FILE_DETECTED_41e217d627"
+          }
+        },
+        {
+          "ruleId": "FILE_MAGIC_MISMATCH",
+          "level": "warning",
+          "message": {
+            "text": "File 'skill.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file."
+          },
+          "properties": {
+            "category": "obfuscation",
+            "severity": "MEDIUM",
+            "remediation": "Rename the file to match its actual content type, or remove it if it appears malicious."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "skill.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "FILE_MAGIC_MISMATCH_fdd34aac2c"
+          }
+        },
+        {
+          "ruleId": "SKILL_LOAD_FALLBACK_USED",
+          "level": "note",
+          "message": {
+            "text": "SkillLoadError rejected malformed or missing manifest metadata. The bounded package body was still scanned as inert content; manifest capabilities were not trusted."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "INFO",
+            "remediation": "Repair the YAML frontmatter and provide the required manifest fields."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "skill.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "SKILL_LOAD_FALLBACK_USED"
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "endTimeUtc": "2026-09-24T19:26:46Z"
+        }
+      ]
+    }
+  ]
+}

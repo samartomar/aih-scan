@@ -31,3 +31,9 @@ export function verifyCompletedPublication(input: Readonly<{
   generation?: string;
   run?: BaselinePublicationCommandRunner;
 }>): boolean;
+
+/** Exactly the four release files, each hashed file matching `SHA256SUMS`. */
+export function verifyDownloadedFiles(directory: string): void;
+
+/** The discovery document names exactly this repository's release download locator. */
+export function assertDiscoveryLocator(discoveryPath: string, repository: string, tag: string): void;

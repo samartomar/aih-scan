@@ -1,15 +1,18 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BASELINE_PYTHON_EXECUTABLE_V1,
   type BaselineProcessRunnerV1,
   CISCO_SKILL_SCANNER_VERSION_V1,
   createBaselineAnalyzerExecutionV1,
+  createBaselineAnalyzerRunV1,
   SEMGREP_VERSION_V1,
   SKILLSPECTOR_IMAGE_DIGEST_V1,
   SKILLSPECTOR_IMAGE_V1,
+  SKILLSPECTOR_SOURCE_REVISION_V1,
+  skillspectorAcceptedImageDigestsRefusalV1,
 } from "../../src/baseline/runtime-v1.js";
 import {
   BASELINE_BWRAP_EXECUTABLE_V1,
@@ -41,10 +44,17 @@ function sourceFixture(): string {
 const sarif = (name: string) =>
   canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name } }, results: [] }],
+    runs: [
+      { tool: { driver: { name } }, results: [], invocations: [{ executionSuccessful: true }] },
+    ],
   }).toString("utf8");
 
 describe("code-owned baseline analyzer runtime", () => {
+  // The hardened profiles run absolute Linux executables, so these tests declare a Linux host.
+  beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  });
+
   it("uses only fixed hardened Docker and lock-backed canonical uv profiles", async () => {
     const calls: Array<{
       argv: readonly string[];
@@ -94,9 +104,10 @@ describe("code-owned baseline analyzer runtime", () => {
         writeFileSync(join(workDirectory, "results.sarif"), sarif("cisco"), "utf8");
         writeFileSync(
           join(workDirectory, "results.json"),
+          // U1j: the report lists the one expected skill.
           canonicalStrictJsonBytesV1({
             summary: { total_skills_scanned: 1 },
-            results: [],
+            results: [{ skill_path: "/aih/source/skills/demo", findings: [] }],
           }),
         );
         return { code: 0, stdout: "", stderr: "", truncated: false };
@@ -247,12 +258,15 @@ describe("code-owned baseline analyzer runtime", () => {
         "/aih/work/results.sarif",
       ]),
     );
+    // D40 (U1m): Semgrep runs from the scan root; Cisco from the empty sibling /aih/cwd, so its
+    // cwd-relative SARIF URIs stay skill-relative.
     expect(
       analyzerCalls.every(
         (call) =>
           call.argv.includes("/aih/source") &&
           call.argv.includes("--chdir") &&
-          call.argv[call.argv.indexOf("--chdir") + 1] === "/aih/source",
+          call.argv[call.argv.indexOf("--chdir") + 1] ===
+            (call.argv.includes("/aih/venv/bin/skill-scanner") ? "/aih/cwd" : "/aih/source"),
       ),
     ).toBe(true);
     expect(JSON.stringify(calls)).not.toContain("secret");
@@ -302,6 +316,59 @@ describe("code-owned baseline analyzer runtime", () => {
       [BASELINE_DOCKER_EXECUTABLE_V1, "--context", "default", "pull", SKILLSPECTOR_IMAGE_V1],
     ]);
     expect(calls.find((argv) => argv.includes("run"))).toContain(SKILLSPECTOR_IMAGE_V1);
+  });
+
+  it("records the pinned image it ran, and keeps its pinned acquisition when no accepted digests are named", async () => {
+    let inspected = false;
+    const runner: BaselineProcessRunnerV1 = async (argv) => {
+      if (argv.includes("version"))
+        return { code: 0, stdout: "Docker version 28", stderr: "", truncated: false };
+      if (argv.includes("inspect")) {
+        if (!inspected) {
+          inspected = true;
+          return { code: 1, stdout: "", stderr: "missing", truncated: false };
+        }
+        return {
+          code: 0,
+          stdout: JSON.stringify({ RepoDigests: [SKILLSPECTOR_IMAGE_V1] }),
+          stderr: "",
+          truncated: false,
+        };
+      }
+      if (argv.includes("pull")) return { code: 0, stdout: "pulled", stderr: "", truncated: false };
+      if (argv.includes("run"))
+        return { code: 0, stdout: sarif("skillspector"), stderr: "", truncated: false };
+      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    };
+
+    const observed = await createBaselineAnalyzerRunV1({ runner, env: { PATH: "C:\\tools" } })({
+      analyzer: "skillspector",
+      sourceRoot: sourceFixture(),
+    });
+
+    expect(observed.image).toEqual({
+      digest: SKILLSPECTOR_IMAGE_DIGEST_V1,
+      reference: SKILLSPECTOR_IMAGE_V1,
+      acceptance: "scan-pinned",
+    });
+    expect(observed.analyzerVersion).toBe(
+      `${SKILLSPECTOR_SOURCE_REVISION_V1}@${SKILLSPECTOR_IMAGE_DIGEST_V1}`,
+    );
+  });
+
+  it("refuses a malformed accepted-digest list when the run is created, before any Docker call", () => {
+    for (const [value, message] of [
+      [["sha256:nope"], /acceptedImageDigests\[0\] is not a sha256/],
+      [[], /accepts nothing/],
+      ["sha256:x", /must be an array/],
+    ] as const) {
+      expect(() =>
+        createBaselineAnalyzerRunV1({
+          skillspectorAcceptedImageDigests: value as unknown as readonly string[],
+        }),
+      ).toThrow(message);
+    }
+    expect(skillspectorAcceptedImageDigestsRefusalV1([`sha256:${"a".repeat(64)}`])).toBeUndefined();
   });
 
   it("preserves bounded analyzer diagnostic head and tail", async () => {

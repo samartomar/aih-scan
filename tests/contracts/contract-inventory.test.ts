@@ -1,0 +1,729 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
+import {
+  listDetectorCapabilitiesV1,
+  resolveDetectorExecutionProfileDocumentV1,
+} from "../../src/capability/detector-capability-v1.js";
+import {
+  canonicalStrictJsonBytesV1,
+  parseStrictJsonObjectV1,
+} from "../../src/contract/strict-json-v1.js";
+import {
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
+  AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
+  AI_HARNESS_STRICT_V2_COMMIT,
+  AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
+} from "../../src/core/core-contract-lock-v2.js";
+import {
+  createScanCandidateV2,
+  parseScanAttestationEnvelopeV2Json,
+  parseScanCandidateV2Json,
+} from "../../src/observation/scan-attestation-v2.js";
+import { createScannerManifestV1 } from "../../src/observation/scanner-manifest-v1.js";
+import { validateSourceSealV2 } from "../../src/observation/source-seal-v2.js";
+import {
+  SCAN_RESULT_RECORD_FORMAT_V1,
+  SCAN_RESULT_RECORD_VERSION_V1,
+  SCAN_RESULT_SUBJECT_NAME_V1,
+} from "../../src/scan-result-record.js";
+
+/**
+ * CONTRACTS.md is prose, so it is pinned rather than trusted: every row names a source
+ * line, and this test re-reads that line. A renamed constant, a bumped literal or a
+ * moved definition fails here instead of leaving the published inventory quietly wrong.
+ */
+const repositoryRoot = resolve(import.meta.dirname, "..", "..");
+const read = (path: string) =>
+  readFileSync(resolve(repositoryRoot, path), "utf8").replace(/\r\n/gu, "\n");
+const contracts = () => read("CONTRACTS.md");
+/** Prose wraps across lines, so sentence checks compare collapsed whitespace. */
+const prose = () => contracts().replace(/\s+/gu, " ");
+
+/** Each row's `file:line` reference, and the token that line must still carry. */
+const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string }>[] = [
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 132,
+    contains: 'protocol: z.literal("ScanCandidateV2")',
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 138,
+    contains: "commit: z.enum([...AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED])",
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 225,
+    contains: 'predicateType: z.literal("https://aih.dev/ScanAttestationV2")',
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 228,
+    contains: 'protocol: z.literal("ScanAttestationV2")',
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 265,
+    contains: "export interface VerifiedScanAttestationV2",
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 1073,
+    contains: "export function isVerifiedScanAttestationV2",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 40,
+    contains: 'protocol: z.literal("SourceSealV2")',
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 41,
+    contains: 'algorithm: z.literal("code-unit-canonical-json-v1")',
+  },
+  {
+    path: "src/observation/scan-bundle-v2.ts",
+    line: 130,
+    contains: 'manifest.protocol !== "ScanBundleV2"',
+  },
+  {
+    path: "src/observation/scanner-manifest-v1.ts",
+    line: 50,
+    contains: 'protocol: z.literal("ScannerManifestV1")',
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 102,
+    contains: 'protocol: z.literal("BaselineVetRequestV1")',
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 139,
+    contains: 'protocol: z.literal("BaselineVetReceiptV1")',
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 996,
+    contains: "attachScanCompletionV1(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 1061,
+    contains: "function carriesBaselineCompletion(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 819,
+    contains: "function executedProfile(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 834,
+    contains: "function versionNamesLock(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 889,
+    contains: "function assertAnnexLocations(",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 868,
+    contains: "function assertEveryResultLocation(",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 510,
+    contains: "export function assertSarifResultFilesSealedV1(",
+  },
+  {
+    path: "src/observation/source-hash-v1.ts",
+    line: 93,
+    contains: "export function hashSourceTreeV1(",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 2147,
+    contains: "export const BASELINE_BATCH_EXECUTION_PROFILES_V1",
+  },
+  {
+    path: "src/core/organization-evidence-envelope-v1.ts",
+    line: 16,
+    contains: 'format: z.literal("aih-organization-evidence")',
+  },
+  {
+    path: "src/core/organization-evidence-envelope-v1.ts",
+    line: 17,
+    contains: "version: z.literal(1)",
+  },
+  {
+    path: "src/core/core-contract-lock-v2.ts",
+    line: 19,
+    contains: "export const AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
+  },
+  {
+    path: "src/core/core-contract-lock-v2.ts",
+    line: 35,
+    contains: "export const AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED",
+  },
+  {
+    path: "src/core/core-contract-lock-v2.ts",
+    line: 39,
+    contains: "export const AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED",
+  },
+  {
+    path: "src/core/core-contract-lock-v2.ts",
+    line: 49,
+    contains: "export const AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256",
+  },
+  {
+    path: "src/scan-result-record.ts",
+    line: 30,
+    contains: 'export const SCAN_RESULT_RECORD_FORMAT_V1 = "aih-scan-result-record"',
+  },
+  {
+    path: "src/scan-result-record.ts",
+    line: 31,
+    contains: "export const SCAN_RESULT_RECORD_VERSION_V1 = 1",
+  },
+  {
+    path: "src/scan-result-record.ts",
+    line: 32,
+    contains: 'export const SCAN_RESULT_SUBJECT_NAME_V1 = "source-tree"',
+  },
+  {
+    path: "src/scan-result-record.ts",
+    line: 459,
+    contains: "export function parseScanResultRecordV1",
+  },
+  {
+    path: "src/capability/detector-capability-v1.ts",
+    line: 136,
+    contains: "export interface DetectorExecutionProfileDocumentV1",
+  },
+  {
+    path: "src/capability/detector-capability-v1.ts",
+    line: 172,
+    contains: "export interface DetectorCapabilityV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 156, contains: "RunDetectorRefusalReasonV1" },
+  {
+    path: "src/observation/source-observation-seal-v1.ts",
+    line: 138,
+    contains: "export function sealSourceObservationV1",
+  },
+  {
+    path: "src/observation/source-observation-seal-v1.ts",
+    line: 41,
+    contains: "export const SOURCE_OBSERVATION_SEAL_LIMITS_V1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 252,
+    contains: "readonly detectorOptions?: DetectorOptionsV1",
+  },
+  {
+    path: "src/runner/detector-options-v1.ts",
+    line: 68,
+    contains: "export function readDetectorOptionsV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 1429,
+    contains: "export async function probeDetectorAvailabilityV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 1388,
+    contains: "export type DetectorAvailabilityV1Result",
+  },
+  {
+    path: "src/runner/run-cisco-shard-v1.ts",
+    line: 142,
+    contains: "export async function runCiscoShardV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 89,
+    contains: "export function assertCiscoSingleSkillReportSkillV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 126,
+    contains: "export function assertCiscoScanAllSkillInventoryV1",
+  },
+  {
+    path: "src/baseline/cisco-report-skills-v1.ts",
+    line: 177,
+    contains: "export function assertCiscoSingleSkillAnalyzersCompleteV1",
+  },
+  {
+    path: "src/baseline/bounded-output-read-v1.ts",
+    line: 55,
+    contains: "export function readBoundedAnalyzerOutputV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 1078,
+    contains: "export function ciscoFallbackPairingV1",
+  },
+  {
+    path: "src/baseline/cisco-analyzer-failures-v1.ts",
+    line: 106,
+    contains: "export function assertCiscoAnalyzersCompleteV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 1151,
+    contains: "export function assertCiscoScanAllAnalyzersCompleteV1",
+  },
+  {
+    path: "src/runner/run-cisco-shard-v1.ts",
+    line: 52,
+    contains: "export type RunCiscoShardV1Result",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 179,
+    contains: "export type RunDetectorFailureCauseV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 181, contains: "export interface ScanCoverageV1" },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 813,
+    contains: "export async function runDetectorV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 301,
+    contains: "export type RunDetectorProducerV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 277,
+    contains: "readonly acceptedImageDigests?: readonly string[]",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 217,
+    contains: "readonly image?: SkillspectorImageMatchV1",
+  },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 219,
+    contains: "readonly hostRuntime?: HostProcessRuntimeV1",
+  },
+  { path: "src/runner/run-detector-v1.ts", line: 254, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 259, contains: "readonly timeoutMs?: number" },
+  {
+    path: "src/runner/run-detector-v1.ts",
+    line: 350,
+    contains: "      sourceSeal:",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 63,
+    contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 762,
+    contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 238,
+    contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
+  },
+  {
+    path: "src/baseline/runtime-v1.ts",
+    line: 77,
+    contains: 'const ciscoWorkingDirectoryV1 = "/aih/cwd"',
+  },
+  {
+    path: "src/detectors/cisco-multi-skill/scan-v1.ts",
+    line: 259,
+    contains: "cwd: request.skillDir",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 625,
+    contains: "export function sourceRelativeSarifV1",
+  },
+  {
+    path: "src/baseline/sarif-source-relative-v1.ts",
+    line: 843,
+    contains: "export function ciscoSourceRelativeSarifV1",
+  },
+  {
+    path: "src/cli/windows-job-supervisor.ts",
+    line: 560,
+    contains: "export function runUnderWindowsJobV1",
+  },
+  {
+    path: "src/cli/residual-processes.ts",
+    line: 221,
+    contains: "export async function sweepResidualProcessesV1",
+  },
+  {
+    path: "src/detectors/completion-evidence-v1.ts",
+    line: 18,
+    contains: "export const SCAN_COMPLETION_PROPERTY_V1",
+  },
+  {
+    path: "src/detectors/completion-evidence-v1.ts",
+    line: 57,
+    contains: "export function subjectFilesDigestV1",
+  },
+  {
+    path: "src/detectors/completion-evidence-v1.ts",
+    line: 183,
+    contains: "export function attachScanCompletionV1",
+  },
+  { path: "src/findings/scan-findings-v1.ts", line: 44, contains: "export type FindingFieldV1" },
+  {
+    path: "src/findings/scan-findings-v1.ts",
+    line: 66,
+    contains: "export interface ScanFindingsV1",
+  },
+  {
+    path: "src/findings/scan-findings-v1.ts",
+    line: 414,
+    contains: "export function projectAnalyzerSarifFindingsV1",
+  },
+  {
+    path: "src/findings/scan-findings-v1.ts",
+    line: 576,
+    contains: "export function readScanFindingsV1",
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 27,
+    contains: 'set.protocol !== "BaselinePublicationRequestSetV1"',
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 14,
+    contains: 'args[6] === "--overlap"',
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 52,
+    contains: 'fail("overlapping component paths")',
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 62,
+    contains: "fail(`overlapping paths within component",
+  },
+];
+
+/**
+ * Each byte bound the inventory states, the row phrase that states it, and the source
+ * line that enforces it. A bound the source does not enforce cannot be published.
+ */
+const BOUNDS: readonly Readonly<{
+  path: string;
+  line: number;
+  contains: string;
+  phrase: string;
+}>[] = [
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 316,
+    contains: "maxBytes = 2 * 1024 * 1024",
+    phrase: "decoded payload 2 MiB",
+  },
+  {
+    path: "src/observation/scan-attestation-v2.ts",
+    line: 740,
+    contains: "payload.byteLength > 2 * 1024 * 1024",
+    phrase: "decoded payload 2 MiB",
+  },
+  {
+    path: "src/observation/scan-bundle-v2.ts",
+    line: 116,
+    contains: "2 * 1024 * 1024",
+    phrase: "`candidate.json` 2 MiB",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 24,
+    contains: "maxFileBytes = 16 * 1024 * 1024",
+    phrase: "16 MiB per file",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 25,
+    contains: "maxTotalBytes = 256 * 1024 * 1024",
+    phrase: "256 MiB total",
+  },
+  {
+    path: "src/observation/source-seal-v2.ts",
+    line: 26,
+    contains: "maxSealBytes = 512 * 1024",
+    phrase: "512 KiB canonical seal",
+  },
+  {
+    path: "src/observation/scan-bundle-v2.ts",
+    line: 171,
+    contains: '"bundle annex", 16 * 1024 * 1024',
+    phrase: "16 MiB each",
+  },
+  {
+    path: "src/baseline/batch-v1.ts",
+    line: 60,
+    contains: "maxAnnexBytes = 16 * 1024 * 1024",
+    phrase: "16 MiB per annex",
+  },
+];
+
+type GenuineCandidate = Record<string, unknown> & {
+  coreContract: Record<string, string>;
+  sourceSeals: { before: Record<string, unknown> };
+};
+const genuineCandidate = () =>
+  JSON.parse(read("tests/fixtures/cisco/genuine-oci-capture-candidate.json")) as GenuineCandidate;
+const candidateInput = (patch: Record<string, unknown>) => {
+  const { candidateSha256: _digest, ...input } = genuineCandidate();
+  return { ...input, ...patch };
+};
+/** The issue paths of the ZodError `action` throws; fails if it throws anything else. */
+const zodIssuePaths = (action: () => unknown): string[] => {
+  let thrown: unknown;
+  try {
+    action();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ZodError);
+  return (thrown as ZodError).issues.map((issue) => issue.path.join("."));
+};
+const envelopeText = (statement: Record<string, unknown>, payloadType: string) =>
+  JSON.stringify({
+    payload: canonicalStrictJsonBytesV1(statement).toString("base64"),
+    payloadType,
+    signatures: [{ keyid: ["ed25519:", "0".repeat(64)].join(""), sig: "AAAA" }],
+  });
+const IN_TOTO = "application/vnd.in-toto+json";
+
+describe("published contract inventory", () => {
+  it("names a source line for every contract, and that line still defines it", () => {
+    const document = contracts();
+    for (const anchor of ANCHORS) {
+      const reference = `${anchor.path}:${anchor.line}`;
+      expect(document, reference).toContain(reference);
+      const line = read(anchor.path).split("\n")[anchor.line - 1];
+      expect(line, reference).toBeDefined();
+      expect(line, reference).toContain(anchor.contains);
+    }
+  });
+
+  // S2g: a `$\`` in a String.replace replacement once spliced the whole preceding document
+  // into the "Detector options" row, so the title, the prose and the tables appeared twice.
+  it("states the title once and every contract row once, each heading on its own line", () => {
+    const document = contracts();
+    expect(document.split("# Contracts published by").length - 1).toBe(1);
+    expect(document.split("Every format this package produces").length - 1).toBe(1);
+    const lines = document.split("\n");
+    for (const line of lines.filter((candidate) => candidate.includes("# ")))
+      expect(line.startsWith("#") || !/(?:^|[^#])#{1,6} [A-Z]/u.test(line), line.slice(0, 80)).toBe(
+        true,
+      );
+    const rowNames = lines
+      .filter((line) => line.startsWith("| ") && !/^| (?:---|Contract |)/u.test(line))
+      .map((line) => line.split(" | ")[0]);
+    expect(rowNames.length).toBe(new Set(rowNames).size);
+    expect(document).toContain("normalized npm scopes (`^@[a-z0-9][a-z0-9._~-]*$`)");
+  });
+
+  it("anchors every source reference it publishes", () => {
+    const anchored = new Set([...ANCHORS, ...BOUNDS].map((a) => `${a.path}:${a.line}`));
+    const references = [...contracts().matchAll(/`((?:src|tools)\/[^`:]+:\d+)`/gu)].map(
+      (match) => match[1],
+    );
+    expect(references.length).toBeGreaterThan(0);
+    for (const reference of references) expect(anchored, reference).toContain(reference);
+  });
+
+  it("states only byte bounds the source enforces, on the row that cites them", () => {
+    const rows = contracts().split("\n");
+    for (const bound of BOUNDS) {
+      const reference = `${bound.path}:${bound.line}`;
+      const row = rows.find((candidate) => candidate.includes(`\`${reference}\``));
+      expect(row, reference).toBeDefined();
+      expect(row, reference).toContain(bound.phrase);
+      const line = read(bound.path).split("\n")[bound.line - 1];
+      expect(line, reference).toContain(bound.contains);
+    }
+    // The envelope never had an 8 MiB bound; the decoded payload is bounded to 2 MiB.
+    expect(contracts()).not.toContain("8 MiB");
+  });
+
+  it("describes the refusal each reader actually throws for an unknown identity", () => {
+    // Schema-checked identities surface as a ZodError naming the field, not a TypeError.
+    const document = contracts();
+    expect(document).toContain("a `ZodError` from `parseScanCandidateV2Json`");
+    expect(document).toContain("a `ZodError` from `parseScanAttestationEnvelopeV2Json`");
+    expect(document).not.toContain("`TypeError` naming the invalid field");
+    const candidate = genuineCandidate();
+    expect(
+      zodIssuePaths(() =>
+        parseScanCandidateV2Json(JSON.stringify({ ...candidate, protocol: "ScanCandidateV9" })),
+      ),
+    ).toContain("protocol");
+    const commit = { ...candidate.coreContract, commit: "0".repeat(40) };
+    expect(
+      zodIssuePaths(() => createScanCandidateV2(candidateInput({ coreContract: commit }))),
+    ).toEqual(["coreContract.commit"]);
+    const digest = { ...candidate.coreContract, decisionSchemaSha256: "f".repeat(64) };
+    expect(
+      zodIssuePaths(() => createScanCandidateV2(candidateInput({ coreContract: digest }))),
+    ).toEqual(["coreContract.decisionSchemaSha256"]);
+    const mixed = {
+      commit: AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED[0],
+      decisionSchemaSha256: AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED[1],
+    };
+    expect(
+      zodIssuePaths(() => createScanCandidateV2(candidateInput({ coreContract: mixed }))),
+    ).toEqual(["coreContract"]);
+
+    const statement = {
+      _type: "https://in-toto.io/Statement/v1",
+      predicate: { protocol: "ScanAttestationV2" },
+      predicateType: "https://aih.dev/ScanAttestationV2",
+      subject: [],
+    };
+    expect(
+      zodIssuePaths(() =>
+        parseScanAttestationEnvelopeV2Json(envelopeText(statement, "text/plain")),
+      ),
+    ).toEqual(["payloadType"]);
+    for (const [field, patch] of [
+      ["_type", { _type: "https://in-toto.io/Statement/v9" }],
+      ["predicateType", { predicateType: "https://aih.dev/Other" }],
+      ["predicate.protocol", { predicate: { protocol: "ScanAttestationV9" } }],
+    ] as const) {
+      const text = envelopeText({ ...statement, ...patch }, IN_TOTO);
+      expect(
+        zodIssuePaths(() => parseScanAttestationEnvelopeV2Json(text)),
+        field,
+      ).toContain(field);
+    }
+
+    const seal = candidate.sourceSeals.before;
+    expect(
+      zodIssuePaths(() => validateSourceSealV2({ ...seal, protocol: "SourceSealV9" })),
+    ).toEqual(["protocol"]);
+    expect(zodIssuePaths(() => validateSourceSealV2({ ...seal, algorithm: "other" }))).toEqual([
+      "algorithm",
+    ]);
+    expect(
+      zodIssuePaths(() =>
+        createScannerManifestV1({ protocol: "ScannerManifestV9", detectors: [] }),
+      ),
+    ).toContain("protocol");
+  });
+
+  it("restates the exact constants this build compiles", () => {
+    const document = contracts();
+    for (const value of [
+      SCAN_RESULT_RECORD_FORMAT_V1,
+      SCAN_RESULT_SUBJECT_NAME_V1,
+      AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256,
+    ]) {
+      expect(document, value).toContain(value);
+    }
+    expect(document).toContain(`version: ${SCAN_RESULT_RECORD_VERSION_V1}`);
+    expect(document).toContain("AI_HARNESS_CORE_CONTRACTS_ACCEPTED");
+    expect(document).toContain("AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED");
+    expect(document).toContain("AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED");
+    // The default emitted pair must be the newest accepted member, and the document
+    // must say so rather than naming a value the build no longer emits.
+    expect(AI_HARNESS_STRICT_V2_COMMIT).toBe(AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED.at(-1));
+    expect(AI_HARNESS_DECISION_V2_SCHEMA_SHA256).toBe(
+      AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED.at(-1),
+    );
+    expect(document).toContain("newest last");
+  });
+
+  it("names every refusal a reader can produce", () => {
+    const document = contracts();
+    for (const reason of [
+      "unknown-format",
+      "unknown-version",
+      "unknown-subject-name",
+      "malformed-record",
+      "not-an-object",
+      "unknown-detector",
+      "unsupported-platform",
+      "unsupported-subject-kind",
+      "subject-requirement-unmet",
+      "prerequisite-missing",
+      "execution-profile-unavailable",
+      "unexpected Core commit",
+      "schema digest mismatch",
+      "schema digest drift: <path>",
+      "a tree without git history requires --core-commit",
+      "declared commit is not the checked-out commit",
+    ]) {
+      expect(document, reason).toContain(reason);
+    }
+  });
+
+  it("names every detector capability and execution profile this build publishes", () => {
+    const document = contracts();
+    for (const capability of listDetectorCapabilitiesV1()) {
+      for (const profile of capability.executionProfiles) {
+        expect(resolveDetectorExecutionProfileDocumentV1(profile.id), profile.id).toBeDefined();
+      }
+    }
+    expect(document).toContain("DetectorCapabilityV1");
+    expect(document).toContain("DetectorExecutionProfileDocumentV1");
+    expect(document).toContain("ScanFindingsV1");
+  });
+
+  it("states the data-only request set's overlap modes and that disjoint is the default (SI1c)", () => {
+    const sentences = prose();
+    expect(sentences).toContain("**[Scan: SI1c]**");
+    expect(sentences).toContain("`--overlap <disjoint|compiler-catalog>`");
+    expect(sentences).toContain("`disjoint` is the default");
+    expect(sentences).toContain("`publication request set rejected: arguments`");
+    expect(sentences).toContain("`publication request set rejected: overlapping component paths`");
+  });
+
+  it("names the reviewed overlap-mode record the directory test and the dispatcher read (SI1d)", () => {
+    const sentences = prose();
+    expect(sentences).toContain("**[Scan: SI1d]**");
+    expect(sentences).toContain("`.github/baseline-request-sets/overlap-modes.json`");
+    expect(sentences).toContain("every set it does not list is verified as `disjoint`");
+    expect(sentences).toContain("`-f request_set_overlap`");
+    const record = parseStrictJsonObjectV1(
+      read(".github/baseline-request-sets/overlap-modes.json"),
+      "overlap-modes.json",
+    );
+    for (const mode of Object.values(record)) expect(mode).toBe("compiler-catalog");
+  });
+
+  it("states that evidence carries no authority and that the document is not the contract", () => {
+    const sentences = prose();
+    expect(sentences).toContain("Scanner evidence carries no authority");
+    expect(sentences).toContain("This document is not the contract. The source is.");
+    expect(sentences).toContain("never by version-number equality");
+    expect(sentences).toContain("A recorded hash answers *what did we test*");
+    expect(sentences).toContain("It is not approval of a Core release");
+    // The inventory records what Scan reads and emits; it never claims an effect.
+    for (const claim of [
+      "grants approval",
+      "approves the subject",
+      "qualifies the component",
+      "authorizes adoption",
+      "is production authority",
+    ]) {
+      expect(sentences, claim).not.toContain(claim);
+    }
+  });
+});

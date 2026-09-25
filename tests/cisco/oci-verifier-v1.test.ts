@@ -283,7 +283,7 @@ const replaceWithSingleLayer = (fixture: LayoutFixture, layer: Buffer): string =
 
 const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number): string => {
   const mib = 1024 * 1024;
-  const target = 512 * mib + extraBytes;
+  const target = 192 * mib + extraBytes;
   const index = JSON.parse(readFileSync(join(fixture.root, "index.json"), "utf8")) as {
     readonly manifests?: unknown;
   };
@@ -315,15 +315,15 @@ const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number)
     readonly mediaType: "application/vnd.oci.image.layer.v1.tar";
     readonly size: number;
   }> = [];
-  for (let value = 1; value <= 3; value += 1) {
-    let bytes = Buffer.alloc(128 * mib, value);
+  for (let value = 1; value <= 1; value += 1) {
+    let bytes = Buffer.alloc(144 * mib, value);
     const digest = hash(bytes);
     write(fixture.root, digest, bytes);
     bytes = Buffer.alloc(0);
     fixedLayers.push({
       digest,
       mediaType: "application/vnd.oci.image.layer.v1.tar",
-      size: 128 * mib,
+      size: 144 * mib,
     });
   }
   const build = (finalDigest: string, finalLength: number) => {
@@ -358,15 +358,16 @@ const replaceWithExactTotalLayout = (fixture: LayoutFixture, extraBytes: number)
     const indexBytes = Buffer.from(JSON.stringify(nextIndex));
     return { configBytes, configDigest, indexBytes, manifestBytes, manifestDigest, nextIndex };
   };
-  const provisional = build(hash("provisional-layer"), 128 * mib - 4096);
+  const fixedLength = fixedLayers.reduce((sum, layer) => sum + layer.size, 0);
+  // Same digit count as the final length, so the provisional manifest has the final byte length.
+  const provisional = build(hash("provisional-layer"), target - fixedLength - 4096);
   const overhead =
     readFileSync(join(fixture.root, "oci-layout")).length +
     provisional.indexBytes.length +
     provisional.configBytes.length +
     provisional.manifestBytes.length;
-  const fixedLength = fixedLayers.reduce((sum, layer) => sum + layer.size, 0);
   const finalLength = target - fixedLength - overhead;
-  if (finalLength < 1 || finalLength > 128 * mib)
+  if (finalLength < 1 || finalLength > 144 * mib)
     throw new Error("test fixture total layout construction is out of bounds");
   let finalLayer = Buffer.alloc(finalLength, 4);
   const finalDigest = hash(finalLayer);
@@ -733,7 +734,7 @@ describe("Cisco OCI candidate verifier V1", () => {
       {
         reason: "size range at-most-256MiB cumulative at-most-1MiB",
         mutate: (descriptor) => {
-          descriptor.size = 128 * 1024 * 1024 + 1;
+          descriptor.size = 144 * 1024 * 1024 + 1;
         },
       },
     ];
@@ -780,22 +781,32 @@ describe("Cisco OCI candidate verifier V1", () => {
     }
   });
 
-  it("accepts an exact 128MiB layer and rejects one byte beyond the file bound", () => {
+  it("accepts the measured Cisco 2.1.0 venv layer", () => {
+    // tools/cisco-oci-candidate at Cisco 2.1.0 (buildkit v0.30.0, gzip): 144,783,569 bytes.
+    const measured = layoutFixture();
+    const measuredConfigDigest = replaceWithSingleLayer(measured, Buffer.alloc(144_783_569, 3));
+    expect(
+      verifyCiscoOciCandidateV1({ ...input(measured), loadedImageId: measuredConfigDigest })
+        .manifestDigestSha256,
+    ).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("accepts an exact 144MiB layer and rejects one byte beyond the file bound", () => {
     const exact = layoutFixture();
-    const exactConfigDigest = replaceWithSingleLayer(exact, Buffer.alloc(128 * 1024 * 1024, 1));
+    const exactConfigDigest = replaceWithSingleLayer(exact, Buffer.alloc(144 * 1024 * 1024, 1));
     expect(
       verifyCiscoOciCandidateV1({ ...input(exact), loadedImageId: exactConfigDigest })
         .manifestDigestSha256,
     ).toMatch(/^sha256:[a-f0-9]{64}$/);
 
     const above = layoutFixture();
-    replaceWithSingleLayer(above, Buffer.alloc(128 * 1024 * 1024 + 1, 2));
+    replaceWithSingleLayer(above, Buffer.alloc(144 * 1024 * 1024 + 1, 2));
     expect(() => verifyCiscoOciCandidateV1(input(above))).toThrow(
       "layer size range at-most-256MiB",
     );
   });
 
-  it("accepts an exact 512MiB layout and rejects one byte beyond the aggregate bound", () => {
+  it("accepts an exact 192MiB layout and rejects one byte beyond the aggregate bound", () => {
     const exact = layoutFixture();
     const exactConfigDigest = replaceWithExactTotalLayout(exact, 0);
     expect(
@@ -807,7 +818,7 @@ describe("Cisco OCI candidate verifier V1", () => {
     const aboveConfigDigest = replaceWithExactTotalLayout(above, 1);
     expect(() =>
       verifyCiscoOciCandidateV1({ ...input(above), loadedImageId: aboveConfigDigest }),
-    ).toThrow("layout bound at-most-1024MiB");
+    ).toThrow("layout bound at-most-256MiB");
   }, 20_000);
 
   it("classifies rejected Docker descriptor media types without echoing them", () => {

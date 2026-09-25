@@ -1,5 +1,6 @@
 import { type CiscoCaptureV2, captureRegisteredCiscoOciCandidateV2 } from "../cisco/capture-v2.js";
 import { parseCiscoOciLayoutV1 } from "../cisco/oci-layout-v1.js";
+import { dockerRunner } from "../cli/docker-runner.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
@@ -20,15 +21,22 @@ function ownData(value: object, key: string): unknown {
   if (descriptor === undefined || !("value" in descriptor)) fail(`${key} must be own data`);
   return descriptor.value;
 }
-function exactInput(value: object, fields: readonly string[]): void {
+function exactInput(
+  value: object,
+  fields: readonly string[],
+  optional: readonly string[] = [],
+): void {
+  const allowed = new Set([...fields, ...optional]);
   if (
     Object.getPrototypeOf(value) !== Object.prototype ||
     Object.getOwnPropertySymbols(value).length !== 0 ||
-    Object.keys(value).length !== fields.length ||
+    Object.keys(value).length > allowed.size ||
+    Object.keys(value).some((key) => !allowed.has(key)) ||
     fields.some((field) => !Object.hasOwn(value, field))
   )
     fail("input fields");
   for (const field of fields) ownData(value, field);
+  for (const field of optional) if (Object.hasOwn(value, field)) ownData(value, field);
 }
 function registrationInput(value: DetectorRegistrationV1): Record<string, unknown> {
   return {
@@ -52,15 +60,11 @@ export async function captureRegisteredDetectorCandidateV2(
   value: unknown,
 ): Promise<CiscoCaptureV2> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail("input object");
-  exactInput(value, [
-    "registration",
-    "detectorId",
-    "layout",
-    "sourceRoot",
-    "selectedClosurePaths",
-    "annexPayloads",
-    "runner",
-  ]);
+  exactInput(
+    value,
+    ["registration", "detectorId", "layout", "sourceRoot", "selectedClosurePaths", "annexPayloads"],
+    ["runner"],
+  );
   const suppliedRegistration = ownData(value, "registration");
   const registration = createDetectorRegistrationV1(suppliedRegistration);
   const detectorId = ownData(value, "detectorId");
@@ -68,7 +72,8 @@ export async function captureRegisteredDetectorCandidateV2(
   const sourceRoot = ownData(value, "sourceRoot");
   const selectedClosurePaths = ownData(value, "selectedClosurePaths");
   const annexPayloads = ownData(value, "annexPayloads");
-  const runner = ownData(value, "runner");
+  // Scan owns the Docker backend; an injected runner stays available for tests and CI.
+  const runner = Object.hasOwn(value, "runner") ? ownData(value, "runner") : dockerRunner;
   if (
     typeof detectorId !== "string" ||
     typeof sourceRoot !== "string" ||

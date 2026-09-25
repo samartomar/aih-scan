@@ -23,9 +23,11 @@ import {
   parseBaselineVetPublicationV1Json,
   resolveBaselineVetDiscoveryV1,
 } from "../../src/baseline/publication-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../../src/baseline/runtime-v1.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 import { ed25519KeyIdV2 } from "../../src/observation/scan-attestation-v2.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./batch-version-support.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -67,6 +69,7 @@ async function fixture(rule = "# Rule\n", detail = "") {
             files: [],
           }),
           analyzerVersion: "native.0123456789ab",
+          executionProfileId: "in-process-native-v1",
         }
       : {
           mediaType: "application/sarif+json",
@@ -76,11 +79,13 @@ async function fixture(rule = "# Rule\n", detail = "") {
               {
                 tool: { driver: { name: analyzer } },
                 results: [],
+                invocations: [{ executionSuccessful: true }],
                 properties: { detail: analyzer === "skillspector" ? detail : "" },
               },
             ],
           }),
-          analyzerVersion: `${analyzer}.0123456789ab`,
+          analyzerVersion: batchAnalyzerVersion(analyzer),
+          executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
         };
   const result = await executeBaselineVetBatchV1(request, { sourceRoot: root, execute });
   const keys = generateKeyPairSync("ed25519");

@@ -22,11 +22,13 @@ import {
   parseBaselineVetRequestV1Json,
   verifyBaselineVetReceiptV1,
 } from "../../src/baseline/batch-v1.js";
+import { BASELINE_BATCH_EXECUTION_PROFILES_V1 } from "../../src/baseline/runtime-v1.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
 } from "../../src/contract/strict-json-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../../src/observation/source-hash-v1.js";
+import { batchAnalyzerVersion } from "./batch-version-support.js";
 
 const temporaryDirectories: string[] = [];
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -91,7 +93,13 @@ function requestForCurrentSource(root: string, request: ReturnType<typeof fixtur
 const sarif = (name: string) =>
   canonicalStrictJsonBytesV1({
     version: "2.1.0",
-    runs: [{ tool: { driver: { name } }, results: [] }],
+    runs: [
+      {
+        tool: { driver: { name } },
+        results: [],
+        invocations: [{ executionSuccessful: true }],
+      },
+    ],
   });
 
 describe("BaselineVetRequestV1", () => {
@@ -182,7 +190,7 @@ describe("BaselineVetRequestV1", () => {
 });
 
 describe("baseline batch execution", () => {
-  it("preserves safe relative source symlinks to files and directories outside components", async () => {
+  it("preserves safe relative file symlinks and omits directory symlinks outside components (D26)", async () => {
     const { root, request } = fixture();
     writeFileSync(join(root, "CLAUDE.md"), "# Shared guidance\n", "utf8");
     mkdirSync(join(root, "shared"));
@@ -201,9 +209,10 @@ describe("baseline batch execution", () => {
       expect(lstatSync(join(sourceRoot, "AGENTS.md")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(sourceRoot, "AGENTS.md"))).toBe("CLAUDE.md");
       expect(readFileSync(join(sourceRoot, "AGENTS.md"), "utf8")).toBe("# Shared guidance\n");
-      expect(lstatSync(join(sourceRoot, "shared-link")).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(join(sourceRoot, "shared-link"))).toBe("shared");
-      expect(readFileSync(join(sourceRoot, "shared-link", "README.md"), "utf8")).toBe(
+      // D26: the directory link is bound by the source digest but never recreated; its target
+      // is analyzed at its real path.
+      expect(existsSync(join(sourceRoot, "shared-link"))).toBe(false);
+      expect(readFileSync(join(sourceRoot, "shared", "README.md"), "utf8")).toBe(
         "# Shared directory\n",
       );
       return analyzer === "aih-native"
@@ -214,11 +223,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
 
@@ -249,11 +260,13 @@ describe("baseline batch execution", () => {
                 files: [],
               }),
               analyzerVersion: "native.0123456789ab",
+              executionProfileId: "in-process-native-v1",
             }
           : {
               mediaType: "application/sarif+json",
               bytes: sarif(analyzer),
-              analyzerVersion: `${analyzer}.0123456789ab`,
+              analyzerVersion: batchAnalyzerVersion(analyzer),
+              executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             };
       };
 
@@ -386,11 +399,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
 
@@ -462,11 +477,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     };
 
@@ -495,6 +512,7 @@ describe("baseline batch execution", () => {
           mediaType: "application/sarif+json",
           bytes: Buffer.alloc(0),
           analyzerVersion: "missing.0123456789ab",
+          executionProfileId: "linux-namespace-uv-v1",
         }),
       },
       {
@@ -508,7 +526,8 @@ describe("baseline batch execution", () => {
             analyzer === "aih-native"
               ? canonicalStrictJsonBytesV1({ protocol: "BaselineNativeObservationV1", files: [] })
               : Buffer.from("{}", "utf8"),
-          analyzerVersion: `${analyzer}.0123456789ab`,
+          analyzerVersion: batchAnalyzerVersion(analyzer),
+          executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
         }),
       },
       {
@@ -524,11 +543,13 @@ describe("baseline batch execution", () => {
                   files: [],
                 }),
                 analyzerVersion: "native.0123456789ab",
+                executionProfileId: "in-process-native-v1",
               }
             : {
                 mediaType: "application/sarif+json",
                 bytes: sarif(analyzer),
-                analyzerVersion: `${analyzer}.0123456789ab`,
+                analyzerVersion: batchAnalyzerVersion(analyzer),
+                executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
               };
         },
       },
@@ -547,11 +568,13 @@ describe("baseline batch execution", () => {
                   files: [],
                 }),
                 analyzerVersion: "native.0123456789ab",
+                executionProfileId: "in-process-native-v1",
               }
             : {
                 mediaType: "application/sarif+json",
                 bytes: sarif(analyzer),
-                analyzerVersion: `${analyzer}.0123456789ab`,
+                analyzerVersion: batchAnalyzerVersion(analyzer),
+                executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
               });
       await expect(
         executeBaselineVetBatchV1(request, { sourceRoot: root, execute }),
@@ -571,11 +594,13 @@ describe("baseline batch execution", () => {
               files: [],
             }),
             analyzerVersion: "native.0123456789ab",
+            executionProfileId: "in-process-native-v1",
           }
         : {
             mediaType: "application/sarif+json",
             bytes: sarif(analyzer),
-            analyzerVersion: `${analyzer}.0123456789ab`,
+            analyzerVersion: batchAnalyzerVersion(analyzer),
+            executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
           };
     const result = await executeBaselineVetBatchV1(request, { sourceRoot: root, execute });
     const first = result.annexArtifacts[0];
@@ -657,11 +682,13 @@ describe("baseline batch execution", () => {
                 files: [],
               }),
               analyzerVersion: "native.0123456789ab",
+              executionProfileId: "in-process-native-v1",
             }
           : {
               mediaType: "application/sarif+json",
               bytes: sarif(analyzer),
-              analyzerVersion: `${analyzer}.0123456789ab`,
+              analyzerVersion: batchAnalyzerVersion(analyzer),
+              executionProfileId: BASELINE_BATCH_EXECUTION_PROFILES_V1[analyzer],
             },
     });
     const ciscoBytes = sarif("cisco");

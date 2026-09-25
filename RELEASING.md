@@ -140,7 +140,26 @@ verify the checksum, keyless signature, and SBOM subject before claiming the
 candidate publication complete. Then run the exact public installed Scanner/Core/
 Catalog acceptance. Source checkout or local tarball execution cannot satisfy this gate.
 
-8. After acceptance, obtain separate promotion authorization:
+8. After acceptance, dispatch `promotion-readiness.yml` with the candidate version and
+   the Core `sibling-compatibility` run id and attempt that tested it, and require a green
+   `promotion-readiness / authorize` run. That read-only job refuses unless Core's
+   version 2 compatibility evidence names exactly one `scan-candidate` combination for
+   this candidate: Scan at `next` installed with the supported `@aihq/core` and
+   `@aihq/catalog` at `latest`, with every Scan-required contract check present once and
+   passed and its execution environment recorded. The published tarball bytes and
+   registry integrity must still equal the bytes that run tested, `dist-tags.next` must
+   still be this candidate, and the Core and Catalog it names must still be `latest` with
+   the same registry integrity, re-observed live. Evidence from an `all-next`, `baseline`
+   or `branch` combination never qualifies; if the supported Core or Catalog moved,
+   rerun Core's `sibling-compatibility` instead of reusing the old run. It prints the
+   promotion commands and executes none of them.
+   A green run is evidence, not authorization.
+   The first cutover goes Core first: packages published before this
+   evidence predate its checks, so their `baseline` combination records failed or
+   unavailable checks. Once the new Core is `latest`, a Scan candidate can become ready
+   against it and against whichever Catalog is then `latest`, because the gate requires
+   only Scan's and Core's checks. No step treats `all-next` evidence as independent
+   compatibility. Then obtain separate promotion authorization, quoting that run id:
 
    ```text
    Authorize promoting @aihq/scan@X.Y.Z from next to latest after installed acceptance of <full-main-SHA>.

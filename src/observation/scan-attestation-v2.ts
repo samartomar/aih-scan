@@ -15,8 +15,9 @@ import {
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
 import {
-  AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
-  AI_HARNESS_STRICT_V2_COMMIT,
+  AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
+  AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED,
+  isAcceptedAiHarnessCoreContractV2,
 } from "../core/core-contract-lock-v2.js";
 import { createDetectorRegistrationV1 } from "../registration/detector-registration-v1.js";
 import { createObservationKeyV1, createObservationSetV1 } from "./observation-evidence-v1.js";
@@ -129,12 +130,23 @@ const subject = z
 const candidateInput = z
   .object({
     protocol: z.literal("ScanCandidateV2"),
+    // Membership, not equality: a candidate produced against an older accepted Core
+    // contract still verifies, while a fresh candidate declares the default pair. The
+    // commit and digest must be one accepted pair; a mixed pair never existed.
     coreContract: z
       .object({
-        commit: z.literal(AI_HARNESS_STRICT_V2_COMMIT),
-        decisionSchemaSha256: z.literal(AI_HARNESS_DECISION_V2_SCHEMA_SHA256),
+        commit: z.enum([...AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED]),
+        decisionSchemaSha256: z.enum([...AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED]),
       })
-      .strict(),
+      .strict()
+      .superRefine((value, context) => {
+        if (!isAcceptedAiHarnessCoreContractV2(value.commit, value.decisionSchemaSha256))
+          context.addIssue({
+            code: "custom",
+            message: "Core commit and decision-schema digest are not one accepted pair",
+            path: [],
+          });
+      }),
     subject,
     sourceSeals: z.object({ before: sourceSeal, after: sourceSeal }).strict(),
     observation: z.object({ keySha256: sha256, setSha256: sha256 }).strict(),
@@ -598,7 +610,7 @@ function sortedAnnexes(
   return [...values].sort((left, right) => codeUnitCompare(left.descriptorId, right.descriptorId));
 }
 export function assertCompleteScanAnnexArtifactsV2(
-  descriptors: z.infer<typeof candidateInput>["annexes"],
+  descriptors: readonly z.infer<typeof candidateInput>["annexes"][number][],
   value: unknown,
 ): z.infer<typeof candidateInput>["annexes"] {
   if (!Array.isArray(value) || value.length !== descriptors.length) fail("annex artifact set");
@@ -627,7 +639,9 @@ export function assertCompleteScanAnnexArtifactsV2(
     )
       fail("annex artifact binding");
   }
-  return descriptors;
+  // The scan only reads these descriptors, so a readonly view is accepted; the
+  // returned type stays the mutable wire shape its callers already expect.
+  return descriptors as z.infer<typeof candidateInput>["annexes"];
 }
 
 /** Source-seal V2 bytes use strict JSON and code-unit sorted object keys. */

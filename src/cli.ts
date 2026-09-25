@@ -37,9 +37,7 @@ import {
   parseBaselineVetDiscoveryV1Json,
   resolveBaselineVetDiscoveryV1,
 } from "./baseline/publication-v1.js";
-import { createBaselineAnalyzerExecutionV1 } from "./baseline/runtime-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
-import { dockerRunner } from "./cli/docker-runner.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
   canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
@@ -367,6 +365,8 @@ async function capture(args: readonly string[]): Promise<void> {
   });
   if (new Set(annexPayloads.map((entry) => entry.descriptorId)).size !== annexPayloads.length)
     fail(`${captureLabel} annex file duplicate`);
+  // No runner is passed: Scan owns the Docker backend, so the CLI and an installed
+  // library consumer reach the same default execution path.
   const captured = registered
     ? await captureRegisteredDetectorCandidateV2({
         registration: request.registration,
@@ -375,7 +375,6 @@ async function capture(args: readonly string[]): Promise<void> {
         sourceRoot: request.sourceRoot,
         selectedClosurePaths: request.selectedClosurePaths,
         annexPayloads,
-        runner: dockerRunner,
       })
     : await captureCiscoOciCandidateV2({
         layout: request.layout,
@@ -384,7 +383,6 @@ async function capture(args: readonly string[]): Promise<void> {
         runtime: request.runtime,
         annexPayloads,
         broker: request.broker,
-        runner: dockerRunner,
       });
   const afterRequest = readJson(requestPath, "capture request");
   if (!requestBytes.equals(canonicalStrictJsonBytesV1(afterRequest)))
@@ -410,10 +408,9 @@ async function baselineVet(args: readonly string[]): Promise<void> {
     fail("baseline-vet arguments");
   const request = parseBaselineVetRequestV1Json(readText(requestPath, "baseline vet request"));
   const requestBytes = canonicalBaselineVetRequestV1Bytes(request);
-  const result = await executeBaselineVetBatchV1(request, {
-    sourceRoot,
-    execute: createBaselineAnalyzerExecutionV1(),
-  });
+  // No execute callback is passed: Scan's own hardened analyzer execution is the
+  // default, so the CLI and an installed library consumer share one execution path.
+  const result = await executeBaselineVetBatchV1(request, { sourceRoot });
   const afterRequest = parseBaselineVetRequestV1Json(readText(requestPath, "baseline vet request"));
   if (!requestBytes.equals(canonicalBaselineVetRequestV1Bytes(afterRequest)))
     fail("baseline vet request changed during execution");

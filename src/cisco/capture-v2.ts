@@ -1,3 +1,4 @@
+import { dockerRunner } from "../cli/docker-runner.js";
 import {
   canonicalStrictJsonBytesV1,
   canonicalStrictJsonSha256V1,
@@ -22,12 +23,28 @@ function ownData(value: object, key: string): unknown {
   if (descriptor === undefined || !("value" in descriptor)) fail(`${key} must be own data`);
   return descriptor.value;
 }
-function exactInput(value: object, fields: readonly string[]): void {
+/**
+ * Accepts exactly `required`, plus at most the named `optional` fields.
+ *
+ * Every field is still proved to be an own data property, so an accessor, a symbol
+ * key, a prototype-borrowed value or any unknown field is refused as before.
+ */
+function exactInput(
+  value: object,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): void {
   if (Object.getPrototypeOf(value) !== Object.prototype) fail("input plain data");
   const keys = Reflect.ownKeys(value);
-  if (keys.length !== fields.length || fields.some((field) => !keys.includes(field)))
+  const allowed = new Set<string | symbol>([...required, ...optional]);
+  if (
+    keys.length > required.length + optional.length ||
+    keys.some((key) => !allowed.has(key)) ||
+    required.some((field) => !keys.includes(field))
+  )
     fail("input fields");
-  for (const field of fields) ownData(value, field);
+  for (const field of required) ownData(value, field);
+  for (const field of optional) if (keys.includes(field)) ownData(value, field);
 }
 function sameSeal(
   left: { sourceTreeSha256: string; selectedClosureSha256: string; sealedSnapshotSha256: string },
@@ -112,16 +129,16 @@ async function captureCiscoOciCandidateV2Internal(
     "runtime",
     "annexPayloads",
     "broker",
-    "runner",
   ];
-  exactInput(input, fields);
+  exactInput(input, fields, ["runner"]);
   const layoutInput = ownData(input, "layout");
   const sourceRoot = ownData(input, "sourceRoot");
   const selectedClosurePaths = ownData(input, "selectedClosurePaths");
   const runtime = ownData(input, "runtime");
   const annexPayloads = ownData(input, "annexPayloads");
   const broker = ownData(input, "broker");
-  const runner = ownData(input, "runner");
+  // Scan owns the Docker backend; an injected runner stays available for tests and CI.
+  const runner = Object.hasOwn(input, "runner") ? ownData(input, "runner") : dockerRunner;
   if (
     typeof sourceRoot !== "string" ||
     !Array.isArray(selectedClosurePaths) ||

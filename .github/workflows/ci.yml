@@ -16,11 +16,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The contract gate verifies against the NEWEST accepted Core contract.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: samartomar/ai-harness
+          ref: c31741602b3dbd5f228dafe00591e5679c782878
+          path: .core-contract
+          persist-credentials: false
+      # The packed-evidence gate pins one exact Core package and its resolver behaviour,
+      # so it keeps its own checkout at the older accepted Core contract.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: samartomar/ai-harness
           ref: 6130dd837b8e8bd41e999fb40733e0e460e69720
-          path: .core-contract
+          path: .core-cold-evidence
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -36,18 +45,19 @@ jobs:
       - run: node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract
       - name: Verify packed registered-detector evidence handoff
         env:
-          AIH_SCAN_CORE_SOURCE: ${{ github.workspace }}/.core-contract
+          AIH_SCAN_CORE_SOURCE: ${{ github.workspace }}/.core-cold-evidence
         run: npm run verify:cold-core-evidence
       - name: Remove exact Core contract checkout
         if: ${{ always() }}
         run: |
           set -euo pipefail
-          core_root="$GITHUB_WORKSPACE/.core-contract"
-          if [ -e "$core_root" ]; then
-            test -d "$core_root"
-            rm -rf -- "$core_root"
-          fi
-          test ! -e "$core_root"
+          for core_root in "$GITHUB_WORKSPACE/.core-contract" "$GITHUB_WORKSPACE/.core-cold-evidence"; do
+            if [ -e "$core_root" ]; then
+              test -d "$core_root"
+              rm -rf -- "$core_root"
+            fi
+            test ! -e "$core_root"
+          done
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:cov
@@ -105,7 +115,7 @@ jobs:
                 throw new Error(`${analyzer} sandbox probe emitted no SARIF`);
             }
             mkdirSync(join(sourceRoot, "skills", "broken"), { recursive: true });
-            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
+            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), Buffer.from([0x23, 0x20, 0x42, 0xff, 0x0a]));
             let rejectedPartialCoverage = false;
             try {
               await execute({
@@ -126,6 +136,49 @@ jobs:
             }
             if (!rejectedPartialCoverage)
               throw new Error("Cisco sandbox probe accepted partial skill coverage");
+            // D45 leg 3: Cisco 2.1.0 scans a `# Broken\n` skill through its skill_loader fallback,
+            // which D30 accepts. In a fresh root the run completes and reports that fallback at
+            // the skill; the execution itself enforces the D28/D30 pairing of every result.
+            const fallbackRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-fallback-probe-"));
+            try {
+              mkdirSync(join(fallbackRoot, "skills", "probe"), { recursive: true });
+              writeFileSync(
+                join(fallbackRoot, "skills", "probe", "SKILL.md"),
+                "---\nname: probe\ndescription: Scanner CI fixture\n---\n\n# Probe\n",
+                "utf8",
+              );
+              mkdirSync(join(fallbackRoot, "skills", "broken"), { recursive: true });
+              writeFileSync(join(fallbackRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
+              const fallback = await execute({
+                analyzer: "cisco",
+                sourceRoot: fallbackRoot,
+                source: {
+                  id: "python-sandbox-fallback-probe",
+                  owner: "aih",
+                  repository: "scanner-ci-fixture",
+                  pinnedCommit: "a".repeat(40),
+                  treeSha256: "b".repeat(64),
+                },
+              });
+              if (fallback.mediaType !== "application/sarif+json" || fallback.bytes.byteLength === 0)
+                throw new Error("Cisco fallback probe emitted no SARIF");
+              const results = JSON.parse(Buffer.from(fallback.bytes).toString("utf8")).runs.flatMap(
+                (run) => run.results ?? [],
+              );
+              const uri = (result) => result.locations?.[0]?.physicalLocation?.artifactLocation?.uri;
+              if (
+                !results.some(
+                  (result) =>
+                    result.ruleId === "SKILL_LOAD_FALLBACK_USED" &&
+                    uri(result) === "skills/broken/SKILL.md",
+                )
+              )
+                throw new Error("Cisco fallback probe reported no SKILL_LOAD_FALLBACK_USED at skills/broken/SKILL.md");
+              if (!results.every((result) => /^skills\/(?:probe|broken)\//u.test(uri(result) ?? "")))
+                throw new Error("Cisco fallback probe reported a result outside its two skills");
+            } finally {
+              rmSync(fallbackRoot, { recursive: true, force: true });
+            }
           } finally {
             rmSync(sourceRoot, { recursive: true, force: true });
           }

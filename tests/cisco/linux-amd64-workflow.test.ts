@@ -62,23 +62,23 @@ describe("Cisco Linux amd64 observation probe workflow", () => {
     );
     expect(installUv).toContain("python -m uv --version >/dev/null");
     expect(workflow).not.toMatch(/astral-sh\/setup-uv|versions-manifest/i);
-    expect(workflow).toContain("68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f");
-    expect(workflow).toContain("aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1");
-    expect(workflow).toContain("30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2");
+    expect(workflow).toContain("35de8ad9e2d243fb418f8dbeba2f55c4a430495fe1c7163a21809f0ea3999ead");
+    expect(workflow).toContain("1e98c5679994dc56f82c1d88a77528d4c4b076160aff85b4d97ce239360bc210");
+    expect(workflow).toContain("c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e");
     const verification = blockContaining(workflow, "Verify exact runtime inputs");
     const warm = blockContaining(workflow, "Warm exact Cisco runtime");
     const live = blockContaining(workflow, "Capture Linux observation evidence");
     expect(verification).toMatch(/curl .*--output .*\.whl/);
-    expect(verification).toMatch(/cisco[-_]ai[-_]skill[-_]scanner.*2\.0\.14/i);
+    expect(verification).toMatch(/cisco[-_]ai[-_]skill[-_]scanner.*2\.1\.0/i);
     expect(verification).toMatch(/sha256sum -c\s+[^\s]+/);
     expect(verification).toMatch(
-      /68c2649f7a724a465546d0a500d668ec5ed41e526391f8dee4d8513efdca806f.*pyproject\.toml/i,
+      /35de8ad9e2d243fb418f8dbeba2f55c4a430495fe1c7163a21809f0ea3999ead.*pyproject\.toml/i,
     );
     expect(verification).toMatch(
-      /aaba1f3260494b09dfc62fd6c309558b901b8ad9411587d534a4f09721d3b4a1.*uv\.lock/i,
+      /1e98c5679994dc56f82c1d88a77528d4c4b076160aff85b4d97ce239360bc210.*uv\.lock/i,
     );
     expect(verification).toMatch(
-      /30b5c8a5108307981e0299e6cde0da869be64deb5da0ca66cf9f0022c3c48fc2.*\.whl/i,
+      /c84292b720bf0eddc8913fe3017dcdb05bd7e98eb19f6ee61dee2c4eb9fa901e.*\.whl/i,
     );
     expect(warm).toMatch(/uv sync --project .*--locked --isolated --python 3\.12/);
     expect(warm).not.toMatch(/--offline/);

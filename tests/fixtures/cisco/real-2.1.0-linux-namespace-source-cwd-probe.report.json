@@ -1,0 +1,126 @@
+{
+  "summary": {
+    "total_skills_scanned": 1,
+    "total_findings": 3,
+    "safe_skills": 1,
+    "findings_by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "info": 1
+    },
+    "timestamp": "2026-09-25T01:25:52.621049+00:00"
+  },
+  "results": [
+    {
+      "skill_name": "probe",
+      "skill_path": "/aih/source/skills/probe",
+      "is_safe": true,
+      "max_severity": "MEDIUM",
+      "findings_count": 3,
+      "findings": [
+        {
+          "id": "FILE_MAGIC_MISMATCH_6324effa0e",
+          "rule_id": "FILE_MAGIC_MISMATCH",
+          "category": "obfuscation",
+          "severity": "MEDIUM",
+          "title": "File extension does not match actual content type",
+          "description": "File 'SKILL.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Rename the file to match its actual content type, or remove it if it appears malicious.",
+          "analyzer": "static",
+          "metadata": {
+            "actual_type": "code/yaml",
+            "actual_family": "code",
+            "claimed_extension": ".md",
+            "confidence_score": 0.920269787311554,
+            "semantic_facts": {
+              "evidence_kind": "file_magic",
+              "context_kind": "binary",
+              "signals": [
+                {
+                  "rule_id": "FILE_MAGIC_MISMATCH",
+                  "kind": "file_magic_mismatch",
+                  "file_path": "SKILL.md",
+                  "value_class": "binary"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "SOCIAL_ENG_VAGUE_DESCRIPTION_65c01f6a51",
+          "rule_id": "SOCIAL_ENG_VAGUE_DESCRIPTION",
+          "category": "social_engineering",
+          "severity": "LOW",
+          "title": "Vague skill description",
+          "description": "Skill description is too short (18 chars). Provide detailed explanation.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Provide a clear, detailed description of what the skill does and when to use it",
+          "analyzer": "static",
+          "metadata": {}
+        },
+        {
+          "id": "MANIFEST_MISSING_LICENSE_c5ae9be793",
+          "rule_id": "MANIFEST_MISSING_LICENSE",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Skill does not specify a license",
+          "description": "Skill manifest does not include a 'license' field. Specifying a license helps users understand usage terms.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)",
+          "analyzer": "static",
+          "metadata": {}
+        }
+      ],
+      "scan_duration_seconds": 0.5373513698577881,
+      "duration_ms": 537,
+      "analyzers_used": [
+        "static_analyzer",
+        "bytecode",
+        "pipeline",
+        "correlation"
+      ],
+      "timestamp": "2026-09-25T01:25:53.160722+00:00",
+      "scan_metadata": {
+        "policy_name": "default",
+        "policy_version": "1.0",
+        "policy_preset_base": "balanced",
+        "policy_fingerprint_sha256": "26ada30a1f502eecdbe7b7e35a3fe7a324be2298494208e1019b75e72b0bc516",
+        "cel": {
+          "mode": "shadow",
+          "runtime": "cel-go",
+          "runtime_version": "v0.32.0;helper=2.1.0",
+          "fact_schema": "v1",
+          "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+          "evaluated": 0,
+          "retained": 3,
+          "would_suppress": 0,
+          "suppressed": 0,
+          "fallbacks": 0,
+          "projection_incomplete": 0,
+          "elapsed_ms": 0.0,
+          "projection_ms": 0.0,
+          "evaluation_ms": 0.0,
+          "errors": [],
+          "per_rule": {},
+          "suppressed_candidates": []
+        },
+        "rule_contract": {
+          "status": "passed",
+          "schema_version": 2,
+          "checked": 3,
+          "invalid_findings": 0,
+          "errors": []
+        }
+      }
+    }
+  ]
+}

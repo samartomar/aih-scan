@@ -1,0 +1,225 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "skill-scanner",
+          "version": "1.0.0",
+          "informationUri": "https://github.com/cisco-ai-defense/skill-scanner",
+          "rules": [
+            {
+              "id": "FILE_MAGIC_MISMATCH",
+              "name": "File Magic Mismatch",
+              "shortDescription": {
+                "text": "File extension does not match actual content type"
+              },
+              "fullDescription": {
+                "text": "File 'SKILL.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "category": "obfuscation",
+                "severity": "MEDIUM",
+                "tags": [
+                  "obfuscation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Rename the file to match its actual content type, or remove it if it appears malicious.",
+                "markdown": "**Remediation**: Rename the file to match its actual content type, or remove it if it appears malicious."
+              }
+            },
+            {
+              "id": "SOCIAL_ENG_VAGUE_DESCRIPTION",
+              "name": "Social Eng Vague Description",
+              "shortDescription": {
+                "text": "Vague skill description"
+              },
+              "fullDescription": {
+                "text": "Skill description is too short (18 chars). Provide detailed explanation."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "social_engineering",
+                "severity": "LOW",
+                "tags": [
+                  "social_engineering",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Provide a clear, detailed description of what the skill does and when to use it",
+                "markdown": "**Remediation**: Provide a clear, detailed description of what the skill does and when to use it"
+              }
+            },
+            {
+              "id": "MANIFEST_MISSING_LICENSE",
+              "name": "Manifest Missing License",
+              "shortDescription": {
+                "text": "Skill does not specify a license"
+              },
+              "fullDescription": {
+                "text": "Skill manifest does not include a 'license' field. Specifying a license helps users understand usage terms."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "policy_violation",
+                "severity": "INFO",
+                "tags": [
+                  "policy_violation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)",
+                "markdown": "**Remediation**: Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)"
+              }
+            },
+            {
+              "id": "SKILL_LOAD_FALLBACK_USED",
+              "name": "Skill Load Fallback Used",
+              "shortDescription": {
+                "text": "Strict manifest load failed; inert fallback scan used"
+              },
+              "fullDescription": {
+                "text": "SkillLoadError rejected malformed or missing manifest metadata. The bounded package body was still scanned as inert content; manifest capabilities were not trusted."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "category": "policy_violation",
+                "severity": "INFO",
+                "tags": [
+                  "policy_violation",
+                  "security"
+                ]
+              },
+              "help": {
+                "text": "Repair the YAML frontmatter and provide the required manifest fields.",
+                "markdown": "**Remediation**: Repair the YAML frontmatter and provide the required manifest fields."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "FILE_MAGIC_MISMATCH",
+          "level": "warning",
+          "message": {
+            "text": "File 'SKILL.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file."
+          },
+          "properties": {
+            "category": "obfuscation",
+            "severity": "MEDIUM",
+            "remediation": "Rename the file to match its actual content type, or remove it if it appears malicious."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "SKILL.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "FILE_MAGIC_MISMATCH_6324effa0e"
+          }
+        },
+        {
+          "ruleId": "SOCIAL_ENG_VAGUE_DESCRIPTION",
+          "level": "note",
+          "message": {
+            "text": "Skill description is too short (18 chars). Provide detailed explanation."
+          },
+          "properties": {
+            "category": "social_engineering",
+            "severity": "LOW",
+            "remediation": "Provide a clear, detailed description of what the skill does and when to use it"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "SKILL.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "SOCIAL_ENG_VAGUE_DESCRIPTION_65c01f6a51"
+          }
+        },
+        {
+          "ruleId": "MANIFEST_MISSING_LICENSE",
+          "level": "note",
+          "message": {
+            "text": "Skill manifest does not include a 'license' field. Specifying a license helps users understand usage terms."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "INFO",
+            "remediation": "Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "SKILL.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "MANIFEST_MISSING_LICENSE_c5ae9be793"
+          }
+        },
+        {
+          "ruleId": "SKILL_LOAD_FALLBACK_USED",
+          "level": "note",
+          "message": {
+            "text": "SkillLoadError rejected malformed or missing manifest metadata. The bounded package body was still scanned as inert content; manifest capabilities were not trusted."
+          },
+          "properties": {
+            "category": "policy_violation",
+            "severity": "INFO",
+            "remediation": "Repair the YAML frontmatter and provide the required manifest fields."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "SKILL.md",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "primaryLocationLineHash": "SKILL_LOAD_FALLBACK_USED"
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "endTimeUtc": "2026-09-25T01:58:04Z"
+        }
+      ]
+    }
+  ]
+}

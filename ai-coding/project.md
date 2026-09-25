@@ -5,11 +5,13 @@ repository that builds the `@aihq/scan` V2 package and `aih-scan`
 CLI. V2 captures one registered Cisco Linux `amd64` OCI path, seals and
 re-observes a disposable source, emits a complete detached candidate/annex
 bundle, signs canonical DSSE/in-toto evidence with Ed25519, and verifies exact
-claims against caller-supplied roots and replay state. Normal CI locks the
-contract to exact Core source
-`6130dd837b8e8bd41e999fb40733e0e460e69720`, whose manifest remains
-`@aihq/core@0.1.1`, plus the Strict V2 decision and
-organization-evidence schema artifacts. An organization-signed, successful,
+claims against caller-supplied roots and replay state. Normal CI's contract
+gate verifies the Strict V2 decision and organization-evidence schema artifacts
+of the newest accepted Core source
+`c31741602b3dbd5f228dafe00591e5679c782878`, and accepts each Core commit only
+with its own decision-schema digest. The cold packed-evidence proof still pins
+exact Core source `6130dd837b8e8bd41e999fb40733e0e460e69720`, whose manifest
+remains `@aihq/core@0.1.1`. An organization-signed, successful,
 already verified V2 attestation
 can be projected into one canonical Core organization-evidence envelope that
 binds the caller-selected exact Core subject plus the verified evidence,
@@ -34,7 +36,7 @@ revoked. Source state alone never establishes publication or organization
 evidence custody. The package moves bounded baseline-vet execution and its signed
 receipt/annex contract into Scanner and safely preserves validated in-root relative
 source symlinks in private analyzer snapshots while selected component trees remain
-symlink-free. The Core lock is a
+symlink-free. That cold-evidence Core lock is a
 post-`0.1.1` compatibility fixture whose
 manifest predates public `@aihq/core@0.2.0`; the released Core Workbench handoff
 comes from immutable `v-core-0.2.0` at

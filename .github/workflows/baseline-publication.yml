@@ -19,6 +19,11 @@ on:
         description: Exact SHA-256 of request set bytes, required with request_set_url
         required: false
         type: string
+      request_set_overlap:
+        description: Optional overlap mode for request_set_url (empty = disjoint, or compiler-catalog)
+        required: false
+        default: ''
+        type: string
       core_ref:
         description: Exact Core request-author commit, only for optional Core client route
         required: false
@@ -46,7 +51,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     permissions:
       contents: read
       attestations: read
@@ -60,6 +65,7 @@ jobs:
       EXPLICIT_CANDIDATE: ${{ inputs.candidate }}
       REQUEST_SET_URL: ${{ inputs.request_set_url }}
       REQUEST_SET_SHA256: ${{ inputs.request_set_sha256 }}
+      REQUEST_SET_OVERLAP: ${{ inputs.request_set_overlap }}
       CORE_REF: ${{ inputs.core_ref }}
       SOURCE_REPOSITORY: ${{ inputs.source_repository }}
       SOURCE_REF: ${{ inputs.source_ref }}
@@ -74,6 +80,8 @@ jobs:
           [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "$CANDIDATE" =~ ^[a-z0-9][a-z0-9:._-]{0,127}$ ]]
           test -z "$LEGACY_CATALOG" || test -z "$EXPLICIT_CANDIDATE"
+          case "$REQUEST_SET_OVERLAP" in ''|compiler-catalog) ;; *) exit 1 ;; esac
+          test -z "$REQUEST_SET_OVERLAP" || test -n "$REQUEST_SET_URL"
           if [ -n "$REQUEST_SET_URL" ]; then
             test -z "$CORE_REF"
             test -z "$LEGACY_CATALOG"
@@ -213,7 +221,8 @@ jobs:
             "$REQUEST_SET_URL" --output "$RUNNER_TEMP/baseline/request-set.json"
           node tools/prepare-publication-request-set.mjs \
             "$RUNNER_TEMP/baseline/request-set.json" "$REQUEST_SET_SHA256" \
-            "$CANDIDATE" "$SOURCE_REPOSITORY" "$SOURCE_REF" "$RUNNER_TEMP/baseline/requests"
+            "$CANDIDATE" "$SOURCE_REPOSITORY" "$SOURCE_REF" "$RUNNER_TEMP/baseline/requests" \
+            --overlap "${REQUEST_SET_OVERLAP:-disjoint}"
 
       - name: Verify each authored request binds to the dispatched source
         shell: bash

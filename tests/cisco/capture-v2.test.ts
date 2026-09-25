@@ -13,6 +13,7 @@ import {
   writeScanCaptureBundleV2,
 } from "../../src/observation/scan-bundle-v2.js";
 import { captureRegisteredDetectorCandidateV2 } from "../../src/registration/capture-registered-detector-v2.js";
+import { writeCiscoCaptureReportV1 } from "../support/cisco-job-report.js";
 
 const roots: string[] = [];
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -272,6 +273,7 @@ describe("Cisco V2 capture promotion", () => {
         if (argv[2] === "start") {
           if (outputRoot === undefined) throw new Error("missing output root");
           writeFileSync(join(outputRoot, "result.sarif"), sarif());
+          writeCiscoCaptureReportV1(outputRoot);
           return { code: 0, stdout: "", stderr: "" };
         }
         if (argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
@@ -395,6 +397,7 @@ describe("Cisco V2 capture promotion", () => {
           if (argv[2] === "start") {
             if (outputRoot === undefined) throw new Error("missing output root");
             writeFileSync(join(outputRoot, "result.sarif"), sarif());
+            writeCiscoCaptureReportV1(outputRoot);
             return { code: 0, stdout: "", stderr: "" };
           }
           if (argv[2] === "rm") return { code: 0, stdout: "", stderr: "" };
@@ -438,6 +441,7 @@ describe("Cisco V2 capture promotion", () => {
           if (argv.at(-1) !== containerId || outputRoot === undefined)
             throw new Error("broker did not start the claimed container");
           writeFileSync(join(outputRoot, "result.sarif"), sarif());
+          writeCiscoCaptureReportV1(outputRoot);
           return { code: 0, stdout: "", stderr: "" };
         }
         if (argv[2] === "rm") {

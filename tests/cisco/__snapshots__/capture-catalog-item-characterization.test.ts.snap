@@ -1,0 +1,647 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`capture-catalog-item command characterization > answers every argument-stage case with the same streams and exit status 1`] = `
+{
+  "collection id grammar": {
+    "argv": [
+      "--catalog-tarball",
+      "c.tgz",
+      "--scan-tarball",
+      "s.tgz",
+      "--output",
+      "out",
+      "--registration",
+      "r.json",
+      "--layout",
+      "l.json",
+      "--image-id",
+      "i.txt",
+      "--sbom",
+      "sbom.json",
+      "--provenance",
+      "prov.json",
+      "--collection-id",
+      "Not-Lower",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: --collection-id grammar
+",
+    "stdout": "",
+  },
+  "detector id grammar": {
+    "argv": [
+      "--catalog-tarball",
+      "c.tgz",
+      "--scan-tarball",
+      "s.tgz",
+      "--output",
+      "out",
+      "--registration",
+      "r.json",
+      "--layout",
+      "l.json",
+      "--image-id",
+      "i.txt",
+      "--sbom",
+      "sbom.json",
+      "--provenance",
+      "prov.json",
+      "--detector-id",
+      "cisco",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: --detector-id grammar
+",
+    "stdout": "",
+  },
+  "duplicate boolean argument": {
+    "argv": [
+      "--prepare-only",
+      "--prepare-only",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: duplicate argument --prepare-only
+",
+    "stdout": "",
+  },
+  "duplicate value argument": {
+    "argv": [
+      "--output",
+      "a",
+      "--output",
+      "b",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: duplicate argument --output
+",
+    "stdout": "",
+  },
+  "flag given as a value": {
+    "argv": [
+      "--output",
+      "--layout",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: --output requires a value
+",
+    "stdout": "",
+  },
+  "help": {
+    "argv": [
+      "--help",
+    ],
+    "signal": null,
+    "status": 0,
+    "stderr": "",
+    "stdout": "Usage:
+  node tools/capture-catalog-item.mjs \\
+    --catalog-tarball <@aihq/catalog-*.tgz> \\
+    --scan-tarball <aihq-scan-*.tgz> \\
+    --output <new-or-empty-directory> \\
+    --registration <DetectorRegistrationV1 authoring JSON> \\
+    --layout <canonical CiscoOciLayoutV1 JSON> \\
+    --image-id <docker image inspect --format '{{.Id}}' output> \\
+    --sbom <SPDX JSON> \\
+    --provenance <in-toto JSON> \\
+    [--detector-id <detector.*>] [--collection-id <id>] [--subject-id <id>]
+    [--consumer-root <empty-dir>] [--prepare-only]
+
+  --catalog-tarball  npm pack output of the Catalog commit under test.
+  --scan-tarball     npm pack output of the Scan commit under test.
+  --output           New or empty run directory. It receives source/ (the complete
+                     published closure under its own paths), detector/,
+                     capture-request.json, source-closure.json, preflight.json,
+                     execution.log and bundle/, plus capture-failure.json whenever
+                     the run stops after preparation without a verified bundle.
+  --registration     The organization's own DetectorRegistrationV1 authoring document
+                     (README "Capture"). Nothing here is derived or defaulted.
+  --layout           Canonical CiscoOciLayoutV1 JSON for the loaded detector image,
+                     produced by: node tools/verify-cisco-oci-candidate.mjs \\
+                       --metadata <buildx metadata> --layout-root <oci layout dir> \\
+                       --image-id <config id file> --summary <summary out> \\
+                       --canonical-layout <this file>
+  --image-id         File holding 'docker image inspect --format {{.Id}} local.invalid/aih-scan/cisco'.
+  --sbom             The exact SPDX bytes whose sha256 the registration declares.
+  --provenance       The exact in-toto bytes whose sha256 the registration declares.
+  --detector-id      Required only when the registration declares more than one entry.
+  --collection-id    Collection view the source closure is read from. Default: aih-core.
+  --subject-id       Subject whose source closure is read. Default: governance-quality.
+                     The entry id and every digest come from what the public
+                     readCatalogSourceClosureV1 returns for this pair; no entry id
+                     is defaulted or supplied by the operator.
+  --consumer-root    Fresh install directory. Default: a new mkdtemp under the system temp root.
+  --prepare-only     Validate everything, write the request, pass the subject and
+                     Docker gates, and stop before capture.
+
+Source selection. The item's original source is read through the installed
+package's public readCatalogSourceClosureV1(collectionId, subjectId). Every file of
+the returned closure is staged under the path Catalog publishes it at, re-hashed,
+and its declared digest verified before it is written. The capture source root is
+the 'skill' material root Catalog declares; a closure with no declared skill root,
+or with more than one, is refused rather than guessed at, and a nested SKILL.md is
+never discovered and never substituted for a declaration. Files outside that root,
+such as aih-packs.json, stay outside the mounted root and are recorded as
+uncovered: a scan of the skill root does not cover them.
+
+Diagnostic record. source-closure.json records the complete closure, the selected
+skill root, every published-to-staged-to-selected path mapping and the files the
+mount cannot cover. It is this helper's own diagnostic: not signed evidence, not a
+capture bundle and not authority. The capture seal covers the selected paths only
+and is never the closure's declaredTreeDigest or the entry's subjectDigest.
+
+Suitability. cisco-oci-v1 loads the skill from the root the broker mounts at
+/source, so the mounted root must hold the declared skill's SKILL.md at its top
+level. Suitability is read from the staged material, never from the item's Catalog
+subject kind label: an item labelled 'agent' may be a skill pack, while
+closure.json, profile.json, prose.md and recipe.json are assessment artifacts and
+are never staged as a source — Catalog's own source reader refuses a subject whose
+material is not source files. A run that reaches the Docker gate records the
+accepted skill entry, the covered published paths and the uncovered ones in
+preflight.json. A refusal before capture names the reason in execution.log and
+leaves the selected root and the covered paths in capture-request.json and
+source-closure.json; a failed capture additionally leaves capture-failure.json with
+the command, the exit status, the streams that exist, that root and those paths.
+findingsProduced stays null — unknown — for any capture that ran and failed or
+whose bundle failed validation, because this helper does not inspect detector
+output; it is false only when no capture process existed at all. No failed run is
+recorded as an empty scan.
+
+Checkouts. This file exists only in some Scan commits. Run it from the checkout
+that holds it, at the reviewed helper commit, and record that commit separately
+from the two package checkpoint identities. Do not switch, reset or clean that
+checkout: packing an older package checkpoint would delete this file. Build each
+package checkpoint in its own extraction instead, then pass the two tarballs here:
+
+  git -C <catalog-checkout> archive --format=tar <catalog-commit> | \\
+    (mkdir -p /tmp/aih-catalog-build && tar -x -C /tmp/aih-catalog-build)
+  cd /tmp/aih-catalog-build && npm ci && npm run build && npm pack
+
+  git -C <scan-checkout> archive --format=tar <scan-commit> | \\
+    (mkdir -p /tmp/aih-scan-build && tar -x -C /tmp/aih-scan-build)
+  cd /tmp/aih-scan-build && npm ci && npm pack
+
+@aihq/catalog has no prepack script, so its dist/ must be built before packing;
+@aihq/scan builds itself in prepack. The produced tarball names carry each
+package version, and both tarball hashes plus both installed versions are written
+to preflight.json.
+
+Running it here proves preparation only. The detector runs only when all of these
+hold: Node reports linux/x64 (OCI amd64), PATH=/usr/bin:/bin reaches
+/usr/bin/docker or /bin/docker, that daemon reports Linux amd64 on its default
+socket (the broker passes no DOCKER_HOST/DOCKER_CONTEXT), and the image is loaded
+under the exact config digest the layout declares.
+",
+  },
+  "help beside another argument": {
+    "argv": [
+      "--help",
+      "--prepare-only",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: unknown argument --help; run with --help
+",
+    "stdout": "",
+  },
+  "no arguments": {
+    "argv": [],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: missing required argument(s) --catalog-tarball, --scan-tarball, --output, --registration, --layout, --image-id, --sbom, --provenance; run with --help
+  --registration: supply the organization's own DetectorRegistrationV1 authoring JSON (README section Capture)
+  --layout: supply node tools/verify-cisco-oci-candidate.mjs ... --canonical-layout <file>
+  --image-id: supply docker image inspect --format '{{.Id}}' local.invalid/aih-scan/cisco > <file>
+  --sbom: supply the SPDX bytes whose sha256 your registration declares
+  --provenance: supply the in-toto bytes whose sha256 your registration declares
+",
+    "stdout": "",
+  },
+  "required operator inputs missing": {
+    "argv": [
+      "--catalog-tarball",
+      "c.tgz",
+      "--scan-tarball",
+      "s.tgz",
+      "--output",
+      "out",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: missing required argument(s) --registration, --layout, --image-id, --sbom, --provenance; run with --help
+  --registration: supply the organization's own DetectorRegistrationV1 authoring JSON (README section Capture)
+  --layout: supply node tools/verify-cisco-oci-candidate.mjs ... --canonical-layout <file>
+  --image-id: supply docker image inspect --format '{{.Id}}' local.invalid/aih-scan/cisco > <file>
+  --sbom: supply the SPDX bytes whose sha256 your registration declares
+  --provenance: supply the in-toto bytes whose sha256 your registration declares
+",
+    "stdout": "",
+  },
+  "short help": {
+    "argv": [
+      "-h",
+    ],
+    "signal": null,
+    "status": 0,
+    "stderr": "",
+    "stdout": "Usage:
+  node tools/capture-catalog-item.mjs \\
+    --catalog-tarball <@aihq/catalog-*.tgz> \\
+    --scan-tarball <aihq-scan-*.tgz> \\
+    --output <new-or-empty-directory> \\
+    --registration <DetectorRegistrationV1 authoring JSON> \\
+    --layout <canonical CiscoOciLayoutV1 JSON> \\
+    --image-id <docker image inspect --format '{{.Id}}' output> \\
+    --sbom <SPDX JSON> \\
+    --provenance <in-toto JSON> \\
+    [--detector-id <detector.*>] [--collection-id <id>] [--subject-id <id>]
+    [--consumer-root <empty-dir>] [--prepare-only]
+
+  --catalog-tarball  npm pack output of the Catalog commit under test.
+  --scan-tarball     npm pack output of the Scan commit under test.
+  --output           New or empty run directory. It receives source/ (the complete
+                     published closure under its own paths), detector/,
+                     capture-request.json, source-closure.json, preflight.json,
+                     execution.log and bundle/, plus capture-failure.json whenever
+                     the run stops after preparation without a verified bundle.
+  --registration     The organization's own DetectorRegistrationV1 authoring document
+                     (README "Capture"). Nothing here is derived or defaulted.
+  --layout           Canonical CiscoOciLayoutV1 JSON for the loaded detector image,
+                     produced by: node tools/verify-cisco-oci-candidate.mjs \\
+                       --metadata <buildx metadata> --layout-root <oci layout dir> \\
+                       --image-id <config id file> --summary <summary out> \\
+                       --canonical-layout <this file>
+  --image-id         File holding 'docker image inspect --format {{.Id}} local.invalid/aih-scan/cisco'.
+  --sbom             The exact SPDX bytes whose sha256 the registration declares.
+  --provenance       The exact in-toto bytes whose sha256 the registration declares.
+  --detector-id      Required only when the registration declares more than one entry.
+  --collection-id    Collection view the source closure is read from. Default: aih-core.
+  --subject-id       Subject whose source closure is read. Default: governance-quality.
+                     The entry id and every digest come from what the public
+                     readCatalogSourceClosureV1 returns for this pair; no entry id
+                     is defaulted or supplied by the operator.
+  --consumer-root    Fresh install directory. Default: a new mkdtemp under the system temp root.
+  --prepare-only     Validate everything, write the request, pass the subject and
+                     Docker gates, and stop before capture.
+
+Source selection. The item's original source is read through the installed
+package's public readCatalogSourceClosureV1(collectionId, subjectId). Every file of
+the returned closure is staged under the path Catalog publishes it at, re-hashed,
+and its declared digest verified before it is written. The capture source root is
+the 'skill' material root Catalog declares; a closure with no declared skill root,
+or with more than one, is refused rather than guessed at, and a nested SKILL.md is
+never discovered and never substituted for a declaration. Files outside that root,
+such as aih-packs.json, stay outside the mounted root and are recorded as
+uncovered: a scan of the skill root does not cover them.
+
+Diagnostic record. source-closure.json records the complete closure, the selected
+skill root, every published-to-staged-to-selected path mapping and the files the
+mount cannot cover. It is this helper's own diagnostic: not signed evidence, not a
+capture bundle and not authority. The capture seal covers the selected paths only
+and is never the closure's declaredTreeDigest or the entry's subjectDigest.
+
+Suitability. cisco-oci-v1 loads the skill from the root the broker mounts at
+/source, so the mounted root must hold the declared skill's SKILL.md at its top
+level. Suitability is read from the staged material, never from the item's Catalog
+subject kind label: an item labelled 'agent' may be a skill pack, while
+closure.json, profile.json, prose.md and recipe.json are assessment artifacts and
+are never staged as a source — Catalog's own source reader refuses a subject whose
+material is not source files. A run that reaches the Docker gate records the
+accepted skill entry, the covered published paths and the uncovered ones in
+preflight.json. A refusal before capture names the reason in execution.log and
+leaves the selected root and the covered paths in capture-request.json and
+source-closure.json; a failed capture additionally leaves capture-failure.json with
+the command, the exit status, the streams that exist, that root and those paths.
+findingsProduced stays null — unknown — for any capture that ran and failed or
+whose bundle failed validation, because this helper does not inspect detector
+output; it is false only when no capture process existed at all. No failed run is
+recorded as an empty scan.
+
+Checkouts. This file exists only in some Scan commits. Run it from the checkout
+that holds it, at the reviewed helper commit, and record that commit separately
+from the two package checkpoint identities. Do not switch, reset or clean that
+checkout: packing an older package checkpoint would delete this file. Build each
+package checkpoint in its own extraction instead, then pass the two tarballs here:
+
+  git -C <catalog-checkout> archive --format=tar <catalog-commit> | \\
+    (mkdir -p /tmp/aih-catalog-build && tar -x -C /tmp/aih-catalog-build)
+  cd /tmp/aih-catalog-build && npm ci && npm run build && npm pack
+
+  git -C <scan-checkout> archive --format=tar <scan-commit> | \\
+    (mkdir -p /tmp/aih-scan-build && tar -x -C /tmp/aih-scan-build)
+  cd /tmp/aih-scan-build && npm ci && npm pack
+
+@aihq/catalog has no prepack script, so its dist/ must be built before packing;
+@aihq/scan builds itself in prepack. The produced tarball names carry each
+package version, and both tarball hashes plus both installed versions are written
+to preflight.json.
+
+Running it here proves preparation only. The detector runs only when all of these
+hold: Node reports linux/x64 (OCI amd64), PATH=/usr/bin:/bin reaches
+/usr/bin/docker or /bin/docker, that daemon reports Linux amd64 on its default
+socket (the broker passes no DOCKER_HOST/DOCKER_CONTEXT), and the image is loaded
+under the exact config digest the layout declares.
+",
+  },
+  "subject id grammar": {
+    "argv": [
+      "--catalog-tarball",
+      "c.tgz",
+      "--scan-tarball",
+      "s.tgz",
+      "--output",
+      "out",
+      "--registration",
+      "r.json",
+      "--layout",
+      "l.json",
+      "--image-id",
+      "i.txt",
+      "--sbom",
+      "sbom.json",
+      "--provenance",
+      "prov.json",
+      "--subject-id",
+      "../escape",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: --subject-id grammar
+",
+    "stdout": "",
+  },
+  "unknown argument": {
+    "argv": [
+      "--bogus",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: unknown argument --bogus; run with --help
+",
+    "stdout": "",
+  },
+  "value missing at the end": {
+    "argv": [
+      "--output",
+    ],
+    "signal": null,
+    "status": 1,
+    "stderr": "refused: --output requires a value
+",
+    "stdout": "",
+  },
+}
+`;
+
+exports[`capture-catalog-item command characterization > keeps its exported names 1`] = `
+[
+  "BROKER_DOCKER_EXECUTABLE",
+  "assertPlatform",
+  "assertSkillSourceRoot",
+  "attemptCapture",
+  "createRunDirectory",
+  "installEnvironment",
+  "npmCliPath",
+  "prepareCapture",
+  "readCatalogSourceClosure",
+  "readDetectorInputs",
+  "runPreparedCapture",
+]
+`;
+
+exports[`capture-catalog-item command characterization > leaves the same records when the capture command fails 1`] = `
+{
+  "attempt": {
+    "captureCommand": [
+      "<node>",
+      "<case>/consumer/node_modules/@aihq/scan/dist/cli.js",
+      "capture",
+      "--request",
+      "<case>/run/capture-request.json",
+      "--output",
+      "<case>/run/bundle",
+    ],
+    "captureProcessExisted": true,
+    "exitCode": 9,
+    "outcome": "failed",
+    "phase": "capture",
+    "reason": "capture exited 9: fixture-noise-0
+fixture-noise-1
+fixture-noise-2
+stub capture CLI: no detector and no bundle exist in this fixture; full output is in execution.log",
+    "signal": null,
+    "spawnError": null,
+    "stderr": "fixture-noise-0
+fixture-noise-1
+fixture-noise-2
+stub capture CLI: no detector and no bundle exist in this fixture
+",
+    "stdout": "",
+  },
+  "run": {
+    "capture-failure.json": "{"bundleDirectory":"<case>/run/bundle","bundlePresent":false,"bundleVerified":false,"captureCommand":["<node>","<case>/consumer/node_modules/@aihq/scan/dist/cli.js","capture","--request","<case>/run/capture-request.json","--output","<case>/run/bundle"],"captureProcessExisted":true,"captureRequestPath":"<case>/run/capture-request.json","coveredFilePaths":["LICENSE","SKILL.md","profile.json"],"executionLog":"<case>/run/execution.log","exitCode":9,"findingsProduced":null,"findingsProducedBasis":"capture-output-not-inspected","outcome":"failed","phase":"capture","protocol":"CatalogItemCaptureFailureV1","reason":"capture exited 9: fixture-noise-0\\nfixture-noise-1\\nfixture-noise-2\\nstub capture CLI: no detector and no bundle exist in this fixture; full output is in execution.log","signal":null,"sourceClosureRecord":"<case>/run/source-closure.json","sourceRoot":"<case>/run/source/packs/governance-quality/aih-gov-doctor","spawnError":null,"stderr":"fixture-noise-0\\nfixture-noise-1\\nfixture-noise-2\\nstub capture CLI: no detector and no bundle exist in this fixture\\n","stderrCharacters":114,"stderrTruncated":false,"stdout":"","stdoutCharacters":0,"stdoutTruncated":false}",
+    "capture-request.json": "{"annexFiles":[{"descriptorId":"annex.sbom","path":"<case>/run/detector/annex/annex.sbom.bin"},{"descriptorId":"annex.provenance","path":"<case>/run/detector/annex/annex.provenance.bin"}],"detectorId":"detector.fixture.organization","layout":{"configDigestSha256":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","logicalReference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestDescriptor":{"annotations":{"org.opencontainers.image.ref.name":"cisco"},"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"architecture":"amd64","os":"linux"},"size":1024},"manifestDigestSha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestPlatform":{"architecture":"amd64","os":"linux"},"protocol":"CiscoOciLayoutV1"},"registration":{"protocol":"DetectorRegistrationV1","registrations":[{"adapterCapability":"cisco-oci-v1","broker":{"capability":"cisco-oci-v1","identity":"broker.0123456789ab"},"detector":{"adapter":{"identity":"adapter.0123456789ab","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"analyzerIdentity":"native.0123456789ab","detectorId":"detector.fixture.organization","executionProfileSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","observationConfigurationSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","ociImage":{"reference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"provenance":{"mediaType":"application/vnd.in-toto+json","sha256":"ff1a7c06b54418b41ddf6c233246bf9664641e08bbd5593a9f5ebd2b2d8fc8fd"},"sbom":{"mediaType":"application/spdx+json","sha256":"f873d45996f8e1fc5fd35cc414b6c9d1f82faa1c9672d410fe372533ebf518aa"},"supportedPlatforms":[{"architecture":"amd64","os":"linux"}]},"runtime":{"configSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sourceReference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]},"selectedClosurePaths":["LICENSE","SKILL.md","profile.json"],"sourceRoot":"<case>/run/source/packs/governance-quality/aih-gov-doctor"}",
+    "detector/annex/annex.provenance.bin": "{"_type":"fixture-in-toto-statement","predicateType":"fixture"}
+",
+    "detector/annex/annex.sbom.bin": "{"name":"fixture-annex-sbom","spdxVersion":"SPDX-2.3"}
+",
+    "detector/image-id.txt": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+",
+    "detector/layout-v1.json": "{"configDigestSha256":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","logicalReference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestDescriptor":{"annotations":{"org.opencontainers.image.ref.name":"cisco"},"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"architecture":"amd64","os":"linux"},"size":1024},"manifestDigestSha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestPlatform":{"architecture":"amd64","os":"linux"},"protocol":"CiscoOciLayoutV1"}",
+    "execution.log": "tarball         --catalog-tarball sha256:<catalog-tarball-sha256> <stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz
+tarball         --scan-tarball sha256:<scan-tarball-sha256> <stub-packages>/stub-tarballs/aihq-scan-0.0.0-fixture.tgz
+consumer        <case>/consumer
+npm             <npm>
+
+===== npm install --ignore-scripts =====
+<npm install output>
+installed       @aihq/catalog@0.0.0-fixture
+installed       @aihq/scan@0.0.0-fixture
+closure file    aih-packs.json sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2 (33 bytes)
+closure file    packs/governance-quality/aih-gov-doctor/LICENSE sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8 (23 bytes)
+closure file    packs/governance-quality/aih-gov-doctor/SKILL.md sha256:906e45454676388a6df74df02640674ba2082cdfcaee9fb7b0b133449dfc1a6a (39 bytes)
+closure file    packs/governance-quality/aih-gov-doctor/profile.json sha256:a0dbf6f5605d700abb328853e3744628b8e0418dc5c7f6d717b704b82763e8d2 (37 bytes)
+closure         aih-core/governance-quality entry agent.aih.governance-quality.core-0-6-2 (4 published files, format aih-catalog-source-closure v1)
+declared root   packs/governance-quality/aih-gov-doctor (kind skill, marker SKILL.md, 3 files)
+source root     <case>/run/source/packs/governance-quality/aih-gov-doctor (covers LICENSE, SKILL.md, profile.json)
+uncovered       aih-packs.json
+diagnostic      <case>/run/source-closure.json (not evidence; the staged closure and its coverage)
+registration    detector.fixture.organization sha256:acc3d1e7d63ee2e7561572971bf78d982351a796289f4788c0a59d219fa75e56 (1 entry)
+layout          local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa config sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+detector input  annex.sbom sha256:f873d45996f8e1fc5fd35cc414b6c9d1f82faa1c9672d410fe372533ebf518aa
+detector input  annex.provenance sha256:ff1a7c06b54418b41ddf6c233246bf9664641e08bbd5593a9f5ebd2b2d8fc8fd
+request         <case>/run/capture-request.json
+
+===== aih-scan capture =====
+finished <time>
+exit     9
+--- stderr ---
+fixture-noise-0
+fixture-noise-1
+fixture-noise-2
+stub capture CLI: no detector and no bundle exist in this fixture
+
+
+capture failure: capture exited 9: fixture-noise-0
+fixture-noise-1
+fixture-noise-2
+stub capture CLI: no detector and no bundle exist in this fixture; full output is in execution.log
+",
+    "source-closure.json": "{"authority":"diagnostic-record-not-evidence","catalog":{"name":"@aihq/catalog","tarball":{"flag":"--catalog-tarball","path":"<stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz","sha256":"sha256:<catalog-tarball-sha256>"},"version":"0.0.0-fixture"},"closure":{"assessment":{"profile":{"path":"defaults/workbench/aih-core-0.6.2/agent.aih.governance-quality.core-0-6-2/artifacts/profile.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222"}},"asset":{"assetId":"aih/package:skill-pack/governance-quality","sourceRevisionId":"package:@aihq/core@0.6.2"},"collection":{"id":"aih-core","release":"0.6.2-fixture"},"declaredTreeDigest":{"note":"recorded as Catalog declares it; never presented as the capture seal","reproduced":false,"value":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"entry":{"entryId":"agent.aih.governance-quality.core-0-6-2","subject":{"id":"governance-quality","kind":"agent","sourceDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","subjectDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}},"files":[{"byteLength":33,"path":"aih-packs.json","sha256":"sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2"},{"byteLength":23,"path":"packs/governance-quality/aih-gov-doctor/LICENSE","sha256":"sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8"},{"byteLength":39,"path":"packs/governance-quality/aih-gov-doctor/SKILL.md","sha256":"sha256:906e45454676388a6df74df02640674ba2082cdfcaee9fb7b0b133449dfc1a6a"},{"byteLength":37,"path":"packs/governance-quality/aih-gov-doctor/profile.json","sha256":"sha256:a0dbf6f5605d700abb328853e3744628b8e0418dc5c7f6d717b704b82763e8d2"}],"format":"aih-catalog-source-closure","materialRoots":[{"excludes":[],"files":["aih-packs.json","packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"kind":"closure","path":"."},{"excludes":["aih-packs.json"],"files":["packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"kind":"skill","marker":"SKILL.md","path":"packs/governance-quality/aih-gov-doctor"}],"root":"defaults/sources/github.com/samartomar/ai-harness/5555555555555555555555555555555555555555","source":{"host":"github.com","repository":"samartomar/ai-harness","revision":"5555555555555555555555555555555555555555"},"version":1},"coverage":{"coveredPublishedPaths":["packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"mountedRoot":"<case>/run/source/packs/governance-quality/aih-gov-doctor","selectedPaths":["LICENSE","SKILL.md","profile.json"],"statement":"The capture requested from this run mounts <case>/run/source/packs/governance-quality/aih-gov-doctor and covers the selected paths listed here only. A scan of a skill root does not cover the rest of the closure, and no seal it produces is the complete closure, its declaredTreeDigest or the entry subjectDigest.","uncoveredPublishedPaths":[{"declaredExcluded":true,"publishedPath":"aih-packs.json","reason":"outside the mounted skill root packs/governance-quality/aih-gov-doctor, so this capture does not cover it","stagedPath":"<case>/run/source/aih-packs.json"}]},"pathMapping":[{"publishedPath":"aih-packs.json","selectedPath":null,"stagedPath":"<case>/run/source/aih-packs.json"},{"publishedPath":"packs/governance-quality/aih-gov-doctor/LICENSE","selectedPath":"LICENSE","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/LICENSE"},{"publishedPath":"packs/governance-quality/aih-gov-doctor/SKILL.md","selectedPath":"SKILL.md","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/SKILL.md"},{"publishedPath":"packs/governance-quality/aih-gov-doctor/profile.json","selectedPath":"profile.json","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/profile.json"}],"protocol":"CatalogSourceClosureCaptureRecordV1","sealScope":{"requestPath":"<case>/run/capture-request.json","selectedPaths":["LICENSE","SKILL.md","profile.json"],"statement":"A capture bundle produced from this request seals the mounted source root over the selected paths above, and describes this scan of this root only."},"selectedSkillRoot":{"declaredExcludes":["aih-packs.json"],"declaredFiles":["packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"declaredPath":"packs/governance-quality/aih-gov-doctor","marker":"SKILL.md","selectedPaths":["LICENSE","SKILL.md","profile.json"],"stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor"},"selection":{"collectionId":"aih-core","subjectId":"governance-quality"},"stagedFiles":[{"byteLength":33,"publishedPath":"aih-packs.json","sha256":"sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2","stagedPath":"<case>/run/source/aih-packs.json"},{"byteLength":23,"publishedPath":"packs/governance-quality/aih-gov-doctor/LICENSE","sha256":"sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/LICENSE"},{"byteLength":39,"publishedPath":"packs/governance-quality/aih-gov-doctor/SKILL.md","sha256":"sha256:906e45454676388a6df74df02640674ba2082cdfcaee9fb7b0b133449dfc1a6a","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/SKILL.md"},{"byteLength":37,"publishedPath":"packs/governance-quality/aih-gov-doctor/profile.json","sha256":"sha256:a0dbf6f5605d700abb328853e3744628b8e0418dc5c7f6d717b704b82763e8d2","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/profile.json"}],"statement":"Written by tools/capture-catalog-item.mjs to record which Catalog source files were staged and which of them this capture covers. It is not signed evidence, not a capture bundle and not an authority, and it seals nothing."}",
+    "source/aih-packs.json": "{"protocol":"fixture-aih-packs"}
+",
+    "source/packs/governance-quality/aih-gov-doctor/LICENSE": "Fixture licence bytes.
+",
+    "source/packs/governance-quality/aih-gov-doctor/SKILL.md": "---
+name: fixture
+---
+
+# fixture skill
+",
+    "source/packs/governance-quality/aih-gov-doctor/profile.json": "{"protocol":"fixture-skill-profile"}
+",
+  },
+}
+`;
+
+exports[`capture-catalog-item command characterization > leaves the same records when the subject gate refuses a prepared root 1`] = `
+{
+  "reason": "Refusal: catalog item agent.aih.governance-quality.core-0-6-2 is not a skill source for cisco-oci-v1: the broker mounts the capture source root at /source and the scanner loads the skill from that root, but <case>/run/source/packs/no-skill holds no staged SKILL.md at its top level (top-level entries: LICENSE, profile.json; staged files: LICENSE, profile.json). This root is the skill material root the source closure declares, and the entry the route loads is read from the staged bytes: a verified digest proves these are the published bytes, not that they are the skill entry this route can load.",
+  "run": {
+    "capture-failure.json": "{"bundleDirectory":"<case>/run/bundle","bundlePresent":false,"bundleVerified":false,"captureCommand":null,"captureProcessExisted":false,"captureRequestPath":"<case>/run/capture-request.json","coveredFilePaths":["LICENSE","profile.json"],"executionLog":"<case>/run/execution.log","exitCode":null,"findingsProduced":false,"findingsProducedBasis":"no-capture-process-existed","outcome":"failed","phase":"subject","protocol":"CatalogItemCaptureFailureV1","reason":"catalog item agent.aih.governance-quality.core-0-6-2 is not a skill source for cisco-oci-v1: the broker mounts the capture source root at /source and the scanner loads the skill from that root, but <case>/run/source/packs/no-skill holds no staged SKILL.md at its top level (top-level entries: LICENSE, profile.json; staged files: LICENSE, profile.json). This root is the skill material root the source closure declares, and the entry the route loads is read from the staged bytes: a verified digest proves these are the published bytes, not that they are the skill entry this route can load.","signal":null,"sourceClosureRecord":"<case>/run/source-closure.json","sourceRoot":"<case>/run/source/packs/no-skill","spawnError":null,"stderr":null,"stderrCharacters":0,"stderrTruncated":false,"stdout":null,"stdoutCharacters":0,"stdoutTruncated":false}",
+    "capture-request.json": "{"annexFiles":[{"descriptorId":"annex.sbom","path":"<case>/run/detector/annex/annex.sbom.bin"},{"descriptorId":"annex.provenance","path":"<case>/run/detector/annex/annex.provenance.bin"}],"detectorId":"detector.fixture.organization","layout":{"configDigestSha256":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","logicalReference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestDescriptor":{"annotations":{"org.opencontainers.image.ref.name":"cisco"},"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"architecture":"amd64","os":"linux"},"size":1024},"manifestDigestSha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestPlatform":{"architecture":"amd64","os":"linux"},"protocol":"CiscoOciLayoutV1"},"registration":{"protocol":"DetectorRegistrationV1","registrations":[{"adapterCapability":"cisco-oci-v1","broker":{"capability":"cisco-oci-v1","identity":"broker.0123456789ab"},"detector":{"adapter":{"identity":"adapter.0123456789ab","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"analyzerIdentity":"native.0123456789ab","detectorId":"detector.fixture.organization","executionProfileSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","observationConfigurationSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","ociImage":{"reference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"provenance":{"mediaType":"application/vnd.in-toto+json","sha256":"ff1a7c06b54418b41ddf6c233246bf9664641e08bbd5593a9f5ebd2b2d8fc8fd"},"sbom":{"mediaType":"application/spdx+json","sha256":"f873d45996f8e1fc5fd35cc414b6c9d1f82faa1c9672d410fe372533ebf518aa"},"supportedPlatforms":[{"architecture":"amd64","os":"linux"}]},"runtime":{"configSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sourceReference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]},"selectedClosurePaths":["LICENSE","profile.json"],"sourceRoot":"<case>/run/source/packs/no-skill"}",
+    "detector/annex/annex.provenance.bin": "{"_type":"fixture-in-toto-statement","predicateType":"fixture"}
+",
+    "detector/annex/annex.sbom.bin": "{"name":"fixture-annex-sbom","spdxVersion":"SPDX-2.3"}
+",
+    "detector/image-id.txt": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+",
+    "detector/layout-v1.json": "{"configDigestSha256":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","logicalReference":"local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestDescriptor":{"annotations":{"org.opencontainers.image.ref.name":"cisco"},"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/vnd.oci.image.manifest.v1+json","platform":{"architecture":"amd64","os":"linux"},"size":1024},"manifestDigestSha256":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","manifestPlatform":{"architecture":"amd64","os":"linux"},"protocol":"CiscoOciLayoutV1"}",
+    "execution.log": "tarball         --catalog-tarball sha256:<catalog-tarball-sha256> <stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz
+tarball         --scan-tarball sha256:<scan-tarball-sha256> <stub-packages>/stub-tarballs/aihq-scan-0.0.0-fixture.tgz
+consumer        <case>/consumer
+npm             <npm>
+
+===== npm install --ignore-scripts =====
+<npm install output>
+installed       @aihq/catalog@0.0.0-fixture
+installed       @aihq/scan@0.0.0-fixture
+closure file    aih-packs.json sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2 (33 bytes)
+closure file    packs/no-skill/LICENSE sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8 (23 bytes)
+closure file    packs/no-skill/profile.json sha256:5d50d098d2b44bbdf3fe1e1d7f4d32aeb36c49d161a251379a92318bffd53e72 (31 bytes)
+closure         aih-core/governance-quality entry agent.aih.governance-quality.core-0-6-2 (3 published files, format aih-catalog-source-closure v1)
+declared root   packs/no-skill (kind skill, marker profile.json, 2 files)
+source root     <case>/run/source/packs/no-skill (covers LICENSE, profile.json)
+uncovered       aih-packs.json
+diagnostic      <case>/run/source-closure.json (not evidence; the staged closure and its coverage)
+registration    detector.fixture.organization sha256:acc3d1e7d63ee2e7561572971bf78d982351a796289f4788c0a59d219fa75e56 (1 entry)
+layout          local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa config sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+detector input  annex.sbom sha256:f873d45996f8e1fc5fd35cc414b6c9d1f82faa1c9672d410fe372533ebf518aa
+detector input  annex.provenance sha256:ff1a7c06b54418b41ddf6c233246bf9664641e08bbd5593a9f5ebd2b2d8fc8fd
+request         <case>/run/capture-request.json
+
+subject failure: catalog item agent.aih.governance-quality.core-0-6-2 is not a skill source for cisco-oci-v1: the broker mounts the capture source root at /source and the scanner loads the skill from that root, but <case>/run/source/packs/no-skill holds no staged SKILL.md at its top level (top-level entries: LICENSE, profile.json; staged files: LICENSE, profile.json). This root is the skill material root the source closure declares, and the entry the route loads is read from the staged bytes: a verified digest proves these are the published bytes, not that they are the skill entry this route can load.
+",
+    "source-closure.json": "{"authority":"diagnostic-record-not-evidence","catalog":{"name":"@aihq/catalog","tarball":{"flag":"--catalog-tarball","path":"<stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz","sha256":"sha256:<catalog-tarball-sha256>"},"version":"0.0.0-fixture"},"closure":{"assessment":{"profile":{"path":"defaults/workbench/aih-core-0.6.2/agent.aih.governance-quality.core-0-6-2/artifacts/profile.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222"}},"asset":{"assetId":"aih/package:skill-pack/governance-quality","sourceRevisionId":"package:@aihq/core@0.6.2"},"collection":{"id":"aih-core","release":"0.6.2-fixture"},"declaredTreeDigest":{"note":"recorded as Catalog declares it; never presented as the capture seal","reproduced":false,"value":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"entry":{"entryId":"agent.aih.governance-quality.core-0-6-2","subject":{"id":"governance-quality","kind":"agent","sourceDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","subjectDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}},"files":[{"byteLength":33,"path":"aih-packs.json","sha256":"sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2"},{"byteLength":23,"path":"packs/no-skill/LICENSE","sha256":"sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8"},{"byteLength":31,"path":"packs/no-skill/profile.json","sha256":"sha256:5d50d098d2b44bbdf3fe1e1d7f4d32aeb36c49d161a251379a92318bffd53e72"}],"format":"aih-catalog-source-closure","materialRoots":[{"excludes":[],"files":["aih-packs.json","packs/no-skill/LICENSE","packs/no-skill/profile.json"],"kind":"closure","path":"."},{"excludes":["aih-packs.json"],"files":["packs/no-skill/LICENSE","packs/no-skill/profile.json"],"kind":"skill","marker":"profile.json","path":"packs/no-skill"}],"root":"defaults/sources/github.com/samartomar/ai-harness/5555555555555555555555555555555555555555","source":{"host":"github.com","repository":"samartomar/ai-harness","revision":"5555555555555555555555555555555555555555"},"version":1},"coverage":{"coveredPublishedPaths":["packs/no-skill/LICENSE","packs/no-skill/profile.json"],"mountedRoot":"<case>/run/source/packs/no-skill","selectedPaths":["LICENSE","profile.json"],"statement":"The capture requested from this run mounts <case>/run/source/packs/no-skill and covers the selected paths listed here only. A scan of a skill root does not cover the rest of the closure, and no seal it produces is the complete closure, its declaredTreeDigest or the entry subjectDigest.","uncoveredPublishedPaths":[{"declaredExcluded":true,"publishedPath":"aih-packs.json","reason":"outside the mounted skill root packs/no-skill, so this capture does not cover it","stagedPath":"<case>/run/source/aih-packs.json"}]},"pathMapping":[{"publishedPath":"aih-packs.json","selectedPath":null,"stagedPath":"<case>/run/source/aih-packs.json"},{"publishedPath":"packs/no-skill/LICENSE","selectedPath":"LICENSE","stagedPath":"<case>/run/source/packs/no-skill/LICENSE"},{"publishedPath":"packs/no-skill/profile.json","selectedPath":"profile.json","stagedPath":"<case>/run/source/packs/no-skill/profile.json"}],"protocol":"CatalogSourceClosureCaptureRecordV1","sealScope":{"requestPath":"<case>/run/capture-request.json","selectedPaths":["LICENSE","profile.json"],"statement":"A capture bundle produced from this request seals the mounted source root over the selected paths above, and describes this scan of this root only."},"selectedSkillRoot":{"declaredExcludes":["aih-packs.json"],"declaredFiles":["packs/no-skill/LICENSE","packs/no-skill/profile.json"],"declaredPath":"packs/no-skill","marker":"profile.json","selectedPaths":["LICENSE","profile.json"],"stagedPath":"<case>/run/source/packs/no-skill"},"selection":{"collectionId":"aih-core","subjectId":"governance-quality"},"stagedFiles":[{"byteLength":33,"publishedPath":"aih-packs.json","sha256":"sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2","stagedPath":"<case>/run/source/aih-packs.json"},{"byteLength":23,"publishedPath":"packs/no-skill/LICENSE","sha256":"sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8","stagedPath":"<case>/run/source/packs/no-skill/LICENSE"},{"byteLength":31,"publishedPath":"packs/no-skill/profile.json","sha256":"sha256:5d50d098d2b44bbdf3fe1e1d7f4d32aeb36c49d161a251379a92318bffd53e72","stagedPath":"<case>/run/source/packs/no-skill/profile.json"}],"statement":"Written by tools/capture-catalog-item.mjs to record which Catalog source files were staged and which of them this capture covers. It is not signed evidence, not a capture bundle and not an authority, and it seals nothing."}",
+    "source/aih-packs.json": "{"protocol":"fixture-aih-packs"}
+",
+    "source/packs/no-skill/LICENSE": "Fixture licence bytes.
+",
+    "source/packs/no-skill/profile.json": "{"protocol":"fixture-profile"}
+",
+  },
+}
+`;
+
+exports[`capture-catalog-item command characterization > refuses the same preparation inputs with the same messages 1`] = `
+{
+  "closure not verified": {
+    "reason": "Refusal: the installed catalog serves no verified source closure for aih-core/governance-quality: state "refused", reason fixture-refusal. A subject whose material is not published source files is refused by Catalog itself, and this helper never substitutes the item's assessment artifacts for its source",
+    "run": {
+      "execution.log": "tarball         --catalog-tarball sha256:<catalog-tarball-sha256> <stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz
+tarball         --scan-tarball sha256:<scan-tarball-sha256> <stub-packages>/stub-tarballs/aihq-scan-0.0.0-fixture.tgz
+consumer        <case>/consumer
+npm             <npm>
+
+===== npm install --ignore-scripts =====
+<npm install output>
+installed       @aihq/catalog@0.0.0-fixture
+installed       @aihq/scan@0.0.0-fixture
+",
+    },
+  },
+  "image id does not match the layout": {
+    "reason": "Refusal: --image-id does not match the config digest the layout declares",
+    "run": {
+      "execution.log": "tarball         --catalog-tarball sha256:<catalog-tarball-sha256> <stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz
+tarball         --scan-tarball sha256:<scan-tarball-sha256> <stub-packages>/stub-tarballs/aihq-scan-0.0.0-fixture.tgz
+consumer        <case>/consumer
+npm             <npm>
+
+===== npm install --ignore-scripts =====
+<npm install output>
+installed       @aihq/catalog@0.0.0-fixture
+installed       @aihq/scan@0.0.0-fixture
+closure file    aih-packs.json sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2 (33 bytes)
+closure file    packs/governance-quality/aih-gov-doctor/LICENSE sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8 (23 bytes)
+closure file    packs/governance-quality/aih-gov-doctor/SKILL.md sha256:906e45454676388a6df74df02640674ba2082cdfcaee9fb7b0b133449dfc1a6a (39 bytes)
+closure file    packs/governance-quality/aih-gov-doctor/profile.json sha256:a0dbf6f5605d700abb328853e3744628b8e0418dc5c7f6d717b704b82763e8d2 (37 bytes)
+closure         aih-core/governance-quality entry agent.aih.governance-quality.core-0-6-2 (4 published files, format aih-catalog-source-closure v1)
+declared root   packs/governance-quality/aih-gov-doctor (kind skill, marker SKILL.md, 3 files)
+source root     <case>/run/source/packs/governance-quality/aih-gov-doctor (covers LICENSE, SKILL.md, profile.json)
+uncovered       aih-packs.json
+diagnostic      <case>/run/source-closure.json (not evidence; the staged closure and its coverage)
+registration    detector.fixture.organization sha256:acc3d1e7d63ee2e7561572971bf78d982351a796289f4788c0a59d219fa75e56 (1 entry)
+layout          local.invalid/aih-scan/cisco@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa config sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+",
+      "source-closure.json": "{"authority":"diagnostic-record-not-evidence","catalog":{"name":"@aihq/catalog","tarball":{"flag":"--catalog-tarball","path":"<stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz","sha256":"sha256:<catalog-tarball-sha256>"},"version":"0.0.0-fixture"},"closure":{"assessment":{"profile":{"path":"defaults/workbench/aih-core-0.6.2/agent.aih.governance-quality.core-0-6-2/artifacts/profile.json","sha256":"2222222222222222222222222222222222222222222222222222222222222222"}},"asset":{"assetId":"aih/package:skill-pack/governance-quality","sourceRevisionId":"package:@aihq/core@0.6.2"},"collection":{"id":"aih-core","release":"0.6.2-fixture"},"declaredTreeDigest":{"note":"recorded as Catalog declares it; never presented as the capture seal","reproduced":false,"value":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"entry":{"entryId":"agent.aih.governance-quality.core-0-6-2","subject":{"id":"governance-quality","kind":"agent","sourceDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000","subjectDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}},"files":[{"byteLength":33,"path":"aih-packs.json","sha256":"sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2"},{"byteLength":23,"path":"packs/governance-quality/aih-gov-doctor/LICENSE","sha256":"sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8"},{"byteLength":39,"path":"packs/governance-quality/aih-gov-doctor/SKILL.md","sha256":"sha256:906e45454676388a6df74df02640674ba2082cdfcaee9fb7b0b133449dfc1a6a"},{"byteLength":37,"path":"packs/governance-quality/aih-gov-doctor/profile.json","sha256":"sha256:a0dbf6f5605d700abb328853e3744628b8e0418dc5c7f6d717b704b82763e8d2"}],"format":"aih-catalog-source-closure","materialRoots":[{"excludes":[],"files":["aih-packs.json","packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"kind":"closure","path":"."},{"excludes":["aih-packs.json"],"files":["packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"kind":"skill","marker":"SKILL.md","path":"packs/governance-quality/aih-gov-doctor"}],"root":"defaults/sources/github.com/samartomar/ai-harness/5555555555555555555555555555555555555555","source":{"host":"github.com","repository":"samartomar/ai-harness","revision":"5555555555555555555555555555555555555555"},"version":1},"coverage":{"coveredPublishedPaths":["packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"mountedRoot":"<case>/run/source/packs/governance-quality/aih-gov-doctor","selectedPaths":["LICENSE","SKILL.md","profile.json"],"statement":"The capture requested from this run mounts <case>/run/source/packs/governance-quality/aih-gov-doctor and covers the selected paths listed here only. A scan of a skill root does not cover the rest of the closure, and no seal it produces is the complete closure, its declaredTreeDigest or the entry subjectDigest.","uncoveredPublishedPaths":[{"declaredExcluded":true,"publishedPath":"aih-packs.json","reason":"outside the mounted skill root packs/governance-quality/aih-gov-doctor, so this capture does not cover it","stagedPath":"<case>/run/source/aih-packs.json"}]},"pathMapping":[{"publishedPath":"aih-packs.json","selectedPath":null,"stagedPath":"<case>/run/source/aih-packs.json"},{"publishedPath":"packs/governance-quality/aih-gov-doctor/LICENSE","selectedPath":"LICENSE","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/LICENSE"},{"publishedPath":"packs/governance-quality/aih-gov-doctor/SKILL.md","selectedPath":"SKILL.md","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/SKILL.md"},{"publishedPath":"packs/governance-quality/aih-gov-doctor/profile.json","selectedPath":"profile.json","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/profile.json"}],"protocol":"CatalogSourceClosureCaptureRecordV1","sealScope":{"requestPath":"<case>/run/capture-request.json","selectedPaths":["LICENSE","SKILL.md","profile.json"],"statement":"A capture bundle produced from this request seals the mounted source root over the selected paths above, and describes this scan of this root only."},"selectedSkillRoot":{"declaredExcludes":["aih-packs.json"],"declaredFiles":["packs/governance-quality/aih-gov-doctor/LICENSE","packs/governance-quality/aih-gov-doctor/SKILL.md","packs/governance-quality/aih-gov-doctor/profile.json"],"declaredPath":"packs/governance-quality/aih-gov-doctor","marker":"SKILL.md","selectedPaths":["LICENSE","SKILL.md","profile.json"],"stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor"},"selection":{"collectionId":"aih-core","subjectId":"governance-quality"},"stagedFiles":[{"byteLength":33,"publishedPath":"aih-packs.json","sha256":"sha256:ee9d3eafa6f4993afa80c3686d3bec2cfdbdb7ea7b5459c189922378d8f792e2","stagedPath":"<case>/run/source/aih-packs.json"},{"byteLength":23,"publishedPath":"packs/governance-quality/aih-gov-doctor/LICENSE","sha256":"sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/LICENSE"},{"byteLength":39,"publishedPath":"packs/governance-quality/aih-gov-doctor/SKILL.md","sha256":"sha256:906e45454676388a6df74df02640674ba2082cdfcaee9fb7b0b133449dfc1a6a","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/SKILL.md"},{"byteLength":37,"publishedPath":"packs/governance-quality/aih-gov-doctor/profile.json","sha256":"sha256:a0dbf6f5605d700abb328853e3744628b8e0418dc5c7f6d717b704b82763e8d2","stagedPath":"<case>/run/source/packs/governance-quality/aih-gov-doctor/profile.json"}],"statement":"Written by tools/capture-catalog-item.mjs to record which Catalog source files were staged and which of them this capture covers. It is not signed evidence, not a capture bundle and not an authority, and it seals nothing."}",
+      "source/aih-packs.json": "{"protocol":"fixture-aih-packs"}
+",
+      "source/packs/governance-quality/aih-gov-doctor/LICENSE": "Fixture licence bytes.
+",
+      "source/packs/governance-quality/aih-gov-doctor/SKILL.md": "---
+name: fixture
+---
+
+# fixture skill
+",
+      "source/packs/governance-quality/aih-gov-doctor/profile.json": "{"protocol":"fixture-skill-profile"}
+",
+    },
+  },
+  "no declared skill root": {
+    "reason": "Refusal: the source closure for aih-core/governance-quality declares no 'skill' material root (declared kinds: closure); this helper mounts a declared skill root and never discovers one in the staged tree",
+    "run": {
+      "execution.log": "tarball         --catalog-tarball sha256:<catalog-tarball-sha256> <stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz
+tarball         --scan-tarball sha256:<scan-tarball-sha256> <stub-packages>/stub-tarballs/aihq-scan-0.0.0-fixture.tgz
+consumer        <case>/consumer
+npm             <npm>
+
+===== npm install --ignore-scripts =====
+<npm install output>
+installed       @aihq/catalog@0.0.0-fixture
+installed       @aihq/scan@0.0.0-fixture
+",
+    },
+  },
+  "served digest mismatch": {
+    "reason": "Refusal: the installed catalog served packs/governance-quality/aih-gov-doctor/LICENSE with bytes that do not match its declared digest: sha256:7ed74b0e1338e3e9049260632642bfaaaed700e77447c835ea6c7a8a0b7badb8 != sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "run": {
+      "execution.log": "tarball         --catalog-tarball sha256:<catalog-tarball-sha256> <stub-packages>/stub-tarballs/aihq-catalog-0.0.0-fixture.tgz
+tarball         --scan-tarball sha256:<scan-tarball-sha256> <stub-packages>/stub-tarballs/aihq-scan-0.0.0-fixture.tgz
+consumer        <case>/consumer
+npm             <npm>
+
+===== npm install --ignore-scripts =====
+<npm install output>
+installed       @aihq/catalog@0.0.0-fixture
+installed       @aihq/scan@0.0.0-fixture
+",
+    },
+  },
+}
+`;

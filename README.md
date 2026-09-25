@@ -37,6 +37,17 @@ and artifact-attestation checks succeed.
 with fail-closed coverage accounting and direct/OCI equivalence evidence. Source state does
 not prove this candidate is published or promoted; use the live custody checks below.
 
+`@aihq/scan@0.5.0` runs Semgrep and Cisco through the explicitly named
+`host-process-uv-v1` profile on Linux `amd64` and `arm64`, macOS `arm64` and Windows `amd64`:
+uv from `PATH`, a uv-discovered Python 3.12 with no downloads, a persistent lock-addressed uv
+cache, an `--offline` scan stage, and a process group or a Windows Job Object that ends the
+whole analyzer tree on timeout or `signal` abort. SARIF artifact URIs are relative to the
+declared source root, SARIF observations carry a `ScanFindingsV1` projection, and an empty
+source root completes for Semgrep. The profile is unisolated and does not enforce the
+network; it is never a default. The `0.5.0` candidate bundles Cisco `2.1.0+uvlock.1e98c5679994` as one lock
+shared by the host profile, the namespace profile and the Linux OCI candidate image recipe.
+Source state does not prove this candidate is published.
+
 The one-use bootstrap source and GitHub environment secret are absent. The
 protected environment is tag-only and secret-free. npm Trusted Publishing is
 bound to `samartomar/aih-scan`, workflow `release.yml`, environment
@@ -54,6 +65,52 @@ The GitHub Actions example signs with a generated `test-ephemeral` key and
 uploads that public root beside the evidence. It proves the capture, signing,
 and verification mechanics. It is not an organization trust root or public
 qualification authority.
+
+## Node-only interfaces
+
+Every interface this package ships is Node-only. The library entry point, the
+`aih-scan` binary and the scripts under `examples/` all require Node.js 20 or
+newer, and none of them runs in a browser, an edge runtime, a service worker, or
+any other environment without full Node built-ins.
+
+That follows from what the package does rather than from a packaging oversight.
+It reads and seals real files through `node:fs` with `O_NOFOLLOW`, hard-link and
+`fstat`/`lstat` identity checks; it spawns bounded analyzer processes through
+`node:child_process`; it hashes and verifies Ed25519 signatures through
+`node:crypto`; and it writes bundles into directories it creates itself. None of
+that has a browser equivalent, and a shimmed one would not be the same evidence.
+
+Concretely:
+
+- `exports` declares exactly two entries: `"."` for the library and
+  `"./package.json"` so a consumer can locate the package root. There is no
+  `browser`, `module`, `unpkg`, or `jsdelivr` field, and no `dist` subpath is
+  reachable.
+- The package is ESM only (`"type": "module"`). There is no CommonJS build.
+- The hardened detector execution profiles additionally require Linux `amd64`;
+  see [CONTRACTS.md](CONTRACTS.md). Only the in-process `aih-native` analyzer
+  runs on any other platform, and it is not isolated because it spawns nothing.
+- `detector.semgrep` also offers `host-process-uv-v1`, used only when a caller
+  names it and never as a fallback. It runs uv and Semgrep as ordinary host
+  processes with no isolation and no network enforcement, on Linux `amd64`
+  only: Windows is refused because process-tree containment is unproven there,
+  macOS is refused pending a hosted proof, and a real installed-uv run is not
+  yet proven.
+
+Runnable examples live in [`examples/`](examples). They reach the package
+through its public entry point only:
+
+```sh
+node examples/run-detector.mjs
+node examples/verify-capture-bundle.mjs --help
+```
+
+`run-detector.mjs` prints the published detector capabilities, shows the typed
+refusal a hardened detector produces before anything is spawned, and runs the
+in-process analyzer for real against a throwaway fixture.
+`verify-capture-bundle.mjs` verifies a capture bundle you supply, under trust
+roots and an expected-claims policy you supply, and ships neither. Both scripts
+are repository documentation and are not part of the published tarball.
 
 ## Install and verify the package boundary
 
@@ -148,8 +205,12 @@ Supply `candidate` (the exact source id), `source_repository`, `source_ref`,
 `request_set_url`, and `request_set_sha256`. The URL must name a JSON file on
 `raw.githubusercontent.com` at an exact 40-character commit. Scanner checks the
 16 MiB input limit, exact SHA-256, closed schema, each canonical request digest,
-source identity, duplicate components, and overlapping component paths before
-writing any batch. This route never checks out Core, installs Core dependencies,
+source identity, duplicate components, and overlapping paths before writing any
+batch. Overlap is checked in `disjoint` mode by default (no path shared or nested
+across components); a set listed in `.github/baseline-request-sets/overlap-modes.json`
+is verified, and dispatched with the input `request_set_overlap: compiler-catalog`,
+in `compiler-catalog` mode, which allows overlap across components and still
+refuses it inside one. This route never checks out Core, installs Core dependencies,
 or executes request-author code. It accepts independently prepared provider data
 without adding a source-specific switch to Scanner or changing Core inventories.
 Reviewed inputs for this delivery are isolated by provider and source commit in
@@ -681,3 +742,14 @@ scanner behavior only against disposable fixture roots.
 [Apache-2.0](LICENSE). Scanner evidence and software are provided on an "AS IS"
 basis without organization approval, qualification, warranty, support, or effect
 authority.
+
+## Public organization evidence digest
+
+`coreOrganizationEvidenceEnvelopeDigestV1` is exported from `@aihq/scan`.
+Call it on the envelope returned by
+`projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1`, after verifying the
+attestation. It returns the domain-separated `sha256:...` binding used by Core;
+this differs from hashing the serialized file. The helper preserves projection
+custody: a parsed or copied envelope is rejected. To import a saved envelope, use
+Core's public canonical-byte parser and digest helper, then run the normal Core
+evidence and authority checks. Neither digest establishes approval or authority.

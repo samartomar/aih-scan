@@ -1,0 +1,260 @@
+{
+  "authority": "diagnostic-record-not-evidence",
+  "note": "A recorded reading of the published @aihq/catalog contract and of one genuine capture, carried only so the relationship between Catalog's declared source revision and this capture's seal is locked by a test. It is not evidence, not authority, and not a Catalog input.",
+  "recordedFrom": {
+    "captureRun": "source-closure-capture-20260921160506",
+    "captureRunCommit": "3b0780d6b79d449fc0ee674fd1df9b19fedfde13",
+    "catalogPackage": {
+      "name": "@aihq/catalog",
+      "tarballSha256": "c6af69d283c4b20eff4d1e5d697d4612ca061120b73137bbf311ec34402e9942",
+      "version": "0.2.0"
+    },
+    "scanPackage": {
+      "name": "@aihq/scan",
+      "tarballSha256": "f27364436f6604ffda7a27aabe350e4be91f68586a3d9c8bff4f92433dcb60cc",
+      "version": "0.4.0"
+    }
+  },
+  "catalog": {
+    "collectionsDigest": "sha256:355671c361f5d006f6e29a2b6a9f9708b5337d5483a7791d4f894497cab9c03b",
+    "contentDigest": "sha256:912d85585071eece67f33b1164e57a636c9442a9603531c59b00ac9139406a42",
+    "entry": {
+      "artifacts": {
+        "profile": {
+          "path": "defaults/workbench/aih-core-0.6.2/agent.aih.governance-quality.core-0-6-2/artifacts/profile.json",
+          "sha256": "893b4d0b57a2ea240cfd40e4ca222e32fd907c2b100e44b0ba672d0be835c879"
+        }
+      },
+      "entryId": "agent.aih.governance-quality.core-0-6-2",
+      "subject": {
+        "id": "governance-quality",
+        "kind": "agent",
+        "source": {
+          "release": "0.6.2",
+          "revision": "sha256:893b4d0b57a2ea240cfd40e4ca222e32fd907c2b100e44b0ba672d0be835c879",
+          "type": "aih"
+        },
+        "sourceDigest": "sha256:036cddc5672e186f3a12a46b5ff8d22e259014500f154e630c295615390cb0fd",
+        "subjectDigest": "sha256:a1216d4b75cd8e26b2cf196e9535a7703d9f8d8b4f95425c428aa84c07f32a13"
+      }
+    },
+    "organizationAdmission": "not-authoritative",
+    "sourceClosure": {
+      "assessment": {
+        "profile": {
+          "path": "defaults/workbench/aih-core-0.6.2/agent.aih.governance-quality.core-0-6-2/artifacts/profile.json",
+          "sha256": "893b4d0b57a2ea240cfd40e4ca222e32fd907c2b100e44b0ba672d0be835c879"
+        }
+      },
+      "asset": {
+        "assetId": "aih/package:skill-pack/governance-quality",
+        "sourceRevisionId": "package:@aihq/core@0.6.2"
+      },
+      "collection": {
+        "id": "aih-core",
+        "release": "0.6.2"
+      },
+      "declaredTreeDigest": "sha256:a72ef33803283dc2950f50bb238ed915cf86c069964a1971cc3a38510ede4c1c",
+      "entrySubject": {
+        "id": "governance-quality",
+        "kind": "agent",
+        "sourceDigest": "sha256:036cddc5672e186f3a12a46b5ff8d22e259014500f154e630c295615390cb0fd",
+        "subjectDigest": "sha256:a1216d4b75cd8e26b2cf196e9535a7703d9f8d8b4f95425c428aa84c07f32a13"
+      },
+      "files": [
+        {
+          "byteLength": 1226,
+          "path": "aih-packs.json",
+          "sha256": "bc21b9787fb8cfb589085a4f7fb4308a73d30fa9adfa7aa67636efc6ffdce950"
+        },
+        {
+          "byteLength": 598,
+          "path": "packs/governance-quality/aih-gov-doctor/LICENSE",
+          "sha256": "c7963d5f486ca7f94b9141d20a08f0f2ec6f44447ceab499d8adc6ca516cf71e"
+        },
+        {
+          "byteLength": 787,
+          "path": "packs/governance-quality/aih-gov-doctor/SKILL.md",
+          "sha256": "c67ab49713c49abdc53d4d20b97e42c998040dc67e7a2d4db7423efa81cb21b6"
+        },
+        {
+          "byteLength": 1126,
+          "path": "packs/governance-quality/aih-gov-doctor/profile.json",
+          "sha256": "2c467d7689fe043f5eda45da8ef947bb5ccda64255f430ef4d05ffecdcbe8e5b"
+        }
+      ],
+      "materialRoots": [
+        {
+          "kind": "closure",
+          "path": ".",
+          "files": [
+            "aih-packs.json",
+            "packs/governance-quality/aih-gov-doctor/LICENSE",
+            "packs/governance-quality/aih-gov-doctor/SKILL.md",
+            "packs/governance-quality/aih-gov-doctor/profile.json"
+          ],
+          "excludes": []
+        },
+        {
+          "kind": "skill",
+          "path": "packs/governance-quality/aih-gov-doctor",
+          "marker": "SKILL.md",
+          "files": [
+            "packs/governance-quality/aih-gov-doctor/LICENSE",
+            "packs/governance-quality/aih-gov-doctor/SKILL.md",
+            "packs/governance-quality/aih-gov-doctor/profile.json"
+          ],
+          "excludes": [
+            "aih-packs.json"
+          ]
+        }
+      ],
+      "root": "defaults/sources/github.com/samartomar/ai-harness/54ceab4118aade25a8a07608532b434feb0a6e6b",
+      "source": {
+        "host": "github.com",
+        "repository": "samartomar/ai-harness",
+        "revision": "54ceab4118aade25a8a07608532b434feb0a6e6b"
+      }
+    },
+    "status": {
+      "structure": "valid",
+      "artifacts": "verified"
+    }
+  },
+  "capture": {
+    "bundleManifestSha256": "7f80738ed4eaebe6726631363970f110790e3f77f870d163ef5c5f1cd4ebc8cc",
+    "candidateSha256": "b3f4a192b521ccd3af667dc5e1ef1c2317880473bb214483e2c514eda9b2ddd1",
+    "cleanup": {
+      "outcome": "completed"
+    },
+    "coverage": {
+      "kind": "selected-closure",
+      "sha256": "061b88e1b63a8b12cd8883a1a8c9f901ded8d05bbcaadf8b5b23defba2ec1c50",
+      "complete": true
+    },
+    "scan": {
+      "outcome": "succeeded"
+    },
+    "sourceSeals": {
+      "after": {
+        "algorithm": "code-unit-canonical-json-v1",
+        "digests": {
+          "protocol": "SourceSealV2",
+          "sourceTreeSha256": "a7a98fc5ffdc4faf807037c9e63ee1dbf564ff0347e6596c9c4464ee0f23a6b5",
+          "selectedClosureSha256": "061b88e1b63a8b12cd8883a1a8c9f901ded8d05bbcaadf8b5b23defba2ec1c50",
+          "sealedSnapshotSha256": "39b83ae0acbed547f6f4a874a7a046c661ff0bd6924e8efe12f1f8583be17431"
+        },
+        "entries": [
+          {
+            "kind": "file",
+            "path": "LICENSE",
+            "sha256": "c7963d5f486ca7f94b9141d20a08f0f2ec6f44447ceab499d8adc6ca516cf71e",
+            "byteLength": 598
+          },
+          {
+            "kind": "file",
+            "path": "SKILL.md",
+            "sha256": "c67ab49713c49abdc53d4d20b97e42c998040dc67e7a2d4db7423efa81cb21b6",
+            "byteLength": 787
+          },
+          {
+            "kind": "file",
+            "path": "profile.json",
+            "sha256": "2c467d7689fe043f5eda45da8ef947bb5ccda64255f430ef4d05ffecdcbe8e5b",
+            "byteLength": 1126
+          }
+        ],
+        "selectedClosurePaths": [
+          "LICENSE",
+          "SKILL.md",
+          "profile.json"
+        ],
+        "selectedFiles": [
+          {
+            "kind": "file",
+            "path": "LICENSE",
+            "sha256": "c7963d5f486ca7f94b9141d20a08f0f2ec6f44447ceab499d8adc6ca516cf71e",
+            "byteLength": 598
+          },
+          {
+            "kind": "file",
+            "path": "SKILL.md",
+            "sha256": "c67ab49713c49abdc53d4d20b97e42c998040dc67e7a2d4db7423efa81cb21b6",
+            "byteLength": 787
+          },
+          {
+            "kind": "file",
+            "path": "profile.json",
+            "sha256": "2c467d7689fe043f5eda45da8ef947bb5ccda64255f430ef4d05ffecdcbe8e5b",
+            "byteLength": 1126
+          }
+        ]
+      },
+      "before": {
+        "algorithm": "code-unit-canonical-json-v1",
+        "digests": {
+          "protocol": "SourceSealV2",
+          "sourceTreeSha256": "a7a98fc5ffdc4faf807037c9e63ee1dbf564ff0347e6596c9c4464ee0f23a6b5",
+          "selectedClosureSha256": "061b88e1b63a8b12cd8883a1a8c9f901ded8d05bbcaadf8b5b23defba2ec1c50",
+          "sealedSnapshotSha256": "39b83ae0acbed547f6f4a874a7a046c661ff0bd6924e8efe12f1f8583be17431"
+        },
+        "entries": [
+          {
+            "kind": "file",
+            "path": "LICENSE",
+            "sha256": "c7963d5f486ca7f94b9141d20a08f0f2ec6f44447ceab499d8adc6ca516cf71e",
+            "byteLength": 598
+          },
+          {
+            "kind": "file",
+            "path": "SKILL.md",
+            "sha256": "c67ab49713c49abdc53d4d20b97e42c998040dc67e7a2d4db7423efa81cb21b6",
+            "byteLength": 787
+          },
+          {
+            "kind": "file",
+            "path": "profile.json",
+            "sha256": "2c467d7689fe043f5eda45da8ef947bb5ccda64255f430ef4d05ffecdcbe8e5b",
+            "byteLength": 1126
+          }
+        ],
+        "selectedClosurePaths": [
+          "LICENSE",
+          "SKILL.md",
+          "profile.json"
+        ],
+        "selectedFiles": [
+          {
+            "kind": "file",
+            "path": "LICENSE",
+            "sha256": "c7963d5f486ca7f94b9141d20a08f0f2ec6f44447ceab499d8adc6ca516cf71e",
+            "byteLength": 598
+          },
+          {
+            "kind": "file",
+            "path": "SKILL.md",
+            "sha256": "c67ab49713c49abdc53d4d20b97e42c998040dc67e7a2d4db7423efa81cb21b6",
+            "byteLength": 787
+          },
+          {
+            "kind": "file",
+            "path": "profile.json",
+            "sha256": "2c467d7689fe043f5eda45da8ef947bb5ccda64255f430ef4d05ffecdcbe8e5b",
+            "byteLength": 1126
+          }
+        ]
+      }
+    },
+    "subject": {
+      "name": "source-tree",
+      "digest": {
+        "sha256": "a7a98fc5ffdc4faf807037c9e63ee1dbf564ff0347e6596c9c4464ee0f23a6b5"
+      }
+    }
+  },
+  "sources": {
+    "LICENSE": "Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use this file except in compliance with the License.\nYou may obtain a copy of the License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n",
+    "SKILL.md": "---\nname: aih-gov-doctor\ndescription: Declarative Audit and Guide source material for Governance Doctor profiles.\nlicense: Apache-2.0\n---\n\n# Governance Doctor Audit and Guide\n\nUse this source material to describe read-only Governance Doctor Audit and Guide\nfacts. It contains no Repair behavior and does not create authority to change a\ndestination.\n\nThe profile is canonical data. Its identifiers name only the closed read-only\nAIH surfaces represented by the profile contract. It describes reviewing\nprecomputed AIH-produced read-only diagnostic results. Findings and guidance\nremain source-attributed and non-authoritative.\n\nScaffolding copies this first-party source into a destination. The destination\nlifecycle is responsible for subsequent governance and approval before any use.\n",
+    "profile.json": "{\"conflicts\":[{\"conflictId\":\"mcp-controls\",\"conflictsWithSurfaceId\":\"surface:aih.mcp-controls\",\"note\":{\"attribution\":\"catalog:aih/governance-doctor\",\"text\":\"Both surfaces claim the same MCP control target.\"}}],\"diagnosticIds\":[\"aih.doctor.root\",\"aih.policy.evaluate\"],\"effectVersion\":\"1\",\"governanceDoctorProfileSha256\":\"a9bcdad3ab14d82a08b01e42ec78d154b57f9e987c5d4c0824002ad3f0e8b632\",\"guidance\":{\"attribution\":\"catalog:aih/governance-doctor\",\"text\":\"Review precomputed AIH-produced read-only diagnostic results before deciding anything.\"},\"nextActionId\":\"aih.status.root\",\"prerequisites\":[{\"note\":{\"attribution\":\"catalog:aih/governance-doctor\",\"text\":\"A committed effective policy revision must exist.\"},\"prerequisiteId\":\"effective-policy\",\"satisfiedBy\":\"org-policy\"}],\"profileVersion\":\"1\",\"protocol\":\"GovernanceDoctorProfileV1\",\"repairPosture\":\"guided-only\",\"roles\":[{\"owner\":\"aih\",\"roleId\":\"policy-owner\",\"summary\":{\"attribution\":\"catalog:aih/governance-doctor\",\"text\":\"AIH owns the policy decision for this surface.\"}}],\"schemaVersion\":\"1\",\"surfaceId\":\"surface:aih.governance-doctor\",\"targetId\":\"target:aih.workstation\"}"
+  }
+}

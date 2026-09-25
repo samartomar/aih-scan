@@ -89,6 +89,55 @@ describe("immutable baseline publication workflow", () => {
     const independent = step("Prepare independently reviewed data-only requests");
     expect(independent).not.toMatch(/\.core|npm|--import/u);
   });
+  // D34: a whole-repository publication took ~84 minutes at the old analyzer versions, so the
+  // build job gets 240 minutes; the privileged publish job keeps its short 20.
+  it("gives the build job 240 minutes and the publish job 20 (D34)", () => {
+    const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");
+    const timeout = (job: string) =>
+      new RegExp(`\\n  ${job}:\\n(?:    .*\\n)*?    timeout-minutes: (\\d+)\\n`, "u").exec(
+        workflow,
+      )?.[1];
+    expect(timeout("build")).toBe("240");
+    expect(timeout("publish")).toBe("20");
+    expect(workflow.match(/timeout-minutes:/gu)).toHaveLength(2);
+  });
+  // SI1c (D41): the data-only route names its overlap mode. Empty means disjoint (today's
+  // behavior); only compiler-catalog may be named, and only with request_set_url.
+  it("pins the request_set_overlap input, its validation, and its pass-through (SI1c)", () => {
+    const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");
+    expect(workflow).toContain(
+      "      request_set_overlap:\n" +
+        "        description: Optional overlap mode for request_set_url (empty = disjoint, or compiler-catalog)\n" +
+        "        required: false\n" +
+        "        default: ''\n" +
+        "        type: string\n",
+    );
+    expect(workflow.match(/request_set_overlap/gu)).toHaveLength(2);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression
+    expect(workflow).toContain("      REQUEST_SET_OVERLAP: ${{ inputs.request_set_overlap }}\n");
+    const steps = workflow.split(/\n {6}- /u);
+    const step = (name: string) => {
+      const found = steps.find((value) => value.startsWith(`name: ${name}\n`));
+      if (found === undefined) throw new Error(`Missing workflow step: ${name}`);
+      return found;
+    };
+    // Checked before the data-only branch exits, so a mode without request_set_url is refused.
+    expect(step("Validate immutable inputs before checkout")).toContain(
+      '          test -z "$LEGACY_CATALOG" || test -z "$EXPLICIT_CANDIDATE"\n' +
+        "          case \"$REQUEST_SET_OVERLAP\" in ''|compiler-catalog) ;; *) exit 1 ;; esac\n" +
+        '          test -z "$REQUEST_SET_OVERLAP" || test -n "$REQUEST_SET_URL"\n' +
+        '          if [ -n "$REQUEST_SET_URL" ]; then\n',
+    );
+    expect(step("Prepare independently reviewed data-only requests")).toContain(
+      "          node tools/prepare-publication-request-set.mjs \\\n" +
+        '            "$RUNNER_TEMP/baseline/request-set.json" "$REQUEST_SET_SHA256" \\\n' +
+        '            "$CANDIDATE" "$SOURCE_REPOSITORY" "$SOURCE_REF" "$RUNNER_TEMP/baseline/requests" \\\n' +
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansion
+        '            --overlap "${REQUEST_SET_OVERLAP:-disjoint}"\n',
+    );
+    expect(workflow.match(/REQUEST_SET_OVERLAP/gu)).toHaveLength(4);
+  });
+
   it("is explicit, exact-input, content-addressed, and split at the privilege boundary", () => {
     const workflow = readFileSync(workflowPath, "utf8");
 
