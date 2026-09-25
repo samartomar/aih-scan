@@ -331,6 +331,16 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
+    path: "src/baseline/runtime-v1.ts",
+    line: 76,
+    contains: "const ciscoWorkingDirectoryV1 = \"/aih/cwd\"",
+  },
+  {
+    path: "src/detectors/cisco-multi-skill/scan-v1.ts",
+    line: 259,
+    contains: "cwd: request.skillDir",
+  },
+  {
     path: "src/baseline/sarif-source-relative-v1.ts",
     line: 597,
     contains: "export function sourceRelativeSarifV1",
