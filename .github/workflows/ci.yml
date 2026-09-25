@@ -115,7 +115,7 @@ jobs:
                 throw new Error(`${analyzer} sandbox probe emitted no SARIF`);
             }
             mkdirSync(join(sourceRoot, "skills", "broken"), { recursive: true });
-            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
+            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), Buffer.from([0x23, 0x20, 0x42, 0xff, 0x0a]));
             let rejectedPartialCoverage = false;
             try {
               await execute({
@@ -136,6 +136,49 @@ jobs:
             }
             if (!rejectedPartialCoverage)
               throw new Error("Cisco sandbox probe accepted partial skill coverage");
+            // D45 leg 3: Cisco 2.1.0 scans a `# Broken\n` skill through its skill_loader fallback,
+            // which D30 accepts. In a fresh root the run completes and reports that fallback at
+            // the skill; the execution itself enforces the D28/D30 pairing of every result.
+            const fallbackRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-fallback-probe-"));
+            try {
+              mkdirSync(join(fallbackRoot, "skills", "probe"), { recursive: true });
+              writeFileSync(
+                join(fallbackRoot, "skills", "probe", "SKILL.md"),
+                "---\nname: probe\ndescription: Scanner CI fixture\n---\n\n# Probe\n",
+                "utf8",
+              );
+              mkdirSync(join(fallbackRoot, "skills", "broken"), { recursive: true });
+              writeFileSync(join(fallbackRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
+              const fallback = await execute({
+                analyzer: "cisco",
+                sourceRoot: fallbackRoot,
+                source: {
+                  id: "python-sandbox-fallback-probe",
+                  owner: "aih",
+                  repository: "scanner-ci-fixture",
+                  pinnedCommit: "a".repeat(40),
+                  treeSha256: "b".repeat(64),
+                },
+              });
+              if (fallback.mediaType !== "application/sarif+json" || fallback.bytes.byteLength === 0)
+                throw new Error("Cisco fallback probe emitted no SARIF");
+              const results = JSON.parse(Buffer.from(fallback.bytes).toString("utf8")).runs.flatMap(
+                (run) => run.results ?? [],
+              );
+              const uri = (result) => result.locations?.[0]?.physicalLocation?.artifactLocation?.uri;
+              if (
+                !results.some(
+                  (result) =>
+                    result.ruleId === "SKILL_LOAD_FALLBACK_USED" &&
+                    uri(result) === "skills/broken/SKILL.md",
+                )
+              )
+                throw new Error("Cisco fallback probe reported no SKILL_LOAD_FALLBACK_USED at skills/broken/SKILL.md");
+              if (!results.every((result) => /^skills\/(?:probe|broken)\//u.test(uri(result) ?? "")))
+                throw new Error("Cisco fallback probe reported a result outside its two skills");
+            } finally {
+              rmSync(fallbackRoot, { recursive: true, force: true });
+            }
           } finally {
             rmSync(sourceRoot, { recursive: true, force: true });
           }
