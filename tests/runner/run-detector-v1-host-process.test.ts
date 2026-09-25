@@ -1953,3 +1953,100 @@ describe("runDetectorV1 Cisco skill-level finding on the real bytes (D28, U1h)",
     },
   );
 });
+
+// SI1b (review of SI1, P2): on the delegated path every location a Semgrep result reaches, not
+// only locations[0], must be a sealed file of the subject before any evidence is attached.
+describe("runDetectorV1 Semgrep result locations (SI1b)", () => {
+  const at = (uri: string) => ({
+    physicalLocation: {
+      artifactLocation: { uri, uriBaseId: "%SRCROOT%" },
+      region: { startLine: 1 },
+    },
+  });
+  const byIndex = (index: number) => ({
+    physicalLocation: { artifactLocation: { index }, region: { startLine: 1 } },
+  });
+  const fixture = () => {
+    const root = sourceFixture();
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "a.js"), "console.log(1);\n");
+    return root;
+  };
+  const run = (sourceRoot: string, extra: Record<string, unknown>, runExtra = {}) => {
+    const host = hostFixture();
+    const document = JSON.parse(sarif([{ ...result("src/a.js", 1), ...extra }])) as {
+      runs: Record<string, unknown>[];
+    };
+    Object.assign(document.runs[0] as Record<string, unknown>, runExtra);
+    return runDetectorV1(
+      semgrepRequest(
+        {
+          env: host.env,
+          runner: hostRunner([], host.python, async () =>
+            okay(canonicalStrictJsonBytesV1(document as never).toString("utf8")),
+          ),
+        },
+        sourceRoot,
+      ),
+    );
+  };
+
+  it.each<[string, Record<string, unknown>, Record<string, unknown>?]>([
+    [
+      "relatedLocations naming an unsealed file (the reviewer's case)",
+      { relatedLocations: [at("src/missing.js")] },
+    ],
+    ["locations[1] naming an unsealed file", { locations: [at("src/a.js"), at("src/missing.js")] }],
+    [
+      "a code-flow location outside the subject",
+      { codeFlows: [{ threadFlows: [{ locations: [{ location: at("lib/b.js") }] }] }] },
+    ],
+    [
+      "a shared thread-flow location outside the subject",
+      { codeFlows: [{ threadFlows: [{ locations: [{ index: 0 }] }] }] },
+      { threadFlowLocations: [{ location: at("lib/b.js") }] },
+    ],
+    ["analysisTarget naming an unsealed file", { analysisTarget: { uri: "src/missing.js" } }],
+    [
+      "an index-only secondary location naming an unsealed artifact",
+      { locations: [at("src/a.js"), byIndex(0)] },
+      { artifacts: [{ location: { uri: "src/missing.js" } }] },
+    ],
+  ])("fails %s at output and certifies nothing", async (_label, extra, runExtra) => {
+    const outcome = await run(fixture(), extra, runExtra);
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    expect("evidence" in outcome).toBe(false);
+    if (outcome.outcome === "failed")
+      expect(outcome.failure.detail).toMatch(/which is not a sealed file of the subject/);
+  });
+
+  it("fails analysisTarget escaping the source (../../outside.js) at output", async () => {
+    const outcome = await run(fixture(), { analysisTarget: { uri: "../../outside.js" } });
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    expect("evidence" in outcome).toBe(false);
+  });
+
+  it("succeeds with secondary locations inside the subject, evidence equal to the disk digest", async () => {
+    const sourceRoot = fixture();
+    const outcome = await run(
+      sourceRoot,
+      {
+        locations: [at("src/a.js"), at("README.md"), byIndex(0)],
+        relatedLocations: [at("README.md")],
+        analysisTarget: { uri: "src/a.js" },
+        codeFlows: [
+          { threadFlows: [{ locations: [{ location: at("README.md") }, { index: 0 }] }] },
+        ],
+        properties: { artifactLocation: { uri: "../../outside.js" } },
+      },
+      {
+        artifacts: [{ location: { uri: "src/a.js" } }],
+        threadFlowLocations: [{ location: at("src/a.js") }],
+      },
+    );
+    expect(outcome.outcome).toBe("succeeded");
+    expect(completionOfObservationV1(outcome)).toMatchObject(
+      diskSubjectV1(sourceRoot, diskFilesV1(sourceRoot)),
+    );
+  });
+});

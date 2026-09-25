@@ -93,42 +93,42 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 99,
+    line: 102,
     contains: 'protocol: z.literal("BaselineVetRequestV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 136,
+    line: 139,
     contains: 'protocol: z.literal("BaselineVetReceiptV1")',
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 1004,
+    line: 996,
     contains: "attachScanCompletionV1(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 1069,
+    line: 1061,
     contains: "function carriesBaselineCompletion(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 816,
+    line: 819,
     contains: "function executedProfile(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 831,
+    line: 834,
     contains: "function versionNamesLock(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 897,
+    line: 889,
     contains: "function assertAnnexLocations(",
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 865,
+    line: 868,
     contains: "function assertEveryResultLocation(",
   },
   {
@@ -201,7 +201,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 172,
     contains: "export interface DetectorCapabilityV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 155, contains: "RunDetectorRefusalReasonV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 156, contains: "RunDetectorRefusalReasonV1" },
   {
     path: "src/observation/source-observation-seal-v1.ts",
     line: 138,
@@ -214,7 +214,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 251,
+    line: 252,
     contains: "readonly detectorOptions?: DetectorOptionsV1",
   },
   {
@@ -224,12 +224,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1403,
+    line: 1429,
     contains: "export async function probeDetectorAvailabilityV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 1362,
+    line: 1388,
     contains: "export type DetectorAvailabilityV1Result",
   },
   {
@@ -259,7 +259,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 1050,
+    line: 1078,
     contains: "export function ciscoFallbackPairingV1",
   },
   {
@@ -269,7 +269,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 1123,
+    line: 1151,
     contains: "export function assertCiscoScanAllAnalyzersCompleteV1",
   },
   {
@@ -279,40 +279,40 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 178,
+    line: 179,
     contains: "export type RunDetectorFailureCauseV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 180, contains: "export interface ScanCoverageV1" },
+  { path: "src/runner/run-detector-v1.ts", line: 181, contains: "export interface ScanCoverageV1" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 812,
+    line: 813,
     contains: "export async function runDetectorV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 300,
+    line: 301,
     contains: "export type RunDetectorProducerV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 276,
+    line: 277,
     contains: "readonly acceptedImageDigests?: readonly string[]",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 216,
+    line: 217,
     contains: "readonly image?: SkillspectorImageMatchV1",
   },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 218,
+    line: 219,
     contains: "readonly hostRuntime?: HostProcessRuntimeV1",
   },
-  { path: "src/runner/run-detector-v1.ts", line: 253, contains: "readonly signal?: AbortSignal" },
-  { path: "src/runner/run-detector-v1.ts", line: 258, contains: "readonly timeoutMs?: number" },
+  { path: "src/runner/run-detector-v1.ts", line: 254, contains: "readonly signal?: AbortSignal" },
+  { path: "src/runner/run-detector-v1.ts", line: 259, contains: "readonly timeoutMs?: number" },
   {
     path: "src/runner/run-detector-v1.ts",
-    line: 349,
+    line: 350,
     contains: "      sourceSeal:",
   },
   {
@@ -332,12 +332,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 597,
+    line: 625,
     contains: "export function sourceRelativeSarifV1",
   },
   {
     path: "src/baseline/sarif-source-relative-v1.ts",
-    line: 815,
+    line: 843,
     contains: "export function ciscoSourceRelativeSarifV1",
   },
   {
@@ -437,7 +437,7 @@ const BOUNDS: readonly Readonly<{
   },
   {
     path: "src/baseline/batch-v1.ts",
-    line: 57,
+    line: 60,
     contains: "maxAnnexBytes = 16 * 1024 * 1024",
     phrase: "16 MiB per annex",
   },

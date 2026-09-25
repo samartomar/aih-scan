@@ -499,6 +499,34 @@ export function sarifResultFilesV1(result: unknown, run: unknown): string[] {
 }
 
 /**
+ * SI1 (batch) and SI1b (delegated Semgrep and SkillSpector): every file each result of a
+ * normalized SARIF log reaches ({@link sarifResultFilesV1}: `locations[*]`, related locations,
+ * code flows and the shared `threadFlowLocations` they reference, stacks, graphs and the run
+ * graphs a traversal names, fixes, attachments, `analysisTarget` at its schema position only,
+ * every artifact named by index with its `parentIndex` ancestry; never a property bag) must be
+ * one of `sealedFiles`. `owner` names that set in the reason. Throws `TypeError` on the first
+ * file outside it and on anything unresolved (a uri/index contradiction, a bad index).
+ */
+export function assertSarifResultFilesSealedV1(
+  log: Readonly<Record<string, unknown>>,
+  sealedFiles: Readonly<{ has(path: string): boolean }>,
+  owner: "snapshot" | "subject",
+): void {
+  const runs = Array.isArray(log.runs) ? log.runs : [];
+  runs.forEach((run, runIndex) => {
+    const results = isRecord(run) ? run.results : undefined;
+    if (!Array.isArray(results)) return;
+    results.forEach((result, resultIndex) => {
+      for (const file of sarifResultFilesV1(result, run))
+        if (!sealedFiles.has(file))
+          fail(
+            `run ${runIndex} result ${resultIndex} reaches ${JSON.stringify(file)}, which is not a sealed file of the ${owner}`,
+          );
+    });
+  });
+}
+
+/**
  * U1g (review of S2i, P1): every `index` of an already normalized scope resolves by
  * {@link sarifArtifactLocationTargetV1} against the run's own `artifacts`; outside a run no
  * index can resolve. A run artifact's own location may name only its own index, and U1i:

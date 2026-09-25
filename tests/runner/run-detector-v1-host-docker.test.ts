@@ -560,3 +560,94 @@ describe("runDetectorV1 docker-host-local-skillspector-v1 strict analyzer output
     if (outcome.outcome === "failed") expect(outcome.failure.detail).toMatch(reason);
   });
 });
+
+// SI1b (review of SI1, P2): on the delegated path every location a SkillSpector result
+// reaches, not only locations[0], must be a sealed file of the subject before any evidence.
+describe("runDetectorV1 docker-host-local-skillspector-v1 result locations (SI1b)", () => {
+  const at = (uri: string) => ({ physicalLocation: { artifactLocation: { uri } } });
+  const byIndex = (index: number) => ({ physicalLocation: { artifactLocation: { index } } });
+  const fixture = () => {
+    const root = sourceFixture();
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "a.js"), "console.log(1);\n");
+    return root;
+  };
+  const run = (sourceRoot: string, extra: Record<string, unknown>, runExtra = {}) =>
+    runDetectorV1({
+      ...request({
+        env: hostFixture().env,
+        runner: dockerRunner([], async () =>
+          okay(
+            canonicalStrictJsonBytesV1({
+              version: "2.1.0",
+              runs: [
+                {
+                  tool: { driver: { name: "skillspector" } },
+                  invocations: [{ executionSuccessful: true }],
+                  results: [
+                    {
+                      ruleId: "skillspector.prompt-injection",
+                      level: "warning",
+                      message: { text: "prompt injection" },
+                      locations: [at("/scan/src/a.js")],
+                      ...extra,
+                    },
+                  ],
+                  ...runExtra,
+                },
+              ],
+            } as never).toString("utf8"),
+          ),
+        ),
+      }),
+      subject: { kind: "source-tree", sourceRoot, selectedClosurePaths: ["README.md"] },
+    });
+
+  it.each<[string, Record<string, unknown>, Record<string, unknown>?]>([
+    [
+      "relatedLocations naming an unsealed file (the reviewer's case)",
+      { relatedLocations: [at("/scan/src/missing.js")] },
+    ],
+    [
+      "a code-flow location outside the subject",
+      { codeFlows: [{ threadFlows: [{ locations: [{ location: at("/scan/lib/b.js") }] }] }] },
+    ],
+    ["analysisTarget naming an unsealed file", { analysisTarget: { uri: "/scan/src/missing.js" } }],
+    [
+      "an index-only secondary location naming an unsealed artifact",
+      { locations: [at("/scan/src/a.js"), byIndex(0)] },
+      { artifacts: [{ location: { uri: "/scan/src/missing.js" } }] },
+    ],
+  ])("fails %s at output and certifies nothing", async (_label, extra, runExtra) => {
+    const outcome = await run(fixture(), extra, runExtra);
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    expect("evidence" in outcome).toBe(false);
+    if (outcome.outcome === "failed")
+      expect(outcome.failure.detail).toMatch(/which is not a sealed file of the subject/);
+  });
+
+  it("fails analysisTarget escaping the source (../../outside.js) at output", async () => {
+    const outcome = await run(fixture(), { analysisTarget: { uri: "../../outside.js" } });
+    expect(outcome).toMatchObject({ outcome: "failed", failure: { stage: "output" } });
+    expect("evidence" in outcome).toBe(false);
+  });
+
+  it("succeeds with secondary locations inside the subject, evidence equal to the disk digest", async () => {
+    const sourceRoot = fixture();
+    const outcome = await run(
+      sourceRoot,
+      {
+        locations: [at("/scan/src/a.js"), at("/scan/README.md"), byIndex(0)],
+        relatedLocations: [at("/scan/README.md")],
+        analysisTarget: { uri: "/scan/src/a.js" },
+        codeFlows: [{ threadFlows: [{ locations: [{ location: at("/scan/README.md") }] }] }],
+        properties: { artifactLocation: { uri: "../../outside.js" } },
+      },
+      { artifacts: [{ location: { uri: "/scan/src/a.js" } }] },
+    );
+    expect(outcome.outcome).toBe("succeeded");
+    expect(completionOfObservationV1(outcome)).toMatchObject(
+      diskSubjectV1(sourceRoot, diskFilesV1(sourceRoot)),
+    );
+  });
+});

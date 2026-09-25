@@ -48,7 +48,10 @@ import {
   BASELINE_BATCH_EXECUTION_PROFILES_V1,
   createBaselineAnalyzerExecutionV1,
 } from "./runtime-v1.js";
-import { sarifResultFilesV1, sourceRelativeSarifV1 } from "./sarif-source-relative-v1.js";
+import {
+  assertSarifResultFilesSealedV1,
+  sourceRelativeSarifV1,
+} from "./sarif-source-relative-v1.js";
 
 export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "cisco"] as const;
 export type BaselineAnalyzerV1 = (typeof BASELINE_ANALYZERS_V1)[number];
@@ -873,18 +876,7 @@ function assertEveryResultLocation(
     throw new TypeError(
       "a location is not in source-relative normal form (a uriBaseId other than %SRCROOT%, an absolute, file: or backslash URI)",
     );
-  const runs = Array.isArray(log.runs) ? log.runs : [];
-  runs.forEach((run, runIndex) => {
-    const results = (run as { results?: unknown }).results;
-    if (!Array.isArray(results)) return;
-    results.forEach((result, resultIndex) => {
-      for (const file of sarifResultFilesV1(result, run))
-        if (!sealedFiles.has(file))
-          throw new TypeError(
-            `run ${runIndex} result ${resultIndex} reaches ${JSON.stringify(file)}, which is not a sealed file of the snapshot`,
-          );
-    });
-  });
+  assertSarifResultFilesSealedV1(log, sealedFiles, "snapshot");
 }
 
 /**

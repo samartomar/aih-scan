@@ -31,6 +31,7 @@ import {
   type SkillspectorImageMatchV1,
   skillspectorAcceptedImageDigestsRefusalV1,
 } from "../baseline/runtime-v1.js";
+import { assertSarifResultFilesSealedV1 } from "../baseline/sarif-source-relative-v1.js";
 import {
   type DetectorCapabilityV1,
   type DetectorExecutionProfileV1,
@@ -1247,6 +1248,31 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
             ...normalized,
             bytes: Buffer.from(canonicalStrictJsonBytesV1(bound.document)),
           };
+      } catch (error) {
+        return failed("output", error);
+      }
+    }
+    // SI1b (review of SI1, P2): every location each Semgrep and SkillSpector result reaches,
+    // not only its first, must name a file of the analyzed subject, by the one every-result rule
+    // the baseline-vet batch applies (`assertSarifResultFilesSealedV1`), before any evidence.
+    if (
+      (analyzer === "semgrep" || analyzer === "skillspector") &&
+      normalized.mediaType === "application/sarif+json"
+    ) {
+      try {
+        const subjectFiles = new Set(
+          scanCompletionSubjectFilesV1({
+            engine: analyzer,
+            entries: before.entries,
+            selectedClosurePaths: before.selectedClosurePaths,
+            detectorOptions,
+          }).map((file) => file.path),
+        );
+        assertSarifResultFilesSealedV1(
+          parseStrictJsonObjectV1(normalized.bytes.toString("utf8"), `${analyzer} SARIF`),
+          subjectFiles,
+          "subject",
+        );
       } catch (error) {
         return failed("output", error);
       }
