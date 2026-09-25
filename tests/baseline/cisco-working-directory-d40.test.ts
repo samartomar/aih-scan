@@ -7,7 +7,10 @@ import {
   CISCO_SKILL_SCANNER_VERSION_V1,
   createBaselineAnalyzerExecutionV1,
 } from "../../src/baseline/runtime-v1.js";
-import { ciscoSourceRelativeSarifV1 } from "../../src/baseline/sarif-source-relative-v1.js";
+import {
+  assertCiscoScanAllAnalyzersCompleteV1,
+  ciscoSourceRelativeSarifV1,
+} from "../../src/baseline/sarif-source-relative-v1.js";
 import { BASELINE_BWRAP_EXECUTABLE_V1 } from "../../src/cli/process-runner.js";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
 
@@ -190,5 +193,46 @@ describe("D40: Scan refuses, rather than guesses, a Cisco location made relative
     expect(() => ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"])).toThrow(
       "SARIF result 0 (FILE_MAGIC_MISMATCH skills/probe/skills/probe/SKILL.md:null) does not match JSON finding 0 (FILE_MAGIC_MISMATCH skills/probe/SKILL.md:null)",
     );
+  });
+});
+
+describe("D40: real Cisco run from /aih/cwd pairs on every skill", () => {
+  // Real skill-scanner 2.1.0 output, byte for byte, captured in U1m under linux-namespace-uv-v1
+  // at the D40 head on the ci.yml partial-coverage tree: `skills/probe` (the probe skill) and
+  // `skills/broken` (`# Broken\n`, which 2.1.0 loads through its skill_loader fallback, D30).
+  // Every SARIF URI is skill-relative (`SKILL.md`).
+  const load = (name: string) =>
+    JSON.parse(
+      readFileSync(
+        new URL(
+          `../fixtures/cisco/real-2.1.0-linux-namespace-cisco-cwd-partial.${name}`,
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+  const report = load("report.json");
+  const sarif = load("sarif");
+  const uris = (document: {
+    runs: {
+      results: { locations: { physicalLocation: { artifactLocation: { uri: string } } }[] }[];
+    }[];
+  }) =>
+    document.runs.flatMap((run) =>
+      run.results.map((result) => result.locations[0]?.physicalLocation.artifactLocation.uri),
+    );
+
+  it("normalizes each skill-relative URI under its own skill, once, and completes under D30", () => {
+    expect(uris(sarif)).toEqual(["SKILL.md", "SKILL.md", "SKILL.md", "SKILL.md"]);
+    const normalized = ciscoSourceRelativeSarifV1(sarif, report, ["/aih/source"]).document;
+    expect(uris(normalized as Parameters<typeof uris>[0])).toEqual([
+      "skills/probe/SKILL.md",
+      "skills/probe/SKILL.md",
+      "skills/probe/SKILL.md",
+      "skills/broken/SKILL.md",
+    ]);
+    expect(() =>
+      assertCiscoScanAllAnalyzersCompleteV1(report, normalized, ["/aih/source"]),
+    ).not.toThrow();
   });
 });

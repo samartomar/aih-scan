@@ -1,0 +1,215 @@
+{
+  "summary": {
+    "total_skills_scanned": 2,
+    "total_findings": 4,
+    "safe_skills": 2,
+    "findings_by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "info": 2
+    },
+    "timestamp": "2026-09-25T01:58:04.994283+00:00"
+  },
+  "results": [
+    {
+      "skill_name": "probe",
+      "skill_path": "/aih/source/skills/probe",
+      "is_safe": true,
+      "max_severity": "MEDIUM",
+      "findings_count": 3,
+      "findings": [
+        {
+          "id": "FILE_MAGIC_MISMATCH_6324effa0e",
+          "rule_id": "FILE_MAGIC_MISMATCH",
+          "category": "obfuscation",
+          "severity": "MEDIUM",
+          "title": "File extension does not match actual content type",
+          "description": "File 'SKILL.md' extension (.md) suggests one format but Magika detected a different text format: YAML source (yaml). This may indicate content obfuscation or a misnamed file.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Rename the file to match its actual content type, or remove it if it appears malicious.",
+          "analyzer": "static",
+          "metadata": {
+            "actual_type": "code/yaml",
+            "actual_family": "code",
+            "claimed_extension": ".md",
+            "confidence_score": 0.920269787311554,
+            "semantic_facts": {
+              "evidence_kind": "file_magic",
+              "context_kind": "binary",
+              "signals": [
+                {
+                  "rule_id": "FILE_MAGIC_MISMATCH",
+                  "kind": "file_magic_mismatch",
+                  "file_path": "SKILL.md",
+                  "value_class": "binary"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "SOCIAL_ENG_VAGUE_DESCRIPTION_65c01f6a51",
+          "rule_id": "SOCIAL_ENG_VAGUE_DESCRIPTION",
+          "category": "social_engineering",
+          "severity": "LOW",
+          "title": "Vague skill description",
+          "description": "Skill description is too short (18 chars). Provide detailed explanation.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Provide a clear, detailed description of what the skill does and when to use it",
+          "analyzer": "static",
+          "metadata": {}
+        },
+        {
+          "id": "MANIFEST_MISSING_LICENSE_c5ae9be793",
+          "rule_id": "MANIFEST_MISSING_LICENSE",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Skill does not specify a license",
+          "description": "Skill manifest does not include a 'license' field. Specifying a license helps users understand usage terms.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Add 'license' field to SKILL.md frontmatter (e.g., MIT, Apache-2.0)",
+          "analyzer": "static",
+          "metadata": {}
+        }
+      ],
+      "scan_duration_seconds": 0.5703208446502686,
+      "duration_ms": 570,
+      "analyzers_used": [
+        "static_analyzer",
+        "bytecode",
+        "pipeline",
+        "correlation"
+      ],
+      "timestamp": "2026-09-25T01:58:05.566862+00:00",
+      "scan_metadata": {
+        "policy_name": "default",
+        "policy_version": "1.0",
+        "policy_preset_base": "balanced",
+        "policy_fingerprint_sha256": "26ada30a1f502eecdbe7b7e35a3fe7a324be2298494208e1019b75e72b0bc516",
+        "cel": {
+          "mode": "shadow",
+          "runtime": "cel-go",
+          "runtime_version": "v0.32.0;helper=2.1.0",
+          "fact_schema": "v1",
+          "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+          "evaluated": 0,
+          "retained": 3,
+          "would_suppress": 0,
+          "suppressed": 0,
+          "fallbacks": 0,
+          "projection_incomplete": 0,
+          "elapsed_ms": 0.0,
+          "projection_ms": 0.0,
+          "evaluation_ms": 0.0,
+          "errors": [],
+          "per_rule": {},
+          "suppressed_candidates": []
+        },
+        "rule_contract": {
+          "status": "passed",
+          "schema_version": 2,
+          "checked": 3,
+          "invalid_findings": 0,
+          "errors": []
+        }
+      }
+    },
+    {
+      "skill_name": "broken",
+      "skill_path": "/aih/source/skills/broken",
+      "is_safe": true,
+      "max_severity": "INFO",
+      "findings_count": 1,
+      "findings": [
+        {
+          "id": "SKILL_LOAD_FALLBACK_USED",
+          "rule_id": "SKILL_LOAD_FALLBACK_USED",
+          "category": "policy_violation",
+          "severity": "INFO",
+          "title": "Strict manifest load failed; inert fallback scan used",
+          "description": "SkillLoadError rejected malformed or missing manifest metadata. The bounded package body was still scanned as inert content; manifest capabilities were not trusted.",
+          "file_path": "SKILL.md",
+          "line_number": null,
+          "snippet": null,
+          "remediation": "Repair the YAML frontmatter and provide the required manifest fields.",
+          "analyzer": "skill_loader",
+          "metadata": {
+            "fallback_used": true,
+            "fallback_mode": "bounded_inert_raw_body",
+            "strict_error_type": "SkillLoadError",
+            "strict_error_code": "MISSING_REQUIRED_MANIFEST_FIELD",
+            "manifest_complete": false,
+            "capability_facts_trusted": false,
+            "projection_complete": false,
+            "projection_error_code": "MANIFEST_METADATA_INCOMPLETE"
+          }
+        }
+      ],
+      "scan_duration_seconds": 0.005703926086425781,
+      "duration_ms": 5,
+      "analyzers_used": [
+        "static_analyzer",
+        "bytecode",
+        "pipeline",
+        "correlation"
+      ],
+      "timestamp": "2026-09-25T01:58:05.574090+00:00",
+      "scan_metadata": {
+        "policy_name": "default",
+        "policy_version": "1.0",
+        "policy_preset_base": "balanced",
+        "policy_fingerprint_sha256": "26ada30a1f502eecdbe7b7e35a3fe7a324be2298494208e1019b75e72b0bc516",
+        "cel": {
+          "mode": "shadow",
+          "runtime": "cel-go",
+          "runtime_version": "v0.32.0;helper=2.1.0",
+          "fact_schema": "v1",
+          "expression_set_hash": "f26459b8f4a46a974d7ab0aaae34127b5b6a40d693e266e12fca03a69a6d26aa",
+          "evaluated": 0,
+          "retained": 1,
+          "would_suppress": 0,
+          "suppressed": 0,
+          "fallbacks": 0,
+          "projection_incomplete": 0,
+          "elapsed_ms": 0.0,
+          "projection_ms": 0.0,
+          "evaluation_ms": 0.0,
+          "errors": [],
+          "per_rule": {},
+          "suppressed_candidates": []
+        },
+        "rule_contract": {
+          "status": "passed",
+          "schema_version": 2,
+          "checked": 1,
+          "invalid_findings": 0,
+          "errors": []
+        },
+        "loader": {
+          "fallback_used": true,
+          "fallback_mode": "bounded_inert_raw_body",
+          "strict_error_type": "SkillLoadError",
+          "strict_error_code": "MISSING_REQUIRED_MANIFEST_FIELD",
+          "manifest_complete": false,
+          "capability_facts_trusted": false,
+          "projection_complete": false,
+          "projection_error_code": "MANIFEST_METADATA_INCOMPLETE"
+        }
+      },
+      "analyzers_failed": [
+        {
+          "analyzer": "skill_loader",
+          "error": "SkillLoadError:MISSING_REQUIRED_MANIFEST_FIELD"
+        }
+      ]
+    }
+  ]
+}
