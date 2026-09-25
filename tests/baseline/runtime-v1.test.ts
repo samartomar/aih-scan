@@ -258,12 +258,15 @@ describe("code-owned baseline analyzer runtime", () => {
         "/aih/work/results.sarif",
       ]),
     );
+    // D40 (U1m): Semgrep runs from the scan root; Cisco from the empty sibling /aih/cwd, so its
+    // cwd-relative SARIF URIs stay skill-relative.
     expect(
       analyzerCalls.every(
         (call) =>
           call.argv.includes("/aih/source") &&
           call.argv.includes("--chdir") &&
-          call.argv[call.argv.indexOf("--chdir") + 1] === "/aih/source",
+          call.argv[call.argv.indexOf("--chdir") + 1] ===
+            (call.argv.includes("/aih/venv/bin/skill-scanner") ? "/aih/cwd" : "/aih/source"),
       ),
     ).toBe(true);
     expect(JSON.stringify(calls)).not.toContain("secret");
