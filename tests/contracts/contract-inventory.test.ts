@@ -127,6 +127,11 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     contains: "function assertAnnexLocations(",
   },
   {
+    path: "src/baseline/batch-v1.ts",
+    line: 865,
+    contains: "function assertEveryResultLocation(",
+  },
+  {
     path: "src/observation/source-hash-v1.ts",
     line: 93,
     contains: "export function hashSourceTreeV1(",
