@@ -103,6 +103,31 @@ const mounts = (argv: readonly string[]) => {
   return out;
 };
 
+/**
+ * Every mount a bwrap argv names, each operation that creates a file system entry carrying the
+ * mode it is created with. `--perms` is read conservatively as sticky: it applies to every later
+ * creating operation (`--dir`, `--file`, `--bind-data`, `--ro-bind-data`, `--tmpfs`) until the
+ * next `--perms`, so an argv that is right under this reading is right under bwrap's own.
+ */
+const modedMounts = (argv: readonly string[]) => {
+  const namespace = argv.slice(0, argv.indexOf("--"));
+  const out: string[] = [];
+  let mode = "default";
+  for (let index = 0; index < namespace.length; index++) {
+    const value = namespace[index];
+    if (value === "--perms") mode = namespace[++index] as string;
+    else if (["--bind", "--ro-bind", "--ro-bind-try"].includes(value as string))
+      out.push(`${value} ${namespace[index + 1]} ${namespace[index + 2]}`);
+    else if (["--dir", "--tmpfs"].includes(value as string))
+      out.push(`${value} ${namespace[index + 1]} mode=${mode}`);
+    else if (["--file", "--bind-data", "--ro-bind-data"].includes(value as string))
+      out.push(`${value} ${namespace[index + 2]} mode=${mode}`);
+    else if (["--proc", "--dev"].includes(value as string))
+      out.push(`${value} ${namespace[index + 1]}`);
+  }
+  return out;
+};
+
 describe("D40: linux-namespace Cisco runs from an empty directory outside the scan root", () => {
   it("runs every skill-scanner call from a cwd that reaches /aih/source and each skill through '..'", async () => {
     const { calls } = await ciscoCalls();
@@ -122,8 +147,8 @@ describe("D40: linux-namespace Cisco runs from an empty directory outside the sc
         expect(relative.startsWith("../")).toBe(true);
       }
       expect(posix.relative("/aih/source", cwd).startsWith("../")).toBe(true);
-      // A dedicated empty directory: created by bwrap, read-only, and not the output directory
-      // or any other mount.
+      // A dedicated empty directory: created by bwrap with mode 0555 (a mode, not a read-only
+      // bind), and not the output directory or any other mount.
       expect(cwd).not.toBe("/aih/work");
       const namespace = argv.slice(0, argv.indexOf("--"));
       const created = namespace.indexOf(cwd);
@@ -146,6 +171,16 @@ describe("D40: linux-namespace Cisco runs from an empty directory outside the sc
     expect(
       scanMounts.filter((mount) => !mount.includes("/aih/source") && mount !== `--dir ${cwd}`),
     ).toEqual(mounts(sync));
+    // SI1e (review of U1m, P3): modes included. Every mount except the cwd is created with the
+    // same mode as in the sync argv of the same run, so the cwd's 0555 reaches nothing else.
+    const scanModes = modedMounts(scan);
+    expect(scanModes).toContain(`--dir ${cwd} mode=0555`);
+    expect(
+      scanModes.filter(
+        (mount) => !mount.includes("/aih/source") && !mount.startsWith(`--dir ${cwd} `),
+      ),
+    ).toEqual(modedMounts(sync));
+    expect(modedMounts(sync).filter((mount) => mount.includes("mode=0555"))).toEqual([]);
   });
 });
 

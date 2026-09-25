@@ -67,11 +67,12 @@ export const SEMGREP_VERSION_V1 = "1.178.0";
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
 /**
- * Coordinator decision D40 (U1m): the empty, read-only directory linux-namespace-uv-v1 runs
- * Cisco from. Cisco 2.1.0 makes each SARIF URI relative to its working directory (its
- * undeclared `%SRCROOT%`) whenever a skill lies below it; from this sibling of `/aih/source`
- * every skill is reached through "..", so every URI stays skill-relative, as on every other
- * Scan Cisco path.
+ * Coordinator decision D40 (U1m): the directory linux-namespace-uv-v1 runs Cisco from. bwrap
+ * creates it empty with mode 0555: no write permission, which is a mode and not a read-only
+ * bind, so the namespace's root user is not held to it (Cisco writes nothing there). Cisco
+ * 2.1.0 makes each SARIF URI relative to its working directory (its undeclared `%SRCROOT%`)
+ * whenever a skill lies below it; from this sibling of `/aih/source` every skill is reached
+ * through "..", so every URI stays skill-relative, as on every other Scan Cisco path.
  */
 const ciscoWorkingDirectoryV1 = "/aih/cwd";
 /** The Python version request `host-process-uv-v1` hands to `uv python find`. */
@@ -681,11 +682,12 @@ function bubblewrapContainedRunner(
       "--bind",
       input.venvDirectory,
       "/aih/venv",
+      "--dir",
+      "/nonexistent",
+      // Last of the creating operations, so its --perms reaches no other entry (SI1e).
       ...(input.workingDirectory === ciscoWorkingDirectoryV1
         ? ["--perms", "0555", "--dir", ciscoWorkingDirectoryV1]
         : []),
-      "--dir",
-      "/nonexistent",
       "--setenv",
       "HOME",
       "/nonexistent",

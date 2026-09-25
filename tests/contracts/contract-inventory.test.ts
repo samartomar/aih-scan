@@ -146,7 +146,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 2145,
+    line: 2147,
     contains: "export const BASELINE_BATCH_EXECUTION_PROFILES_V1",
   },
   {
@@ -330,17 +330,17 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 760,
+    line: 762,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 237,
+    line: 238,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 76,
+    line: 77,
     contains: 'const ciscoWorkingDirectoryV1 = "/aih/cwd"',
   },
   {
