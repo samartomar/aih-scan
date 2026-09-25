@@ -66,6 +66,14 @@ export const SEMGREP_VERSION_V1 = "1.178.0";
 /** The interpreter the Linux namespace profile binds; the host profile discovers its own. */
 export const BASELINE_PYTHON_EXECUTABLE_V1 = "/usr/bin/python3.13";
 const baselinePythonPathV1 = "/usr/local/lib/python3.13:/usr/local/lib/python3.13/lib-dynload";
+/**
+ * Coordinator decision D40 (U1m): the empty, read-only directory linux-namespace-uv-v1 runs
+ * Cisco from. Cisco 2.1.0 makes each SARIF URI relative to its working directory (its
+ * undeclared `%SRCROOT%`) whenever a skill lies below it; from this sibling of `/aih/source`
+ * every skill is reached through "..", so every URI stays skill-relative, as on every other
+ * Scan Cisco path.
+ */
+const ciscoWorkingDirectoryV1 = "/aih/cwd";
 /** The Python version request `host-process-uv-v1` hands to `uv python find`. */
 export const HOST_PROCESS_UV_PYTHON_REQUEST_V1 = "3.12";
 /**
@@ -608,7 +616,7 @@ function bubblewrapContainedRunner(
     readonly cacheDirectory: string;
     readonly venvDirectory: string;
     readonly network: boolean;
-    readonly workingDirectory: "/aih/project" | "/aih/source";
+    readonly workingDirectory: "/aih/project" | "/aih/source" | typeof ciscoWorkingDirectoryV1;
   },
 ): BaselineProcessRunnerV1 {
   return (argv, options) => {
@@ -673,6 +681,9 @@ function bubblewrapContainedRunner(
       "--bind",
       input.venvDirectory,
       "/aih/venv",
+      ...(input.workingDirectory === ciscoWorkingDirectoryV1
+        ? ["--perms", "0555", "--dir", ciscoWorkingDirectoryV1]
+        : []),
       "--dir",
       "/nonexistent",
       "--setenv",
@@ -1930,7 +1941,7 @@ async function cisco(
       ...sandboxState,
       sourceRoot,
       network: false,
-      workingDirectory: "/aih/source",
+      workingDirectory: ciscoWorkingDirectoryV1,
     });
     const executable = "/aih/venv/bin/skill-scanner";
     const version = requireCleanResult(

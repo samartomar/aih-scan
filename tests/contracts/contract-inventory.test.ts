@@ -138,7 +138,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 2134,
+    line: 2145,
     contains: "export const BASELINE_BATCH_EXECUTION_PROFILES_V1",
   },
   {
@@ -322,12 +322,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 749,
+    line: 760,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 229,
+    line: 237,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
