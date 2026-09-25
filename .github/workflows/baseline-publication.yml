@@ -492,7 +492,7 @@ jobs:
           /usr/bin/python3.13 -c 'import sys; assert sys.version_info[:2] == (3, 13)'
 
 
-      - name: Execute Scanner analyzers once per canonical request
+      - name: Execute Scanner analyzers once per request set
         if: steps.completed.outputs.pending == 'true'
         shell: bash
         run: |
@@ -506,13 +506,14 @@ jobs:
             test -d "$scanner_source" && test ! -L "$scanner_source"
             test "$(dirname "$scanner_source")" = "$RUNNER_TEMP/baseline/material"
           fi
-          for request in "${requests[@]}"; do
-            batch="$(basename "$request" .request.json)"
-            node dist/cli.js baseline-vet \
-              --request "$request" \
-              --source "$scanner_source" \
-              --output "$RUNNER_TEMP/baseline/bundles/$batch.bundle"
-          done
+          # D49: each analyzer runs once for the whole pending set over one sealed snapshot, so
+          # every bundle of this source carries the same annex per analyzer. The set form writes
+          # <batch>.bundle for every request into a new output root, only after all succeeded.
+          rmdir "$RUNNER_TEMP/baseline/bundles"
+          node dist/cli.js baseline-vet \
+            --request-set "$RUNNER_TEMP/baseline/pending" \
+            --source "$scanner_source" \
+            --output-root "$RUNNER_TEMP/baseline/bundles"
 
       - name: Sign, pack, and independently inspect portable publications
         if: steps.completed.outputs.pending == 'true'
