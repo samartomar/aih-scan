@@ -6,7 +6,10 @@ import {
   listDetectorCapabilitiesV1,
   resolveDetectorExecutionProfileDocumentV1,
 } from "../../src/capability/detector-capability-v1.js";
-import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
+import {
+  canonicalStrictJsonBytesV1,
+  parseStrictJsonObjectV1,
+} from "../../src/contract/strict-json-v1.js";
 import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED,
@@ -680,6 +683,19 @@ describe("published contract inventory", () => {
     expect(sentences).toContain("`disjoint` is the default");
     expect(sentences).toContain("`publication request set rejected: arguments`");
     expect(sentences).toContain("`publication request set rejected: overlapping component paths`");
+  });
+
+  it("names the reviewed overlap-mode record the directory test and the dispatcher read (SI1d)", () => {
+    const sentences = prose();
+    expect(sentences).toContain("**[Scan: SI1d]**");
+    expect(sentences).toContain("`.github/baseline-request-sets/overlap-modes.json`");
+    expect(sentences).toContain("every set it does not list is verified as `disjoint`");
+    expect(sentences).toContain("`-f request_set_overlap`");
+    const record = parseStrictJsonObjectV1(
+      read(".github/baseline-request-sets/overlap-modes.json"),
+      "overlap-modes.json",
+    );
+    for (const mode of Object.values(record)) expect(mode).toBe("compiler-catalog");
   });
 
   it("states that evidence carries no authority and that the document is not the contract", () => {
