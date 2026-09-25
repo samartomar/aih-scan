@@ -333,7 +333,7 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   {
     path: "src/baseline/runtime-v1.ts",
     line: 76,
-    contains: "const ciscoWorkingDirectoryV1 = \"/aih/cwd\"",
+    contains: 'const ciscoWorkingDirectoryV1 = "/aih/cwd"',
   },
   {
     path: "src/detectors/cisco-multi-skill/scan-v1.ts",
