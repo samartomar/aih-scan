@@ -205,8 +205,12 @@ Supply `candidate` (the exact source id), `source_repository`, `source_ref`,
 `request_set_url`, and `request_set_sha256`. The URL must name a JSON file on
 `raw.githubusercontent.com` at an exact 40-character commit. Scanner checks the
 16 MiB input limit, exact SHA-256, closed schema, each canonical request digest,
-source identity, duplicate components, and overlapping component paths before
-writing any batch. This route never checks out Core, installs Core dependencies,
+source identity, duplicate components, and overlapping paths before writing any
+batch. Overlap is checked in `disjoint` mode by default (no path shared or nested
+across components); a set listed in `.github/baseline-request-sets/overlap-modes.json`
+is verified, and dispatched with the input `request_set_overlap: compiler-catalog`,
+in `compiler-catalog` mode, which allows overlap across components and still
+refuses it inside one. This route never checks out Core, installs Core dependencies,
 or executes request-author code. It accepts independently prepared provider data
 without adding a source-specific switch to Scanner or changing Core inventories.
 Reviewed inputs for this delivery are isolated by provider and source commit in
