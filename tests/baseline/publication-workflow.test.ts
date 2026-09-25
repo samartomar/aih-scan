@@ -283,7 +283,7 @@ describe("immutable baseline publication workflow", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     const reuse = workflow.indexOf("Reuse only exact completed publications before analyzers");
     const isolation = workflow.indexOf("Bind Scanner analyzer isolation");
-    const analyzers = workflow.indexOf("Execute Scanner analyzers once per canonical request");
+    const analyzers = workflow.indexOf("Execute Scanner analyzers once per request set");
 
     expect(workflow).toContain("concurrency:");
     expect(workflow).toContain(
@@ -310,6 +310,52 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain('for request in "$RUNNER_TEMP/baseline/pending"/*.request.json; do');
     expect(workflow).toContain("if: steps.completed.outputs.pending == 'true'");
     expect(workflow).toContain("if: needs.build.outputs.pending == 'true'");
+  });
+  it("executes the analyzers once for the whole pending request set (D49)", () => {
+    const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");
+    const start = workflow.indexOf(
+      "      - name: Execute Scanner analyzers once per request set\n",
+    );
+    const end = workflow.indexOf(
+      "      - name: Sign, pack, and independently inspect portable publications\n",
+    );
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    // The whole step, byte for byte: the aih source-root branch is kept exactly, the pre-made
+    // empty bundles directory becomes the set form's new output root, and one invocation runs.
+    expect(workflow.slice(start, end)).toBe(
+      [
+        "      - name: Execute Scanner analyzers once per request set\n",
+        "        if: steps.completed.outputs.pending == 'true'\n",
+        "        shell: bash\n",
+        "        run: |\n",
+        "          set -euo pipefail\n",
+        "          shopt -s nullglob\n",
+        '          requests=("$RUNNER_TEMP/baseline/pending"/*.request.json)\n',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: the workflow step is Bash, not a template.
+        '          test "${#requests[@]}" -gt 0\n',
+        '          scanner_source="$GITHUB_WORKSPACE/.source"\n',
+        '          if [ "$CANDIDATE" = "aih" ]; then\n',
+        '            scanner_source="$(cat "$RUNNER_TEMP/baseline/aih-source-root.txt")"\n',
+        '            test -d "$scanner_source" && test ! -L "$scanner_source"\n',
+        '            test "$(dirname "$scanner_source")" = "$RUNNER_TEMP/baseline/material"\n',
+        "          fi\n",
+        "          # D49: each analyzer runs once for the whole pending set over one sealed snapshot, so\n",
+        "          # every bundle of this source carries the same annex per analyzer. The set form writes\n",
+        "          # <batch>.bundle for every request into a new output root, only after all succeeded.\n",
+        '          rmdir "$RUNNER_TEMP/baseline/bundles"\n',
+        "          node dist/cli.js baseline-vet \\\n",
+        '            --request-set "$RUNNER_TEMP/baseline/pending" \\\n',
+        '            --source "$scanner_source" \\\n',
+        '            --output-root "$RUNNER_TEMP/baseline/bundles"\n',
+        "\n",
+      ].join(""),
+    );
+    expect(workflow).not.toContain("Execute Scanner analyzers once per canonical request");
+    expect(workflow.split("node dist/cli.js baseline-vet").length).toBe(2);
+    expect(workflow).not.toContain('--output "$RUNNER_TEMP/baseline/bundles/$batch.bundle"');
+    // Signing and packing still read one bundle per pending request, by its batch name.
+    expect(workflow).toContain('bundle="$RUNNER_TEMP/baseline/bundles/$batch.bundle"');
   });
   it("validates an optional non-authoritative provider coverage map and joins every component to authored requests", () => {
     const workflow = readFileSync(workflowPath, "utf8").replace(/\r\n/gu, "\n");

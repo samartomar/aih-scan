@@ -245,7 +245,10 @@ Scanner acquires each required analyzer once per exact source, verifies the
 pinned SkillSpector image and bundled uv locks/versions, uses hardened Docker and
 lock-backed uv execution against the canonical PyPI index, re-observes every
 source/component digest after the run, and writes one canonical
-content-addressed receipt with detached annexes. The execution host needs Docker,
+content-addressed receipt with detached annexes. A request set of one source
+runs each analyzer once for all of its requests, over one sealed snapshot. Every
+request's receipt carries that one execution's annex bytes, so all batches of a
+source hold the same whole-tree annex per detector. The execution host needs Docker,
 Bubblewrap, `uv`, and root-provisioned Python 3.13 on Linux. The fixed Python
 runtime is rooted at `/usr/local`, with its standard library at
 `/usr/local/lib/python3.13` and its executable exposed as
@@ -285,6 +288,18 @@ npx aih-scan baseline-vet \
   --request /path/to/canonical-baseline-request.json \
   --source /path/to/exact-pinned-source \
   --output /path/to/new-baseline-observation-bundle
+```
+
+For several requests of one source, the set form reads every
+`batch-NNN.request.json` of a directory that holds nothing else (1 to 1000
+files). It runs each analyzer once for the whole set and, only if every request
+succeeded, writes `<output-root>/batch-NNN.bundle` for each:
+
+```sh
+npx aih-scan baseline-vet \
+  --request-set /path/to/canonical-request-directory \
+  --source /path/to/exact-pinned-source \
+  --output-root /path/to/new-bundle-directory
 ```
 
 That first command produces an unsigned observation bundle, not portable trusted
@@ -352,7 +367,11 @@ Reuse requires the exact four-file closure, checksums,
 independent inspection, and GitHub attestation binding this workflow,
 `refs/heads/main`, and the current publisher commit. Only an absent release and
 tag is pending work; lookup, network, authentication, incomplete-release, or
-verification failures stop the run. Only pending requests reach analyzers.
+verification failures stop the run. Only pending requests reach analyzers, and
+they run as one set: each analyzer runs once for all of them. So a set is
+published whole or not at all. When only some of its requests already have
+completed publications, the run stops. Dispatch a fresh `publication_generation`
+to publish the whole set again.
 
 Reuse checks the 90-day public-report freshness policy against the original
 authenticated report signing date and the verified publication timestamp.

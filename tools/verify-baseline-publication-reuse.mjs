@@ -324,8 +324,8 @@ export function verifyCompletedPublication({ repository, publisherSha, sourceRef
   return true;
 }
 
-export function main() {
-  const options = parseArguments(process.argv);
+export function main(argv = process.argv, { run = execute, now } = {}) {
+  const options = parseArguments(argv);
   const requests = requestFiles(options["--requests"]);
   const pendingDirectory = resolve(options["--pending"]);
   const reuseDirectory = resolve(options["--reuse-directory"]);
@@ -348,6 +348,8 @@ export function main() {
         gh,
         reuseDirectory,
         request,
+        run,
+        ...(now === undefined ? {} : { now }),
       })
     ) {
       reused += 1;
@@ -356,6 +358,13 @@ export function main() {
       pending.push(request.name);
     }
   }
+  // D49: the analyzers run once for the whole pending set, and every bundle of the source
+  // carries that one execution's annexes. Publications completed by an earlier run carry
+  // another execution's, so a set that is only partly published cannot be completed here.
+  if (reused > 0 && pending.length > 0)
+    fail(
+      `partial request set: ${reused} of ${requests.length} requests already have completed publications for this publisher and generation, and ${pending.length} do not. The analyzers run once for a whole request set, so a set cannot be completed from a partial one: dispatch a fresh publication_generation to publish the whole set again`,
+    );
   writeFileSync(
     options["--github-output"],
     `pending=${pending.length > 0}\npending_count=${pending.length}\nreused_count=${reused}\n`,

@@ -57,6 +57,8 @@ export const BASELINE_ANALYZERS_V1 = ["aih-native", "skillspector", "semgrep", "
 export type BaselineAnalyzerV1 = (typeof BASELINE_ANALYZERS_V1)[number];
 
 const maxComponents = 100;
+/** D49: one baseline-vet request set holds at most this many canonical requests. */
+export const BASELINE_REQUEST_SET_MAX_V1 = 1_000;
 const maxAnnexBytes = 16 * 1024 * 1024;
 const maxSourceEntries = 100_000;
 const maxSourceBytes = 256 * 1024 * 1024;
@@ -779,13 +781,17 @@ export function assertBaselineAnalyzerSnapshotUnchangedV1(
   assertSafeAnalyzerSnapshot(snapshotRoot, options);
 }
 
+/**
+ * The snapshot depends only on the source root (D49): every request of a set is checked
+ * against the one copy, which is then the only thing any analyzer receives.
+ */
 function createAnalyzerSnapshot(
-  request: BaselineVetRequestV1,
+  requests: readonly BaselineVetRequestV1[],
   sourceRoot: string,
 ): AnalyzerSnapshot {
   const snapshot = snapshotAnalyzerSource(sourceRoot, {});
   try {
-    sourceAndComponentsMatch(request, snapshot);
+    for (const request of requests) sourceAndComponentsMatch(request, snapshot);
     return snapshot;
   } catch (error) {
     rmSync(snapshot.root, { recursive: true, force: true });
@@ -934,13 +940,52 @@ export async function executeBaselineVetBatchV1(
     readonly execute?: BaselineAnalyzerExecutionV1;
   },
 ): Promise<BaselineVetBatchResultV1> {
-  canonicalBaselineVetRequestV1Bytes(request);
+  const [result] = await executeBaselineVetBatchSetV1([request], runtime);
+  return result ?? fail("missing batch result");
+}
+
+/**
+ * D49: one request set over one source. Every request must name the same canonical source and
+ * profile, and none may repeat. The union of their analyzers runs once each, in analyzer
+ * order, over one sealed snapshot, and every proof runs once per execution. Each request's
+ * receipt then holds only its own analyzers, whose annexes are that one execution's bytes, so
+ * every batch of the source carries the same whole-tree annex per detector. Any failure fails
+ * the whole set: no request gets a result. One request is exactly the single-request batch.
+ */
+export async function executeBaselineVetBatchSetV1(
+  requests: readonly BaselineVetRequestV1[],
+  runtime: {
+    readonly sourceRoot: string;
+    /** Optional: Scan's own hardened analyzer execution is the default. */
+    readonly execute?: BaselineAnalyzerExecutionV1;
+  },
+): Promise<readonly BaselineVetBatchResultV1[]> {
+  if (!Array.isArray(requests as unknown) || requests.length === 0)
+    fail("baseline request set is empty");
+  if (requests.length > BASELINE_REQUEST_SET_MAX_V1)
+    fail(`baseline request set exceeds ${BASELINE_REQUEST_SET_MAX_V1} requests`);
+  for (const request of requests) canonicalBaselineVetRequestV1Bytes(request);
+  assertUnique(
+    requests.map((request) => request.requestSha256),
+    "request digest",
+  );
+  const [first] = requests as [BaselineVetRequestV1, ...BaselineVetRequestV1[]];
+  const sourceBytes = canonicalStrictJsonBytesV1(first.source);
+  for (const request of requests) {
+    if (request.profile !== first.profile) fail("baseline request set profile differs");
+    if (!canonicalStrictJsonBytesV1(request.source).equals(sourceBytes))
+      fail("baseline request set source differs");
+  }
   const execute = runtime.execute ?? createBaselineAnalyzerExecutionV1();
-  const snapshot = createAnalyzerSnapshot(request, runtime.sourceRoot);
+  const snapshot = createAnalyzerSnapshot(requests, runtime.sourceRoot);
   const snapshotRoot = snapshot.root;
-  const selected = analyzerOrder(request.components.flatMap((component) => component.analyzers));
-  const observations: z.infer<typeof observation>[] = [];
-  const annexArtifacts: BaselineVetAnnexArtifactV1[] = [];
+  const selected = analyzerOrder(
+    requests.flatMap((request) => request.components.flatMap((component) => component.analyzers)),
+  );
+  const annexes = new Map<
+    BaselineAnalyzerV1,
+    { observation: z.infer<typeof observation>; bytes: Buffer }
+  >();
   try {
     const sealed = sealAnalyzerSnapshot(snapshotRoot);
     const ran: {
@@ -952,7 +997,7 @@ export async function executeBaselineVetBatchV1(
       const result = await execute({
         analyzer: analyzerName,
         sourceRoot: snapshotRoot,
-        source: request.source,
+        source: first.source,
       });
       const executed = executedProfile(analyzerName, result.executionProfileId);
       const observed = normalizedObservation(analyzerName, result);
@@ -971,11 +1016,12 @@ export async function executeBaselineVetBatchV1(
       )
     )
       fail("baseline analyzer snapshot changed during the run");
-    sourceAndComponentsMatch(request, snapshot);
-    const reobserved = createAnalyzerSnapshot(request, runtime.sourceRoot);
+    for (const request of requests) sourceAndComponentsMatch(request, snapshot);
+    const reobserved = createAnalyzerSnapshot(requests, runtime.sourceRoot);
     rmSync(reobserved.root, { recursive: true, force: true });
     // C2a §1.6 (D24): only now, every proof passed, does each SARIF run name the files of the
-    // snapshot the analyzer received, under the lock of the profile that ran.
+    // snapshot the analyzer received, under the lock of the profile that ran. Once per
+    // analyzer: every request that selected it carries these exact bytes (D49).
     for (const { analyzer: analyzerName, observed, executed } of ran) {
       let bytes = observed.bytes;
       if (observed.mediaType === "application/sarif+json") {
@@ -1001,22 +1047,42 @@ export async function executeBaselineVetBatchV1(
         );
         normalizedObservation(analyzerName, { ...observed, bytes });
       }
-      const path = `annex/${analyzerName}.json`;
-      observations.push({
-        analyzer: analyzerName,
-        analyzerVersion: observed.analyzerVersion,
-        annex: {
-          path,
-          mediaType: observed.mediaType,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-          byteLength: bytes.byteLength,
+      annexes.set(analyzerName, {
+        observation: {
+          analyzer: analyzerName,
+          analyzerVersion: observed.analyzerVersion,
+          annex: {
+            path: `annex/${analyzerName}.json`,
+            mediaType: observed.mediaType,
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            byteLength: bytes.byteLength,
+          },
         },
+        bytes,
       });
-      annexArtifacts.push({ path, bytes });
     }
   } finally {
     rmSync(snapshotRoot, { recursive: true, force: true });
   }
+  return Object.freeze(requests.map((request) => batchReceipt(request, annexes)));
+}
+
+/** One request's receipt over the set's executions: only its own analyzers, in order. */
+function batchReceipt(
+  request: BaselineVetRequestV1,
+  annexes: ReadonlyMap<
+    BaselineAnalyzerV1,
+    { observation: z.infer<typeof observation>; bytes: Buffer }
+  >,
+): BaselineVetBatchResultV1 {
+  const own = analyzerOrder(request.components.flatMap((component) => component.analyzers)).map(
+    (name) => annexes.get(name) ?? fail(`missing observation: ${name}`),
+  );
+  const observations = own.map((item) => item.observation);
+  const annexArtifacts: BaselineVetAnnexArtifactV1[] = own.map((item) => ({
+    path: item.observation.annex.path,
+    bytes: Buffer.from(item.bytes),
+  }));
   const observationByAnalyzer = new Map(observations.map((item) => [item.analyzer, item]));
   const authoring: z.input<typeof receiptInput> = {
     protocol: "BaselineVetReceiptV1",

@@ -37,6 +37,10 @@ import {
   parseBaselineVetDiscoveryV1Json,
   resolveBaselineVetDiscoveryV1,
 } from "./baseline/publication-v1.js";
+import {
+  parseBaselineVetRequestSetArgumentsV1,
+  runBaselineVetRequestSetV1,
+} from "./baseline/request-set-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
@@ -57,7 +61,10 @@ const maxInputBytes = 2 * 1024 * 1024;
 const projectCoreEvidenceUsage =
   "Usage: aih-scan project-core-evidence --evidence <file> --bundle <directory> --roots <file> --expected <file> --subject-digest <sha256:...> --output <new-file> [--seen <file>]\n";
 const baselineVetUsage =
-  "Usage: aih-scan baseline-vet --request <canonical-file> --source <directory> --output <new-directory>\n";
+  "Usage: aih-scan baseline-vet --request <canonical-file> --source <directory> --output <new-directory>\n" +
+  "       aih-scan baseline-vet --request-set <directory> --source <directory> --output-root <new-directory>\n" +
+  "The set form reads every batch-NNN.request.json of one source (1 to 1000 regular files, nothing else),\n" +
+  "runs each analyzer once for the whole set, and writes <output-root>/batch-NNN.bundle only if all succeed.\n";
 const baselineSignUsage =
   "Usage: aih-scan baseline-sign --request <canonical-file> --bundle <directory> --signer <file> --private-key <file> --claims <file> --output <new-file>\n";
 const baselineVerifyUsage =
@@ -390,6 +397,7 @@ async function capture(args: readonly string[]): Promise<void> {
   writeScanCaptureBundleV2({ outputDirectory: outputPath, ...captured });
 }
 async function baselineVet(args: readonly string[]): Promise<void> {
+  if (args[0] !== "--request") return baselineVetSet(args);
   if (
     args.length !== 6 ||
     args[0] !== "--request" ||
@@ -423,6 +431,24 @@ async function baselineVet(args: readonly string[]): Promise<void> {
       authority: "none",
     }).toString("utf8")}\n`,
   );
+}
+/** D49: one execution per analyzer for a whole request set of one source. */
+async function baselineVetSet(args: readonly string[]): Promise<void> {
+  const parsed = parseBaselineVetRequestSetArgumentsV1(args);
+  // No execute callback is passed: Scan's own hardened analyzer execution is the default.
+  const written = await runBaselineVetRequestSetV1({
+    ...parsed,
+    readText: (path, label) => readText(path, label),
+  });
+  for (const item of written)
+    process.stdout.write(
+      `${canonicalStrictJsonBytesV1({
+        outcome: "observed",
+        requestSha256: item.requestSha256,
+        receiptSha256: item.receiptSha256,
+        authority: "none",
+      }).toString("utf8")}\n`,
+    );
 }
 function baselineSign(args: readonly string[]): void {
   if (

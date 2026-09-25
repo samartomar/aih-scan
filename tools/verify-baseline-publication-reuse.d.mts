@@ -32,6 +32,16 @@ export function verifyCompletedPublication(input: Readonly<{
   run?: BaselinePublicationCommandRunner;
 }>): boolean;
 
+/**
+ * The workflow step: verifies each request's completed publication or queues it as pending.
+ * D49: a request set that is only partly published is refused, since the analyzers run once
+ * for a whole set; the operator dispatches a fresh publication_generation instead.
+ */
+export function main(
+  argv?: readonly string[],
+  options?: Readonly<{ run?: BaselinePublicationCommandRunner; now?: string }>,
+): void;
+
 /** Exactly the four release files, each hashed file matching `SHA256SUMS`. */
 export function verifyDownloadedFiles(directory: string): void;
 

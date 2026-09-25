@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   baselinePublicationTag,
+  main,
   verifyCompletedPublication,
 } from "../../tools/verify-baseline-publication-reuse.mjs";
 
@@ -368,6 +377,156 @@ describe("baseline publication reuse verifier", () => {
       ).toBe(true);
       expect(calls.join("\n")).toContain(`--source-digest ${publisherSha}`);
       expect(calls.join("\n")).toContain(`--request-sha256 ${requestSha256}`);
+    } finally {
+      rmSync(current.root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * D49 [Scan: SV1]: the workflow runs each analyzer once for the whole pending request set, so
+ * every bundle of a source carries the same annexes. A set of which only some requests already
+ * have completed publications cannot be completed consistently and is refused; full reuse and
+ * no reuse behave as before.
+ */
+describe("baseline publication reuse of a request set (D49)", () => {
+  const digests = ["1", "2", "3"].map((digit) => digit.repeat(64));
+
+  function requestSetRun(completed: ReadonlySet<string>) {
+    const root = mkdtempSync(join(tmpdir(), "aih-baseline-publication-set-"));
+    const requests = join(root, "requests");
+    mkdirSync(requests);
+    const releases = new Map<string, { directory: string; inspection: string }>();
+    for (const [index, digest] of digests.entries()) {
+      writeFileSync(
+        join(requests, `batch-00${index + 1}.request.json`),
+        `${JSON.stringify({ requestSha256: digest })}\n`,
+        "utf8",
+      );
+      const releaseTag = baselinePublicationTag(publisherSha, digest);
+      const releaseRoot = join(root, `release-${index + 1}`);
+      mkdirSync(releaseRoot);
+      releases.set(
+        releaseTag,
+        releaseDirectory(
+          releaseRoot,
+          now,
+          `https://github.com/${repository}/releases/download/${releaseTag}/publication.json`,
+        ),
+      );
+    }
+    const tagOf = (digest: string) => baselinePublicationTag(publisherSha, digest);
+    const run: Runner = (command, args) => {
+      const inspected = args[args.indexOf("--request-sha256") + 1];
+      if (command === process.execPath && typeof inspected === "string")
+        return { status: 0, stdout: releases.get(tagOf(inspected))?.inspection ?? "", stderr: "" };
+      const releaseTag = [...releases.keys()].find((candidate) =>
+        args.some((arg) => arg === candidate || arg.endsWith(`/${candidate}`)),
+      );
+      const release = releaseTag === undefined ? undefined : releases.get(releaseTag);
+      const done = [...completed].some((digest) => tagOf(digest) === releaseTag);
+      if (args[0] === "api")
+        return done && args[1]?.includes("/releases/tags/")
+          ? { status: 0, stdout: releaseMetadata(undefined, releaseTag), stderr: "" }
+          : { status: 1, stdout: "", stderr: "HTTP 404: Not Found" };
+      if (args[0] === "release" && args[1] === "download" && release !== undefined && done) {
+        cpSync(release.directory, args[args.indexOf("--dir") + 1] as string, { recursive: true });
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "attestation" && args[1] === "verify")
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            {
+              verificationResult: {
+                verifiedTimestamps: [
+                  { type: "tlog", uri: "https://rekor.sigstore.dev", timestamp: now },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+    };
+    const output = join(root, "github-output");
+    writeFileSync(output, "", "utf8");
+    const argv = [
+      process.execPath,
+      "tools/verify-baseline-publication-reuse.mjs",
+      "--requests",
+      requests,
+      "--pending",
+      join(root, "pending"),
+      "--reuse-directory",
+      join(root, "reused"),
+      "--repository",
+      repository,
+      "--publisher-sha",
+      publisherSha,
+      "--source-ref",
+      "refs/heads/main",
+      "--workflow",
+      `${repository}/.github/workflows/baseline-publication.yml`,
+      "--scanner",
+      join(root, "scanner.mjs"),
+      "--github-output",
+      output,
+    ];
+    return { root, argv, run, output, pending: join(root, "pending") };
+  }
+
+  function quietly<T>(action: () => T): T {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      return action();
+    } finally {
+      write.mockRestore();
+    }
+  }
+
+  it("sends every request to the analyzers when none has a completed publication", () => {
+    const current = requestSetRun(new Set());
+    try {
+      quietly(() => main(current.argv, { run: current.run, now }));
+      expect(readdirSync(current.pending).sort()).toEqual([
+        "batch-001.request.json",
+        "batch-002.request.json",
+        "batch-003.request.json",
+      ]);
+      expect(readFileSync(current.output, "utf8")).toBe(
+        "pending=true\npending_count=3\nreused_count=0\n",
+      );
+    } finally {
+      rmSync(current.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses the whole set when every request has a completed publication", () => {
+    const current = requestSetRun(new Set(digests));
+    try {
+      quietly(() => main(current.argv, { run: current.run, now }));
+      expect(readdirSync(current.pending)).toEqual([]);
+      expect(readFileSync(current.output, "utf8")).toBe(
+        "pending=false\npending_count=0\nreused_count=3\n",
+      );
+    } finally {
+      rmSync(current.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [[digests[0]]],
+    [[digests[0], digests[2]]],
+  ])("refuses a partial set (%j completed) and tells the operator to dispatch a fresh generation", (done) => {
+    const current = requestSetRun(new Set(done as string[]));
+    try {
+      expect(() => quietly(() => main(current.argv, { run: current.run, now }))).toThrow(
+        new RegExp(
+          `baseline publication reuse rejected: partial request set: ${done.length} of 3 requests already have completed publications.*dispatch a fresh publication_generation`,
+        ),
+      );
+      expect(readFileSync(current.output, "utf8")).toBe("");
     } finally {
       rmSync(current.root, { recursive: true, force: true });
     }
