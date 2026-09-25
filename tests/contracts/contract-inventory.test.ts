@@ -386,6 +386,26 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
     line: 576,
     contains: "export function readScanFindingsV1",
   },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 27,
+    contains: 'set.protocol !== "BaselinePublicationRequestSetV1"',
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 14,
+    contains: 'args[6] === "--overlap"',
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 52,
+    contains: 'fail("overlapping component paths")',
+  },
+  {
+    path: "tools/prepare-publication-request-set.mjs",
+    line: 62,
+    contains: "fail(`overlapping paths within component",
+  },
 ];
 
 /**
@@ -651,6 +671,15 @@ describe("published contract inventory", () => {
     expect(document).toContain("DetectorCapabilityV1");
     expect(document).toContain("DetectorExecutionProfileDocumentV1");
     expect(document).toContain("ScanFindingsV1");
+  });
+
+  it("states the data-only request set's overlap modes and that disjoint is the default (SI1c)", () => {
+    const sentences = prose();
+    expect(sentences).toContain("**[Scan: SI1c]**");
+    expect(sentences).toContain("`--overlap <disjoint|compiler-catalog>`");
+    expect(sentences).toContain("`disjoint` is the default");
+    expect(sentences).toContain("`publication request set rejected: arguments`");
+    expect(sentences).toContain("`publication request set rejected: overlapping component paths`");
   });
 
   it("states that evidence carries no authority and that the document is not the contract", () => {
