@@ -199,8 +199,8 @@ describe("baseline-vet completion evidence (D24)", () => {
     );
     expect(baseline.ordered).toEqual(["SKILL.md", "src/a.js"]);
     expect(baseline.bytes.toString("utf8")).toBe(
-      `SKILL.md ${perFile["SKILL.md"]}
-src/a.js ${perFile["src/a.js"]}
+      `SKILL.md\u0000${perFile["SKILL.md"]}
+src/a.js\u0000${perFile["src/a.js"]}
 `,
     );
     expect(baseline.sha256).toBe(VECTOR_SUBJECT_SHA256);
@@ -833,7 +833,7 @@ describe("S2k: every annex SARIF passes the §1.4 location rules before it is ce
     ["an absolute location", "skillspector", "/etc/passwd"],
     ["a drive-letter location", "semgrep", "C:/outside.js"],
     ["a file URL", "semgrep", "file:///tmp/outside.js"],
-    ["a backslash location", "semgrep", "srca.js"],
+    ["a backslash location", "semgrep", "src\\a.js"],
     ["a path that is not a sealed file", "semgrep", "src/missing.js"],
   ])("publishes nothing for %s", async (_label, name, uri) => {
     const { root, request } = vectorTree();
