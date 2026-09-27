@@ -282,7 +282,9 @@ describe("immutable baseline publication workflow", () => {
   it("retires the Ponytail candidate, coverage mapping and reviewed request set (D105b)", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     const readme = readFileSync(readmePath, "utf8");
-    const requestSets = readdirSync(resolve(".github", "baseline-request-sets"));
+    const requestSets = readdirSync(
+      resolve(import.meta.dirname, "..", "..", ".github", "baseline-request-sets"),
+    );
 
     expect(workflow).not.toMatch(/ponytail/iu);
     expect(readme).not.toMatch(/ponytail/iu);
