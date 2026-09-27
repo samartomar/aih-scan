@@ -219,11 +219,11 @@ Dispatch their raw URL at the reviewed Scanner commit and hash the exact file
 bytes. A changed source revision requires a newly reviewed request set, not a
 package version change.
 
-The optional Core request-client route accepts six
+The optional Core request-client route accepts five
 sealed Core candidates: `aih-core` only for `samartomar/ai-harness`,
 `anthropics-skills` only for `anthropics/skills`, `ecc` only for `affaan-m/ECC`,
-`mattpocock-skills` only for `mattpocock/skills`, `ponytail` only for
-`DietrichGebert/ponytail`, and `superpowers` only for `obra/Superpowers`. It reads
+`mattpocock-skills` only for `mattpocock/skills`, and `superpowers` only for
+`obra/Superpowers`. It reads
 the selected candidate inventory from the same exact Core commit that supplies
 the request authoring code. Legacy dispatch callers may still use `catalog=ecc`
 or `catalog=superpowers` with `core_ref` and the exact source tuple to author the
@@ -385,7 +385,7 @@ renewals append `-r<identifier>`. Each address is immutable. A missing renewal
 runs the analyzers before signing; retrying the same completed renewal reuses it
 only after all verification checks pass. Core pins the exact resulting locator.
 
-Matt Pocock and Ponytail request batches may carry a closed Core-derived source-file
+Matt Pocock request batches may carry a closed Core-derived source-file
 coverage map through the same artifact. When present, the map must match every
 request and component; current request-only producers remain supported. The map is not Scanner evidence,
 authority, or a release asset; Core must re-derive it from its exact pinned

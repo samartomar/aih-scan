@@ -102,7 +102,6 @@ jobs:
             anthropics-skills:anthropics/skills|\
             ecc:affaan-m/ECC|\
             mattpocock-skills:mattpocock/skills|\
-            ponytail:DietrichGebert/ponytail|\
             superpowers:obra/Superpowers) ;;
             *) echo "::error::source repository does not match the selected candidate"; exit 1 ;;
           esac
@@ -300,11 +299,6 @@ jobs:
               id: "source:mattpocock",
               inputFormat: "pinned-skill-collection/v1",
               repository: "https://github.com/mattpocock/skills",
-            },
-            ponytail: {
-              id: "source:ponytail",
-              inputFormat: "pinned-component-collection/v1",
-              repository: "https://github.com/DietrichGebert/ponytail",
             },
           }[candidate];
           if (
