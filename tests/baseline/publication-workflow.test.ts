@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -161,7 +161,8 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain("anthropics-skills:anthropics/skills");
     expect(workflow).toContain("ecc:affaan-m/ECC");
     expect(workflow).toContain("mattpocock-skills:mattpocock/skills");
-    expect(workflow).toContain("ponytail:DietrichGebert/ponytail");
+    // D105b: Ponytail is retired from the current candidate allowlist.
+    expect(workflow).not.toMatch(/ponytail/iu);
     expect(workflow).toContain("superpowers:obra/Superpowers");
     expect(workflow).not.toContain('mkdir -p "$RUNNER_TEMP/baseline/requests"');
     expect(workflow).toContain('mkdir -p "$RUNNER_TEMP/baseline" "$RUNNER_TEMP/baseline/bundles"');
@@ -224,7 +225,6 @@ describe("immutable baseline publication workflow", () => {
         ["anthropics-skills", "anthropics", "skills"],
         ["ecc", "affaan-m", "ECC"],
         ["mattpocock-skills", "mattpocock", "skills"],
-        ["ponytail", "DietrichGebert", "ponytail"],
         ["superpowers", "obra", "Superpowers"],
       ] as const;
       for (const [candidate, owner, repository] of candidates) {
@@ -274,10 +274,19 @@ describe("immutable baseline publication workflow", () => {
     expect(readme).toContain("affaan-m/ECC");
     expect(readme).toContain("anthropics/skills");
     expect(readme).toContain("mattpocock/skills");
-    expect(readme).toContain("DietrichGebert/ponytail");
+    expect(readme).not.toMatch(/ponytail/iu);
     expect(readme).toContain("samartomar/ai-harness");
     expect(readme).toContain("same commit");
     expect(readme).not.toContain("creates request-addressed GitHub Releases");
+  });
+  it("retires the Ponytail candidate, coverage mapping and reviewed request set (D105b)", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+    const readme = readFileSync(readmePath, "utf8");
+    const requestSets = readdirSync(resolve(".github", "baseline-request-sets"));
+
+    expect(workflow).not.toMatch(/ponytail/iu);
+    expect(readme).not.toMatch(/ponytail/iu);
+    expect(requestSets).not.toContain("ponytail");
   });
   it("serializes only equal immutable inputs and verifies completed releases before analyzer setup", () => {
     const workflow = readFileSync(workflowPath, "utf8");
@@ -299,7 +308,7 @@ describe("immutable baseline publication workflow", () => {
     expect(workflow).toContain("attestations: read");
     expect(workflow).toContain("node tools/verify-baseline-publication-reuse.mjs");
     expect(workflow).toContain("mattpocock-skills:mattpocock/skills");
-    expect(workflow).toContain("ponytail:DietrichGebert/ponytail");
+    expect(workflow).not.toMatch(/ponytail/iu);
     expect(workflow).toContain(
       'cp "$RUNNER_TEMP/baseline/requests/coverage-map.json" "$RUNNER_TEMP/baseline/publications/coverage-map.json"',
     );
@@ -446,7 +455,7 @@ describe("immutable baseline publication workflow", () => {
           "wrong-source",
           withCoverageDigest({
             ...coverage,
-            source: { ...coverage.source, id: "source:ponytail" },
+            source: { ...coverage.source, id: "source:ecc" },
           }),
         ],
         ["wrong-request", withCoverageDigest({ ...coverage, requestSha256: ["d".repeat(64)] })],
