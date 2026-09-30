@@ -46,11 +46,9 @@ describe("packed Core evidence proof", () => {
   });
 
   it("distinguishes the exact Core compatibility lock from public Core 0.2.0", () => {
-    for (const path of ["README.md", "ai-coding/project.md"]) {
-      const documentation = read(path);
-      expect(documentation).toContain("6130dd837b8e8bd41e999fb40733e0e460e69720");
-      expect(documentation).toContain("0d63a9853bd51072a5108eee21013d5fb8a8472b");
-      expect(documentation).toMatch(/post-`0\.1\.1` compatibility fixture/u);
-    }
+    const documentation = read("README.md");
+    expect(documentation).toContain("6130dd837b8e8bd41e999fb40733e0e460e69720");
+    expect(documentation).toContain("0d63a9853bd51072a5108eee21013d5fb8a8472b");
+    expect(documentation).toMatch(/post-`0\.1\.1` compatibility fixture/u);
   });
 });

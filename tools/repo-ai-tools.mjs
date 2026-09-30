@@ -139,7 +139,6 @@ const plan = {
       setupCommand: "setup-codex",
       doctorCommand: "doctor-codex",
       projection: ".codex/config.toml",
-      ecc: { marketplace: "affaan-m/ECC", plugin: "ecc@ecc", lifecycle: "native-plugin" },
       tokenOptimizer: { integration: "on-demand", commands: ["token-optimizer-report", "token-optimizer-coach"] },
       mcpServers: {
         serena: { launcher: "serena-mcp", enabledTools: serenaEnabledTools },
@@ -203,13 +202,6 @@ function parseJson(text, label) {
 function commandExists(name) {
   const finder = process.platform === "win32" ? "where.exe" : "which";
   if (!probe(finder, [name]).ok) throw new Error(`missing required command: ${name}`);
-}
-
-function runCodex(args, options = {}) {
-  if (process.platform === "win32") {
-    return run(process.env.ComSpec || "C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/c", "codex.cmd", ...args], options);
-  }
-  return run("codex", args, options);
 }
 
 function localToolEnv() {
@@ -364,7 +356,7 @@ function installTools() {
 
 function renderCodexConfig(override = process.env.CBM_CACHE_DIR) {
   const codebaseMemory = codebaseMemoryConfiguration(override);
-  const lines = [blockBegin, "# Machine-local projection; ai-coding is authoritative.", ""];
+  const lines = [blockBegin, "# Machine-local optional helper projection; AGENTS.md owns project instructions.", ""];
   for (const [name, launcher, enabledTools, startupTimeout] of mcpServers) {
     lines.push(
       `[mcp_servers.${JSON.stringify(name)}]`,
@@ -410,17 +402,6 @@ function writeCodexProjection() {
     }
   }
   writeFileSync(codexConfigPath, `${existing.trimEnd()}\n\n${expected}`, "utf8");
-}
-
-function configureEcc({ refresh = false } = {}) {
-  const market = parseJson(runCodex(["plugin", "marketplace", "list", "--json"], { capture: true }), "Codex marketplace inventory");
-  const marketplaces = Array.isArray(market.marketplaces) ? market.marketplaces : [];
-  const ecc = marketplaces.find((entry) => typeof entry?.name === "string" && entry.name.toLowerCase() === "ecc");
-  if (!ecc) runCodex(["plugin", "marketplace", "add", "affaan-m/ECC", "--json"]);
-  else if (refresh) runCodex(["plugin", "marketplace", "upgrade", ecc.name, "--json"]);
-  const plugins = parseJson(runCodex(["plugin", "list", "--json"], { capture: true }), "Codex plugin inventory");
-  const installed = Array.isArray(plugins.installed) ? plugins.installed : [];
-  if (!installed.some((entry) => entry?.pluginId === "ecc@ecc")) runCodex(["plugin", "add", "ecc@ecc", "--json"]);
 }
 
 function codeReviewGraphEnv() {
@@ -484,14 +465,6 @@ function verifyTools() {
   const overrides = run(toolPython("serena-agent"), ["-c", "import importlib.metadata as m; print('|'.join(m.version(n) for n in ('python-multipart','starlette')))"], { capture: true });
   if (overrides !== "0.0.32|1.3.1") throw new Error(`Serena security override mismatch: ${overrides}`);
   verifyTokenOptimizer();
-}
-
-function verifyEcc() {
-  const plugins = parseJson(runCodex(["plugin", "list", "--json"], { capture: true }), "Codex plugin inventory");
-  const installed = Array.isArray(plugins.installed) ? plugins.installed : [];
-  const ecc = installed.find((entry) => entry?.pluginId === "ecc@ecc");
-  if (!ecc?.installed || !ecc?.enabled) throw new Error("ECC is not installed and enabled in Codex");
-  return { pluginId: ecc.pluginId, version: ecc.version };
 }
 
 function verifyProjection() {
@@ -614,20 +587,18 @@ function doctor() {
   const graph = graphStatus();
   if (!hasPositiveMetric(graph)) throw new Error("code-review-graph has no populated repository index");
   const memory = codebaseMemoryStatus();
-  const ecc = verifyEcc();
   process.stdout.write(`${JSON.stringify({
     ok: true,
     repository: repoRoot,
     cacheGeneration,
     projection: ".codex/config.toml",
-    ecc,
     indexes: { codeReviewGraph: "populated", codebaseMemory: memory },
     mcp: Object.fromEntries(mcpServers.map(([name, launcher, tools]) => [name, { launcher, enabledTools: tools }])),
     tokenOptimizer: { integration: "on-demand", pin: { tag: pins.tokenOptimizer.tag, commit: pins.tokenOptimizer.commit, tree: pins.tokenOptimizer.tree } },
   }, null, 2)}\n`);
 }
 
-function setup({ dryRun = false, refreshEcc = false } = {}) {
+function setup({ dryRun = false } = {}) {
   if (dryRun) {
     process.stdout.write(`${JSON.stringify({
       command: "setup-codex",
@@ -635,7 +606,6 @@ function setup({ dryRun = false, refreshEcc = false } = {}) {
       mutations: [
         "install pinned repo AI tools",
         "write ignored Codex project projection",
-        "install or refresh ECC through the native Codex plugin lifecycle",
         "initialize project-scoped graph and memory indexes",
         "enable the repository pre-commit hook path",
       ],
@@ -646,7 +616,6 @@ function setup({ dryRun = false, refreshEcc = false } = {}) {
   run("git", ["config", "core.hooksPath", ".githooks"]);
   installTools();
   writeCodexProjection();
-  configureEcc({ refresh: refreshEcc });
   initializeIndexes();
   doctor();
 }
@@ -662,7 +631,7 @@ function runTokenOptimizer(action) {
 function main() {
   const command = process.argv[2];
   if (command === "plan") process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
-  else if (command === "setup-codex") setup({ dryRun: process.argv.includes("--dry-run"), refreshEcc: process.argv.includes("--refresh-ecc") });
+  else if (command === "setup-codex") setup({ dryRun: process.argv.includes("--dry-run") });
   else if (command === "doctor-codex") doctor();
   else if (command === "serena-mcp") launchSerena();
   else if (command === "token-savior-mcp") launchTokenSavior();
