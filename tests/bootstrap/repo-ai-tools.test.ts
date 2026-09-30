@@ -103,11 +103,17 @@ describe("aih-scan repository AI bootstrap", () => {
       mutations: [
         "install pinned repo AI tools",
         "write ignored Codex project projection",
-        "install or refresh ECC through the native Codex plugin lifecycle",
         "initialize project-scoped graph and memory indexes",
         "enable the repository pre-commit hook path",
       ],
     });
+  });
+
+  it("keeps optional helper setup independent of engineering workflow plugins", () => {
+    const plan = commandJson("plan");
+    expect(JSON.stringify(plan)).not.toContain("native-plugin");
+    const launcher = readFileSync(resolve(root, "tools/repo-ai-tools.mjs"), "utf8");
+    expect(launcher).not.toMatch(/configureEcc|verifyEcc|runCodex|ecc@ecc/u);
   });
 
   it("keeps generated local state out of Git and exposes only bootstrap scripts", () => {

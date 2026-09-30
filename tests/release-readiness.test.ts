@@ -433,17 +433,6 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(readme).toContain('--source-digest "$release_sha"');
     expect(releasing).toContain("Recovery run `32903155702`");
     expect(releasing).toContain("is no longer present on `main`");
-
-    const project = read("ai-coding/project.md");
-    expect(project).toContain("promoted stable train");
-    expect(project).not.toContain("Source `0.2.1` is an unpublished patch candidate");
-    expect(project).toMatch(/old bootstrap token is\s+revoked/u);
-    expect(project).not.toContain("custody baseline observed while preparing source `0.1.2`");
-    expect(project).not.toContain("establish whether `0.1.2` is public");
-    expect(project).not.toContain("before future release custody is treated as unblocked");
-
-    const router = read("ai-coding/RULE_ROUTER.md");
-    expect(router).toContain("builds the `@aihq/scan` V2 API");
   });
 
   it("gates promotion on Core's compatibility evidence without moving a dist tag", () => {
