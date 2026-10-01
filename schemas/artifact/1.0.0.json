@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aihq:scan:artifact:1.0.0",
+  "title": "Complete immutable Scan artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "scanId", "report", "annexes"],
+  "properties": {
+    "schema": { "const": "urn:aihq:scan:artifact:1.0.0" },
+    "scanId": { "type": "string", "pattern": "^scan:sha256:[0-9a-f]{64}$" },
+    "report": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "mediaType", "sha256", "byteLength", "bytesBase64"],
+      "properties": {
+        "schema": { "$ref": "#/$defs/label" }, "mediaType": { "const": "application/json" },
+        "sha256": { "$ref": "#/$defs/digest" }, "byteLength": { "$ref": "#/$defs/fileLength" },
+        "bytesBase64": { "$ref": "#/$defs/base64" }
+      }
+    },
+    "annexes": { "type": "array", "items": { "$ref": "#/$defs/annex" } },
+    "attestation": { "$ref": "#/$defs/bundle" }
+  },
+  "$defs": {
+    "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "base64": { "type": "string", "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$" },
+    "fileLength": { "type": "integer", "minimum": 0, "maximum": 16777216 },
+    "uint64": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,19})$" },
+    "annex": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "mediaType", "sha256", "byteLength", "bytesBase64"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 256, "pattern": "^annex\\.[a-z0-9][a-z0-9._-]{0,249}$" },
+        "mediaType": { "$ref": "#/$defs/label" }, "sha256": { "$ref": "#/$defs/digest" },
+        "byteLength": { "$ref": "#/$defs/fileLength" }, "bytesBase64": { "$ref": "#/$defs/base64" }
+      }
+    },
+    "bundle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mediaType", "verificationMaterial", "dsseEnvelope"],
+      "properties": {
+        "mediaType": { "const": "application/vnd.dev.sigstore.bundle.v0.3+json" },
+        "verificationMaterial": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "certificate": { "type": "object", "additionalProperties": false, "required": ["rawBytes"], "properties": { "rawBytes": { "$ref": "#/$defs/base64" } } },
+            "publicKey": { "type": "object", "additionalProperties": false, "required": ["hint"], "properties": { "hint": { "type": "string", "pattern": "^ed25519:[0-9a-f]{64}$" } } },
+            "tlogEntries": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/logEntry" } },
+            "timestampVerificationData": { "type": "object", "additionalProperties": false, "properties": { "rfc3161Timestamps": { "type": "array", "maxItems": 4, "items": { "type": "object", "additionalProperties": false, "required": ["signedTimestamp"], "properties": { "signedTimestamp": { "$ref": "#/$defs/base64" } } } } } }
+          },
+          "oneOf": [
+            { "required": ["certificate", "tlogEntries"], "not": { "required": ["publicKey"] }, "properties": { "tlogEntries": { "minItems": 1 } } },
+            { "required": ["publicKey"], "not": { "required": ["certificate"] }, "properties": { "tlogEntries": { "maxItems": 0 }, "timestampVerificationData": { "properties": { "rfc3161Timestamps": { "maxItems": 0 } } } } }
+          ]
+        },
+        "dsseEnvelope": {
+          "type": "object", "additionalProperties": false, "required": ["payloadType", "payload", "signatures"],
+          "properties": {
+            "payloadType": { "const": "application/vnd.in-toto+json" }, "payload": { "$ref": "#/$defs/base64" },
+            "signatures": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["sig"], "properties": { "keyid": { "type": "string", "maxLength": 256 }, "sig": { "$ref": "#/$defs/base64" } } } }
+          }
+        }
+      }
+    },
+    "logEntry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["logIndex", "logId", "kindVersion", "canonicalizedBody", "inclusionProof"],
+      "properties": {
+        "logIndex": { "$ref": "#/$defs/uint64" },
+        "logId": { "type": "object", "additionalProperties": false, "required": ["keyId"], "properties": { "keyId": { "$ref": "#/$defs/base64" } } },
+        "kindVersion": { "type": "object", "additionalProperties": false, "required": ["kind", "version"], "properties": { "kind": { "const": "dsse" }, "version": { "enum": ["0.0.1", "0.0.2"] } } },
+        "integratedTime": { "$ref": "#/$defs/uint64" },
+        "canonicalizedBody": { "$ref": "#/$defs/base64" },
+        "inclusionPromise": { "type": "object", "additionalProperties": false, "required": ["signedEntryTimestamp"], "properties": { "signedEntryTimestamp": { "$ref": "#/$defs/base64" } } },
+        "inclusionProof": {
+          "type": "object", "additionalProperties": false, "required": ["logIndex", "treeSize", "rootHash", "hashes", "checkpoint"],
+          "properties": {
+            "logIndex": { "$ref": "#/$defs/uint64" }, "treeSize": { "$ref": "#/$defs/uint64" }, "rootHash": { "$ref": "#/$defs/base64" },
+            "hashes": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/base64" } },
+            "checkpoint": { "type": "object", "additionalProperties": false, "required": ["envelope"], "properties": { "envelope": { "type": "string", "maxLength": 16384 } } }
+          }
+        }
+      },
+      "allOf": [{ "if": { "properties": { "kindVersion": { "properties": { "version": { "const": "0.0.1" } } } } }, "then": { "required": ["integratedTime", "inclusionPromise"] } }]
+    }
+  },
+  "$comment": "Runtime validation additionally enforces strict UTF-8/NFC, byte budgets, canonical padding and container bytes, uint64 range, exact signature/profile material rules, schema/Scan ID/hash/length bindings, annex order/completeness and DSSE 0.0.2 timestamp requirements. Schema validity never proves authenticity."
+}

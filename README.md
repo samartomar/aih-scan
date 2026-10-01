@@ -15,6 +15,36 @@ load organization code into the Scanner process or grant governance authority.
 
 ## Status
 
+### Unreleased assessment APIs
+
+The new assessment surface has three explicit entry points:
+
+| Entry | Purpose | Runtime |
+| --- | --- | --- |
+| `@aihq/scan/contracts` | Contract support, public types and schema identities | Portable JavaScript |
+| `@aihq/scan/read` | Read complete reports and portable artifacts; authenticity remains unchecked | Portable JavaScript |
+| `@aihq/scan/host` | Run a scan, prepare/attach/sign an artifact, and independently authenticate it | Node `>=24.15.0 <25` |
+
+`runScan` captures pinned Git or local input and accounts for every requested detector.
+Reliable results survive failed or refused sibling work in a partial assessment.
+`prepareArtifact` and local Ed25519 `signArtifact` preserve the same Scan ID for
+unchanged report bytes. `attachAttestation` checks bindings; callers separately
+authenticate against their selected keys or publisher policies. Scanning, signing
+and publication are separate explicit operations.
+
+See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md)
+and the [production publisher plan](docs/production-publisher.md). Versioned JSON
+Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
+`run-result`, `report`, `artifact` and `evidence-association`.
+The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
+byte bindings and cross-field semantics require the corresponding reader.
+
+These changes are unreleased. Production keyless activation still requires approved
+publisher protections and an authorized production-format signing/conformance run.
+The prepared workflow is inert. Package publication remains separately authorized.
+
+### Historical package custody
+
 The promoted `@aihq/scan` stable train contains the V2 library, `aih-scan` CLI,
 strict detector-registration grammar, detached bundle format, Ed25519 DSSE
 signing, Linux `amd64` OCI CI chain, Core organization-evidence projection, and
@@ -66,27 +96,17 @@ uploads that public root beside the evidence. It proves the capture, signing,
 and verification mechanics. It is not an organization trust root or public
 qualification authority.
 
-## Node-only interfaces
+## Runtime boundaries
 
-Every interface this package ships is Node-only. The library entry point, the
-`aih-scan` binary and the scripts under `examples/` all require Node.js 20 or
-newer, and none of them runs in a browser, an edge runtime, a service worker, or
-any other environment without full Node built-ins.
+The package is ESM only. The assessment `contracts` and `read` entries use portable
+data and Web Crypto; they import no Node scanner, filesystem or process modules.
+Reading makes no producer-authentication claim. Schema resources are JSON data.
 
-That follows from what the package does rather than from a packaging oversight.
-It reads and seals real files through `node:fs` with `O_NOFOLLOW`, hard-link and
-`fstat`/`lstat` identity checks; it spawns bounded analyzer processes through
-`node:child_process`; it hashes and verifies Ed25519 signatures through
-`node:crypto`; and it writes bundles into directories it creates itself. None of
-that has a browser equivalent, and a shimmed one would not be the same evidence.
+The host entry, retained V2 root library, `aih-scan` binary and scripts under
+`examples/` use Node `>=24.15.0 <25`. They perform explicit filesystem, process
+or cryptographic work. Private `dist` paths are not public exports.
 
-Concretely:
-
-- `exports` declares exactly two entries: `"."` for the library and
-  `"./package.json"` so a consumer can locate the package root. There is no
-  `browser`, `module`, `unpkg`, or `jsdelivr` field, and no `dist` subpath is
-  reachable.
-- The package is ESM only (`"type": "module"`). There is no CommonJS build.
+The retained V2 detector profiles have additional platform constraints:
 - The hardened detector execution profiles additionally require Linux `amd64`;
   see [CONTRACTS.md](CONTRACTS.md). Only the in-process `aih-native` analyzer
   runs on any other platform, and it is not isolated because it spawns nothing.
@@ -114,7 +134,7 @@ are repository documentation and are not part of the published tarball.
 
 ## Install and verify the package boundary
 
-Node.js 20 or newer is required.
+Node.js `>=24.15.0 <25` is required for host operations and repository checks.
 
 ```sh
 npm ci --ignore-scripts
@@ -133,8 +153,9 @@ npm install --save-dev /path/to/aihq-scan-X.Y.Z.tgz
 npx aih-scan --help
 ```
 
-The package exports only the V2 API from `@aihq/scan`. Internal V1 modules are
-implementation details and are not package export paths.
+The root `@aihq/scan` entry retains its V2 API during this migration. New assessment
+consumers use the explicit `contracts`, `read` and `host` entries above. Internal
+modules are implementation details and are not package export paths.
 
 For an exact candidate, publication custody is proven only when every live
 registry and Release check below succeeds. Until full custody exists, at least

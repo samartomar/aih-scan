@@ -45,14 +45,16 @@ describe("public API examples", () => {
     expect(loader).toContain('resolve(here, "..", "dist", "index.js")');
   });
 
-  it("documents that every shipped interface is Node-only", () => {
+  it("documents portable readers separately from Node host operations", () => {
     const readme = read("README.md");
-    expect(readme).toContain("## Node-only interfaces");
-    expect(readme).toContain("Every interface this package ships is Node-only.");
-    expect(readme).toContain("There is no CommonJS build.");
+    expect(readme).toContain("## Runtime boundaries");
+    expect(readme).toContain("The assessment `contracts` and `read` entries use portable");
+    expect(readme).toContain("they import no Node scanner, filesystem or process modules");
+    expect(readme).toContain("Node `>=24.15.0 <25`");
+    expect(readme).toContain("The package is ESM only.");
     expect(readme).toContain("node examples/run-detector.mjs");
     expect(readme).toContain("node examples/verify-capture-bundle.mjs --help");
-    // No browser claim may creep into the manifest.
+    // The root entry remains Node-only; portability is explicit per subpath.
     const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
     for (const field of ["browser", "module", "unpkg", "jsdelivr", "main"])
       expect(manifest[field], field).toBeUndefined();

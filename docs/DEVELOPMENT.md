@@ -5,6 +5,18 @@ editing, then npm run verify (typecheck, lint, build, tests, and pinned-action v
 Run any additional contract/evidence checks required by the touched workflow.
 Resolve current commands from package.json and protected CI, not cached task notes.
 
+Use Node `>=24.15.0 <25` for the assessment host API and repository checks.
+The installed-package test exercises `@aihq/scan/contracts`, `/read`, `/host`
+and the versioned schema exports from a packed tarball in a temporary consumer.
+It also loads the portable entry graph without Node globals or built-ins.
+Assessment tests use temporary source fixtures; never scan the source checkout.
+
+The default CI verifies Scan independently. Historical V2 Core projection checks
+remain available for that API, but they do not define the immutable assessment
+contract. Authentication fixtures establish only their documented scope; production
+publisher activation needs the separate steps in
+[production-publisher.md](production-publisher.md).
+
 ## CI and release boundaries
 
 The local pre-commit hook runs typecheck, lint, and tests. Any CI added here may

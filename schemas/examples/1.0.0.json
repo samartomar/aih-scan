@@ -1,0 +1,704 @@
+{
+  "description": "Representative static JSON examples for the first Scan contracts. Valid means contract-valid; source and artifact locations are illustrative. The artifact is unsigned and asserts no producer authenticity. Byte bindings require the semantic reader in addition to JSON Schema.",
+  "examples": [
+    {
+      "format": "urn:aihq:scan:request:1.0.0",
+      "valid": {
+        "schema": "urn:aihq:scan:request:1.0.0",
+        "source": {
+          "kind": "local",
+          "path": "/tmp/example-source"
+        },
+        "selection": {
+          "paths": "all",
+          "excludedPaths": []
+        },
+        "detectors": [
+          {
+            "detectorId": "detector.aih-native",
+            "configuration": {}
+          }
+        ]
+      },
+      "invalid": {
+        "schema": "urn:aihq:scan:request:1.0.0",
+        "source": {
+          "kind": "local",
+          "path": "/tmp/example-source"
+        },
+        "selection": {
+          "paths": "all",
+          "excludedPaths": []
+        },
+        "detectors": [
+          {
+            "detectorId": "detector.aih-native",
+            "configuration": {}
+          }
+        ],
+        "unexpected": true
+      },
+      "invalidReason": "Requests reject unknown fields before capture or detector effects."
+    },
+    {
+      "format": "urn:aihq:scan:run-result:1.0.0",
+      "valid": {
+        "schema": "urn:aihq:scan:run-result:1.0.0",
+        "status": "assessment",
+        "scanId": "scan:sha256:a040f5613d1dc90c7772d852965ebbe7421a4533f551f77873e1c1f966d9e3a8",
+        "report": {
+          "annexes": [
+            {
+              "byteLength": 246,
+              "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+              "mediaType": "application/vnd.aih.baseline-native+json",
+              "sha256": "6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9"
+            }
+          ],
+          "completion": "complete",
+          "createdAt": "2026-10-01T09:30:08.758Z",
+          "diagnostics": [],
+          "effectiveLimits": {
+            "detectorTimeoutMs": 600000,
+            "maxAnnexBytes": 16777216,
+            "maxArtifactBytes": 100663296,
+            "maxDecodedArtifactBytes": 67108864,
+            "maxReportBytes": 16777216,
+            "maxRequestBytes": 2097152,
+            "maxSourceBytes": 268435456,
+            "maxSourceEntries": 100000,
+            "maxStatementBytes": 131072
+          },
+          "producer": {
+            "name": "@aihq/scan",
+            "version": "0.5.0"
+          },
+          "requestedDetectors": [
+            {
+              "configuration": {},
+              "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "detectorId": "detector.aih-native",
+              "profileId": "in-process-native-v1"
+            }
+          ],
+          "results": [
+            {
+              "coverage": {
+                "complete": true,
+                "coveredPaths": [
+                  "SKILL.md"
+                ],
+                "excludedPaths": [],
+                "uncoveredPaths": []
+              },
+              "detectorId": "detector.aih-native",
+              "diagnostics": [],
+              "observations": [
+                {
+                  "body": {
+                    "annexIds": [
+                      "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb"
+                    ],
+                    "completedAt": "2026-10-01T09:30:08.756Z",
+                    "coverage": {
+                      "coveredPaths": [
+                        "SKILL.md"
+                      ]
+                    },
+                    "findings": [],
+                    "format": "aih-observation-v1",
+                    "gaps": [
+                      {
+                        "detail": "The aih-native output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.",
+                        "reason": "sarif-not-interpreted"
+                      },
+                      {
+                        "detail": "This run's annex bytes are the analyzer's own output. Scan binds them by digest and does not parse them, so no message or location is reported and the empty list is not a claim that nothing was found.",
+                        "reason": "finding-message-and-location-not-read-from-annex"
+                      },
+                      {
+                        "detail": "A single-analyzer observation declares no occurrence facts, so it declares no severity either. Absent severity is reported as absent, never defaulted.",
+                        "reason": "severity-not-declared-by-attestation"
+                      },
+                      {
+                        "detail": "These findings are evidence only. They grant no qualification, approval, installation, observation or effect authority.",
+                        "reason": "no-effect-or-qualification-authority"
+                      }
+                    ],
+                    "input": {
+                      "adapterSha256": "6a8c0096ff8d0a7664d9e478ce352bbf1702c68908678fa06ccaf88c15135da8",
+                      "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                      "detectorId": "detector.aih-native",
+                      "detectorVersion": "native.014fbd614a5a",
+                      "entries": [
+                        {
+                          "byteLength": 138,
+                          "kind": "file",
+                          "path": "SKILL.md",
+                          "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+                        }
+                      ],
+                      "platform": {
+                        "architecture": "x64",
+                        "os": "win32",
+                        "relevantFactsSha256": "7402e245a08eef12312587aa9060a08868adebfcabd08ee24e9e67405e3647be"
+                      },
+                      "profileId": "in-process-native-v1",
+                      "profileSha256": "dafe959975fb633398ba013a669d118b7de692b147cc4257cb40ec13b1029b2e",
+                      "rulesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                      "scopeKind": "source-tree",
+                      "targetPaths": [
+                        "SKILL.md"
+                      ]
+                    },
+                    "producer": {
+                      "name": "@aihq/scan",
+                      "version": "0.5.0"
+                    },
+                    "startedAt": "2026-10-01T09:30:08.745Z"
+                  },
+                  "observationId": "observation:sha256:440926cb56d7d8664fa50814170e036336511e3ca4dab82175f939454835768e",
+                  "origin": "fresh"
+                }
+              ],
+              "outcome": "succeeded"
+            }
+          ],
+          "schema": "urn:aihq:scan:report:1.0.0",
+          "selection": {
+            "excludedPaths": [],
+            "paths": [
+              "SKILL.md"
+            ]
+          },
+          "source": {
+            "capture": {
+              "captureSha256": "5a4ae33fc98a2b530bd6a9a9f592f4ac759e1c4f70d27fcd3029d76081d0c888",
+              "entries": [
+                {
+                  "byteLength": 138,
+                  "kind": "file",
+                  "path": "SKILL.md",
+                  "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+                }
+              ],
+              "profile": "aih-source-capture-1"
+            },
+            "kind": "local"
+          }
+        },
+        "annexes": [
+          {
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "bytesBase64": "eyJmaWxlcyI6W3siYnl0ZXMiOjEzOCwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicHJvdG9jb2wiOiJCYXNlbGluZU5hdGl2ZU9ic2VydmF0aW9uVjEiLCJzb3VyY2VUcmVlU2hhMjU2IjoiNmNjNDE0NjMzODBiZDNlMjlhYmYxNTExZDFiODJhMGNjZGFiYmFlZmU1YWFhYjdhODI4MjJkZjY3ZGZjZWZkMCJ9"
+          }
+        ],
+        "diagnostics": []
+      },
+      "invalid": {
+        "schema": "urn:aihq:scan:run-result:1.0.0",
+        "status": "complete",
+        "scanId": "scan:sha256:a040f5613d1dc90c7772d852965ebbe7421a4533f551f77873e1c1f966d9e3a8",
+        "report": {
+          "annexes": [
+            {
+              "byteLength": 246,
+              "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+              "mediaType": "application/vnd.aih.baseline-native+json",
+              "sha256": "6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9"
+            }
+          ],
+          "completion": "complete",
+          "createdAt": "2026-10-01T09:30:08.758Z",
+          "diagnostics": [],
+          "effectiveLimits": {
+            "detectorTimeoutMs": 600000,
+            "maxAnnexBytes": 16777216,
+            "maxArtifactBytes": 100663296,
+            "maxDecodedArtifactBytes": 67108864,
+            "maxReportBytes": 16777216,
+            "maxRequestBytes": 2097152,
+            "maxSourceBytes": 268435456,
+            "maxSourceEntries": 100000,
+            "maxStatementBytes": 131072
+          },
+          "producer": {
+            "name": "@aihq/scan",
+            "version": "0.5.0"
+          },
+          "requestedDetectors": [
+            {
+              "configuration": {},
+              "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "detectorId": "detector.aih-native",
+              "profileId": "in-process-native-v1"
+            }
+          ],
+          "results": [
+            {
+              "coverage": {
+                "complete": true,
+                "coveredPaths": [
+                  "SKILL.md"
+                ],
+                "excludedPaths": [],
+                "uncoveredPaths": []
+              },
+              "detectorId": "detector.aih-native",
+              "diagnostics": [],
+              "observations": [
+                {
+                  "body": {
+                    "annexIds": [
+                      "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb"
+                    ],
+                    "completedAt": "2026-10-01T09:30:08.756Z",
+                    "coverage": {
+                      "coveredPaths": [
+                        "SKILL.md"
+                      ]
+                    },
+                    "findings": [],
+                    "format": "aih-observation-v1",
+                    "gaps": [
+                      {
+                        "detail": "The aih-native output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.",
+                        "reason": "sarif-not-interpreted"
+                      },
+                      {
+                        "detail": "This run's annex bytes are the analyzer's own output. Scan binds them by digest and does not parse them, so no message or location is reported and the empty list is not a claim that nothing was found.",
+                        "reason": "finding-message-and-location-not-read-from-annex"
+                      },
+                      {
+                        "detail": "A single-analyzer observation declares no occurrence facts, so it declares no severity either. Absent severity is reported as absent, never defaulted.",
+                        "reason": "severity-not-declared-by-attestation"
+                      },
+                      {
+                        "detail": "These findings are evidence only. They grant no qualification, approval, installation, observation or effect authority.",
+                        "reason": "no-effect-or-qualification-authority"
+                      }
+                    ],
+                    "input": {
+                      "adapterSha256": "6a8c0096ff8d0a7664d9e478ce352bbf1702c68908678fa06ccaf88c15135da8",
+                      "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                      "detectorId": "detector.aih-native",
+                      "detectorVersion": "native.014fbd614a5a",
+                      "entries": [
+                        {
+                          "byteLength": 138,
+                          "kind": "file",
+                          "path": "SKILL.md",
+                          "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+                        }
+                      ],
+                      "platform": {
+                        "architecture": "x64",
+                        "os": "win32",
+                        "relevantFactsSha256": "7402e245a08eef12312587aa9060a08868adebfcabd08ee24e9e67405e3647be"
+                      },
+                      "profileId": "in-process-native-v1",
+                      "profileSha256": "dafe959975fb633398ba013a669d118b7de692b147cc4257cb40ec13b1029b2e",
+                      "rulesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                      "scopeKind": "source-tree",
+                      "targetPaths": [
+                        "SKILL.md"
+                      ]
+                    },
+                    "producer": {
+                      "name": "@aihq/scan",
+                      "version": "0.5.0"
+                    },
+                    "startedAt": "2026-10-01T09:30:08.745Z"
+                  },
+                  "observationId": "observation:sha256:440926cb56d7d8664fa50814170e036336511e3ca4dab82175f939454835768e",
+                  "origin": "fresh"
+                }
+              ],
+              "outcome": "succeeded"
+            }
+          ],
+          "schema": "urn:aihq:scan:report:1.0.0",
+          "selection": {
+            "excludedPaths": [],
+            "paths": [
+              "SKILL.md"
+            ]
+          },
+          "source": {
+            "capture": {
+              "captureSha256": "5a4ae33fc98a2b530bd6a9a9f592f4ac759e1c4f70d27fcd3029d76081d0c888",
+              "entries": [
+                {
+                  "byteLength": 138,
+                  "kind": "file",
+                  "path": "SKILL.md",
+                  "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+                }
+              ],
+              "profile": "aih-source-capture-1"
+            },
+            "kind": "local"
+          }
+        },
+        "annexes": [
+          {
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "bytesBase64": "eyJmaWxlcyI6W3siYnl0ZXMiOjEzOCwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicHJvdG9jb2wiOiJCYXNlbGluZU5hdGl2ZU9ic2VydmF0aW9uVjEiLCJzb3VyY2VUcmVlU2hhMjU2IjoiNmNjNDE0NjMzODBiZDNlMjlhYmYxNTExZDFiODJhMGNjZGFiYmFlZmU1YWFhYjdhODI4MjJkZjY3ZGZjZWZkMCJ9"
+          }
+        ],
+        "diagnostics": []
+      },
+      "invalidReason": "A run result uses assessment or diagnostic status; completion belongs in its report."
+    },
+    {
+      "format": "urn:aihq:scan:report:1.0.0",
+      "valid": {
+        "annexes": [
+          {
+            "byteLength": 246,
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "mediaType": "application/vnd.aih.baseline-native+json",
+            "sha256": "6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9"
+          }
+        ],
+        "completion": "complete",
+        "createdAt": "2026-10-01T09:30:08.758Z",
+        "diagnostics": [],
+        "effectiveLimits": {
+          "detectorTimeoutMs": 600000,
+          "maxAnnexBytes": 16777216,
+          "maxArtifactBytes": 100663296,
+          "maxDecodedArtifactBytes": 67108864,
+          "maxReportBytes": 16777216,
+          "maxRequestBytes": 2097152,
+          "maxSourceBytes": 268435456,
+          "maxSourceEntries": 100000,
+          "maxStatementBytes": 131072
+        },
+        "producer": {
+          "name": "@aihq/scan",
+          "version": "0.5.0"
+        },
+        "requestedDetectors": [
+          {
+            "configuration": {},
+            "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "detectorId": "detector.aih-native",
+            "profileId": "in-process-native-v1"
+          }
+        ],
+        "results": [
+          {
+            "coverage": {
+              "complete": true,
+              "coveredPaths": [
+                "SKILL.md"
+              ],
+              "excludedPaths": [],
+              "uncoveredPaths": []
+            },
+            "detectorId": "detector.aih-native",
+            "diagnostics": [],
+            "observations": [
+              {
+                "body": {
+                  "annexIds": [
+                    "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb"
+                  ],
+                  "completedAt": "2026-10-01T09:30:08.756Z",
+                  "coverage": {
+                    "coveredPaths": [
+                      "SKILL.md"
+                    ]
+                  },
+                  "findings": [],
+                  "format": "aih-observation-v1",
+                  "gaps": [
+                    {
+                      "detail": "The aih-native output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.",
+                      "reason": "sarif-not-interpreted"
+                    },
+                    {
+                      "detail": "This run's annex bytes are the analyzer's own output. Scan binds them by digest and does not parse them, so no message or location is reported and the empty list is not a claim that nothing was found.",
+                      "reason": "finding-message-and-location-not-read-from-annex"
+                    },
+                    {
+                      "detail": "A single-analyzer observation declares no occurrence facts, so it declares no severity either. Absent severity is reported as absent, never defaulted.",
+                      "reason": "severity-not-declared-by-attestation"
+                    },
+                    {
+                      "detail": "These findings are evidence only. They grant no qualification, approval, installation, observation or effect authority.",
+                      "reason": "no-effect-or-qualification-authority"
+                    }
+                  ],
+                  "input": {
+                    "adapterSha256": "6a8c0096ff8d0a7664d9e478ce352bbf1702c68908678fa06ccaf88c15135da8",
+                    "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "detectorId": "detector.aih-native",
+                    "detectorVersion": "native.014fbd614a5a",
+                    "entries": [
+                      {
+                        "byteLength": 138,
+                        "kind": "file",
+                        "path": "SKILL.md",
+                        "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+                      }
+                    ],
+                    "platform": {
+                      "architecture": "x64",
+                      "os": "win32",
+                      "relevantFactsSha256": "7402e245a08eef12312587aa9060a08868adebfcabd08ee24e9e67405e3647be"
+                    },
+                    "profileId": "in-process-native-v1",
+                    "profileSha256": "dafe959975fb633398ba013a669d118b7de692b147cc4257cb40ec13b1029b2e",
+                    "rulesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                    "scopeKind": "source-tree",
+                    "targetPaths": [
+                      "SKILL.md"
+                    ]
+                  },
+                  "producer": {
+                    "name": "@aihq/scan",
+                    "version": "0.5.0"
+                  },
+                  "startedAt": "2026-10-01T09:30:08.745Z"
+                },
+                "observationId": "observation:sha256:440926cb56d7d8664fa50814170e036336511e3ca4dab82175f939454835768e",
+                "origin": "fresh"
+              }
+            ],
+            "outcome": "succeeded"
+          }
+        ],
+        "schema": "urn:aihq:scan:report:1.0.0",
+        "selection": {
+          "excludedPaths": [],
+          "paths": [
+            "SKILL.md"
+          ]
+        },
+        "source": {
+          "capture": {
+            "captureSha256": "5a4ae33fc98a2b530bd6a9a9f592f4ac759e1c4f70d27fcd3029d76081d0c888",
+            "entries": [
+              {
+                "byteLength": 138,
+                "kind": "file",
+                "path": "SKILL.md",
+                "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+              }
+            ],
+            "profile": "aih-source-capture-1"
+          },
+          "kind": "local"
+        }
+      },
+      "invalid": {
+        "annexes": [
+          {
+            "byteLength": 246,
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "mediaType": "application/vnd.aih.baseline-native+json",
+            "sha256": "6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9"
+          }
+        ],
+        "completion": "successful",
+        "createdAt": "2026-10-01T09:30:08.758Z",
+        "diagnostics": [],
+        "effectiveLimits": {
+          "detectorTimeoutMs": 600000,
+          "maxAnnexBytes": 16777216,
+          "maxArtifactBytes": 100663296,
+          "maxDecodedArtifactBytes": 67108864,
+          "maxReportBytes": 16777216,
+          "maxRequestBytes": 2097152,
+          "maxSourceBytes": 268435456,
+          "maxSourceEntries": 100000,
+          "maxStatementBytes": 131072
+        },
+        "producer": {
+          "name": "@aihq/scan",
+          "version": "0.5.0"
+        },
+        "requestedDetectors": [
+          {
+            "configuration": {},
+            "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "detectorId": "detector.aih-native",
+            "profileId": "in-process-native-v1"
+          }
+        ],
+        "results": [
+          {
+            "coverage": {
+              "complete": true,
+              "coveredPaths": [
+                "SKILL.md"
+              ],
+              "excludedPaths": [],
+              "uncoveredPaths": []
+            },
+            "detectorId": "detector.aih-native",
+            "diagnostics": [],
+            "observations": [
+              {
+                "body": {
+                  "annexIds": [
+                    "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb"
+                  ],
+                  "completedAt": "2026-10-01T09:30:08.756Z",
+                  "coverage": {
+                    "coveredPaths": [
+                      "SKILL.md"
+                    ]
+                  },
+                  "findings": [],
+                  "format": "aih-observation-v1",
+                  "gaps": [
+                    {
+                      "detail": "The aih-native output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.",
+                      "reason": "sarif-not-interpreted"
+                    },
+                    {
+                      "detail": "This run's annex bytes are the analyzer's own output. Scan binds them by digest and does not parse them, so no message or location is reported and the empty list is not a claim that nothing was found.",
+                      "reason": "finding-message-and-location-not-read-from-annex"
+                    },
+                    {
+                      "detail": "A single-analyzer observation declares no occurrence facts, so it declares no severity either. Absent severity is reported as absent, never defaulted.",
+                      "reason": "severity-not-declared-by-attestation"
+                    },
+                    {
+                      "detail": "These findings are evidence only. They grant no qualification, approval, installation, observation or effect authority.",
+                      "reason": "no-effect-or-qualification-authority"
+                    }
+                  ],
+                  "input": {
+                    "adapterSha256": "6a8c0096ff8d0a7664d9e478ce352bbf1702c68908678fa06ccaf88c15135da8",
+                    "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "detectorId": "detector.aih-native",
+                    "detectorVersion": "native.014fbd614a5a",
+                    "entries": [
+                      {
+                        "byteLength": 138,
+                        "kind": "file",
+                        "path": "SKILL.md",
+                        "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+                      }
+                    ],
+                    "platform": {
+                      "architecture": "x64",
+                      "os": "win32",
+                      "relevantFactsSha256": "7402e245a08eef12312587aa9060a08868adebfcabd08ee24e9e67405e3647be"
+                    },
+                    "profileId": "in-process-native-v1",
+                    "profileSha256": "dafe959975fb633398ba013a669d118b7de692b147cc4257cb40ec13b1029b2e",
+                    "rulesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                    "scopeKind": "source-tree",
+                    "targetPaths": [
+                      "SKILL.md"
+                    ]
+                  },
+                  "producer": {
+                    "name": "@aihq/scan",
+                    "version": "0.5.0"
+                  },
+                  "startedAt": "2026-10-01T09:30:08.745Z"
+                },
+                "observationId": "observation:sha256:440926cb56d7d8664fa50814170e036336511e3ca4dab82175f939454835768e",
+                "origin": "fresh"
+              }
+            ],
+            "outcome": "succeeded"
+          }
+        ],
+        "schema": "urn:aihq:scan:report:1.0.0",
+        "selection": {
+          "excludedPaths": [],
+          "paths": [
+            "SKILL.md"
+          ]
+        },
+        "source": {
+          "capture": {
+            "captureSha256": "5a4ae33fc98a2b530bd6a9a9f592f4ac759e1c4f70d27fcd3029d76081d0c888",
+            "entries": [
+              {
+                "byteLength": 138,
+                "kind": "file",
+                "path": "SKILL.md",
+                "sha256": "f8185998ec464c5c9d5fe35c2157e0ad2593c5d5224797b24060a016df079d77"
+              }
+            ],
+            "profile": "aih-source-capture-1"
+          },
+          "kind": "local"
+        }
+      },
+      "invalidReason": "Report completion is complete or partial."
+    },
+    {
+      "format": "urn:aihq:scan:artifact:1.0.0",
+      "valid": {
+        "annexes": [
+          {
+            "byteLength": 246,
+            "bytesBase64": "eyJmaWxlcyI6W3siYnl0ZXMiOjEzOCwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicHJvdG9jb2wiOiJCYXNlbGluZU5hdGl2ZU9ic2VydmF0aW9uVjEiLCJzb3VyY2VUcmVlU2hhMjU2IjoiNmNjNDE0NjMzODBiZDNlMjlhYmYxNTExZDFiODJhMGNjZGFiYmFlZmU1YWFhYjdhODI4MjJkZjY3ZGZjZWZkMCJ9",
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "mediaType": "application/vnd.aih.baseline-native+json",
+            "sha256": "6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9"
+          }
+        ],
+        "report": {
+          "byteLength": 3508,
+          "bytesBase64": "eyJhbm5leGVzIjpbeyJieXRlTGVuZ3RoIjoyNDYsImlkIjoiYW5uZXguNTQ5ZDU5YjNkNWY1YTFkN2VjN2IyZjIzYzNkOWI5YjU3YzI3ZGE3MjM1OGVkOTRjN2E1N2FkMGJmMzQyYTZiYiIsIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5haWguYmFzZWxpbmUtbmF0aXZlK2pzb24iLCJzaGEyNTYiOiI2MDk2Y2QzNTAxNGEyMDhhYzZkNjJkNWJiNWY4MGVmYjBkODYzYTAyNDY0ZDM4ZjQ0MGNhYzc0MTJjM2IxZmY5In1dLCJjb21wbGV0aW9uIjoiY29tcGxldGUiLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTAxVDA5OjMwOjA4Ljc1OFoiLCJkaWFnbm9zdGljcyI6W10sImVmZmVjdGl2ZUxpbWl0cyI6eyJkZXRlY3RvclRpbWVvdXRNcyI6NjAwMDAwLCJtYXhBbm5leEJ5dGVzIjoxNjc3NzIxNiwibWF4QXJ0aWZhY3RCeXRlcyI6MTAwNjYzMjk2LCJtYXhEZWNvZGVkQXJ0aWZhY3RCeXRlcyI6NjcxMDg4NjQsIm1heFJlcG9ydEJ5dGVzIjoxNjc3NzIxNiwibWF4UmVxdWVzdEJ5dGVzIjoyMDk3MTUyLCJtYXhTb3VyY2VCeXRlcyI6MjY4NDM1NDU2LCJtYXhTb3VyY2VFbnRyaWVzIjoxMDAwMDAsIm1heFN0YXRlbWVudEJ5dGVzIjoxMzEwNzJ9LCJwcm9kdWNlciI6eyJuYW1lIjoiQGFpaHEvc2NhbiIsInZlcnNpb24iOiIwLjUuMCJ9LCJyZXF1ZXN0ZWREZXRlY3RvcnMiOlt7ImNvbmZpZ3VyYXRpb24iOnt9LCJjb25maWd1cmF0aW9uU2hhMjU2IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldGVjdG9ySWQiOiJkZXRlY3Rvci5haWgtbmF0aXZlIiwicHJvZmlsZUlkIjoiaW4tcHJvY2Vzcy1uYXRpdmUtdjEifV0sInJlc3VsdHMiOlt7ImNvdmVyYWdlIjp7ImNvbXBsZXRlIjp0cnVlLCJjb3ZlcmVkUGF0aHMiOlsiU0tJTEwubWQiXSwiZXhjbHVkZWRQYXRocyI6W10sInVuY292ZXJlZFBhdGhzIjpbXX0sImRldGVjdG9ySWQiOiJkZXRlY3Rvci5haWgtbmF0aXZlIiwiZGlhZ25vc3RpY3MiOltdLCJvYnNlcnZhdGlvbnMiOlt7ImJvZHkiOnsiYW5uZXhJZHMiOlsiYW5uZXguNTQ5ZDU5YjNkNWY1YTFkN2VjN2IyZjIzYzNkOWI5YjU3YzI3ZGE3MjM1OGVkOTRjN2E1N2FkMGJmMzQyYTZiYiJdLCJjb21wbGV0ZWRBdCI6IjIwMjYtMTAtMDFUMDk6MzA6MDguNzU2WiIsImNvdmVyYWdlIjp7ImNvdmVyZWRQYXRocyI6WyJTS0lMTC5tZCJdfSwiZmluZGluZ3MiOltdLCJmb3JtYXQiOiJhaWgtb2JzZXJ2YXRpb24tdjEiLCJnYXBzIjpbeyJkZXRhaWwiOiJUaGUgYWloLW5hdGl2ZSBvdXRwdXQgaXMgYSBzb3VyY2UgaWRlbnRpdHkgb2JzZXJ2YXRpb24sIG5vdCBhIGZpbmRpbmdzIHJlcG9ydCwgc28gbm8gcnVsZSwgc2V2ZXJpdHksIG1lc3NhZ2Ugb3IgbG9jYXRpb24gaXMgZGVyaXZlZCBmcm9tIGl0LiIsInJlYXNvbiI6InNhcmlmLW5vdC1pbnRlcnByZXRlZCJ9LHsiZGV0YWlsIjoiVGhpcyBydW4ncyBhbm5leCBieXRlcyBhcmUgdGhlIGFuYWx5emVyJ3Mgb3duIG91dHB1dC4gU2NhbiBiaW5kcyB0aGVtIGJ5IGRpZ2VzdCBhbmQgZG9lcyBub3QgcGFyc2UgdGhlbSwgc28gbm8gbWVzc2FnZSBvciBsb2NhdGlvbiBpcyByZXBvcnRlZCBhbmQgdGhlIGVtcHR5IGxpc3QgaXMgbm90IGEgY2xhaW0gdGhhdCBub3RoaW5nIHdhcyBmb3VuZC4iLCJyZWFzb24iOiJmaW5kaW5nLW1lc3NhZ2UtYW5kLWxvY2F0aW9uLW5vdC1yZWFkLWZyb20tYW5uZXgifSx7ImRldGFpbCI6IkEgc2luZ2xlLWFuYWx5emVyIG9ic2VydmF0aW9uIGRlY2xhcmVzIG5vIG9jY3VycmVuY2UgZmFjdHMsIHNvIGl0IGRlY2xhcmVzIG5vIHNldmVyaXR5IGVpdGhlci4gQWJzZW50IHNldmVyaXR5IGlzIHJlcG9ydGVkIGFzIGFic2VudCwgbmV2ZXIgZGVmYXVsdGVkLiIsInJlYXNvbiI6InNldmVyaXR5LW5vdC1kZWNsYXJlZC1ieS1hdHRlc3RhdGlvbiJ9LHsiZGV0YWlsIjoiVGhlc2UgZmluZGluZ3MgYXJlIGV2aWRlbmNlIG9ubHkuIFRoZXkgZ3JhbnQgbm8gcXVhbGlmaWNhdGlvbiwgYXBwcm92YWwsIGluc3RhbGxhdGlvbiwgb2JzZXJ2YXRpb24gb3IgZWZmZWN0IGF1dGhvcml0eS4iLCJyZWFzb24iOiJuby1lZmZlY3Qtb3ItcXVhbGlmaWNhdGlvbi1hdXRob3JpdHkifV0sImlucHV0Ijp7ImFkYXB0ZXJTaGEyNTYiOiI2YThjMDA5NmZmOGQwYTc2NjRkOWU0NzhjZTM1MmJiZjE3MDJjNjg5MDg2NzhmYTA2Y2NhZjg4YzE1MTM1ZGE4IiwiY29uZmlndXJhdGlvblNoYTI1NiI6IjQ0MTM2ZmEzNTViMzY3OGExMTQ2YWQxNmY3ZTg2NDllOTRmYjRmYzIxZmU3N2U4MzEwYzA2MGY2MWNhYWZmOGEiLCJkZXRlY3RvcklkIjoiZGV0ZWN0b3IuYWloLW5hdGl2ZSIsImRldGVjdG9yVmVyc2lvbiI6Im5hdGl2ZS4wMTRmYmQ2MTRhNWEiLCJlbnRyaWVzIjpbeyJieXRlTGVuZ3RoIjoxMzgsImtpbmQiOiJmaWxlIiwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicGxhdGZvcm0iOnsiYXJjaGl0ZWN0dXJlIjoieDY0Iiwib3MiOiJ3aW4zMiIsInJlbGV2YW50RmFjdHNTaGEyNTYiOiI3NDAyZTI0NWEwOGVlZjEyMzEyNTg3YWE5MDYwYTA4ODY4YWRlYmZjYWJkMDhlZTI0ZTllNjc0MDVlMzY0N2JlIn0sInByb2ZpbGVJZCI6ImluLXByb2Nlc3MtbmF0aXZlLXYxIiwicHJvZmlsZVNoYTI1NiI6ImRhZmU5NTk5NzVmYjYzMzM5OGJhMDEzYTY2OWQxMThiN2RlNjkyYjE0N2NjNDI1N2NiNDBlYzEzYjEwMjliMmUiLCJydWxlc1NoYTI1NiI6IjRmNTNjZGExOGMyYmFhMGMwMzU0YmI1ZjlhM2VjYmU1ZWQxMmFiNGQ4ZTExYmE4NzNjMmYxMTE2MTIwMmI5NDUiLCJzY29wZUtpbmQiOiJzb3VyY2UtdHJlZSIsInRhcmdldFBhdGhzIjpbIlNLSUxMLm1kIl19LCJwcm9kdWNlciI6eyJuYW1lIjoiQGFpaHEvc2NhbiIsInZlcnNpb24iOiIwLjUuMCJ9LCJzdGFydGVkQXQiOiIyMDI2LTEwLTAxVDA5OjMwOjA4Ljc0NVoifSwib2JzZXJ2YXRpb25JZCI6Im9ic2VydmF0aW9uOnNoYTI1Njo0NDA5MjZjYjU2ZDdkODY2NGZhNTA4MTQxNzBlMDM2MzM2NTExZTNjYTRkYWI4MjE3NWY5Mzk0NTQ4MzU3NjhlIiwib3JpZ2luIjoiZnJlc2gifV0sIm91dGNvbWUiOiJzdWNjZWVkZWQifV0sInNjaGVtYSI6InVybjphaWhxOnNjYW46cmVwb3J0OjEuMC4wIiwic2VsZWN0aW9uIjp7ImV4Y2x1ZGVkUGF0aHMiOltdLCJwYXRocyI6WyJTS0lMTC5tZCJdfSwic291cmNlIjp7ImNhcHR1cmUiOnsiY2FwdHVyZVNoYTI1NiI6IjVhNGFlMzNmYzk4YTJiNTMwYmQ2YTlhOWY1OTJmNGFjNzU5ZTFjNGY3MGQyN2ZjZDMwMjlkNzYwODFkMGM4ODgiLCJlbnRyaWVzIjpbeyJieXRlTGVuZ3RoIjoxMzgsImtpbmQiOiJmaWxlIiwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicHJvZmlsZSI6ImFpaC1zb3VyY2UtY2FwdHVyZS0xIn0sImtpbmQiOiJsb2NhbCJ9fQ==",
+          "mediaType": "application/json",
+          "schema": "urn:aihq:scan:report:1.0.0",
+          "sha256": "f7e31b42db247bf120092e67c8fe2694bdb0a809bdf1b8aa26c596dd0df703f7"
+        },
+        "scanId": "scan:sha256:a040f5613d1dc90c7772d852965ebbe7421a4533f551f77873e1c1f966d9e3a8",
+        "schema": "urn:aihq:scan:artifact:1.0.0"
+      },
+      "invalid": {
+        "annexes": [
+          {
+            "byteLength": 246,
+            "bytesBase64": "Y2hhbmdlZCBhbm5leA==",
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "mediaType": "application/vnd.aih.baseline-native+json",
+            "sha256": "6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9"
+          }
+        ],
+        "report": {
+          "byteLength": 3508,
+          "bytesBase64": "eyJhbm5leGVzIjpbeyJieXRlTGVuZ3RoIjoyNDYsImlkIjoiYW5uZXguNTQ5ZDU5YjNkNWY1YTFkN2VjN2IyZjIzYzNkOWI5YjU3YzI3ZGE3MjM1OGVkOTRjN2E1N2FkMGJmMzQyYTZiYiIsIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5haWguYmFzZWxpbmUtbmF0aXZlK2pzb24iLCJzaGEyNTYiOiI2MDk2Y2QzNTAxNGEyMDhhYzZkNjJkNWJiNWY4MGVmYjBkODYzYTAyNDY0ZDM4ZjQ0MGNhYzc0MTJjM2IxZmY5In1dLCJjb21wbGV0aW9uIjoiY29tcGxldGUiLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTAxVDA5OjMwOjA4Ljc1OFoiLCJkaWFnbm9zdGljcyI6W10sImVmZmVjdGl2ZUxpbWl0cyI6eyJkZXRlY3RvclRpbWVvdXRNcyI6NjAwMDAwLCJtYXhBbm5leEJ5dGVzIjoxNjc3NzIxNiwibWF4QXJ0aWZhY3RCeXRlcyI6MTAwNjYzMjk2LCJtYXhEZWNvZGVkQXJ0aWZhY3RCeXRlcyI6NjcxMDg4NjQsIm1heFJlcG9ydEJ5dGVzIjoxNjc3NzIxNiwibWF4UmVxdWVzdEJ5dGVzIjoyMDk3MTUyLCJtYXhTb3VyY2VCeXRlcyI6MjY4NDM1NDU2LCJtYXhTb3VyY2VFbnRyaWVzIjoxMDAwMDAsIm1heFN0YXRlbWVudEJ5dGVzIjoxMzEwNzJ9LCJwcm9kdWNlciI6eyJuYW1lIjoiQGFpaHEvc2NhbiIsInZlcnNpb24iOiIwLjUuMCJ9LCJyZXF1ZXN0ZWREZXRlY3RvcnMiOlt7ImNvbmZpZ3VyYXRpb24iOnt9LCJjb25maWd1cmF0aW9uU2hhMjU2IjoiNDQxMzZmYTM1NWIzNjc4YTExNDZhZDE2ZjdlODY0OWU5NGZiNGZjMjFmZTc3ZTgzMTBjMDYwZjYxY2FhZmY4YSIsImRldGVjdG9ySWQiOiJkZXRlY3Rvci5haWgtbmF0aXZlIiwicHJvZmlsZUlkIjoiaW4tcHJvY2Vzcy1uYXRpdmUtdjEifV0sInJlc3VsdHMiOlt7ImNvdmVyYWdlIjp7ImNvbXBsZXRlIjp0cnVlLCJjb3ZlcmVkUGF0aHMiOlsiU0tJTEwubWQiXSwiZXhjbHVkZWRQYXRocyI6W10sInVuY292ZXJlZFBhdGhzIjpbXX0sImRldGVjdG9ySWQiOiJkZXRlY3Rvci5haWgtbmF0aXZlIiwiZGlhZ25vc3RpY3MiOltdLCJvYnNlcnZhdGlvbnMiOlt7ImJvZHkiOnsiYW5uZXhJZHMiOlsiYW5uZXguNTQ5ZDU5YjNkNWY1YTFkN2VjN2IyZjIzYzNkOWI5YjU3YzI3ZGE3MjM1OGVkOTRjN2E1N2FkMGJmMzQyYTZiYiJdLCJjb21wbGV0ZWRBdCI6IjIwMjYtMTAtMDFUMDk6MzA6MDguNzU2WiIsImNvdmVyYWdlIjp7ImNvdmVyZWRQYXRocyI6WyJTS0lMTC5tZCJdfSwiZmluZGluZ3MiOltdLCJmb3JtYXQiOiJhaWgtb2JzZXJ2YXRpb24tdjEiLCJnYXBzIjpbeyJkZXRhaWwiOiJUaGUgYWloLW5hdGl2ZSBvdXRwdXQgaXMgYSBzb3VyY2UgaWRlbnRpdHkgb2JzZXJ2YXRpb24sIG5vdCBhIGZpbmRpbmdzIHJlcG9ydCwgc28gbm8gcnVsZSwgc2V2ZXJpdHksIG1lc3NhZ2Ugb3IgbG9jYXRpb24gaXMgZGVyaXZlZCBmcm9tIGl0LiIsInJlYXNvbiI6InNhcmlmLW5vdC1pbnRlcnByZXRlZCJ9LHsiZGV0YWlsIjoiVGhpcyBydW4ncyBhbm5leCBieXRlcyBhcmUgdGhlIGFuYWx5emVyJ3Mgb3duIG91dHB1dC4gU2NhbiBiaW5kcyB0aGVtIGJ5IGRpZ2VzdCBhbmQgZG9lcyBub3QgcGFyc2UgdGhlbSwgc28gbm8gbWVzc2FnZSBvciBsb2NhdGlvbiBpcyByZXBvcnRlZCBhbmQgdGhlIGVtcHR5IGxpc3QgaXMgbm90IGEgY2xhaW0gdGhhdCBub3RoaW5nIHdhcyBmb3VuZC4iLCJyZWFzb24iOiJmaW5kaW5nLW1lc3NhZ2UtYW5kLWxvY2F0aW9uLW5vdC1yZWFkLWZyb20tYW5uZXgifSx7ImRldGFpbCI6IkEgc2luZ2xlLWFuYWx5emVyIG9ic2VydmF0aW9uIGRlY2xhcmVzIG5vIG9jY3VycmVuY2UgZmFjdHMsIHNvIGl0IGRlY2xhcmVzIG5vIHNldmVyaXR5IGVpdGhlci4gQWJzZW50IHNldmVyaXR5IGlzIHJlcG9ydGVkIGFzIGFic2VudCwgbmV2ZXIgZGVmYXVsdGVkLiIsInJlYXNvbiI6InNldmVyaXR5LW5vdC1kZWNsYXJlZC1ieS1hdHRlc3RhdGlvbiJ9LHsiZGV0YWlsIjoiVGhlc2UgZmluZGluZ3MgYXJlIGV2aWRlbmNlIG9ubHkuIFRoZXkgZ3JhbnQgbm8gcXVhbGlmaWNhdGlvbiwgYXBwcm92YWwsIGluc3RhbGxhdGlvbiwgb2JzZXJ2YXRpb24gb3IgZWZmZWN0IGF1dGhvcml0eS4iLCJyZWFzb24iOiJuby1lZmZlY3Qtb3ItcXVhbGlmaWNhdGlvbi1hdXRob3JpdHkifV0sImlucHV0Ijp7ImFkYXB0ZXJTaGEyNTYiOiI2YThjMDA5NmZmOGQwYTc2NjRkOWU0NzhjZTM1MmJiZjE3MDJjNjg5MDg2NzhmYTA2Y2NhZjg4YzE1MTM1ZGE4IiwiY29uZmlndXJhdGlvblNoYTI1NiI6IjQ0MTM2ZmEzNTViMzY3OGExMTQ2YWQxNmY3ZTg2NDllOTRmYjRmYzIxZmU3N2U4MzEwYzA2MGY2MWNhYWZmOGEiLCJkZXRlY3RvcklkIjoiZGV0ZWN0b3IuYWloLW5hdGl2ZSIsImRldGVjdG9yVmVyc2lvbiI6Im5hdGl2ZS4wMTRmYmQ2MTRhNWEiLCJlbnRyaWVzIjpbeyJieXRlTGVuZ3RoIjoxMzgsImtpbmQiOiJmaWxlIiwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicGxhdGZvcm0iOnsiYXJjaGl0ZWN0dXJlIjoieDY0Iiwib3MiOiJ3aW4zMiIsInJlbGV2YW50RmFjdHNTaGEyNTYiOiI3NDAyZTI0NWEwOGVlZjEyMzEyNTg3YWE5MDYwYTA4ODY4YWRlYmZjYWJkMDhlZTI0ZTllNjc0MDVlMzY0N2JlIn0sInByb2ZpbGVJZCI6ImluLXByb2Nlc3MtbmF0aXZlLXYxIiwicHJvZmlsZVNoYTI1NiI6ImRhZmU5NTk5NzVmYjYzMzM5OGJhMDEzYTY2OWQxMThiN2RlNjkyYjE0N2NjNDI1N2NiNDBlYzEzYjEwMjliMmUiLCJydWxlc1NoYTI1NiI6IjRmNTNjZGExOGMyYmFhMGMwMzU0YmI1ZjlhM2VjYmU1ZWQxMmFiNGQ4ZTExYmE4NzNjMmYxMTE2MTIwMmI5NDUiLCJzY29wZUtpbmQiOiJzb3VyY2UtdHJlZSIsInRhcmdldFBhdGhzIjpbIlNLSUxMLm1kIl19LCJwcm9kdWNlciI6eyJuYW1lIjoiQGFpaHEvc2NhbiIsInZlcnNpb24iOiIwLjUuMCJ9LCJzdGFydGVkQXQiOiIyMDI2LTEwLTAxVDA5OjMwOjA4Ljc0NVoifSwib2JzZXJ2YXRpb25JZCI6Im9ic2VydmF0aW9uOnNoYTI1Njo0NDA5MjZjYjU2ZDdkODY2NGZhNTA4MTQxNzBlMDM2MzM2NTExZTNjYTRkYWI4MjE3NWY5Mzk0NTQ4MzU3NjhlIiwib3JpZ2luIjoiZnJlc2gifV0sIm91dGNvbWUiOiJzdWNjZWVkZWQifV0sInNjaGVtYSI6InVybjphaWhxOnNjYW46cmVwb3J0OjEuMC4wIiwic2VsZWN0aW9uIjp7ImV4Y2x1ZGVkUGF0aHMiOltdLCJwYXRocyI6WyJTS0lMTC5tZCJdfSwic291cmNlIjp7ImNhcHR1cmUiOnsiY2FwdHVyZVNoYTI1NiI6IjVhNGFlMzNmYzk4YTJiNTMwYmQ2YTlhOWY1OTJmNGFjNzU5ZTFjNGY3MGQyN2ZjZDMwMjlkNzYwODFkMGM4ODgiLCJlbnRyaWVzIjpbeyJieXRlTGVuZ3RoIjoxMzgsImtpbmQiOiJmaWxlIiwicGF0aCI6IlNLSUxMLm1kIiwic2hhMjU2IjoiZjgxODU5OThlYzQ2NGM1YzlkNWZlMzVjMjE1N2UwYWQyNTkzYzVkNTIyNDc5N2IyNDA2MGEwMTZkZjA3OWQ3NyJ9XSwicHJvZmlsZSI6ImFpaC1zb3VyY2UtY2FwdHVyZS0xIn0sImtpbmQiOiJsb2NhbCJ9fQ==",
+          "mediaType": "application/json",
+          "schema": "urn:aihq:scan:report:1.0.0",
+          "sha256": "f7e31b42db247bf120092e67c8fe2694bdb0a809bdf1b8aa26c596dd0df703f7"
+        },
+        "scanId": "scan:sha256:a040f5613d1dc90c7772d852965ebbe7421a4533f551f77873e1c1f966d9e3a8",
+        "schema": "urn:aihq:scan:artifact:1.0.0"
+      },
+      "invalidReason": "Changed annex bytes do not match the declared length or SHA-256 digest."
+    },
+    {
+      "format": "urn:aihq:scan:evidence-association:1.0.0",
+      "valid": {
+        "schema": "urn:aihq:scan:evidence-association:1.0.0",
+        "scanId": "scan:sha256:a040f5613d1dc90c7772d852965ebbe7421a4533f551f77873e1c1f966d9e3a8",
+        "location": {
+          "kind": "file",
+          "path": "/tmp/example.scan.json"
+        }
+      },
+      "invalid": {
+        "schema": "urn:aihq:scan:evidence-association:1.0.0",
+        "scanId": "unknown",
+        "location": {
+          "kind": "file",
+          "path": "/tmp/example.scan.json"
+        }
+      },
+      "invalidReason": "An association names an exact domain-separated Scan ID."
+    }
+  ]
+}

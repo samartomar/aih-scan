@@ -546,6 +546,58 @@ describe("published V2 package installation", () => {
       directory,
       isolatedNpmInstallEnvironment(emptyUserconfig, inheritedEnvironment),
     );
+    // Extend the existing single packed/install boundary; a second parallel pack
+    // would race the build. This proof uses only the installed public entries.
+    writeFileSync(
+      join(directory, "assessment-consumer.mjs"),
+      readFileSync(join(root, "tests/support/packed-assessment-consumer.mjs")),
+    );
+    const assessmentConsumer = JSON.parse(
+      execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
+        cwd: directory,
+        encoding: "utf8",
+        stdio: "pipe",
+      }),
+    );
+    expect(assessmentConsumer).toMatchObject({
+      installedVersion: "0.5.0",
+      completion: "partial",
+      read: "read",
+      authenticity: "authenticated",
+      portableEntries: ["contracts", "read"],
+    });
+    expect(assessmentConsumer.annexes).toBeGreaterThan(0);
+    writeFileSync(
+      join(directory, "portable-consumer.mts"),
+      [
+        'import { contractSupport, type ScanRequest, type Artifact, type AuthenticationTrust } from "@aihq/scan/contracts";',
+        'import { readArtifact, readReport } from "@aihq/scan/read";',
+        "declare const request: ScanRequest;",
+        "declare const artifact: Artifact;",
+        "declare const trust: AuthenticationTrust;",
+        "void [contractSupport, request, artifact, trust, readArtifact, readReport];",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(directory, "portable-tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          target: "ES2022",
+          lib: ["ES2022", "DOM"],
+          types: [],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+        },
+        files: ["portable-consumer.mts"],
+      }),
+    );
+    execFileSync(
+      process.execPath,
+      [join(root, "node_modules/typescript/bin/tsc"), "-p", "portable-tsconfig.json"],
+      { cwd: directory, encoding: "utf8", stdio: "pipe" },
+    );
     const installedReadme = readFileSync(
       join(directory, "node_modules/@aihq/scan/README.md"),
       "utf8",
@@ -1132,5 +1184,5 @@ describe("published V2 package installation", () => {
         "expected.json",
       ]),
     ).toBe("invalid ScanAttestationV2: signature verification\n");
-  }, 30_000);
+  }, 60_000);
 });

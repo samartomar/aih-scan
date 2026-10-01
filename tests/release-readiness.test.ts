@@ -1010,7 +1010,12 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(manifest).toMatchObject({
       name: "@aihq/scan",
       version: "0.5.0",
-      files: ["dist", "tools/baseline-analyzers", "tools/verify-core-contract-lock-v2.mjs"],
+      files: [
+        "dist",
+        "schemas",
+        "tools/baseline-analyzers",
+        "tools/verify-core-contract-lock-v2.mjs",
+      ],
     });
     expect(existsSync(resolve(root, "LICENSE"))).toBe(true);
     expect(existsSync(resolve(root, "README.md"))).toBe(true);

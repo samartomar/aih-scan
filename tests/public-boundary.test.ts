@@ -87,6 +87,17 @@ describe("Strict V2 public boundary", () => {
     expect(manifest.bin).toEqual({ "aih-scan": "./dist/cli.js" });
     expect(manifest.exports).toEqual({
       ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+      "./contracts": {
+        types: "./dist/public/contracts.d.ts",
+        import: "./dist/public/contracts.js",
+      },
+      "./read": { types: "./dist/public/read.d.ts", import: "./dist/public/read.js" },
+      "./host": { types: "./dist/public/host.d.ts", import: "./dist/public/host.js" },
+      "./schemas/request/1.0.0.json": "./schemas/request/1.0.0.json",
+      "./schemas/run-result/1.0.0.json": "./schemas/run-result/1.0.0.json",
+      "./schemas/report/1.0.0.json": "./schemas/report/1.0.0.json",
+      "./schemas/artifact/1.0.0.json": "./schemas/artifact/1.0.0.json",
+      "./schemas/evidence-association/1.0.0.json": "./schemas/evidence-association/1.0.0.json",
       // Additive and idiomatic: a consumer can locate the package root without deep
       // importing anything. No dist subpath becomes reachable.
       "./package.json": "./package.json",

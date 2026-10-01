@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "urn:aihq:scan:evidence-association:1.0.0"
+    },
+    "scanId": {
+      "type": "string",
+      "pattern": "^scan:sha256:[0-9a-f]{64}$"
+    },
+    "location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "file"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^(?:[A-Za-z]:[\\\\/]|\\/|\\\\\\\\)"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "https"
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "scanId",
+    "location"
+  ],
+  "additionalProperties": false,
+  "$id": "urn:aihq:scan:evidence-association:1.0.0",
+  "description": "AIHQ restricted canonical JSON profile: well-formed NFC strings; nonnegative safe integer numbers; no duplicate keys. Source, observation, coverage and digest cross-field constraints also require the Scan reader."
+}

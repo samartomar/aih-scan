@@ -1,0 +1,136 @@
+# INERT CANDIDATE: this file is outside .github/workflows and cannot run.
+# Activation requires separately approved protection settings, reviewed head and
+# exact independent trust bytes. Never add push/pull_request/workflow_run triggers.
+name: Restricted Scan report publisher
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Reviewed unsigned producer run ID
+        required: true
+        type: string
+      statement_sha256:
+        description: Independently reviewed detached statement SHA-256
+        required: true
+        type: string
+      expected_scan_id:
+        description: Independently reviewed immutable Scan ID
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: scan-report-publisher
+  cancel-in-progress: false
+jobs:
+  bounded-candidate:
+    # Data acquisition has no signing permission and executes no candidate code.
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+      - run: npm ci --ignore-scripts && npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scan-detached-statement
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: detached
+      - name: Validate only bounded statement data
+        env:
+          EXPECTED_SHA256: ${{ inputs.statement_sha256 }}
+        run: node tools/artifact/check-statement.mjs detached/statement.json "$EXPECTED_SHA256" predicate.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checked-detached-statement
+          path: detached/statement.json
+          if-no-files-found: error
+  signer:
+    needs: bounded-candidate
+    if: github.event_name == 'workflow_dispatch' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: scan-report-signing-prod
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+      - run: npm ci --ignore-scripts && npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: checked-detached-statement
+          path: detached
+      - name: Recheck exact detached bytes inside signer
+        id: statement
+        env:
+          EXPECTED_SHA256: ${{ inputs.statement_sha256 }}
+        run: node tools/artifact/check-statement.mjs detached/statement.json "$EXPECTED_SHA256" predicate.json
+      - name: Sign minimal fixed statement through the managed public route
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: scan-report
+          subject-digest: ${{ steps.statement.outputs.digest }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: predicate.json
+      - name: Retain detached bundle only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scan-detached-bundle
+          path: ${{ steps.attest.outputs.bundle-path }}
+          if-no-files-found: error
+  authenticate-before-promotion:
+    needs: signer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.15.0
+      - run: npm ci --ignore-scripts && npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scan-unsigned-artifact
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: unsigned
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scan-detached-bundle
+          path: bundle
+      - name: Authenticate independently before declaring publication output
+        env:
+          EXPECTED_SCAN_ID: ${{ inputs.expected_scan_id }}
+        run: |
+          mapfile -t bundle_files < <(find bundle -maxdepth 1 -type f -name '*.json')
+          test "${#bundle_files[@]}" -eq 1
+          node tools/artifact/verify-promotion.mjs unsigned/artifact.json "${bundle_files[0]}" .github/workflow-templates/scan-report-trust.candidate.json "$EXPECTED_SCAN_ID" authenticated.scan.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: independently-authenticated-scan-report
+          path: authenticated.scan.json
+          if-no-files-found: error

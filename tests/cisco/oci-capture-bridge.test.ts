@@ -337,6 +337,6 @@ describe("Cisco OCI capture evidence bridge", () => {
       workflow.match(/actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/g),
     ).toHaveLength(3);
     expect(workflow.match(/npm ci --ignore-scripts/g)).toHaveLength(3);
-    expect(workflow.match(/node-version: 20/g)).toHaveLength(3);
+    expect(workflow.match(/node-version: "24\.15\.0"/g)).toHaveLength(3);
   });
 });

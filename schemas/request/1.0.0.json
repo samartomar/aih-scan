@@ -1,0 +1,279 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "urn:aihq:scan:request:1.0.0"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "local"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^(?:[A-Za-z]:[\\\\/]|\\/|\\\\\\\\)"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "git"
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^https:\\/\\/[^/@\\s]+(?:\\/[^?#\\s]*)?$"
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          },
+          "required": [
+            "kind",
+            "repository",
+            "commit"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "all"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+              }
+            }
+          ]
+        },
+        "excludedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+          }
+        }
+      },
+      "required": [
+        "paths",
+        "excludedPaths"
+      ],
+      "additionalProperties": false
+    },
+    "detectors": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "detectorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "profileId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "configuration": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "required": [
+          "detectorId",
+          "configuration"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "priorArtifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scanId": {
+            "type": "string",
+            "pattern": "^scan:sha256:[0-9a-f]{64}$"
+          },
+          "location": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096,
+                    "pattern": "^(?:[A-Za-z]:[\\\\/]|\\/|\\\\\\\\)"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "https"
+                  },
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "scanId",
+          "location"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "maxSourceEntries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "maxSourceBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 268435456
+        },
+        "maxRequestBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        },
+        "maxReportBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "maxAnnexBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "maxDecodedArtifactBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        },
+        "maxArtifactBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100663296
+        },
+        "maxStatementBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 131072
+        },
+        "detectorTimeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "source",
+    "selection",
+    "detectors"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    }
+  },
+  "$id": "urn:aihq:scan:request:1.0.0",
+  "description": "AIHQ restricted canonical JSON profile: well-formed NFC strings; nonnegative safe integer numbers; no duplicate keys. Source, observation, coverage and digest cross-field constraints also require the Scan reader."
+}
