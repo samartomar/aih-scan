@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Reuse complete unchanged detector observations through Scan-managed retained
+  handles or independently authenticated supported prior artifacts. Preserve
+  original evidence and observed times while rebuilding current partial reports.
+  Binding-gate uses selected-closure inputs; native and trust-lint retain whole-tree
+  scope. Changed inputs rerun the complete affected unit.
+- Require complete installed adapter identity for fresh and reused observations.
+  Startup contexts with unsupported preload or loader hooks now explicitly refuse
+  detector work; see the assessment API and observation reuse migration notes.
 - Add Scan-owned assessment contracts and versioned JSON Schema resources, portable
   report/artifact readers, and explicit Node host APIs for scanning, preparation,
   attachment, local signing and offline authentication.

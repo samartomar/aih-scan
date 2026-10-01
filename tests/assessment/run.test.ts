@@ -405,8 +405,7 @@ test.each([
 test("lost detector snapshot identity cannot become a partial assessment", async () => {
   const root = rootFixture();
   writeFileSync(join(root, "SKILL.md"), "# Fixture\n");
-  const actualRead = fsBoundary.readFileSync,
-    actualTemp = fsBoundary.mkdtempSync;
+  const actualTemp = fsBoundary.mkdtempSync;
   let capturedRoot = "";
   vi.spyOn(fsBoundary, "mkdtempSync").mockImplementation(((
     prefix: Parameters<typeof fsBoundary.mkdtempSync>[0],
@@ -417,16 +416,26 @@ test("lost detector snapshot identity cannot become a partial assessment", async
       capturedRoot = join(directory, "snapshot");
     return directory;
   }) as typeof fsBoundary.mkdtempSync);
-  vi.spyOn(fsBoundary, "readFileSync").mockImplementation(((
-    path: Parameters<typeof fsBoundary.readFileSync>[0],
-    ...args: unknown[]
-  ) => {
-    const bytes = Reflect.apply(actualRead, fsBoundary, [path, ...args]);
-    if (typeof path === "string" && capturedRoot && path.endsWith("SKILL.md"))
-      writeFileSync(join(capturedRoot, "SKILL.md"), "changed source snapshot\n");
-    return bytes;
-  }) as typeof fsBoundary.readFileSync);
-  const result = await runScan(request(root));
+  // The explicit artifact transport runs after source capture. Corrupt the
+  // snapshot at that public IO boundary, independently of how native analysis
+  // reads its files (descriptor reads and in-memory projection are both valid).
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+    expect(capturedRoot).not.toBe("");
+    writeFileSync(join(capturedRoot, "SKILL.md"), "changed source snapshot\n");
+    return new Response("{}");
+  });
+  const result = await runScan(
+    {
+      ...request(root),
+      priorArtifacts: [
+        {
+          scanId: `scan:sha256:${"0".repeat(64)}`,
+          location: { kind: "https", url: "https://evidence.example.test/prior.json" },
+        },
+      ],
+    },
+    { reuseTrust: { keys: [], publishers: [] } },
+  );
   expect(result).toMatchObject({ status: "diagnostic", phase: "assembly" });
   expect(result).not.toHaveProperty("scanId");
 });

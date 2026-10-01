@@ -6,6 +6,8 @@ export {
   signArtifact,
 } from "../artifact/host.js";
 export type * from "../artifact/types.js";
+export type { RetainedObservationsV1 } from "../assessment/reuse.js";
+export { createRetainedObservationsV1 } from "../assessment/reuse.js";
 export type { RunScanOptions } from "../assessment/run.js";
 export { runScan } from "../assessment/run.js";
 export type { ScanRequest, ScanRunResult } from "../assessment/types.js";

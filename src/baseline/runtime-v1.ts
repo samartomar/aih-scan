@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runNativeImplementationV1 } from "../assessment/native-implementation.js";
 import { type HostExecutableV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
 import { analyzerStdoutV1 } from "../cli/process-output.js";
 import {
@@ -30,7 +31,6 @@ import { type LiveProcessV1, sweepResidualProcessesV1 } from "../cli/residual-pr
 import { windowsSystemRootV1 } from "../cli/windows-job-supervisor.js";
 import {
   canonicalStrictJsonBytesV1,
-  canonicalStrictJsonSha256V1,
   decodeStrictUtf8V1,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
@@ -39,6 +39,9 @@ import {
   SarifCompletionErrorV1,
 } from "../detectors/sarif-completion-v1.js";
 import { hashSourceTreeV1 } from "../observation/source-hash-v1.js";
+
+export { BASELINE_NATIVE_ANALYZER_IDENTITY_V1 } from "../assessment/native-implementation.js";
+
 import type { BaselineAnalyzerExecutionV1, BaselineAnalyzerV1 } from "./batch-v1.js";
 import {
   ANALYZER_OUTPUT_MAX_BYTES_V1,
@@ -180,17 +183,6 @@ export type HostDockerRuntimeV1 = Readonly<{
   context: Readonly<{ name: string; endpoint: string }>;
   containment: "posix-process-group" | "windows-job-object";
 }>;
-
-/**
- * The exact analyzer identity the in-process `aih-native` observation records.
- *
- * Declared here so a capability record can state it without recomputing it, and so a
- * test can prove the capability and the observation name the same identity.
- */
-export const BASELINE_NATIVE_ANALYZER_IDENTITY_V1 = `native.${canonicalStrictJsonSha256V1({
-  domain: "aih.baseline-native-observation-v1",
-  algorithm: "source-hash-v1",
-}).slice(0, 12)}`;
 
 const safeEnvironmentKeys = new Set([
   "ALLUSERSPROFILE",
@@ -2010,17 +2002,7 @@ async function cisco(
 }
 
 function native(sourceRoot: string): AnalyzerOutput {
-  const source = hashSourceTreeV1(sourceRoot);
-  const bytes = canonicalStrictJsonBytesV1({
-    protocol: "BaselineNativeObservationV1",
-    sourceTreeSha256: source.treeSha256,
-    files: source.files,
-  });
-  return {
-    mediaType: "application/vnd.aih.baseline-native+json" as const,
-    bytes,
-    analyzerVersion: BASELINE_NATIVE_ANALYZER_IDENTITY_V1,
-  };
+  return runNativeImplementationV1(sourceRoot);
 }
 
 export type BaselineAnalyzerRunV1 = (input: {
