@@ -141,12 +141,12 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/observation/source-hash-v1.ts",
-    line: 93,
+    line: 101,
     contains: "export function hashSourceTreeV1(",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 2150,
+    line: 2132,
     contains: "export const BASELINE_BATCH_EXECUTION_PROFILES_V1",
   },
   {
@@ -325,22 +325,22 @@ const ANCHORS: readonly Readonly<{ path: string; line: number; contains: string 
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 63,
+    line: 66,
     contains: "export const SKILLSPECTOR_LOCAL_IMAGE_TAG_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 765,
+    line: 757,
     contains: "export function skillspectorAcceptedImageDigestsRefusalV1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 241,
+    line: 233,
     contains: "export const HOST_PROCESS_UV_ENVIRONMENT_V1",
   },
   {
     path: "src/baseline/runtime-v1.ts",
-    line: 77,
+    line: 80,
     contains: 'const ciscoWorkingDirectoryV1 = "/aih/cwd"',
   },
   {

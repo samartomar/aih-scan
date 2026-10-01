@@ -67,7 +67,7 @@ Optional `{ signal, gitCredentials: { username, password } }` host controls rema
 outside JSON. Credentials apply to the selected HTTPS origin; redirects are
 disabled. No credential, detector environment or local source path enters the report.
 
-The current adapter supports one complete source-tree unit per detector. Its exact
+The current adapters support one complete input unit per detector. Its exact
 captured entries, requested output scope, resolved configuration, platform facts,
 released adapter dependency bytes, rule material and execution profile identify
 the unit. Successful units remain in an assessment when another detector fails,
@@ -80,11 +80,21 @@ details remain generic rather than exposing vendor data. Failures leave their sc
 detector can have complete empty coverage while the assessment remains partial.
 Report completeness requires every detector to succeed with complete coverage.
 
+Binding-gate's unit is its complete selected inventory, including containing
+directories and the captured targets of selected file links. An unrelated source
+file can change without invalidating that unit. Native source identity and
+trust-lint bind the complete source tree: trust-lint reads repository-wide
+license, secrets and artifact facts in addition to selected files. Their whole
+tree must be reassessed after any captured input changes. Changing selected
+membership reruns the complete affected unit; an old larger unit is never trimmed
+or relabelled as current work. This release does not split arbitrary detectors
+into independent file-level observations.
+
 | Detector | Configuration | New assessment support |
 | --- | --- | --- |
 | `detector.aih-native` | `{}` | Native source identity observation; empty sources are explicitly refused by its definition |
-| `detector.aih-binding-gate` | `{}` | Existing in-process binding inspectors |
-| `detector.aih-trust-lint` | `{internalScopes:[],mcpConfigPaths:[]}` | Existing in-process trust lint; arrays follow the detector's published ordering and scope rules |
+| `detector.aih-binding-gate` | `{}` | Existing in-process binding inspectors; complete selected-closure reuse |
+| `detector.aih-trust-lint` | `{internalScopes:[],mcpConfigPaths:[]}` | Existing in-process trust lint; whole-tree reuse; arrays follow the detector's published ordering and scope rules |
 | `detector.semgrep` | `{}` | Existing bounded profiles; binds exact shipped Semgrep rule text; platform and prerequisites still apply |
 | Cisco, SkillSpector, Snyk | Their existing published configuration | `rules-material-unavailable` until an exact released rule identity can be established |
 
@@ -95,9 +105,42 @@ refusals leave the shared source profile intact. Legacy root exports remain
 available under their existing contracts. The new path has no Core commit/schema
 lock, success-only publication projection, report TTL, signing or posting side effect.
 
-Requested prior artifacts produce an explicit `reuse-miss` and current work.
-Observation reuse and material-change delivery are separate capabilities; this
-implementation does not borrow unsigned or unsupported prior results.
+Repeated calls can retain successful observations in a process-local handle:
+
+```js
+import { createRetainedObservationsV1, runScan } from "@aihq/scan/host";
+
+const retained = createRetainedObservationsV1();
+const first = await runScan(request, { retained });
+const next = await runScan(request, { retained });
+```
+
+Scan owns the retained bytes. Cloning or deserializing the handle cannot establish
+custody, and changing an earlier returned result cannot change those bytes. Each
+lookup rechecks the original observation and annexes against the current complete
+detector input and current resource limits. The bounded store evicts older units;
+eviction causes fresh work. Observation age alone does not invalidate a unit.
+
+A reused observation keeps its original body, observation ID, producer and
+`startedAt`/`completedAt`. Its current result reference records `origin: "reused"`
+and `fromScanId`; these fields do not change the observation body. Scan assembles
+current source identity, requested detectors and coverage into a new assessment.
+Reuse does not advance the time at which the work was observed. Fresh and reused
+observations can coexist with explicit unavailable work in a partial assessment.
+
+Durable sharing uses explicitly located `priorArtifacts` in the request and
+independently selected `reuseTrust` in the host options. Imported candidates must
+both authenticate and pass the supported detailed artifact reader before current
+input matching. An unsigned, corrupt, unsupported, untrusted or unavailable
+artifact produces a `reuse-miss` and current work. Trust comes from the caller's
+host configuration, never from the artifact itself. Source Git credentials are
+not forwarded to artifact URLs. Material-change delivery is a separate capability.
+
+The three in-process profiles establish current detector and runtime identity
+before lookup. External profiles whose complete tool identity is known only after
+execution rerun with an explicit reason. Unknown rule material remains a refusal.
+The implementation and legacy donor differences are recorded in
+[observation reuse migration](observation-reuse-migration.md).
 
 Readers validate the supported report's closed shape, source/configuration/
 observation hashes, ordered unique membership, observation input, file-bound

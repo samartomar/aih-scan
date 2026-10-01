@@ -1,19 +1,28 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AuthenticationTrust } from "../artifact/types.js";
 import { SEMGREP_RULES_V1 } from "../baseline/runtime-v1.js";
 import {
   type DetectorCapabilityV1,
   type DetectorExecutionProfileV1,
   resolveDetectorCapabilityV1,
 } from "../capability/detector-capability-v1.js";
+import { runBindingGateV1 } from "../detectors/binding-gate/index.js";
+import { runTrustLintV1 } from "../detectors/trust-lint/index.js";
 import { packageIdentity } from "../public/package-identity.js";
 import { type DetectorOptionsV1, readDetectorOptionsV1 } from "../runner/detector-options-v1.js";
 import { type RunDetectorV1Result, runDetectorV1 } from "../runner/run-detector-v1.js";
 import { type CapturedSource, type CaptureOptions, captureSource } from "./capture.js";
 import {
+  type InProcessAssessmentDetectorInput,
+  runInProcessAssessmentDetector,
+} from "./in-process-adapter.js";
+import { observationScope } from "./input-scope.js";
+import {
   base64Encode,
   bound,
+  ContractError,
   canonicalBytes,
   errorDiagnostic,
   fail,
@@ -22,7 +31,18 @@ import {
   sha256,
   strictParse,
 } from "./json.js";
+import { nativeImplementationV1 } from "./native-implementation.js";
+import { type PriorArtifactCandidate, readPriorArtifacts } from "./prior-artifacts.js";
 import { ordered, validateReport } from "./report.js";
+import {
+  admitImportedObservationV1,
+  admitRetainedObservationV1,
+  isRetainedObservationsV1,
+  type RetainedAdmissionV1,
+  type RetainedAnnexV1,
+  type RetainedObservationsV1,
+  retainObservationV1,
+} from "./reuse.js";
 import { requestShape } from "./shapes.js";
 import {
   type AnnexDescriptor,
@@ -34,20 +54,69 @@ import {
   type Limits,
   limitCeilings,
   type ObservationBody,
+  type ObservationInput,
   type ReportBody,
   type RequestedDetector,
+  type ScanId,
   type ScanRequest,
   type ScanRunResult,
   schemas,
 } from "./types.js";
 
-export interface RunScanOptions extends CaptureOptions {}
+export interface RunScanOptions extends CaptureOptions {
+  /**
+   * A Scan-managed own-custody record of successful observations from earlier `runScan`
+   * calls in this process, minted only by `createRetainedObservationsV1`. A value Scan did
+   * not mint is never own-custody data: it admits nothing and every detector runs fresh.
+   * Durable sharing between processes goes through the artifact and authentication
+   * boundary, never through this handle.
+   */
+  retained?: RetainedObservationsV1;
+  /**
+   * Independently selected trust for imported `priorArtifacts`. Without it, imported
+   * observations are never admitted: their bytes are neither authenticated nor read, and
+   * the current assessment performs the work itself. This is deliberately separate from
+   * `retained`, which is Scan's own process-local custody.
+   */
+  reuseTrust?: AuthenticationTrust;
+}
 /** Membership and exact rule identity are one closed support definition. */
 const detectorRuleBindings: ReadonlyMap<string, () => Promise<string>> = new Map([
   ["detector.aih-native", () => sha256(canonicalBytes([]))],
   ["detector.semgrep", () => sha256(new TextEncoder().encode(SEMGREP_RULES_V1))],
   ["detector.aih-trust-lint", () => moduleDigest("detectors/trust-lint/index")],
   ["detector.aih-binding-gate", () => moduleDigest("detectors/binding-gate/index")],
+]);
+/** Actual execution roots: unrelated detector implementations are not adapter dependencies. */
+const inProcessImplementations = new Map<
+  string,
+  { implementation: InProcessAssessmentDetectorInput["implementation"]; adapterRoots: string[] }
+>([
+  [
+    "detector.aih-native",
+    {
+      implementation: nativeImplementationV1,
+      adapterRoots: [
+        "assessment/in-process-adapter",
+        "assessment/input-scope",
+        "assessment/native-implementation",
+      ],
+    },
+  ],
+  [
+    "detector.aih-binding-gate",
+    {
+      implementation: runBindingGateV1,
+      adapterRoots: ["assessment/in-process-adapter", "assessment/input-scope"],
+    },
+  ],
+  [
+    "detector.aih-trust-lint",
+    {
+      implementation: runTrustLintV1,
+      adapterRoots: ["assessment/in-process-adapter", "assessment/input-scope"],
+    },
+  ],
 ]);
 interface ResolvedDetector {
   request: RequestedDetector;
@@ -116,10 +185,10 @@ function requestSnapshot(raw: unknown): ScanRequest {
 }
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 /** Bind the actual released adapter dependency closure, conservatively including shared implementation files. */
-async function moduleDigest(entry: string): Promise<string> {
+async function moduleDigest(...entries: string[]): Promise<string> {
   const extension = extname(fileURLToPath(import.meta.url));
   const root = resolve(moduleDirectory, "..");
-  const pending = [join(root, `${entry}${extension}`)],
+  const pending = entries.map((entry) => join(root, `${entry}${extension}`)),
     seen = new Set<string>(),
     manifest: { path: string; sha256: string }[] = [];
   while (pending.length) {
@@ -142,9 +211,12 @@ async function moduleDigest(entry: string): Promise<string> {
       path: file.slice(root.length + 1).replaceAll("\\", "/"),
       sha256: await sha256(bytes),
     });
-    for (const match of bytes
+    // Type-only declarations disappear from the installed JavaScript graph and
+    // must not turn source-mode identity into an unrelated runtime dependency.
+    const runtimeSource = bytes
       .toString("utf8")
-      .matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
+      .replace(/(?:^|\n)\s*(?:import|export)\s+type\s+[\s\S]*?;/g, "");
+    for (const match of runtimeSource.matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
       const imported = resolve(dirname(file), match[1]!.replace(/\.js$/, extension));
       if (!imported.startsWith(root + "/") && !imported.startsWith(root + "\\"))
         fail("Adapter dependency is outside the installed module root");
@@ -153,6 +225,59 @@ async function moduleDigest(entry: string): Promise<string> {
   }
   manifest.sort((a, b) => (a.path < b.path ? -1 : 1));
   return sha256(canonicalBytes(manifest));
+}
+/**
+ * The execution seams the assessment runner itself supplies. `runScan` passes neither a
+ * test process runner nor a caller prerequisite probe, so every detector it runs reports
+ * these defaults; a reuse lookup derives the same platform facts a fresh run records.
+ */
+const assessmentSeams: Readonly<{ runner: string; prerequisiteProbe: string }> = Object.freeze({
+  runner: "scan-owned-default",
+  prerequisiteProbe: "scan-owned-default",
+});
+/** The platform facts a run of this package records, from facts it settled before or during it. */
+async function observationPlatform(seams: {
+  runner: string;
+  prerequisiteProbe: string;
+}): Promise<ObservationInput["platform"]> {
+  return {
+    os: process.platform,
+    architecture: process.arch,
+    relevantFactsSha256: await sha256(
+      canonicalBytes({
+        node: process.version,
+        runner: seams.runner,
+        prerequisiteProbe: seams.prerequisiteProbe,
+      }),
+    ),
+  };
+}
+/** One canonical observation input, built the same way for a fresh run and a reuse lookup. */
+function observationInputFor(input: {
+  detectorId: string;
+  detectorVersion: string;
+  adapterSha256: string;
+  rulesSha256: string;
+  configurationSha256: string;
+  profileId: string;
+  profileSha256: string;
+  platform: ObservationInput["platform"];
+  targetPaths: string[];
+  entries: ObservationInput["entries"];
+  selectedPaths: string[];
+}): ObservationInput {
+  return {
+    detectorId: input.detectorId,
+    detectorVersion: input.detectorVersion,
+    adapterSha256: input.adapterSha256,
+    rulesSha256: input.rulesSha256,
+    configurationSha256: input.configurationSha256,
+    profileId: input.profileId,
+    profileSha256: input.profileSha256,
+    platform: input.platform,
+    ...observationScope(input.detectorId, input.entries, input.selectedPaths),
+    targetPaths: input.targetPaths,
+  };
 }
 async function resolvedDetectors(
   request: ScanRequest,
@@ -302,11 +427,25 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       results: DetectorResult[] = [],
       annexes: AnnexDescriptor[] = [],
       payloads: { id: string; bytesBase64: string }[] = [];
-    const diagnostics: Diagnostic[] = (request.priorArtifacts ?? []).map(() => ({
-      code: "reuse-miss",
-      detail:
-        "Observation reuse is not supported by this contract implementation; current requested work is performed.",
-    }));
+    // Imported prior artifacts are acquired, authenticated and fully read once, under the
+    // caller's independently selected trust. Without that trust they admit nothing.
+    const diagnostics: Diagnostic[] = [];
+    let priorArtifacts: PriorArtifactCandidate[] = [];
+    try {
+      const priors = await readPriorArtifacts(request.priorArtifacts ?? [], {
+        trust: options.reuseTrust,
+        signal: options.signal,
+        limits,
+      });
+      priorArtifacts = priors.artifacts;
+      diagnostics.push(...priors.diagnostics);
+    } catch {
+      diagnostics.push({
+        code: "reuse-miss",
+        detail:
+          "Prior artifacts could not be acquired, authenticated and read within their bounded contract; current work proceeds.",
+      });
+    }
     const reportFor = (units: DetectorResult[], descriptors: AnnexDescriptor[]): ReportBody => ({
       schema: schemas.report,
       producer: packageIdentity,
@@ -330,7 +469,165 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       effectiveLimits: limits,
       diagnostics,
     });
-    const adapterSha256 = await moduleDigest("runner/run-detector-v1");
+    const active = captured.selection.paths.filter(
+      (path) => !captured.selection.excludedPaths.includes(path),
+    );
+    /** Fresh units enter custody only once the final report and its Scan ID exist. */
+    const pendingRetention: {
+      detectorId: string;
+      body: ObservationBody;
+      annex: RetainedAnnexV1;
+    }[] = [];
+    /**
+     * Validates one candidate unit against the current selection, the report contract and
+     * the current budgets, without publishing it. A reused unit is never a shortcut past
+     * these checks, and a candidate that fails them is never counted as reuse.
+     */
+    const validateUnit = async (
+      id: string,
+      body: ObservationBody,
+      origin: "fresh" | "reused",
+      fromScanId: ScanId | undefined,
+      annex: RetainedAnnexV1,
+      admittedDiagnostics: Diagnostic[],
+    ): Promise<{
+      unit: DetectorResult;
+      descriptor: AnnexDescriptor;
+      payload: { id: string; bytesBase64: string };
+    }> => {
+      if (annex.bytes.length > limits.maxAnnexBytes)
+        throw new ContractError(
+          "resource-limit",
+          "The detector annex exceeds the selected annex byte limit.",
+        );
+      if (annex.byteLength !== annex.bytes.length || annex.sha256 !== (await sha256(annex.bytes)))
+        fail("Native observation annex lost its byte binding");
+      const covered = body.coverage.coveredPaths.filter((path) => active.includes(path)).sort(),
+        uncovered = active.filter((path) => !covered.includes(path));
+      ordered(covered, "detector covered paths");
+      const descriptor: AnnexDescriptor = {
+        id: annex.id,
+        mediaType: annex.mediaType,
+        sha256: annex.sha256,
+        byteLength: annex.bytes.length,
+      };
+      const unit: DetectorResult = {
+        detectorId: id,
+        outcome: uncovered.length ? "failed" : "succeeded",
+        observations: [
+          {
+            observationId: await observationIdFor(body),
+            body,
+            origin,
+            ...(fromScanId === undefined ? {} : { fromScanId }),
+          },
+        ],
+        coverage: {
+          coveredPaths: covered,
+          excludedPaths: [...captured.selection.excludedPaths],
+          uncoveredPaths: uncovered,
+          complete: uncovered.length === 0,
+        },
+        diagnostics: [
+          ...admittedDiagnostics,
+          ...(uncovered.length
+            ? [
+                {
+                  code: "detector-incomplete",
+                  detail: "The completed observation left requested paths uncovered.",
+                  detectorId: id,
+                },
+              ]
+            : []),
+        ],
+      };
+      const remaining = resolved.slice(results.length + 1);
+      const candidate = reportFor(
+        [
+          ...results,
+          unit,
+          ...remaining.map((pending) =>
+            emptyResult(
+              pending.request.detectorId,
+              captured,
+              pending.request.profileId === null ? "refused" : "failed",
+              [
+                {
+                  code: "detector-output-invalid",
+                  detail: "The detector did not produce a valid bounded observation.",
+                  detectorId: pending.request.detectorId,
+                },
+              ],
+            ),
+          ),
+        ],
+        [...annexes, descriptor].sort((a, b) => (a.id < b.id ? -1 : 1)),
+      );
+      await validateReport(candidate);
+      const candidateBytes = canonicalBytes(candidate),
+        payload = { id: annex.id, bytesBase64: base64Encode(annex.bytes) };
+      // Reserve bounded accounting space for later refusal/failure diagnostics.
+      bound(
+        candidateBytes.length + remaining.length * 512 <= limits.maxReportBytes,
+        "report bytes",
+        limits.maxReportBytes,
+      );
+      bound(
+        candidateBytes.length +
+          candidate.annexes.reduce((sum, part) => sum + part.byteLength, 0) +
+          remaining.length * 512 <=
+          limits.maxDecodedArtifactBytes,
+        "decoded artifact bytes",
+        limits.maxDecodedArtifactBytes,
+      );
+      bound(
+        canonicalBytes(
+          unsignedArtifact(
+            candidateBytes,
+            `scan:sha256:${"0".repeat(64)}`,
+            "0".repeat(64),
+            candidate.annexes,
+            [...payloads, payload],
+          ),
+        ).length +
+          remaining.length * 1024 <=
+          limits.maxArtifactBytes,
+        "artifact bytes",
+        limits.maxArtifactBytes,
+      );
+      return { unit, descriptor, payload };
+    };
+    /** Publishes a validated unit and retains a complete, successful fresh unit. */
+    const publishUnit = (
+      id: string,
+      unit: DetectorResult,
+      descriptor: AnnexDescriptor,
+      payload: { id: string; bytesBase64: string },
+      origin: "fresh" | "reused",
+      body: ObservationBody,
+      annex: RetainedAnnexV1,
+    ): void => {
+      annexes.push(descriptor);
+      payloads.push(payload);
+      results.push(unit);
+      if (origin === "fresh" && unit.coverage.complete)
+        pendingRetention.push({ detectorId: id, body, annex });
+    };
+    /** The one honest failure shape for a detector whose own unit could not be admitted. */
+    const failUnit = (id: string, error: unknown, detail: string): void => {
+      results.push(
+        emptyResult(id, captured, "failed", [
+          {
+            code:
+              errorDiagnostic(error).code === "resource-limit"
+                ? "resource-limit"
+                : "detector-output-invalid",
+            detail,
+            detectorId: id,
+          },
+        ]),
+      );
+    };
     for (const detector of resolved) {
       const id = detector.request.detectorId;
       if (!detector.capability || !detector.profile) {
@@ -397,23 +694,167 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         );
         continue;
       }
+      const inProcess = inProcessImplementations.get(id);
+      const adapterSha256 = await moduleDigest(
+        ...(inProcess?.adapterRoots ?? ["runner/run-detector-v1"]),
+      );
+      let rulesPromise: Promise<string> | undefined;
+      const ruleDigest = (): Promise<string> => {
+        rulesPromise ??= bindRules();
+        return rulesPromise;
+      };
       captured.assertUnchanged();
+      // Reuse is opt-in: with no supplied handle and no admitted prior artifact, nothing
+      // below changes the current path.
+      const reuseDiagnostics: Diagnostic[] = [];
+      if (options.retained !== undefined || priorArtifacts.length > 0) {
+        const capability = detector.capability,
+          profile = detector.profile;
+        const noteMiss = (detail: string): void => {
+          if (
+            !reuseDiagnostics.some(
+              (diagnostic) => diagnostic.code === "reuse-miss" && diagnostic.detail === detail,
+            )
+          )
+            reuseDiagnostics.push({ code: "reuse-miss", detail, detectorId: id });
+        };
+        /**
+         * Validates and publishes an admitted candidate, or records why it is a miss. A
+         * candidate that fails current admission is never counted as a reuse.
+         */
+        const tryAdmitted = async (admission: RetainedAdmissionV1): Promise<boolean> => {
+          if (admission.status !== "admitted") {
+            noteMiss(admission.detail);
+            return false;
+          }
+          try {
+            const validated = await validateUnit(
+              id,
+              admission.body,
+              "reused",
+              admission.fromScanId,
+              admission.annex,
+              [
+                {
+                  code: "reuse-hit",
+                  detail:
+                    "The current detector input exactly matches an admissible observation; its original identity, body and observed times are reused unchanged.",
+                  detectorId: id,
+                },
+              ],
+            );
+            publishUnit(
+              id,
+              validated.unit,
+              validated.descriptor,
+              validated.payload,
+              "reused",
+              admission.body,
+              admission.annex,
+            );
+            return true;
+          } catch (error) {
+            noteMiss(
+              `A candidate observation did not survive current report or budget admission (${errorDiagnostic(error).code}); the current scope is measured fresh.`,
+            );
+            return false;
+          }
+        };
+        let currentInput: ObservationInput | undefined;
+        const platformArchitecture = process.arch === "x64" ? "amd64" : process.arch;
+        const platformOs = process.platform === "win32" ? "windows" : process.platform;
+        const reusableProfile =
+          inProcess !== undefined &&
+          profile.prerequisites.length === 0 &&
+          profile.supportedPlatforms.some(
+            (platform) =>
+              platform.os === platformOs && platform.architecture === platformArchitecture,
+          ) &&
+          captured.selection.excludedPaths.length === 0 &&
+          (captured.capture.entries.length > 0 || capability.emptySource === "completes");
+        if (reusableProfile) {
+          currentInput = observationInputFor({
+            detectorId: id,
+            detectorVersion: capability.analyzerVersion,
+            adapterSha256,
+            rulesSha256: await ruleDigest(),
+            configurationSha256: detector.request.configurationSha256,
+            profileId: profile.id,
+            profileSha256: profile.sha256,
+            platform: await observationPlatform(assessmentSeams),
+            targetPaths: active,
+            entries: captured.capture.entries,
+            selectedPaths: captured.selection.paths,
+          });
+        } else {
+          // The current tool, runtime and analyzer identity of this profile is settled only
+          // by running it, so no trustworthy complete current identity exists yet. The
+          // detector reruns rather than binding a claim it cannot check.
+          noteMiss(
+            "This profile cannot establish an eligible complete current input before execution, so no candidate observation is admitted.",
+          );
+        }
+        if (currentInput !== undefined) {
+          let reused = false;
+          if (options.retained !== undefined) {
+            if (!isRetainedObservationsV1(options.retained))
+              noteMiss(
+                "The supplied retained-observations handle is not a Scan-managed own-custody record, so no retained observation is admitted.",
+              );
+            else
+              reused = await tryAdmitted(
+                await admitRetainedObservationV1({
+                  store: options.retained,
+                  detectorId: id,
+                  input: currentInput,
+                  limits,
+                }),
+              );
+          }
+          if (!reused && priorArtifacts.length > 0)
+            reused = await tryAdmitted(
+              await admitImportedObservationV1({
+                artifacts: priorArtifacts,
+                detectorId: id,
+                input: currentInput,
+                limits,
+              }),
+            );
+          if (reused) {
+            captured.assertUnchanged();
+            continue;
+          }
+        }
+      }
       const startedAt = new Date().toISOString();
       let run: RunDetectorV1Result;
       try {
-        run = await runDetectorV1({
-          detectorId: id,
-          subject: {
-            kind: "source-tree",
-            sourceRoot: captured.root,
-            selectedClosurePaths: captured.selection.paths,
-            excludedPaths: captured.selection.excludedPaths,
-          },
-          executionProfileId: detector.profile.id,
-          signal: options.signal,
-          timeoutMs: limits.detectorTimeoutMs,
-          ...(detector.options ? { detectorOptions: detector.options } : {}),
-        });
+        run = inProcess
+          ? await runInProcessAssessmentDetector({
+              capability: detector.capability,
+              profile: detector.profile,
+              sourceRoot: captured.root,
+              selectedClosurePaths: captured.selection.paths,
+              excludedPaths: captured.selection.excludedPaths,
+              detectorOptions: detector.options,
+              signal: options.signal,
+              timeoutMs: limits.detectorTimeoutMs,
+              producer: packageIdentity,
+              implementation: inProcess.implementation,
+            })
+          : await runDetectorV1({
+              detectorId: id,
+              subject: {
+                kind: "source-tree",
+                sourceRoot: captured.root,
+                selectedClosurePaths: captured.selection.paths,
+                excludedPaths: captured.selection.excludedPaths,
+              },
+              executionProfileId: detector.profile.id,
+              signal: options.signal,
+              timeoutMs: limits.detectorTimeoutMs,
+              ...(detector.options ? { detectorOptions: detector.options } : {}),
+            });
       } catch {
         run = {
           outcome: "refused",
@@ -453,55 +894,24 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         if (run.evidence.kind !== "baseline-analyzer-observation-v1")
           fail("Detector returned unsupported observation evidence");
         const native = run.evidence.observation,
-          annexId = `annex.${await sha256(new TextEncoder().encode(id))}`;
-        if (native.bytes.length > limits.maxAnnexBytes) {
-          results.push(
-            emptyResult(id, captured, "failed", [
-              {
-                code: "resource-limit",
-                detail: "The detector annex exceeds the selected annex byte limit.",
-                detectorId: id,
-              },
-            ]),
-          );
-          continue;
-        }
-        if (
-          native.annex.byteLength !== native.bytes.length ||
-          native.annex.sha256 !== (await sha256(native.bytes))
-        )
-          fail("Native observation annex lost its byte binding");
-        const active = captured.selection.paths.filter(
-            (path) => !captured.selection.excludedPaths.includes(path),
-          ),
+          annexId = `annex.${await sha256(new TextEncoder().encode(id))}`,
           covered = run.coverage.coveredPaths.filter((path) => active.includes(path)).sort();
         ordered(covered, "detector covered paths");
-        const uncovered = active.filter((path) => !covered.includes(path));
         const body: ObservationBody = {
           format: "aih-observation-v1",
-          input: {
+          input: observationInputFor({
             detectorId: id,
             detectorVersion: native.analyzerVersion,
             adapterSha256,
-            rulesSha256: await bindRules(),
+            rulesSha256: await ruleDigest(),
             configurationSha256: detector.request.configurationSha256,
             profileId: detector.profile.id,
             profileSha256: detector.profile.sha256,
-            platform: {
-              os: process.platform,
-              architecture: process.arch,
-              relevantFactsSha256: await sha256(
-                canonicalBytes({
-                  node: process.version,
-                  runner: run.seams.runner,
-                  prerequisiteProbe: run.seams.prerequisiteProbe,
-                }),
-              ),
-            },
-            scopeKind: "source-tree",
+            platform: await observationPlatform(run.seams),
             targetPaths: active,
             entries: captured.capture.entries,
-          },
+            selectedPaths: captured.selection.paths,
+          }),
           startedAt,
           completedAt: new Date().toISOString(),
           producer: { name: packageIdentity.name, version: packageIdentity.version },
@@ -510,102 +920,28 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
           gaps: run.findings.gaps.map((gap) => ({ reason: gap.kind, detail: gap.detail })),
           annexIds: [annexId],
         };
-        const descriptor: AnnexDescriptor = {
+        const annex: RetainedAnnexV1 = {
           id: annexId,
           mediaType: native.mediaType,
           sha256: native.annex.sha256,
           byteLength: native.bytes.length,
+          bytes: native.bytes,
         };
-        const unit: DetectorResult = {
-          detectorId: id,
-          outcome: uncovered.length ? "failed" : "succeeded",
-          observations: [{ observationId: await observationIdFor(body), body, origin: "fresh" }],
-          coverage: {
-            coveredPaths: covered,
-            excludedPaths: [...captured.selection.excludedPaths],
-            uncoveredPaths: uncovered,
-            complete: uncovered.length === 0,
-          },
-          diagnostics: uncovered.length
-            ? [
-                {
-                  code: "detector-incomplete",
-                  detail: "The completed observation left requested paths uncovered.",
-                  detectorId: id,
-                },
-              ]
-            : [],
-        };
-        const remaining = resolved.slice(results.length + 1);
-        const candidate = reportFor(
-          [
-            ...results,
-            unit,
-            ...remaining.map((pending) =>
-              emptyResult(
-                pending.request.detectorId,
-                captured,
-                pending.request.profileId === null ? "refused" : "failed",
-                [
-                  {
-                    code: "detector-output-invalid",
-                    detail: "The detector did not produce a valid bounded observation.",
-                    detectorId: pending.request.detectorId,
-                  },
-                ],
-              ),
-            ),
-          ],
-          [...annexes, descriptor].sort((a, b) => (a.id < b.id ? -1 : 1)),
+        const validated = await validateUnit(id, body, "fresh", undefined, annex, reuseDiagnostics);
+        publishUnit(
+          id,
+          validated.unit,
+          validated.descriptor,
+          validated.payload,
+          "fresh",
+          body,
+          annex,
         );
-        await validateReport(candidate);
-        const candidateBytes = canonicalBytes(candidate),
-          payload = { id: annexId, bytesBase64: base64Encode(native.bytes) };
-        // Reserve bounded accounting space for later refusal/failure diagnostics.
-        bound(
-          candidateBytes.length + remaining.length * 512 <= limits.maxReportBytes,
-          "report bytes",
-          limits.maxReportBytes,
-        );
-        bound(
-          candidateBytes.length +
-            candidate.annexes.reduce((sum, annex) => sum + annex.byteLength, 0) +
-            remaining.length * 512 <=
-            limits.maxDecodedArtifactBytes,
-          "decoded artifact bytes",
-          limits.maxDecodedArtifactBytes,
-        );
-        bound(
-          canonicalBytes(
-            unsignedArtifact(
-              candidateBytes,
-              `scan:sha256:${"0".repeat(64)}`,
-              "0".repeat(64),
-              candidate.annexes,
-              [...payloads, payload],
-            ),
-          ).length +
-            remaining.length * 1024 <=
-            limits.maxArtifactBytes,
-          "artifact bytes",
-          limits.maxArtifactBytes,
-        );
-        annexes.push(descriptor);
-        payloads.push(payload);
-        results.push(unit);
       } catch (error) {
-        results.push(
-          emptyResult(id, captured, "failed", [
-            {
-              code:
-                errorDiagnostic(error).code === "resource-limit"
-                  ? "resource-limit"
-                  : "detector-output-invalid",
-              detail:
-                "The detector did not produce a valid bounded observation; its scope remains uncovered.",
-              detectorId: id,
-            },
-          ]),
+        failUnit(
+          id,
+          error,
+          "The detector did not produce a valid bounded observation; its scope remains uncovered.",
         );
       }
       captured.assertUnchanged();
@@ -623,6 +959,17 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       "artifact bytes",
       limits.maxArtifactBytes,
     );
+    // Custody is written only now: a fresh unit's original assessment identity is this
+    // report's Scan ID, and a report that failed validation above reaches no custody.
+    if (options.retained !== undefined) {
+      for (const pending of pendingRetention)
+        await retainObservationV1(options.retained, {
+          detectorId: pending.detectorId,
+          body: pending.body,
+          annexes: [pending.annex],
+          fromScanId: scanId,
+        });
+    }
     return {
       schema: schemas.runResult,
       status: "assessment",

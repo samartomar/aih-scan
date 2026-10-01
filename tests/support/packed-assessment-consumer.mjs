@@ -10,6 +10,7 @@ import { contractSupport } from "@aihq/scan/contracts";
 import { readArtifact, readReport } from "@aihq/scan/read";
 import {
   authenticateArtifact,
+  createRetainedObservationsV1,
   prepareArtifact,
   runScan,
   signArtifact,
@@ -49,7 +50,7 @@ assert.equal((await runScan(invalidRequest)).phase, "request");
 const source = resolve("assessment-subject");
 mkdirSync(source);
 writeFileSync(resolve(source, "README.md"), "# Public consumer fixture\n");
-const result = await runScan({
+const request = {
   schema: "urn:aihq:scan:request:1.0.0",
   source: { kind: "local", path: source },
   selection: { paths: "all", excludedPaths: [] },
@@ -57,7 +58,9 @@ const result = await runScan({
     { detectorId: "detector.aih-native", configuration: {} },
     { detectorId: "detector.unavailable", configuration: {} },
   ],
-});
+};
+const retained = createRetainedObservationsV1();
+const result = await runScan(request, { retained });
 assert.equal(result.status, "assessment");
 assert.equal(result.report.completion, "partial");
 assert.equal(result.report.results.length, 2);
@@ -66,6 +69,13 @@ assert.equal(result.report.results.find((entry) => entry.detectorId === "detecto
 assert.equal(result.report.producer.version, manifest.version);
 assert.equal(JSON.stringify(result.report).includes(source), false);
 assert(result.annexes.length > 0, "The installed assessment binds nonempty native annex bytes");
+const repeated = await runScan(request, { retained });
+assert.equal(repeated.status, "assessment");
+assert.equal(repeated.report.completion, "partial");
+assert.equal(repeated.report.results[0].observations[0].origin, "reused");
+assert.deepEqual(repeated.report.results[0].observations[0].body, result.report.results[0].observations[0].body);
+assert.deepEqual(repeated.annexes, result.annexes);
+assert.notEqual(repeated.scanId, result.scanId);
 
 const annexes = result.annexes.map(({ id, bytesBase64 }) => ({ id, bytes: new Uint8Array(Buffer.from(bytesBase64, "base64")) }));
 const prepared = await prepareArtifact({ report: result.report, annexes });
@@ -88,6 +98,20 @@ assert.equal(authenticated.status, "authenticated");
 assert.equal(authenticated.producerIdentity, "consumer-organization");
 assert.equal((await authenticateArtifact({ bytes: signed.bytes, expectedScanId: result.scanId, trust: { keys: [], publishers: [] } })).status, "unverifiable");
 assert.equal((await readArtifact(signed.bytes)).authenticity, "unchecked");
+const priorPath = resolve("prior-artifact.json");
+writeFileSync(priorPath, signed.bytes);
+const imported = await runScan({
+  ...request,
+  priorArtifacts: [{ scanId: result.scanId, location: { kind: "file", path: priorPath } }],
+}, {
+  reuseTrust: { keys: [{ identity: "consumer-organization", keyId, publicKeySpkiBase64: spki.toString("base64") }], publishers: [] },
+});
+assert.equal(imported.status, "assessment");
+assert.equal(imported.report.completion, "partial");
+assert.equal(imported.report.results[0].observations[0].origin, "reused");
+assert.equal(imported.report.results[0].observations[0].fromScanId, result.scanId);
+assert.deepEqual(imported.report.results[0].observations[0].body, result.report.results[0].observations[0].body);
+assert.deepEqual(imported.annexes, result.annexes);
 
 // Load the actual packed ESM entry graph in a realm without process, Buffer,
 // filesystem, subprocesses or network fetch. The harness resolves portable

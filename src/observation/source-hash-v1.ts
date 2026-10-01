@@ -5,13 +5,27 @@ import { readSourceEntryNamesV1 } from "./source-entry-name-v1.js";
 
 export type SourceHashedFileV1 = { path: string; bytes: number; sha256: string };
 export type SourceTreeHashV1 = { treeSha256: string; files: SourceHashedFileV1[] };
-type Entry = {
+export type SourceHashEntryV1 = {
   type: "directory" | "file" | "symlink";
   path: string;
   bytes?: number;
   sha256?: string;
   target?: string;
 };
+type Entry = SourceHashEntryV1;
+
+/** The source-hash-v1 encoding, shared by physical and materialized observation trees. */
+export function hashSourceEntriesV1(entries: readonly SourceHashEntryV1[]): SourceTreeHashV1 {
+  const ordered = [...entries].sort((a, b) => codeUnitCompare(a.path, b.path));
+  return {
+    treeSha256: createHash("sha256").update(JSON.stringify(ordered)).digest("hex"),
+    files: ordered.flatMap((entry) =>
+      entry.type === "file"
+        ? [{ path: entry.path, bytes: entry.bytes ?? 0, sha256: entry.sha256 ?? "" }]
+        : [],
+    ),
+  };
+}
 const fail = (message: string): never => {
   throw new TypeError(message);
 };
@@ -77,13 +91,7 @@ export function hashComponentTreeV1(
     entries.set(pathRel, { type: "file", path: pathRel, ...file(path) });
   };
   for (const item of [...roots].sort(codeUnitCompare)) visit(resolve(root, ...item.split("/")));
-  const ordered = [...entries.values()].sort((a, b) => codeUnitCompare(a.path, b.path));
-  return {
-    treeSha256: createHash("sha256").update(JSON.stringify(ordered)).digest("hex"),
-    files: ordered.flatMap((e) =>
-      e.type === "file" ? [{ path: e.path, bytes: e.bytes ?? 0, sha256: e.sha256 ?? "" }] : [],
-    ),
-  };
+  return hashSourceEntriesV1([...entries.values()]);
 }
 /**
  * `omittedDirectoryLinks` (D26) names, by source-relative POSIX path, the directory links an
@@ -131,11 +139,5 @@ export function hashSourceTreeV1(
       fail(`omitted directory link is not a free source path: ${path}`);
     entries.set(path, { type: "symlink", path, target });
   }
-  const ordered = [...entries.values()].sort((a, b) => codeUnitCompare(a.path, b.path));
-  return {
-    treeSha256: createHash("sha256").update(JSON.stringify(ordered)).digest("hex"),
-    files: ordered.flatMap((e) =>
-      e.type === "file" ? [{ path: e.path, bytes: e.bytes ?? 0, sha256: e.sha256 ?? "" }] : [],
-    ),
-  };
+  return hashSourceEntriesV1([...entries.values()]);
 }
