@@ -42,11 +42,17 @@ human text. One matching closed issue remains closed. A different change creates
 a new issue linked to the highest-numbered prior issue for the same item.
 Duplicate exact matches fail that change before mutation.
 
-The managed-section check is conservative. Any listed issue whose body contains
-a malformed or duplicated managed section or marker fails the whole lookup
-before mutation, even if it concerns another item. An operator repairs or
-removes that section, then retries the retained summary. An exact change marker
-paired with a different item key fails only that change.
+Only an exact managed delimiter or complete identity marker claims a managed
+section; ordinary prose mentioning marker names is ignored. Once such syntax is
+present, the check is conservative: a malformed or duplicated section or marker
+fails the whole lookup before mutation, even if it concerns another item. An
+operator repairs or removes that section, then retries the retained summary.
+An exact change marker paired with a different item key fails only that change.
+
+Markers identify material; they do not authenticate issue authors or dispositions.
+Choose a tracker whose issue content and closing decisions you trust. A person
+able to write a matching marker can affect matching or cause ambiguity. This API
+does not enforce an issue-author policy.
 
 The lookup admits at most 20 pages of 100 entries, and pull requests count
 toward those pages. A larger tracker refuses with `incomplete-lookup`. The

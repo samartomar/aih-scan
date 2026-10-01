@@ -40,6 +40,49 @@ const configured = (transport: GitHubTransport) => ({
   transport,
 });
 
+test("ordinary marker prose does not claim a managed section or block creation", async () => {
+  const prose = "Store exact `aihq-scan-change:v1` and `aihq-scan-item:v1` HTML comment markers.";
+  let creations = 0;
+  const result = await host.deliverMaterialChange(
+    configured({
+      listIssues: async () => ({ issues: [issue(5, prose)], hasNextPage: false }),
+      createIssue: async ({ body }) => {
+        creations++;
+        return issue(6, body);
+      },
+      updateIssue: async () => {
+        throw new Error("Prose must not match a change");
+      },
+    }),
+  );
+  expect(result.results).toMatchObject([{ status: "created" }]);
+  expect(creations).toBe(1);
+});
+
+test("ordinary marker prose around a valid section is preserved during update", async () => {
+  const prose =
+    "These aihq-scan-managed:v1, aihq-scan-change:v1 and aihq-scan-item:v1 names explain the format.\n";
+  let updated = "";
+  const result = await host.deliverMaterialChange(
+    configured({
+      listIssues: async () => ({
+        issues: [issue(7, prose + managed() + prose)],
+        hasNextPage: false,
+      }),
+      createIssue: async () => {
+        throw new Error("An exact managed section must update");
+      },
+      updateIssue: async ({ body }) => {
+        updated = body;
+        return issue(7, body);
+      },
+    }),
+  );
+  expect(result.results).toMatchObject([{ status: "updated" }]);
+  expect(updated.startsWith(prose)).toBe(true);
+  expect(updated.endsWith(prose)).toBe(true);
+});
+
 test("a new change searches all pages, excludes PRs and links the highest prior item issue", async () => {
   let createdBody = "";
   const transport: GitHubTransport = {

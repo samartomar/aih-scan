@@ -99,10 +99,11 @@ function issueNumberOf(value: unknown, target: GitHubTarget): number | undefined
 }
 function parseSection(body: string): Issue["managed"] {
   if (!body.includes("aihq-scan-")) return undefined;
-  const markerHints = ["aihq-scan-managed:", "aihq-scan-change:", "aihq-scan-item:"];
-  if (!markerHints.some((hint) => body.includes(hint))) return undefined;
   const changes = [...body.matchAll(/<!-- aihq-scan-change:v1 (change:sha256:[a-f0-9]{64}) -->/g)];
   const items = [...body.matchAll(/<!-- aihq-scan-item:v1 ([a-f0-9]{64}) -->/g)];
+  if (!body.includes(start) && !body.includes(end) && !changes.length && !items.length)
+    return undefined;
+  const markerComments = body.match(/<!--\s*\/?aihq-scan-(?:managed|change|item):/g) ?? [];
   const begin = body.indexOf(start),
     finish = body.indexOf(end) + end.length;
   if (
@@ -110,9 +111,7 @@ function parseSection(body: string): Issue["managed"] {
     body.split(end).length !== 2 ||
     changes.length !== 1 ||
     items.length !== 1 ||
-    body.split(markerHints[0]!).length !== 3 ||
-    body.split(markerHints[1]!).length !== 2 ||
-    body.split(markerHints[2]!).length !== 2 ||
+    markerComments.length !== 4 ||
     finish <= begin + start.length ||
     changes[0]!.index! < begin + start.length ||
     items[0]!.index! < begin + start.length ||

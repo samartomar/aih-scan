@@ -37,6 +37,13 @@ bound is now 256 KiB UTF-8. The host then ran `npm test -- tests/material-change
 all 70 tests passed, including the 50 delivery/HTTP tests and 20 comparison,
 validation and identity tests. Targeted formatting completed without errors.
 
+Committed-diff review found that ordinary prose mentioning marker names could
+block lookup, including human text surrounding a valid section. Two public
+delivery regressions reproduced the failure. Detection now starts only from an
+exact delimiter or complete identity marker, and counts comment syntax rather
+than prose; malformed claimed sections retain conservative refusal.
+The host then ran the material suite again: all 72 tests passed.
+
 A packed disposable consumer checks the installed `@aihq/scan/host` API; no test posts
 real data or creates a live issue. This is development evidence under Unreleased,
 not a package publication or production-signing claim.
