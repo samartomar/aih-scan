@@ -52,6 +52,9 @@ The upload workflow contains only the exact harmless retained data. It performs
 no checkout, scan, candidate execution or signing. It rechecks the byte lengths
 and SHA-256 values before writing the two files exclusively and uploading them
 as separate immutable artifacts. Their retention is 30 days.
+This operation's fixed harmless report and complete annex bytes are embedded in
+the public upload workflow and are therefore public. Only the minimal detached
+statement is submitted to Sigstore; those report/annex bytes are outside its payload.
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
@@ -80,6 +83,9 @@ Dispatch the publisher once with that selected `candidate_run_id`, the exact
 `check-candidate-run.mjs` validates successful first-attempt manual upload provenance,
 exact repository/head/workflow/actor and the two selected immutable artifacts.
 It refuses ambiguity, expiry, oversized uploads and mismatching IDs/digests.
+Refusals emit only fixed stage codes for selectors, raw run/artifact metadata,
+run/actor custody and artifact custody/ambiguity; no input or dependency errors
+are echoed. Preserve the code and retained metadata when diagnosing a failed run.
 Downloads use exact artifact IDs. Trusted `check-statement.mjs` rechecks the
 reviewed detached bytes and closed minimal statement before and inside the signer.
 
