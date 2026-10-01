@@ -9,6 +9,7 @@ The original files under `.github/workflow-templates/` remain inert references.
 
 Submit and dispatch from the single authenticated independent account designated
 for this operation. The owner is code owner and signing-environment reviewer.
+The selected dispatcher is stomar-tech (GitHub User 333589491); samartomar performs required owner review.
 
 The signer identity is
 `https://github.com/samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main`,
