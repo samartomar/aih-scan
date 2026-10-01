@@ -1,5 +1,4 @@
-import { lstatSync, readFileSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AuthenticationTrust } from "../artifact/types.js";
 import { SEMGREP_RULES_V1 } from "../baseline/runtime-v1.js";
@@ -14,6 +13,10 @@ import { packageIdentity } from "../public/package-identity.js";
 import { type DetectorOptionsV1, readDetectorOptionsV1 } from "../runner/detector-options-v1.js";
 import { type RunDetectorV1Result, runDetectorV1 } from "../runner/run-detector-v1.js";
 import { type CapturedSource, type CaptureOptions, captureSource } from "./capture.js";
+import {
+  createImplementationDigester,
+  type ImplementationDigester,
+} from "./implementation-digest.js";
 import {
   type InProcessAssessmentDetectorInput,
   runInProcessAssessmentDetector,
@@ -81,11 +84,20 @@ export interface RunScanOptions extends CaptureOptions {
   reuseTrust?: AuthenticationTrust;
 }
 /** Membership and exact rule identity are one closed support definition. */
-const detectorRuleBindings: ReadonlyMap<string, () => Promise<string>> = new Map([
+const detectorRuleBindings: ReadonlyMap<
+  string,
+  (digester: ImplementationDigester) => Promise<string>
+> = new Map([
   ["detector.aih-native", () => sha256(canonicalBytes([]))],
   ["detector.semgrep", () => sha256(new TextEncoder().encode(SEMGREP_RULES_V1))],
-  ["detector.aih-trust-lint", () => moduleDigest("detectors/trust-lint/index")],
-  ["detector.aih-binding-gate", () => moduleDigest("detectors/binding-gate/index")],
+  [
+    "detector.aih-trust-lint",
+    (digester: ImplementationDigester) => digester.digest("detectors/trust-lint/index"),
+  ],
+  [
+    "detector.aih-binding-gate",
+    (digester: ImplementationDigester) => digester.digest("detectors/binding-gate/index"),
+  ],
 ]);
 /** Actual execution roots: unrelated detector implementations are not adapter dependencies. */
 const inProcessImplementations = new Map<
@@ -184,48 +196,6 @@ function requestSnapshot(raw: unknown): ScanRequest {
   return request;
 }
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-/** Bind the actual released adapter dependency closure, conservatively including shared implementation files. */
-async function moduleDigest(...entries: string[]): Promise<string> {
-  const extension = extname(fileURLToPath(import.meta.url));
-  const root = resolve(moduleDirectory, "..");
-  const pending = entries.map((entry) => join(root, `${entry}${extension}`)),
-    seen = new Set<string>(),
-    manifest: { path: string; sha256: string }[] = [];
-  while (pending.length) {
-    const file = pending.pop()!;
-    if (seen.has(file)) continue;
-    seen.add(file);
-    const before = lstatSync(file);
-    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1)
-      fail("Installed adapter material is unavailable");
-    const bytes = readFileSync(file),
-      after = lstatSync(file);
-    if (
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    )
-      fail("Installed adapter material changed");
-    manifest.push({
-      path: file.slice(root.length + 1).replaceAll("\\", "/"),
-      sha256: await sha256(bytes),
-    });
-    // Type-only declarations disappear from the installed JavaScript graph and
-    // must not turn source-mode identity into an unrelated runtime dependency.
-    const runtimeSource = bytes
-      .toString("utf8")
-      .replace(/(?:^|\n)\s*(?:import|export)\s+type\s+[\s\S]*?;/g, "");
-    for (const match of runtimeSource.matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
-      const imported = resolve(dirname(file), match[1]!.replace(/\.js$/, extension));
-      if (!imported.startsWith(root + "/") && !imported.startsWith(root + "\\"))
-        fail("Adapter dependency is outside the installed module root");
-      pending.push(imported);
-    }
-  }
-  manifest.sort((a, b) => (a.path < b.path ? -1 : 1));
-  return sha256(canonicalBytes(manifest));
-}
 /**
  * The execution seams the assessment runner itself supplies. `runScan` passes neither a
  * test process runner nor a caller prerequisite probe, so every detector it runs reports
@@ -423,6 +393,10 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
     return diagnostic("capture", error);
   }
   try {
+    const implementationDigester = createImplementationDigester({
+      moduleRoot: resolve(moduleDirectory, ".."),
+      extension: extname(fileURLToPath(import.meta.url)),
+    });
     const resolved = await resolvedDetectors(request, captured.selection.paths),
       results: DetectorResult[] = [],
       annexes: AnnexDescriptor[] = [],
@@ -473,11 +447,18 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       (path) => !captured.selection.excludedPaths.includes(path),
     );
     /** Fresh units enter custody only once the final report and its Scan ID exist. */
-    const pendingRetention: {
+    type PendingRetention = {
       detectorId: string;
       body: ObservationBody;
       annex: RetainedAnnexV1;
-    }[] = [];
+    };
+    type ValidatedUnit = {
+      unit: DetectorResult;
+      descriptor: AnnexDescriptor;
+      payload: { id: string; bytesBase64: string };
+      retention?: PendingRetention;
+    };
+    const pendingRetention: PendingRetention[] = [];
     /**
      * Validates one candidate unit against the current selection, the report contract and
      * the current budgets, without publishing it. A reused unit is never a shortcut past
@@ -490,11 +471,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       fromScanId: ScanId | undefined,
       annex: RetainedAnnexV1,
       admittedDiagnostics: Diagnostic[],
-    ): Promise<{
-      unit: DetectorResult;
-      descriptor: AnnexDescriptor;
-      payload: { id: string; bytesBase64: string };
-    }> => {
+    ): Promise<ValidatedUnit> => {
       if (annex.bytes.length > limits.maxAnnexBytes)
         throw new ContractError(
           "resource-limit",
@@ -595,23 +572,21 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         "artifact bytes",
         limits.maxArtifactBytes,
       );
-      return { unit, descriptor, payload };
+      return {
+        unit,
+        descriptor,
+        payload,
+        ...(origin === "fresh" && unit.coverage.complete
+          ? { retention: { detectorId: id, body, annex } }
+          : {}),
+      };
     };
     /** Publishes a validated unit and retains a complete, successful fresh unit. */
-    const publishUnit = (
-      id: string,
-      unit: DetectorResult,
-      descriptor: AnnexDescriptor,
-      payload: { id: string; bytesBase64: string },
-      origin: "fresh" | "reused",
-      body: ObservationBody,
-      annex: RetainedAnnexV1,
-    ): void => {
+    const publishUnit = ({ unit, descriptor, payload, retention }: ValidatedUnit): void => {
       annexes.push(descriptor);
       payloads.push(payload);
       results.push(unit);
-      if (origin === "fresh" && unit.coverage.complete)
-        pendingRetention.push({ detectorId: id, body, annex });
+      if (retention) pendingRetention.push(retention);
     };
     /** The one honest failure shape for a detector whose own unit could not be admitted. */
     const failUnit = (id: string, error: unknown, detail: string): void => {
@@ -695,14 +670,27 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         continue;
       }
       const inProcess = inProcessImplementations.get(id);
-      const adapterSha256 = await moduleDigest(
-        ...(inProcess?.adapterRoots ?? ["runner/run-detector-v1"]),
-      );
-      let rulesPromise: Promise<string> | undefined;
-      const ruleDigest = (): Promise<string> => {
-        rulesPromise ??= bindRules();
-        return rulesPromise;
-      };
+      let adapterSha256: string;
+      let rulesSha256: string;
+      try {
+        adapterSha256 = await implementationDigester.digest(
+          ...(inProcess?.adapterRoots ?? ["runner/run-detector-v1"]),
+        );
+        rulesSha256 = await bindRules(implementationDigester);
+        implementationDigester.assertUnchanged();
+      } catch {
+        results.push(
+          emptyResult(id, captured, "refused", [
+            {
+              code: "implementation-material-unavailable",
+              detail:
+                "The complete installed implementation identity could not be established; current work remains uncovered.",
+              detectorId: id,
+            },
+          ]),
+        );
+        continue;
+      }
       captured.assertUnchanged();
       // Reuse is opt-in: with no supplied handle and no admitted prior artifact, nothing
       // below changes the current path.
@@ -743,15 +731,8 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
                 },
               ],
             );
-            publishUnit(
-              id,
-              validated.unit,
-              validated.descriptor,
-              validated.payload,
-              "reused",
-              admission.body,
-              admission.annex,
-            );
+            implementationDigester.assertUnchanged();
+            publishUnit(validated);
             return true;
           } catch (error) {
             noteMiss(
@@ -777,7 +758,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
             detectorId: id,
             detectorVersion: capability.analyzerVersion,
             adapterSha256,
-            rulesSha256: await ruleDigest(),
+            rulesSha256,
             configurationSha256: detector.request.configurationSha256,
             profileId: profile.id,
             profileSha256: profile.sha256,
@@ -826,6 +807,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
           }
         }
       }
+      implementationDigester.assertUnchanged();
       const startedAt = new Date().toISOString();
       let run: RunDetectorV1Result;
       try {
@@ -864,6 +846,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         };
       }
       captured.assertUnchanged();
+      implementationDigester.assertUnchanged();
       if (run.outcome === "refused") {
         results.push(
           emptyResult(id, captured, "refused", [
@@ -903,7 +886,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
             detectorId: id,
             detectorVersion: native.analyzerVersion,
             adapterSha256,
-            rulesSha256: await ruleDigest(),
+            rulesSha256,
             configurationSha256: detector.request.configurationSha256,
             profileId: detector.profile.id,
             profileSha256: detector.profile.sha256,
@@ -928,15 +911,8 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
           bytes: native.bytes,
         };
         const validated = await validateUnit(id, body, "fresh", undefined, annex, reuseDiagnostics);
-        publishUnit(
-          id,
-          validated.unit,
-          validated.descriptor,
-          validated.payload,
-          "fresh",
-          body,
-          annex,
-        );
+        implementationDigester.assertUnchanged();
+        publishUnit(validated);
       } catch (error) {
         failUnit(
           id,
@@ -947,6 +923,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       captured.assertUnchanged();
     }
     captured.assertUnchanged();
+    implementationDigester.assertUnchanged();
     annexes.sort((a, b) => (a.id < b.id ? -1 : 1));
     payloads.sort((a, b) => (a.id < b.id ? -1 : 1));
     const report = await validateReport(reportFor(results, annexes));
@@ -959,6 +936,7 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       "artifact bytes",
       limits.maxArtifactBytes,
     );
+    implementationDigester.assertUnchanged();
     // Custody is written only now: a fresh unit's original assessment identity is this
     // report's Scan ID, and a report that failed validation above reaches no custody.
     if (options.retained !== undefined) {

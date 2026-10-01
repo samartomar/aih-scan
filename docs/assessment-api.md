@@ -128,6 +128,12 @@ current source identity, requested detectors and coverage into a new assessment.
 Reuse does not advance the time at which the work was observed. Fresh and reused
 observations can coexist with explicit unavailable work in a partial assessment.
 
+`fromScanId` names the assessment from which Scan acquired the reusable bytes.
+For process-local retention, this is the assessment that originally created the
+stored unit. For an imported artifact, it is that authenticated artifact's Scan ID,
+even if its own reference records an earlier reuse. It is an acquisition reference,
+not a claim to have authenticated the observation's entire prior history.
+
 Durable sharing uses explicitly located `priorArtifacts` in the request and
 independently selected `reuseTrust` in the host options. Imported candidates must
 both authenticate and pass the supported detailed artifact reader before current
@@ -135,10 +141,24 @@ input matching. An unsigned, corrupt, unsupported, untrusted or unavailable
 artifact produces a `reuse-miss` and current work. Trust comes from the caller's
 host configuration, never from the artifact itself. Source Git credentials are
 not forwarded to artifact URLs. Material-change delivery is a separate capability.
+Hosts must authorize the prior artifact locations they pass to Scan; the library
+does not impose an application-specific filesystem or network access policy.
 
 The three in-process profiles establish current detector and runtime identity
 before lookup. External profiles whose complete tool identity is known only after
 execution rerun with an explicit reason. Unknown rule material remains a refusal.
+Implementation identity includes each local runtime module and the complete
+installed trees of its imported packages, with their resolved runtime, optional
+and peer dependencies. These package trees are conservative dependency units;
+unrelated product modules and the application's whole lockfile are not input
+identities. Unsupported or over-budget dependency material is an explicit
+`implementation-material-unavailable` refusal for the affected detector.
+Node startup conditions are part of implementation identity. Command-line
+`--require` preloads bind their exact static module closure; unsupported custom
+loaders, import hooks or nonliteral dynamic acquisition are refused.
+Run Scan from an immutable package installation and restart its process after
+changing installed code or dependencies. In-place package replacement while Node
+still holds previously loaded modules is outside the supported execution model.
 The implementation and legacy donor differences are recorded in
 [observation reuse migration](observation-reuse-migration.md).
 

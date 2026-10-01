@@ -40,6 +40,10 @@ signer. The public boundary checks are in:
 - `tests/assessment/adapter-isolation.test.ts`: real installed module changes
   invalidate their dependents, preserve unrelated work, and retain native annex
   parity with the existing runner, including file links.
+- `tests/assessment/dependency-input-reuse.test.ts`: independently loaded package
+  installations with changed parser bytes invalidate dependent imported work and
+  preserve unaffected observations; missing dependency material is an explicit
+  refusal, and changed startup conditions require current work.
 - `tests/package-install-v2.test.ts` and its packed assessment consumer: retained
   and authenticated imported reuse through the actual installed public API.
 
@@ -66,7 +70,7 @@ its complete selected unit, native source identity runs fresh over the changed
 tree, and an unavailable detector remains explicitly refused. The report is partial.
 
 On Windows x64, Node 24.19.0, on 2026-10-01, the empty-retention first run took
-619.27 ms. Delta runs had a 410.30 ms median, compared with 500.69 ms when forcing
+841.24 ms. Delta runs had a 645.87 ms median, compared with 706.37 ms when forcing
 fresh detector work on the same changed source. Fresh/delta order alternated;
 the process and filesystem caches stayed warm. These are one host's observed
 end-to-end timings, including current source capture and report validation.
