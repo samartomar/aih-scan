@@ -40,6 +40,7 @@
     "./schemas/report/1.0.0.json": "./schemas/report/1.0.0.json",
     "./schemas/artifact/1.0.0.json": "./schemas/artifact/1.0.0.json",
     "./schemas/evidence-association/1.0.0.json": "./schemas/evidence-association/1.0.0.json",
+    "./schemas/material-change/1.0.0.json": "./schemas/material-change/1.0.0.json",
     "./package.json": "./package.json"
   },
   "bin": {

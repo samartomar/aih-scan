@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add strict material inventory comparison, portable `MaterialChange` contracts
+  and a versioned schema. Compare published content and declared installation
+  metadata independently of findings; partial inventory never proves removal.
+  Add an explicitly enabled GitHub handoff that preserves human text, closed
+  dispositions and retry data independently of artifact operations.
+
 - Reuse complete unchanged detector observations through Scan-managed retained
   handles or independently authenticated supported prior artifacts. Preserve
   original evidence and observed times while rebuilding current partial reports.

@@ -23,7 +23,7 @@ The new assessment surface has three explicit entry points:
 | --- | --- | --- |
 | `@aihq/scan/contracts` | Contract support, public types and schema identities | Portable JavaScript |
 | `@aihq/scan/read` | Read complete reports and portable artifacts; authenticity remains unchecked | Portable JavaScript |
-| `@aihq/scan/host` | Run a scan, prepare/attach/sign an artifact, and independently authenticate it | Node `>=24.15.0 <25` |
+| `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25` |
 
 `runScan` captures pinned Git or local input and accounts for every requested detector.
 Reliable results survive failed or refused sibling work in a partial assessment.
@@ -33,9 +33,15 @@ authenticate against their selected keys or publisher policies. Scanning, signin
 and publication are separate explicit operations.
 
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md)
-and the [production publisher plan](docs/production-publisher.md). Versioned JSON
+and the [production publisher plan](docs/production-publisher.md).
+
+Compare declared installation material with `compareMaterialInventories` from
+`@aihq/scan/host`; see [material comparison](docs/material-change-comparison.md)
+and [explicit GitHub handoff](docs/material-change-handoff.md). These Unreleased
+software APIs keep findings, report publication and issue delivery independent.
+
 Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
-`run-result`, `report`, `artifact` and `evidence-association`.
+`run-result`, `report`, `artifact`, `evidence-association` and `material-change`.
 The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
 byte bindings and cross-field semantics require the corresponding reader.
 

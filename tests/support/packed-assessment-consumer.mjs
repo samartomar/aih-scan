@@ -10,7 +10,9 @@ import { contractSupport } from "@aihq/scan/contracts";
 import { readArtifact, readReport } from "@aihq/scan/read";
 import {
   authenticateArtifact,
+  compareMaterialInventories,
   createRetainedObservationsV1,
+  deliverMaterialChange,
   prepareArtifact,
   runScan,
   signArtifact,
@@ -19,14 +21,14 @@ import {
 const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json", "utf8"));
 assert.deepEqual(contractSupport.package, { name: manifest.name, version: manifest.version });
 assert.equal(contractSupport.schema, "urn:aihq:package-support:1.0.0");
-assert.equal(contractSupport.contracts.length, 5);
-for (const name of ["request", "run-result", "report", "artifact", "evidence-association"]) {
+assert.equal(contractSupport.contracts.length, 6);
+for (const name of ["request", "run-result", "report", "artifact", "evidence-association", "material-change"]) {
   const schema = JSON.parse(readFileSync(fileURLToPath(import.meta.resolve(`@aihq/scan/schemas/${name}/1.0.0.json`)), "utf8"));
   assert.equal(schema.$id, `urn:aihq:scan:${name}:1.0.0`);
   assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.deepEqual(contractSupport.contracts.find(entry => entry.id === schema.$id), {
     id: schema.$id,
-    role: { request: "accepts", "run-result": "produces", report: "both", artifact: "both", "evidence-association": "accepts" }[name],
+    role: { request: "accepts", "run-result": "produces", report: "both", artifact: "both", "evidence-association": "accepts", "material-change": "both" }[name],
     schemaExport: `@aihq/scan/schemas/${name}/1.0.0.json`,
   });
 }
@@ -113,6 +115,39 @@ assert.equal(imported.report.results[0].observations[0].fromScanId, result.scanI
 assert.deepEqual(imported.report.results[0].observations[0].body, result.report.results[0].observations[0].body);
 assert.deepEqual(imported.annexes, result.annexes);
 
+const materialInventory = (scanId, digest) => ({
+  scanId, projection: "aih-material-v1", complete: true,
+  items: [{ itemId: "skills/review", paths: [{ path: "skills/review/SKILL.md", sha256: digest.repeat(64) }], metadata: { install: "copy" } }],
+});
+const material = await compareMaterialInventories({
+  sourceId: "https://github.com/example/skills",
+  before: materialInventory(result.scanId, "1"), after: materialInventory(repeated.scanId, "2"),
+});
+assert.equal(material.status, "compared");
+assert.equal(material.materialChange.schema, "urn:aihq:scan:material-change:1.0.0");
+assert.equal(material.materialChange.changes.length, 1);
+assert.equal(material.materialChange.changes[0].kind, "modified");
+assert.equal(material.materialChange.changes[0].beforeSha256, "0c3d7c0efc10d1a8471d3c7c3c8e4cba0c7628f3bce18757af83e7e319230e80");
+assert.notEqual(material.materialChange.changes[0].afterSha256, material.materialChange.changes[0].beforeSha256);
+const disabledDelivery = await deliverMaterialChange({ summary: material.materialChange, enabled: false });
+assert.equal(disabledDelivery.results[0].status, "failed");
+assert.equal(disabledDelivery.results[0].diagnostics[0].code, "delivery-disabled");
+assert.deepEqual(disabledDelivery.retryableSummary, material.materialChange);
+const artifactBeforeDelivery = new Uint8Array(signed.bytes);
+let deliveredIssue;
+const deliveryTransport = {
+  listIssues: async () => ({ issues: deliveredIssue ? [deliveredIssue] : [], hasNextPage: false }),
+  createIssue: async ({ body }) => (deliveredIssue = { number: 1, state: "open", body, html_url: "https://github.com/example/tracker/issues/1" }),
+  updateIssue: async ({ body }) => (deliveredIssue = { ...deliveredIssue, body }),
+};
+const enabledDeliveryInput = { summary: material.materialChange, enabled: true, target: { owner: "example", repository: "tracker" }, credential: "test-only", transport: deliveryTransport };
+assert.equal((await deliverMaterialChange(enabledDeliveryInput)).results[0].status, "created");
+assert.equal((await deliverMaterialChange(enabledDeliveryInput)).results[0].status, "updated");
+deliveredIssue.state = "closed";
+assert.equal((await deliverMaterialChange(enabledDeliveryInput)).results[0].status, "closed-disposition");
+assert.deepEqual(signed.bytes, artifactBeforeDelivery);
+assert.equal((await readArtifact(signed.bytes)).scanId, result.scanId);
+
 // Load the actual packed ESM entry graph in a realm without process, Buffer,
 // filesystem, subprocesses or network fetch. The harness resolves portable
 // package dependencies as a browser bundler would, while refusing Node built-ins.
@@ -149,4 +184,5 @@ process.stdout.write(JSON.stringify({
   read: portableResult.status,
   authenticity: authenticated.status,
   portableEntries: ["contracts", "read"],
+  materialChange: material.materialChange.changes[0].kind,
 }) + "\n");
