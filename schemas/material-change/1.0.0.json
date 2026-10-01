@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aihq:scan:material-change:1.0.0",
+  "description": "Material change under AIHQ restricted canonical JSON: well-formed NFC strings and nonnegative safe integers. The host additionally enforces UTF-8 byte bounds, canonical URLs, unique sorted item identities, unequal modification digests, uncompared-item exclusion and completeness semantics. Maximum canonical document: 2 MiB; JSON depth: 32; nodes: 100000.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sourceId", "materialProjection", "beforeScanId", "afterScanId", "inventory", "changes", "diagnostics"],
+  "properties": {
+    "schema": { "const": "urn:aihq:scan:material-change:1.0.0" },
+    "sourceId": {
+      "type": "string",
+      "maxLength": 2048,
+      "oneOf": [
+        { "pattern": "^local:[A-Za-z0-9][A-Za-z0-9._-]{0,249}$" },
+        { "pattern": "^https://[^/@\\s]+/[^?#%\\s]+$" }
+      ],
+      "description": "Already canonical credential-free HTTPS Git repository URL without query, fragment, trailing slash or .git suffix; or explicit local:<stable-label>. Never a machine path."
+    },
+    "materialProjection": { "const": "aih-material-v1" },
+    "beforeScanId": { "anyOf": [{ "$ref": "#/$defs/scanId" }, { "type": "null" }] },
+    "afterScanId": { "$ref": "#/$defs/scanId" },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["beforeComplete", "afterComplete", "uncomparedItemIds"],
+      "properties": {
+        "beforeComplete": { "type": "boolean" },
+        "afterComplete": { "type": "boolean" },
+        "uncomparedItemIds": { "type": "array", "maxItems": 4096, "uniqueItems": true, "items": { "$ref": "#/$defs/itemId" } }
+      }
+    },
+    "changes": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/change" } },
+    "diagnostics": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/diagnostic" } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "beforeScanId": { "type": "null" } } },
+      "then": {
+        "properties": {
+          "inventory": { "properties": { "beforeComplete": { "const": false } } },
+          "changes": { "items": { "properties": { "kind": { "const": "added" } } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "changes": { "contains": { "properties": { "kind": { "const": "removed" } }, "required": ["kind"] } } } },
+      "then": {
+        "properties": {
+          "beforeScanId": { "$ref": "#/$defs/scanId" },
+          "inventory": { "properties": { "beforeComplete": { "const": true }, "afterComplete": { "const": true } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "beforeScanId": { "type": "string" },
+          "changes": { "contains": { "properties": { "kind": { "const": "added" } }, "required": ["kind"] } }
+        }
+      },
+      "then": { "properties": { "inventory": { "properties": { "beforeComplete": { "const": true } } } } }
+    }
+  ],
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "scanId": { "type": "string", "pattern": "^scan:sha256:[0-9a-f]{64}$" },
+    "itemId": {
+      "type": "string", "minLength": 1, "maxLength": 4096,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!/)$",
+      "description": "NFC safe relative POSIX material identity, at most 4096 UTF-8 bytes."
+    },
+    "change": {
+      "type": "object", "additionalProperties": false,
+      "required": ["itemId", "kind", "beforeSha256", "afterSha256"],
+      "properties": {
+        "itemId": { "$ref": "#/$defs/itemId" },
+        "kind": { "enum": ["added", "removed", "modified"] },
+        "beforeSha256": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "afterSha256": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+      },
+      "oneOf": [
+        { "properties": { "kind": { "const": "added" }, "beforeSha256": { "type": "null" }, "afterSha256": { "$ref": "#/$defs/digest" } } },
+        { "properties": { "kind": { "const": "removed" }, "beforeSha256": { "$ref": "#/$defs/digest" }, "afterSha256": { "type": "null" } } },
+        { "properties": { "kind": { "const": "modified" }, "beforeSha256": { "$ref": "#/$defs/digest" }, "afterSha256": { "$ref": "#/$defs/digest" } } }
+      ]
+    },
+    "diagnostic": {
+      "type": "object", "additionalProperties": false, "required": ["code", "detail"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+        "detail": { "type": "string", "maxLength": 4096 },
+        "detectorId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "path": { "$ref": "#/$defs/itemId" }
+      }
+    }
+  }
+}

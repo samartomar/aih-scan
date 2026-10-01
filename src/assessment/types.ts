@@ -4,6 +4,7 @@ export const schemas = Object.freeze({
   report: "urn:aihq:scan:report:1.0.0",
   artifact: "urn:aihq:scan:artifact:1.0.0",
   evidenceAssociation: "urn:aihq:scan:evidence-association:1.0.0",
+  materialChange: "urn:aihq:scan:material-change:1.0.0",
 } as const);
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Digest = string;

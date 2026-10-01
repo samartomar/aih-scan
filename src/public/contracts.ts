@@ -12,6 +12,7 @@ export type {
   SigstoreBundle,
 } from "../artifact/types.js";
 export * from "../assessment/types.js";
+export type * from "../material-change/types.js";
 export const contractSupport = Object.freeze({
   schema: "urn:aihq:package-support:1.0.0",
   package: packageIdentity,
@@ -28,6 +29,11 @@ export const contractSupport = Object.freeze({
       id: schemas.evidenceAssociation,
       role: "accepts",
       schemaExport: "@aihq/scan/schemas/evidence-association/1.0.0.json",
+    },
+    {
+      id: schemas.materialChange,
+      role: "both",
+      schemaExport: "@aihq/scan/schemas/material-change/1.0.0.json",
     },
   ]),
   entries: Object.freeze([

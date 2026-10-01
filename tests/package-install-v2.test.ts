@@ -565,17 +565,22 @@ describe("published V2 package installation", () => {
       read: "read",
       authenticity: "authenticated",
       portableEntries: ["contracts", "read"],
+      materialChange: "modified",
     });
     expect(assessmentConsumer.annexes).toBeGreaterThan(0);
     writeFileSync(
       join(directory, "portable-consumer.mts"),
       [
-        'import { contractSupport, type ScanRequest, type Artifact, type AuthenticationTrust } from "@aihq/scan/contracts";',
+        'import { contractSupport, type ScanRequest, type Artifact, type AuthenticationTrust, type MaterialChange, type MaterialInventory, type CompareMaterialInventoriesInput } from "@aihq/scan/contracts";',
         'import { readArtifact, readReport } from "@aihq/scan/read";',
         "declare const request: ScanRequest;",
         "declare const artifact: Artifact;",
         "declare const trust: AuthenticationTrust;",
-        "void [contractSupport, request, artifact, trust, readArtifact, readReport];",
+        "declare const materialChange: MaterialChange;",
+        "declare const inventory: MaterialInventory;",
+        'const comparison: CompareMaterialInventoriesInput = { sourceId: "local:consumer", before: null, after: inventory };',
+        'const projection: "aih-material-v1" = materialChange.materialProjection;',
+        "void [contractSupport, request, artifact, trust, materialChange, comparison, projection, readArtifact, readReport];",
       ].join("\n"),
     );
     writeFileSync(
@@ -596,6 +601,40 @@ describe("published V2 package installation", () => {
     execFileSync(
       process.execPath,
       [join(root, "node_modules/typescript/bin/tsc"), "-p", "portable-tsconfig.json"],
+      { cwd: directory, encoding: "utf8", stdio: "pipe" },
+    );
+    writeFileSync(
+      join(directory, "material-host-consumer.mts"),
+      [
+        'import { compareMaterialInventories, deliverMaterialChange, type GitHubTransport, type MaterialChangeDeliveryResult, type MaterialComparisonResult, type MaterialInventory } from "@aihq/scan/host";',
+        'import type { MaterialChange } from "@aihq/scan/contracts";',
+        "declare const inventory: MaterialInventory;",
+        "declare const summary: MaterialChange;",
+        "declare const transport: GitHubTransport;",
+        'const compared: MaterialComparisonResult = await compareMaterialInventories({ sourceId: "local:consumer", before: null, after: inventory });',
+        'const delivered: MaterialChangeDeliveryResult = await deliverMaterialChange({ summary, enabled: true, target: { owner: "example", repository: "tracker" }, credential: "test-only", transport });',
+        "void [compared, delivered];",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(directory, "material-host-tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          target: "ES2022",
+          lib: ["ES2022", "DOM"],
+          types: ["node"],
+          typeRoots: [join(root, "node_modules/@types")],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+        },
+        files: ["material-host-consumer.mts"],
+      }),
+    );
+    execFileSync(
+      process.execPath,
+      [join(root, "node_modules/typescript/bin/tsc"), "-p", "material-host-tsconfig.json"],
       { cwd: directory, encoding: "utf8", stdio: "pipe" },
     );
     const installedReadme = readFileSync(
