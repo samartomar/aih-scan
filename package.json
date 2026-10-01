@@ -74,6 +74,7 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
+    "@babel/parser": "7.29.9",
     "@sigstore/bundle": "5.0.0",
     "@sigstore/protobuf-specs": "0.5.0",
     "@sigstore/verify": "4.1.2",

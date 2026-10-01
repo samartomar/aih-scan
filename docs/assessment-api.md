@@ -154,7 +154,10 @@ unrelated product modules and the application's whole lockfile are not input
 identities. Unsupported or over-budget dependency material is an explicit
 `implementation-material-unavailable` refusal for the affected detector.
 Node startup conditions are part of implementation identity. Command-line
-`--require` preloads bind their exact static module closure. Preloads passed through
+`--require` preloads bind their exact static module closure, parsed as JavaScript
+syntax. Supported preloads load modules through direct literal `import`/`require`
+calls; indirect loading, runtime code generation and behavior from untracked
+runtime configuration are outside this host model. Preloads passed through
 `NODE_OPTIONS` (`--require` or `-r`), `--import`, `--loader`/`--experimental-loader`,
 and custom module registration hooks are currently unsupported. Nonliteral dynamic
 module acquisition is also refused. These contexts produce an explicit refusal

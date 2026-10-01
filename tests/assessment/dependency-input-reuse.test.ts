@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import type { ScanRunResult } from "../../src/public/host.js";
 
 type Assessment = Extract<ScanRunResult, { status: "assessment" }> & { preloadMarker?: string };
@@ -35,6 +35,67 @@ function npmCliPath(): string {
   throw new Error("npm CLI entrypoint unavailable");
 }
 
+let templateRoot: string | undefined;
+let installationTemplate: string | undefined;
+let casesDirectory: string | undefined;
+
+function removeTemporaryFixture(root: string): void {
+  const path = relative(resolve(tmpdir()), resolve(root));
+  if (
+    !path ||
+    isAbsolute(path) ||
+    path === ".." ||
+    path.startsWith("../") ||
+    path.startsWith("..\\") ||
+    !basename(root).startsWith("aih-dependency-reuse-")
+  )
+    throw new Error("Fixture cleanup must stay within its owned temporary root");
+  rmSync(root, { recursive: true, force: true });
+}
+
+beforeAll(() => {
+  templateRoot = mkdtempSync(join(tmpdir(), "aih-dependency-reuse-template-"));
+  const first = join(templateRoot, "installation"),
+    built = join(first, "dist");
+  mkdirSync(first);
+  execFileSync(
+    process.execPath,
+    [resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.build.json", "--outDir", built],
+    { stdio: "pipe" },
+  );
+
+  cpSync(resolve("package.json"), join(first, "package.json"));
+  cpSync(resolve("tools/baseline-analyzers"), join(first, "tools/baseline-analyzers"), {
+    recursive: true,
+  });
+  const packages = execFileSync(
+    process.execPath,
+    [npmCliPath(), "ls", "--omit=dev", "--all", "--parseable"],
+    { encoding: "utf8" },
+  )
+    .trim()
+    .split(/\r?\n/)
+    .slice(1);
+  for (const packageRoot of packages) {
+    const path = relative(resolve("."), packageRoot);
+    if (path.startsWith("..") || !path.startsWith("node_modules"))
+      throw new Error("Fixture dependency must belong to its selected checkout");
+    const destination = join(templateRoot, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(packageRoot, destination, { recursive: true });
+  }
+
+  // Compiled modules and common package files remain immutable after setup.
+  // Case installations resolve unchanged packages through this real ancestor tree.
+  installationTemplate = first;
+  casesDirectory = join(templateRoot, "cases");
+  mkdirSync(casesDirectory);
+}, 30000);
+
+afterAll(() => {
+  if (templateRoot) removeTemporaryFixture(templateRoot);
+});
+
 function installedFixture(
   change: (installation: string) => void,
   verify: (current: Assessment, original: Assessment) => void,
@@ -42,39 +103,23 @@ function installedFixture(
   preparePreload?: (installation: string) => string[],
   launchFromInstallation = false,
 ): void {
-  const root = mkdtempSync(join(tmpdir(), "aih-dependency-reuse-test-"));
+  if (!casesDirectory || !templateRoot)
+    throw new Error("Installed fixture template is unavailable");
+  const root = mkdtempSync(join(casesDirectory, "aih-dependency-reuse-test-"));
   try {
-    const built = join(root, "built"),
-      first = join(root, "first"),
+    if (!installationTemplate) throw new Error("Installed fixture template is unavailable");
+    const first = join(root, "first"),
       second = join(root, "second");
-    execFileSync(
-      process.execPath,
-      [resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.build.json", "--outDir", built],
-      { stdio: "pipe" },
-    );
-    mkdirSync(first);
-    cpSync(built, join(first, "dist"), { recursive: true });
-    cpSync(resolve("package.json"), join(first, "package.json"));
-    cpSync(resolve("tools/baseline-analyzers"), join(first, "tools/baseline-analyzers"), {
-      recursive: true,
-    });
-    const packages = execFileSync(
-      process.execPath,
-      [npmCliPath(), "ls", "--omit=dev", "--all", "--parseable"],
-      { encoding: "utf8" },
-    )
-      .trim()
-      .split(/\r?\n/)
-      .slice(1);
-    for (const packageRoot of packages) {
-      const path = relative(resolve("."), packageRoot);
-      if (path.startsWith("..") || !path.startsWith("node_modules"))
-        throw new Error("Fixture dependency must belong to its selected checkout");
-      const destination = join(first, path);
-      mkdirSync(dirname(destination), { recursive: true });
-      cpSync(packageRoot, destination, { recursive: true });
+    cpSync(installationTemplate, first, { recursive: true });
+    cpSync(installationTemplate, second, { recursive: true });
+    // YAML is the only package mutated by these cases. Both processes get distinct
+    // regular-file copies, while every other installed dependency stays immutable.
+    for (const installation of [first, second]) {
+      mkdirSync(join(installation, "node_modules"));
+      cpSync(join(templateRoot, "node_modules/yaml"), join(installation, "node_modules/yaml"), {
+        recursive: true,
+      });
     }
-    cpSync(first, second, { recursive: true });
     const firstFlags = preparePreload?.(first) ?? [];
     const secondFlags = preparePreload?.(second) ?? startupFlags;
     const source = join(root, "source");
@@ -150,7 +195,7 @@ process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPr
       });
     verify(current, original);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTemporaryFixture(root);
   }
 }
 
@@ -230,45 +275,55 @@ test("changed Node startup conditions cannot admit observations from another exe
   );
 }, 30000);
 
-test("a quote-prefixed computed preload dependency is refused instead of admitting stale signed observations", () => {
-  installedFixture(
-    (installation) =>
-      writeFileSync(
-        join(installation, "preload/actual.cjs"),
-        "globalThis.__aihPreloadMarker = 'changed';\n",
-      ),
-    (current, original) => {
-      expect(original.preloadMarker).toBe("original");
-      expect(current.preloadMarker).toBe("changed");
-      expect(current).toMatchObject({
-        status: "assessment",
-        report: {
-          completion: "partial",
-          results: [
-            "detector.aih-binding-gate",
-            "detector.aih-native",
-            "detector.aih-trust-lint",
-          ].map((detectorId) => ({
-            detectorId,
-            outcome: "refused",
-            observations: [],
-            coverage: { uncoveredPaths: ["SKILL.md"], complete: false },
-            diagnostics: [{ code: "implementation-material-unavailable" }],
-          })),
-        },
-      });
-    },
-    [],
-    (installation) => {
-      const directory = join(installation, "preload");
-      mkdirSync(directory);
-      writeFileSync(join(directory, "entry.cjs"), "require('./' + 'actual.cjs');\n");
-      writeFileSync(join(directory, "index.js"), "// unchanged unused resolution fallback\n");
-      writeFileSync(join(directory, "actual.cjs"), "globalThis.__aihPreloadMarker = 'original';\n");
-      return ["--require", join(directory, "entry.cjs")];
-    },
-  );
-}, 30000);
+test.each([
+  ["quote-prefixed computed", "require('./' + 'actual.cjs');\n"],
+  ["require alias", "const load = require; load('./actual.cjs');\n"],
+])(
+  "a %s preload dependency is refused instead of admitting stale signed observations",
+  (_kind, entry) => {
+    installedFixture(
+      (installation) =>
+        writeFileSync(
+          join(installation, "preload/actual.cjs"),
+          "globalThis.__aihPreloadMarker = 'changed';\n",
+        ),
+      (current, original) => {
+        expect(original.preloadMarker).toBe("original");
+        expect(current.preloadMarker).toBe("changed");
+        expect(current).toMatchObject({
+          status: "assessment",
+          report: {
+            completion: "partial",
+            results: [
+              "detector.aih-binding-gate",
+              "detector.aih-native",
+              "detector.aih-trust-lint",
+            ].map((detectorId) => ({
+              detectorId,
+              outcome: "refused",
+              observations: [],
+              coverage: { uncoveredPaths: ["SKILL.md"], complete: false },
+              diagnostics: [{ code: "implementation-material-unavailable" }],
+            })),
+          },
+        });
+      },
+      [],
+      (installation) => {
+        const directory = join(installation, "preload");
+        mkdirSync(directory);
+        writeFileSync(join(directory, "entry.cjs"), entry);
+        writeFileSync(join(directory, "index.js"), "// unchanged unused resolution fallback\n");
+        writeFileSync(
+          join(directory, "actual.cjs"),
+          "globalThis.__aihPreloadMarker = 'original';\n",
+        );
+        return ["--require", join(directory, "entry.cjs")];
+      },
+    );
+  },
+  30000,
+);
 
 test("relative startup preloads resolve from each Node launch working directory", () => {
   installedFixture(
@@ -310,3 +365,58 @@ test("relative startup preloads resolve from each Node launch working directory"
     true,
   );
 }, 30000);
+
+test.each([
+  ["commented literal", "require /* acquisition comment */ ('./actual.cjs');\n"],
+  ["escaped literal and identifier", "requ\\u0069re('.\\x2factual.cjs');\n"],
+])(
+  "a %s preload call binds the dependency actually executed by Node",
+  (_kind, entry) => {
+    installedFixture(
+      (installation) =>
+        writeFileSync(
+          join(installation, "preload/actual.cjs"),
+          "globalThis.__aihPreloadMarker = 'changed';\n",
+        ),
+      (current, original) => {
+        expect(original.preloadMarker).toBe("original");
+        expect(current.preloadMarker).toBe("changed");
+        expect(original.report.results.map((result) => result.outcome)).toEqual([
+          "succeeded",
+          "succeeded",
+          "succeeded",
+        ]);
+        expect(current).toMatchObject({
+          status: "assessment",
+          report: {
+            results: [
+              "detector.aih-binding-gate",
+              "detector.aih-native",
+              "detector.aih-trust-lint",
+            ].map((detectorId) => ({
+              detectorId,
+              outcome: "succeeded",
+              observations: [{ origin: "fresh" }],
+            })),
+          },
+        });
+        for (const index of [0, 1, 2])
+          expect(current.report.results[index]?.observations[0]?.body.input.adapterSha256).not.toBe(
+            original.report.results[index]?.observations[0]?.body.input.adapterSha256,
+          );
+      },
+      [],
+      (installation) => {
+        const directory = join(installation, "preload");
+        mkdirSync(directory);
+        writeFileSync(join(directory, "entry.cjs"), entry);
+        writeFileSync(
+          join(directory, "actual.cjs"),
+          "globalThis.__aihPreloadMarker = 'original';\n",
+        );
+        return ["--require", join(directory, "entry.cjs")];
+      },
+    );
+  },
+  30000,
+);

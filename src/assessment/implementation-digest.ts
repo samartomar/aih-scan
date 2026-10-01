@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { parse } from "@babel/parser";
 
 /** A fresh, bounded installation snapshot shared only by one assessment. */
 export interface ImplementationDigester {
@@ -258,28 +259,143 @@ export function createImplementationDigester(options: {
     argv: boundArguments,
     nodeOptions: process.env.NODE_OPTIONS ?? "",
   });
+  const extractedImports = new Map<Buffer, string[]>();
   const runtimeImports = (bytes: Buffer): string[] => {
-    const source = bytes
-      .toString("utf8")
-      .replace(/(?:^|\n)\s*(?:import|export)\s+type\s+[\s\S]*?;/g, "");
-    // A quoted prefix is not a literal argument: concatenation, additional
-    // arguments and escaped spellings remain outside this exact static subset.
-    const literalCalls = new Set(
-      [...source.matchAll(/\b(?:import|require)\s*\(\s*(["'])([^"'\\\r\n]*)\1\s*\)/g)].map(
-        (match) => match.index,
-      ),
-    );
-    for (const call of source.matchAll(/\b(?:import|require)\s*\(/g))
-      if (!literalCalls.has(call.index)) unavailable();
-    return [
-      ...new Set(
-        [
-          ...source.matchAll(
-            /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([^"']+)["']/g,
-          ),
-        ].map((match) => match[1] ?? unavailable()),
-      ),
-    ].sort();
+    const cached = extractedImports.get(bytes);
+    if (cached) return cached;
+    // Bound allocation before parsing, then bound the syntax traversal independently.
+    if (bytes.length > 1024 * 1024) unavailable();
+    const ast = parse(bytes.toString("utf8"), {
+      sourceType: "unambiguous",
+      plugins: ["typescript"],
+      createImportExpressions: true,
+      attachComment: false,
+      allowReturnOutsideFunction: true,
+    });
+    type SyntaxNode = { type: string; [key: string]: unknown };
+    const node = (value: unknown): SyntaxNode | undefined =>
+      value !== null &&
+      typeof value === "object" &&
+      "type" in value &&
+      typeof value.type === "string"
+        ? (value as SyntaxNode)
+        : undefined;
+    const literal = (value: unknown): string => {
+      const argument = node(value);
+      if (argument?.type !== "StringLiteral" || typeof argument.value !== "string") unavailable();
+      return argument.value;
+    };
+    const imports = new Set<string>();
+    const pending: { value: SyntaxNode; parent?: SyntaxNode; key?: string; depth: number }[] = [
+      { value: ast as unknown as SyntaxNode, depth: 0 },
+    ];
+    const typeOnly = new Set([
+      "TSImportType",
+      "TSTypeAnnotation",
+      "TSTypeAliasDeclaration",
+      "TSInterfaceDeclaration",
+      "TSTypeParameterDeclaration",
+      "TSTypeParameterInstantiation",
+      "TSDeclareFunction",
+    ]);
+    const unsupported = new Set([
+      "eval",
+      "Function",
+      "createRequire",
+      "_load",
+      "register",
+      "registerHooks",
+    ]);
+    let visited = 0;
+    while (pending.length) {
+      const item = pending.pop();
+      if (!item || ++visited > 100_000 || item.depth >= caps.depth) unavailable();
+      const value = item.value;
+      if (typeOnly.has(value.type) || value.declare === true) continue;
+      if (value.importKind === "type" || value.exportKind === "type") continue;
+      if (value.type === "TSImportEqualsDeclaration") unavailable();
+      if (
+        value.type === "ImportDeclaration" ||
+        value.type === "ExportNamedDeclaration" ||
+        value.type === "ExportAllDeclaration"
+      ) {
+        const specifiers = Array.isArray(value.specifiers) ? value.specifiers : [];
+        if (
+          specifiers.length > 0 &&
+          specifiers.every((specifier) => {
+            const part = node(specifier);
+            return part?.importKind === "type" || part?.exportKind === "type";
+          })
+        )
+          continue;
+        if (value.source) imports.add(literal(value.source));
+      }
+      if (value.type === "ImportExpression") {
+        if (value.options != null) unavailable();
+        imports.add(literal(value.source));
+      }
+      if (
+        value.type === "CallExpression" &&
+        node(value.callee)?.type === "Identifier" &&
+        node(value.callee)?.name === "require"
+      ) {
+        if (!Array.isArray(value.arguments) || value.arguments.length !== 1) unavailable();
+        imports.add(literal(value.arguments[0]));
+      }
+      if (value.type === "Identifier" && value.name === "require") {
+        // A reference used to construct an alias or alternate require API is unknown.
+        if (
+          item.key !== "callee" ||
+          item.parent?.type !== "CallExpression" ||
+          item.parent.callee !== value
+        )
+          unavailable();
+      }
+      if (
+        value.type === "Identifier" &&
+        typeof value.name === "string" &&
+        unsupported.has(value.name)
+      )
+        unavailable();
+      if (
+        (value.type === "MemberExpression" || value.type === "OptionalMemberExpression") &&
+        value.computed === true
+      ) {
+        const property = node(value.property);
+        if (
+          property?.type === "StringLiteral" &&
+          typeof property.value === "string" &&
+          (unsupported.has(property.value) || property.value === "require")
+        )
+          unavailable();
+      }
+      for (const [key, child] of Object.entries(value)) {
+        if (
+          [
+            "loc",
+            "extra",
+            "comments",
+            "leadingComments",
+            "innerComments",
+            "trailingComments",
+            "typeAnnotation",
+            "typeParameters",
+            "returnType",
+            "superTypeParameters",
+            "implements",
+          ].includes(key)
+        )
+          continue;
+        for (const candidate of Array.isArray(child) ? child : [child]) {
+          const nested = node(candidate);
+          if (nested) pending.push({ value: nested, parent: value, key, depth: item.depth + 1 });
+        }
+      }
+    }
+    if (imports.has("vm") || imports.has("node:vm")) unavailable();
+    const result = [...imports].sort();
+    extractedImports.set(bytes, result);
+    return result;
   };
   const assertUnchanged = (): void => {
     // Conditional exports and Node startup flags select runtime behavior.
@@ -346,12 +462,6 @@ export function createImplementationDigester(options: {
             };
             files.push(node);
             const imports = runtimeImports(content.bytes);
-            // Registering module-transform hooks requires another model of executed code.
-            if (
-              imports.some((name) => name === "node:module" || name === "module") &&
-              /\bregister(?:Hooks)?\s*\(/.test(content.bytes.toString("utf8"))
-            )
-              unavailable();
             for (const specifier of imports) {
               if (isBuiltin(specifier)) continue;
               if (specifier.startsWith(".")) {
