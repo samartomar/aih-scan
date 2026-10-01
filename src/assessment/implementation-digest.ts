@@ -67,6 +67,7 @@ export function createImplementationDigester(options: {
   extension: string;
 }): ImplementationDigester {
   const root = resolve(options.moduleRoot);
+  const bindingWorkingDirectory = process.cwd();
   const startup = (): string =>
     JSON.stringify({ argv: process.execArgv, nodeOptions: process.env.NODE_OPTIONS ?? "" });
   const startupIdentity = startup();
@@ -232,7 +233,13 @@ export function createImplementationDigester(options: {
         : process.execArgv[++index];
       try {
         if (!preload) unavailable();
-        const file = createRequire(join(root, "package.json")).resolve(preload);
+        // Node resolves command-line preloads from its launch cwd. The current
+        // cwd alone cannot prove that history: require a matching already-loaded
+        // startup module, otherwise refuse rather than bind an unexecuted file.
+        const startupRequire = createRequire(join(bindingWorkingDirectory, ".aih-preload.cjs"));
+        const file = startupRequire.resolve(preload);
+        const loaded = startupRequire.cache[file];
+        if (!loaded?.loaded || loaded.parent?.id !== "internal/preload") unavailable();
         boundArguments.push("--require", `preload:${preloadFiles.length}`);
         preloadFiles.push(file);
       } catch {
@@ -255,8 +262,15 @@ export function createImplementationDigester(options: {
     const source = bytes
       .toString("utf8")
       .replace(/(?:^|\n)\s*(?:import|export)\s+type\s+[\s\S]*?;/g, "");
-    // This static model does not guess nonliteral dynamic module acquisition.
-    if (/\b(?:import|require)\s*\((?!\s*["'])/.test(source)) unavailable();
+    // A quoted prefix is not a literal argument: concatenation, additional
+    // arguments and escaped spellings remain outside this exact static subset.
+    const literalCalls = new Set(
+      [...source.matchAll(/\b(?:import|require)\s*\(\s*(["'])([^"'\\\r\n]*)\1\s*\)/g)].map(
+        (match) => match.index,
+      ),
+    );
+    for (const call of source.matchAll(/\b(?:import|require)\s*\(/g))
+      if (!literalCalls.has(call.index)) unavailable();
     return [
       ...new Set(
         [
@@ -270,6 +284,7 @@ export function createImplementationDigester(options: {
   const assertUnchanged = (): void => {
     // Conditional exports and Node startup flags select runtime behavior.
     if (startup() !== startupIdentity) unavailable();
+    if (preloadFiles.length > 0 && process.cwd() !== bindingWorkingDirectory) unavailable();
     for (const { name, parent } of absent) {
       try {
         createRequire(parent).resolve(name);

@@ -154,8 +154,16 @@ unrelated product modules and the application's whole lockfile are not input
 identities. Unsupported or over-budget dependency material is an explicit
 `implementation-material-unavailable` refusal for the affected detector.
 Node startup conditions are part of implementation identity. Command-line
-`--require` preloads bind their exact static module closure; unsupported custom
-loaders, import hooks or nonliteral dynamic acquisition are refused.
+`--require` preloads bind their exact static module closure. Preloads passed through
+`NODE_OPTIONS` (`--require` or `-r`), `--import`, `--loader`/`--experimental-loader`,
+and custom module registration hooks are currently unsupported. Nonliteral dynamic
+module acquisition is also refused. These contexts produce an explicit refusal
+for each affected detector, including fresh work and external detectors; they do
+not produce observations with an unknown adapter identity.
+Relative command-line preloads resolve from the working directory and must match
+an already loaded startup module. Keep the launch working directory unchanged
+before and during assessment; the loaded-module check cannot establish arbitrary
+working-directory history before Scan was imported.
 Run Scan from an immutable package installation and restart its process after
 changing installed code or dependencies. In-place package replacement while Node
 still holds previously loaded modules is outside the supported execution model.

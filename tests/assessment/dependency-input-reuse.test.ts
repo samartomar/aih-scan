@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { expect, test } from "vitest";
 import type { ScanRunResult } from "../../src/public/host.js";
 
-type Assessment = Extract<ScanRunResult, { status: "assessment" }>;
+type Assessment = Extract<ScanRunResult, { status: "assessment" }> & { preloadMarker?: string };
 
 function npmCliPath(): string {
   const configured = process.env.npm_execpath;
@@ -39,6 +39,8 @@ function installedFixture(
   change: (installation: string) => void,
   verify: (current: Assessment, original: Assessment) => void,
   startupFlags: string[] = [],
+  preparePreload?: (installation: string) => string[],
+  launchFromInstallation = false,
 ): void {
   const root = mkdtempSync(join(tmpdir(), "aih-dependency-reuse-test-"));
   try {
@@ -73,6 +75,8 @@ function installedFixture(
       cpSync(packageRoot, destination, { recursive: true });
     }
     cpSync(first, second, { recursive: true });
+    const firstFlags = preparePreload?.(first) ?? [];
+    const secondFlags = preparePreload?.(second) ?? startupFlags;
     const source = join(root, "source");
     mkdirSync(source);
     writeFileSync(
@@ -109,11 +113,12 @@ const keyId = 'ed25519:' + createHash('sha256').update(spki).digest('hex');
 const artifact = await signArtifact({report:result.report, annexes:result.annexes.map(({id,bytesBase64})=>({id,bytes:Buffer.from(bytesBase64,'base64')})), signer:{keyId,privateKey}});
 writeFileSync(${JSON.stringify(priorPath)}, artifact.bytes);
 writeFileSync(${JSON.stringify(trustPath)}, JSON.stringify({keys:[{identity:'independent-dependency-fixture', keyId, publicKeySpkiBase64:spki.toString('base64')}],publishers:[]}));
-process.stdout.write(JSON.stringify(result));
+process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPreloadMarker}));
 `,
     );
     const original = JSON.parse(
-      execFileSync(process.execPath, [firstScript], {
+      execFileSync(process.execPath, [...firstFlags, firstScript], {
+        cwd: launchFromInstallation ? first : undefined,
         encoding: "utf8",
         maxBuffer: 2 * 1024 * 1024,
       }),
@@ -126,21 +131,23 @@ process.stdout.write(JSON.stringify(result));
 import {readFileSync} from 'node:fs';
 import {runScan} from ${JSON.stringify(pathToFileURL(join(second, "dist/public/host.js")).href)};
 const result = await runScan({...${JSON.stringify(request)}, priorArtifacts:[{scanId:${JSON.stringify(original.scanId)},location:{kind:'file',path:${JSON.stringify(priorPath)}}}]}, {reuseTrust:JSON.parse(readFileSync(${JSON.stringify(trustPath)},'utf8'))});
-process.stdout.write(JSON.stringify(result));
+process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPreloadMarker}));
 `,
     );
     const current = JSON.parse(
-      execFileSync(process.execPath, [...startupFlags, currentScript], {
+      execFileSync(process.execPath, [...secondFlags, currentScript], {
+        cwd: launchFromInstallation ? second : undefined,
         encoding: "utf8",
         maxBuffer: 2 * 1024 * 1024,
       }),
     );
-    expect(original).toMatchObject({
-      status: "assessment",
-      report: {
-        results: [{ outcome: "succeeded" }, { outcome: "succeeded" }, { outcome: "succeeded" }],
-      },
-    });
+    if (preparePreload === undefined)
+      expect(original).toMatchObject({
+        status: "assessment",
+        report: {
+          results: [{ outcome: "succeeded" }, { outcome: "succeeded" }, { outcome: "succeeded" }],
+        },
+      });
     verify(current, original);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -220,5 +227,86 @@ test("changed Node startup conditions cannot admit observations from another exe
         },
       }),
     ["--conditions=aih-independent-fixture"],
+  );
+}, 30000);
+
+test("a quote-prefixed computed preload dependency is refused instead of admitting stale signed observations", () => {
+  installedFixture(
+    (installation) =>
+      writeFileSync(
+        join(installation, "preload/actual.cjs"),
+        "globalThis.__aihPreloadMarker = 'changed';\n",
+      ),
+    (current, original) => {
+      expect(original.preloadMarker).toBe("original");
+      expect(current.preloadMarker).toBe("changed");
+      expect(current).toMatchObject({
+        status: "assessment",
+        report: {
+          completion: "partial",
+          results: [
+            "detector.aih-binding-gate",
+            "detector.aih-native",
+            "detector.aih-trust-lint",
+          ].map((detectorId) => ({
+            detectorId,
+            outcome: "refused",
+            observations: [],
+            coverage: { uncoveredPaths: ["SKILL.md"], complete: false },
+            diagnostics: [{ code: "implementation-material-unavailable" }],
+          })),
+        },
+      });
+    },
+    [],
+    (installation) => {
+      const directory = join(installation, "preload");
+      mkdirSync(directory);
+      writeFileSync(join(directory, "entry.cjs"), "require('./' + 'actual.cjs');\n");
+      writeFileSync(join(directory, "index.js"), "// unchanged unused resolution fallback\n");
+      writeFileSync(join(directory, "actual.cjs"), "globalThis.__aihPreloadMarker = 'original';\n");
+      return ["--require", join(directory, "entry.cjs")];
+    },
+  );
+}, 30000);
+
+test("relative startup preloads resolve from each Node launch working directory", () => {
+  installedFixture(
+    () => {},
+    (current, original) => {
+      expect(original.preloadMarker).toBe("relative-preload");
+      expect(current.preloadMarker).toBe("relative-preload");
+      expect(original.report.results.map((result) => result.outcome)).toEqual([
+        "succeeded",
+        "succeeded",
+        "succeeded",
+      ]);
+      expect(current).toMatchObject({
+        status: "assessment",
+        report: {
+          results: [
+            "detector.aih-binding-gate",
+            "detector.aih-native",
+            "detector.aih-trust-lint",
+          ].map((detectorId) => ({
+            detectorId,
+            outcome: "succeeded",
+            observations: [{ origin: "reused" }],
+          })),
+        },
+      });
+    },
+    [],
+    (installation) => {
+      const directory = join(installation, "preload");
+      mkdirSync(directory);
+      writeFileSync(join(directory, "entry.cjs"), "require('./actual.cjs');\n");
+      writeFileSync(
+        join(directory, "actual.cjs"),
+        "globalThis.__aihPreloadMarker = 'relative-preload';\n",
+      );
+      return ["-r", "./preload/entry.cjs"];
+    },
+    true,
   );
 }, 30000);

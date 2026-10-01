@@ -43,7 +43,8 @@ signer. The public boundary checks are in:
 - `tests/assessment/dependency-input-reuse.test.ts`: independently loaded package
   installations with changed parser bytes invalidate dependent imported work and
   preserve unaffected observations; missing dependency material is an explicit
-  refusal, and changed startup conditions require current work.
+  refusal, changed startup conditions require current work, computed preload
+  dependencies refuse, and relative preloads bind the startup module Node loaded.
 - `tests/package-install-v2.test.ts` and its packed assessment consumer: retained
   and authenticated imported reuse through the actual installed public API.
 
@@ -61,6 +62,16 @@ a synchronous OS filesystem call cannot itself be interrupted by that deadline.
 A small timing fixture does not establish customer-scale performance or
 file-level support for every detector.
 
+Complete adapter identity also applies to fresh observations. The baseline ran
+fresh work in startup contexts whose preload dependencies it did not bind; this
+change explicitly refuses affected detectors when that identity is unavailable.
+Currently unsupported contexts include `NODE_OPTIONS` preloads (including VS Code
+auto-attach and APM bootloaders), `node --import tsx`, custom loader or module
+registration hooks, and computed dynamic module paths. Command-line `--require`
+preloads with a supported complete static closure can run. These limitations
+apply to external detectors as well as in-process and reused work. Supporting
+additional contexts requires binding their real resolved implementation.
+
 ## Representative delta measurement
 
 `npm run build && node tools/measure-observation-reuse.mjs` measures an owned
@@ -70,7 +81,7 @@ its complete selected unit, native source identity runs fresh over the changed
 tree, and an unavailable detector remains explicitly refused. The report is partial.
 
 On Windows x64, Node 24.19.0, on 2026-10-01, the empty-retention first run took
-841.24 ms. Delta runs had a 645.87 ms median, compared with 706.37 ms when forcing
+801.99 ms. Delta runs had a 684.36 ms median, compared with 785.87 ms when forcing
 fresh detector work on the same changed source. Fresh/delta order alternated;
 the process and filesystem caches stayed warm. These are one host's observed
 end-to-end timings, including current source capture and report validation.
