@@ -25,6 +25,66 @@ const expiredPolicy = (fixture: Fixture) => {
   return old;
 };
 
+test("the product authenticates TEST ONLY DSSE 0.0.2 with a real RFC3161 timestamp bound to signature bytes", async () => {
+  const fixture = await syntheticKeyless("0.0.2");
+  expect(fixture.bundle.verificationMaterial.tlogEntries![0]!.kindVersion).toEqual({
+    kind: "dsse",
+    version: "0.0.2",
+  });
+  expect(fixture.bundle.verificationMaterial.tlogEntries![0]!.inclusionPromise).toBeUndefined();
+  expect(Date.parse(new X509Certificate(fixture.certificate).validTo)).toBeLessThan(Date.now());
+  expect(fixture.prepared.artifact.annexes[0]?.byteLength).toBeGreaterThan(0);
+  expect(await authenticate(fixture, [fixture.publisher])).toEqual({
+    scanId: fixture.prepared.scanId,
+    status: "authenticated",
+    producerIdentity: fixture.publisher.identity,
+    reportRead: "not-requested",
+  });
+});
+
+test.each([
+  "missing",
+  "wrong imprint",
+  "outside leaf validity",
+  "unselected TSA",
+  "corrupt TSA signature",
+])("DSSE 0.0.2 refuses a %s timestamp witness through the product API", async (change) => {
+  const fixture = await syntheticKeyless("0.0.2");
+  const artifact = structuredClone(fixture.attached.artifact);
+  const publisher = structuredClone(fixture.publisher);
+  if (change === "missing")
+    delete artifact.attestation!.verificationMaterial.timestampVerificationData;
+  if (change === "unselected TSA") publisher.trustedRoot.timestampAuthorities = [];
+  const timestamp = (
+    artifact.attestation!.verificationMaterial.timestampVerificationData as
+      | {
+          rfc3161Timestamps: { signedTimestamp: string }[];
+        }
+      | undefined
+  )?.rfc3161Timestamps[0];
+  if (timestamp) {
+    if (change === "wrong imprint")
+      timestamp.signedTimestamp = fixture.timestamps!.wrongImprintTimestamp;
+    if (change === "outside leaf validity")
+      timestamp.signedTimestamp = fixture.timestamps!.outsideLeafValidityTimestamp;
+    if (change === "corrupt TSA signature") {
+      const token = Buffer.from(timestamp.signedTimestamp, "base64");
+      token[token.length - 1] = token[token.length - 1]! ^ 1;
+      timestamp.signedTimestamp = token.toString("base64");
+    }
+  }
+  expect(
+    await authenticateArtifact({
+      bytes: canonicalBytes(artifact),
+      expectedScanId: fixture.prepared.scanId,
+      trust: { keys: [], publishers: [publisher] },
+    }),
+  ).toMatchObject({
+    status: "unverifiable",
+    reason: change === "missing" ? "malformed" : "invalid-signature",
+  });
+});
+
 test("the product authenticates a TEST ONLY expired certificate with real CT/Rekor witnesses and a nonempty annex", async () => {
   const fixture = await syntheticKeyless();
   expect(Date.parse(new X509Certificate(fixture.certificate).validTo)).toBeLessThan(Date.now());
@@ -180,6 +240,7 @@ test("the certificate profile binds the original statement bytes and nonempty an
 
 test("successful product certificate authentication and historical consolidation perform no network calls", async () => {
   const fixture = await syntheticKeyless();
+  const timestampFixture = await syntheticKeyless("0.0.2");
   const blocked = () => {
     throw new Error("No network permitted");
   };
@@ -210,6 +271,10 @@ test("successful product certificate authentication and historical consolidation
         structuredClone(fixture.publisher),
       ]),
     ).toMatchObject({ status: "authenticated", producerIdentity: fixture.publisher.identity });
+    expect(await authenticate(timestampFixture, [timestampFixture.publisher])).toMatchObject({
+      status: "authenticated",
+      producerIdentity: timestampFixture.publisher.identity,
+    });
     for (const guard of guards) expect(guard).not.toHaveBeenCalled();
   } finally {
     for (const guard of guards) guard.mockRestore();

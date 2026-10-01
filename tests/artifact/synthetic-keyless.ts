@@ -80,7 +80,81 @@ const canonical = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
-export async function syntheticKeyless() {
+// RFC3161 TimeStampResp containing CMS SignedData. All keys stay in this local
+// test helper; consumers receive only signed tokens and public certificates.
+function syntheticTimestamps(signature: Buffer) {
+  const ca = ec(),
+    signer = ec();
+  const caName = name("TEST ONLY timestamp CA");
+  const dates = validity("100101000000Z", "400101000000Z");
+  const caCertificate = signedCertificate(
+    tbs(caName, caName, ca.publicKey, dates, [
+      extension([2, 5, 29, 19], sequence(der(1, Buffer.from([255]))), true),
+    ]),
+    ca.privateKey,
+  );
+  const signerCertificate = signedCertificate(
+    tbs(caName, name("TEST ONLY timestamp signer"), signer.publicKey, dates, [
+      extension([2, 5, 29, 19], sequence()),
+      extension([2, 5, 29, 15], der(3, Buffer.from([7, 128])), true),
+      extension([2, 5, 29, 37], sequence(oid(1, 3, 6, 1, 5, 5, 7, 3, 8)), true),
+    ]),
+    ca.privateKey,
+  );
+  const digestAlgorithm = sequence(oid(2, 16, 840, 1, 101, 3, 4, 2, 1));
+  const tstOid = oid(1, 2, 840, 113549, 1, 9, 16, 1, 4);
+  const token = (data: Buffer, genTime: string) => {
+    const info = sequence(
+      der(2, Buffer.from([1])),
+      oid(1, 3, 6, 1, 4, 1, 57264, 999),
+      sequence(digestAlgorithm, der(4, hash(data))),
+      der(2, Buffer.from([1])),
+      der(24, Buffer.from(genTime)),
+    );
+    const attributes = [
+      sequence(oid(1, 2, 840, 113549, 1, 9, 3), der(0x31, tstOid)),
+      sequence(oid(1, 2, 840, 113549, 1, 9, 4), der(0x31, der(4, hash(info)))),
+      // ESS SigningCertificateV2 binds the TSA signer certificate (SHA-256 default).
+      sequence(
+        oid(1, 2, 840, 113549, 1, 9, 16, 2, 47),
+        der(0x31, sequence(sequence(sequence(der(4, hash(signerCertificate)))))),
+      ),
+    ].sort(Buffer.compare);
+    const signerInfo = sequence(
+      der(2, Buffer.from([1])),
+      sequence(caName, der(2, Buffer.from([1]))),
+      digestAlgorithm,
+      der(0xa0, ...attributes),
+      algorithm,
+      der(4, sign("sha256", der(0x31, ...attributes), signer.privateKey)),
+    );
+    const signedData = sequence(
+      der(2, Buffer.from([3])),
+      der(0x31, digestAlgorithm),
+      sequence(tstOid, der(0xa0, der(4, info))),
+      der(0xa0, signerCertificate, caCertificate),
+      der(0x31, signerInfo),
+    );
+    return sequence(
+      sequence(der(2, Buffer.from([0]))),
+      sequence(oid(1, 2, 840, 113549, 1, 7, 2), der(0xa0, signedData)),
+    );
+  };
+  return {
+    signedTimestamp: b64(token(signature, "20200601000000Z")),
+    wrongImprintTimestamp: b64(token(Buffer.alloc(signature.length), "20200601000000Z")),
+    outsideLeafValidityTimestamp: b64(token(signature, "20220601000000Z")),
+    authority: {
+      uri: "https://tsa.test.invalid",
+      certChain: {
+        certificates: [{ rawBytes: b64(signerCertificate) }, { rawBytes: b64(caCertificate) }],
+      },
+      validFor: { start: "2010-01-01T00:00:00Z", end: "2040-01-01T00:00:00Z" },
+    },
+  };
+}
+
+export async function syntheticKeyless(version: "0.0.1" | "0.0.2" = "0.0.1") {
   const ca = ec(),
     leaf = ec(),
     ct = ec(),
@@ -152,12 +226,28 @@ export async function syntheticKeyless() {
   const signature = sign("sha256", pae, leaf.privateKey);
   const body = Buffer.from(
     canonical({
-      apiVersion: "0.0.1",
+      apiVersion: version,
       kind: "dsse",
-      spec: {
-        payloadHash: { algorithm: "sha256", value: hash(payload).toString("hex") },
-        signatures: [{ signature: b64(signature), verifier: b64(certificate) }],
-      },
+      spec:
+        version === "0.0.1"
+          ? {
+              payloadHash: { algorithm: "sha256", value: hash(payload).toString("hex") },
+              signatures: [{ signature: b64(signature), verifier: b64(certificate) }],
+            }
+          : {
+              dsseV002: {
+                payloadHash: { algorithm: "SHA2_256", digest: b64(hash(payload)) },
+                signatures: [
+                  {
+                    content: b64(signature),
+                    verifier: {
+                      keyDetails: "PKIX_ECDSA_P256_SHA_256",
+                      x509Certificate: { rawBytes: b64(certificate) },
+                    },
+                  },
+                ],
+              },
+            },
     }),
   );
   const logId = hash(spki(rekor.publicKey));
@@ -182,10 +272,16 @@ export async function syntheticKeyless() {
         {
           logIndex: "0",
           logId: { keyId: b64(logId) },
-          kindVersion: { kind: "dsse", version: "0.0.1" },
-          integratedTime: String(witnessed / 1000),
+          kindVersion: { kind: "dsse", version },
+          ...(version === "0.0.1"
+            ? {
+                integratedTime: String(witnessed / 1000),
+                inclusionPromise: {
+                  signedEntryTimestamp: b64(sign("sha256", set, rekor.privateKey)),
+                },
+              }
+            : {}),
           canonicalizedBody: b64(body),
-          inclusionPromise: { signedEntryTimestamp: b64(sign("sha256", set, rekor.privateKey)) },
           inclusionProof: {
             logIndex: "0",
             treeSize: "1",
@@ -230,6 +326,13 @@ export async function syntheticKeyless() {
       ],
     },
   };
+  const timestamps = version === "0.0.2" ? syntheticTimestamps(signature) : undefined;
+  if (timestamps) {
+    bundle.verificationMaterial.timestampVerificationData = {
+      rfc3161Timestamps: [{ signedTimestamp: timestamps.signedTimestamp }],
+    };
+    publisher.trustedRoot.timestampAuthorities = [timestamps.authority];
+  }
   const attached = await attachAttestation({ bytes: prepared.bytes, bundle });
-  return { prepared, attached, bundle, publisher, certificate, payload };
+  return { prepared, attached, bundle, publisher, certificate, payload, timestamps };
 }
