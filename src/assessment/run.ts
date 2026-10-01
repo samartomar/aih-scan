@@ -34,6 +34,7 @@ import {
   type Limits,
   limitCeilings,
   type ObservationBody,
+  type ReportBody,
   type RequestedDetector,
   type ScanRequest,
   type ScanRunResult,
@@ -41,6 +42,13 @@ import {
 } from "./types.js";
 
 export interface RunScanOptions extends CaptureOptions {}
+/** Membership and exact rule identity are one closed support definition. */
+const detectorRuleBindings: ReadonlyMap<string, () => Promise<string>> = new Map([
+  ["detector.aih-native", () => sha256(canonicalBytes([]))],
+  ["detector.semgrep", () => sha256(new TextEncoder().encode(SEMGREP_RULES_V1))],
+  ["detector.aih-trust-lint", () => moduleDigest("detectors/trust-lint/index")],
+  ["detector.aih-binding-gate", () => moduleDigest("detectors/binding-gate/index")],
+]);
 interface ResolvedDetector {
   request: RequestedDetector;
   capability?: DetectorCapabilityV1;
@@ -241,6 +249,31 @@ function findings(
     })
     .sort((a, b) => (a.rawOccurrenceFingerprint < b.rawOccurrenceFingerprint ? -1 : 1));
 }
+function unsignedArtifact(
+  reportBytes: Uint8Array,
+  scanId: string,
+  reportDigest: string,
+  annexes: AnnexDescriptor[],
+  payloads: { id: string; bytesBase64: string }[],
+) {
+  const byId = new Map(payloads.map((payload) => [payload.id, payload.bytesBase64]));
+  return {
+    schema: schemas.artifact,
+    scanId,
+    report: {
+      schema: schemas.report,
+      mediaType: "application/json",
+      sha256: reportDigest,
+      byteLength: reportBytes.length,
+      bytesBase64: base64Encode(reportBytes),
+    },
+    annexes: annexes.map((annex) => {
+      const bytesBase64 = byId.get(annex.id);
+      if (bytesBase64 === undefined) fail("Missing staged annex bytes");
+      return { ...annex, bytesBase64 };
+    }),
+  };
+}
 export async function runScan(raw: unknown, options: RunScanOptions = {}): Promise<ScanRunResult> {
   const diagnostic = (
     phase: "request" | "capture" | "assembly",
@@ -274,6 +307,29 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
       detail:
         "Observation reuse is not supported by this contract implementation; current requested work is performed.",
     }));
+    const reportFor = (units: DetectorResult[], descriptors: AnnexDescriptor[]): ReportBody => ({
+      schema: schemas.report,
+      producer: packageIdentity,
+      createdAt: new Date().toISOString(),
+      source:
+        request.source.kind === "git"
+          ? {
+              kind: "git",
+              repository: request.source.repository,
+              commit: request.source.commit,
+              capture: captured.capture,
+            }
+          : { kind: "local", capture: captured.capture },
+      selection: captured.selection,
+      requestedDetectors: resolved.map((d) => d.request),
+      results: units,
+      completion: units.every((unit) => unit.outcome === "succeeded" && unit.coverage.complete)
+        ? "complete"
+        : "partial",
+      annexes: descriptors,
+      effectiveLimits: limits,
+      diagnostics,
+    });
     const adapterSha256 = await moduleDigest("runner/run-detector-v1");
     for (const detector of resolved) {
       const id = detector.request.detectorId;
@@ -314,14 +370,8 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         );
         continue;
       }
-      if (
-        ![
-          "detector.aih-native",
-          "detector.semgrep",
-          "detector.aih-trust-lint",
-          "detector.aih-binding-gate",
-        ].includes(id)
-      ) {
+      const bindRules = detectorRuleBindings.get(id);
+      if (bindRules === undefined) {
         results.push(
           emptyResult(id, captured, "refused", [
             {
@@ -397,147 +447,177 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
         );
         continue;
       }
-      if (run.evidence.kind !== "baseline-analyzer-observation-v1")
-        fail("Detector returned unsupported observation evidence");
-      const native = run.evidence.observation,
-        annexId = `annex.${await sha256(new TextEncoder().encode(id))}`;
-      if (native.bytes.length > limits.maxAnnexBytes) {
+      // Projection, byte binding and semantic validation are local to this detector.
+      // Source assertions above and below this catch remain assessment-wide.
+      try {
+        if (run.evidence.kind !== "baseline-analyzer-observation-v1")
+          fail("Detector returned unsupported observation evidence");
+        const native = run.evidence.observation,
+          annexId = `annex.${await sha256(new TextEncoder().encode(id))}`;
+        if (native.bytes.length > limits.maxAnnexBytes) {
+          results.push(
+            emptyResult(id, captured, "failed", [
+              {
+                code: "resource-limit",
+                detail: "The detector annex exceeds the selected annex byte limit.",
+                detectorId: id,
+              },
+            ]),
+          );
+          continue;
+        }
+        if (
+          native.annex.byteLength !== native.bytes.length ||
+          native.annex.sha256 !== (await sha256(native.bytes))
+        )
+          fail("Native observation annex lost its byte binding");
+        const active = captured.selection.paths.filter(
+            (path) => !captured.selection.excludedPaths.includes(path),
+          ),
+          covered = run.coverage.coveredPaths.filter((path) => active.includes(path)).sort();
+        ordered(covered, "detector covered paths");
+        const uncovered = active.filter((path) => !covered.includes(path));
+        const body: ObservationBody = {
+          format: "aih-observation-v1",
+          input: {
+            detectorId: id,
+            detectorVersion: native.analyzerVersion,
+            adapterSha256,
+            rulesSha256: await bindRules(),
+            configurationSha256: detector.request.configurationSha256,
+            profileId: detector.profile.id,
+            profileSha256: detector.profile.sha256,
+            platform: {
+              os: process.platform,
+              architecture: process.arch,
+              relevantFactsSha256: await sha256(
+                canonicalBytes({
+                  node: process.version,
+                  runner: run.seams.runner,
+                  prerequisiteProbe: run.seams.prerequisiteProbe,
+                }),
+              ),
+            },
+            scopeKind: "source-tree",
+            targetPaths: active,
+            entries: captured.capture.entries,
+          },
+          startedAt,
+          completedAt: new Date().toISOString(),
+          producer: { name: packageIdentity.name, version: packageIdentity.version },
+          coverage: { coveredPaths: covered },
+          findings: findings(run, annexId, captured),
+          gaps: run.findings.gaps.map((gap) => ({ reason: gap.kind, detail: gap.detail })),
+          annexIds: [annexId],
+        };
+        const descriptor: AnnexDescriptor = {
+          id: annexId,
+          mediaType: native.mediaType,
+          sha256: native.annex.sha256,
+          byteLength: native.bytes.length,
+        };
+        const unit: DetectorResult = {
+          detectorId: id,
+          outcome: uncovered.length ? "failed" : "succeeded",
+          observations: [{ observationId: await observationIdFor(body), body, origin: "fresh" }],
+          coverage: {
+            coveredPaths: covered,
+            excludedPaths: [...captured.selection.excludedPaths],
+            uncoveredPaths: uncovered,
+            complete: uncovered.length === 0,
+          },
+          diagnostics: uncovered.length
+            ? [
+                {
+                  code: "detector-incomplete",
+                  detail: "The completed observation left requested paths uncovered.",
+                  detectorId: id,
+                },
+              ]
+            : [],
+        };
+        const remaining = resolved.slice(results.length + 1);
+        const candidate = reportFor(
+          [
+            ...results,
+            unit,
+            ...remaining.map((pending) =>
+              emptyResult(
+                pending.request.detectorId,
+                captured,
+                pending.request.profileId === null ? "refused" : "failed",
+                [
+                  {
+                    code: "detector-output-invalid",
+                    detail: "The detector did not produce a valid bounded observation.",
+                    detectorId: pending.request.detectorId,
+                  },
+                ],
+              ),
+            ),
+          ],
+          [...annexes, descriptor].sort((a, b) => (a.id < b.id ? -1 : 1)),
+        );
+        await validateReport(candidate);
+        const candidateBytes = canonicalBytes(candidate),
+          payload = { id: annexId, bytesBase64: base64Encode(native.bytes) };
+        // Reserve bounded accounting space for later refusal/failure diagnostics.
+        bound(
+          candidateBytes.length + remaining.length * 512 <= limits.maxReportBytes,
+          "report bytes",
+          limits.maxReportBytes,
+        );
+        bound(
+          candidateBytes.length +
+            candidate.annexes.reduce((sum, annex) => sum + annex.byteLength, 0) +
+            remaining.length * 512 <=
+            limits.maxDecodedArtifactBytes,
+          "decoded artifact bytes",
+          limits.maxDecodedArtifactBytes,
+        );
+        bound(
+          canonicalBytes(
+            unsignedArtifact(
+              candidateBytes,
+              `scan:sha256:${"0".repeat(64)}`,
+              "0".repeat(64),
+              candidate.annexes,
+              [...payloads, payload],
+            ),
+          ).length +
+            remaining.length * 1024 <=
+            limits.maxArtifactBytes,
+          "artifact bytes",
+          limits.maxArtifactBytes,
+        );
+        annexes.push(descriptor);
+        payloads.push(payload);
+        results.push(unit);
+      } catch (error) {
         results.push(
           emptyResult(id, captured, "failed", [
             {
-              code: "resource-limit",
-              detail: "The detector annex exceeds the selected annex byte limit.",
+              code:
+                errorDiagnostic(error).code === "resource-limit"
+                  ? "resource-limit"
+                  : "detector-output-invalid",
+              detail:
+                "The detector did not produce a valid bounded observation; its scope remains uncovered.",
               detectorId: id,
             },
           ]),
         );
-        continue;
       }
-      if (
-        native.annex.byteLength !== native.bytes.length ||
-        native.annex.sha256 !== (await sha256(native.bytes))
-      )
-        fail("Native observation annex lost its byte binding");
-      const active = captured.selection.paths.filter(
-          (path) => !captured.selection.excludedPaths.includes(path),
-        ),
-        covered = run.coverage.coveredPaths.filter((path) => active.includes(path)).sort();
-      ordered(covered, "detector covered paths");
-      const uncovered = active.filter((path) => !covered.includes(path));
-      const body: ObservationBody = {
-        format: "aih-observation-v1",
-        input: {
-          detectorId: id,
-          detectorVersion: native.analyzerVersion,
-          adapterSha256,
-          rulesSha256:
-            id === "detector.semgrep"
-              ? await sha256(new TextEncoder().encode(SEMGREP_RULES_V1))
-              : id === "detector.aih-trust-lint"
-                ? await moduleDigest("detectors/trust-lint/index")
-                : id === "detector.aih-binding-gate"
-                  ? await moduleDigest("detectors/binding-gate/index")
-                  : await sha256(canonicalBytes([])),
-          configurationSha256: detector.request.configurationSha256,
-          profileId: detector.profile.id,
-          profileSha256: detector.profile.sha256,
-          platform: {
-            os: process.platform,
-            architecture: process.arch,
-            relevantFactsSha256: await sha256(
-              canonicalBytes({
-                node: process.version,
-                runner: run.seams.runner,
-                prerequisiteProbe: run.seams.prerequisiteProbe,
-              }),
-            ),
-          },
-          scopeKind: "source-tree",
-          targetPaths: active,
-          entries: captured.capture.entries,
-        },
-        startedAt,
-        completedAt: new Date().toISOString(),
-        producer: { name: packageIdentity.name, version: packageIdentity.version },
-        coverage: { coveredPaths: covered },
-        findings: findings(run, annexId, captured),
-        gaps: run.findings.gaps.map((gap) => ({ reason: gap.kind, detail: gap.detail })),
-        annexIds: [annexId],
-      };
-      annexes.push({
-        id: annexId,
-        mediaType: native.mediaType,
-        sha256: native.annex.sha256,
-        byteLength: native.bytes.length,
-      });
-      payloads.push({ id: annexId, bytesBase64: base64Encode(native.bytes) });
-      results.push({
-        detectorId: id,
-        outcome: uncovered.length ? "failed" : "succeeded",
-        observations: [{ observationId: await observationIdFor(body), body, origin: "fresh" }],
-        coverage: {
-          coveredPaths: covered,
-          excludedPaths: [...captured.selection.excludedPaths],
-          uncoveredPaths: uncovered,
-          complete: uncovered.length === 0,
-        },
-        diagnostics: uncovered.length
-          ? [
-              {
-                code: "detector-incomplete",
-                detail: "The completed observation left requested paths uncovered.",
-                detectorId: id,
-              },
-            ]
-          : [],
-      });
+      captured.assertUnchanged();
     }
     captured.assertUnchanged();
     annexes.sort((a, b) => (a.id < b.id ? -1 : 1));
     payloads.sort((a, b) => (a.id < b.id ? -1 : 1));
-    const report = await validateReport({
-      schema: schemas.report,
-      producer: packageIdentity,
-      createdAt: new Date().toISOString(),
-      source:
-        request.source.kind === "git"
-          ? {
-              kind: "git",
-              repository: request.source.repository,
-              commit: request.source.commit,
-              capture: captured.capture,
-            }
-          : { kind: "local", capture: captured.capture },
-      selection: captured.selection,
-      requestedDetectors: resolved.map((d) => d.request),
-      results,
-      completion: results.every(
-        (result) => result.outcome === "succeeded" && result.coverage.complete,
-      )
-        ? "complete"
-        : "partial",
-      annexes,
-      effectiveLimits: limits,
-      diagnostics,
-    });
+    const report = await validateReport(reportFor(results, annexes));
     const bytes = canonicalBytes(report);
     bound(bytes.length <= limits.maxReportBytes, "report bytes", limits.maxReportBytes);
     const scanId = await scanIdFor(bytes);
-    const unsigned = {
-      schema: schemas.artifact,
-      scanId,
-      report: {
-        schema: schemas.report,
-        mediaType: "application/json",
-        sha256: await sha256(bytes),
-        byteLength: bytes.length,
-        bytesBase64: base64Encode(bytes),
-      },
-      annexes: annexes.map((annex, index) => ({
-        ...annex,
-        bytesBase64: payloads[index]!.bytesBase64,
-      })),
-    };
+    const unsigned = unsignedArtifact(bytes, scanId, await sha256(bytes), annexes, payloads);
     bound(
       canonicalBytes(unsigned).length <= limits.maxArtifactBytes,
       "artifact bytes",

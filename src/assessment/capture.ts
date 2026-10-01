@@ -20,7 +20,16 @@ import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node
 import { fileURLToPath } from "node:url";
 import { spawnBoundedV1 } from "../cli/process-runner.js";
 import { readSourceEntryNamesV1 } from "../observation/source-entry-name-v1.js";
-import { base64Decode, bound, canonicalBytes, fail, hasControl, strictParse } from "./json.js";
+import { gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
+import {
+  base64Decode,
+  bound,
+  ContractError,
+  canonicalBytes,
+  fail,
+  hasControl,
+  strictParse,
+} from "./json.js";
 import { validateEntries } from "./report.js";
 import { pathShape } from "./shapes.js";
 import { decodeStrictUtf8V1 } from "./strict-json.js";
@@ -175,6 +184,11 @@ export interface CaptureOptions {
   signal?: AbortSignal;
   gitCredentials?: { username: string; password: string };
 }
+class GitContainmentError extends ContractError {
+  constructor() {
+    super("invalid-input", "Pinned Git acquisition could not confirm process-tree cleanup");
+  }
+}
 async function git(
   argv: string[],
   cwd: string,
@@ -183,7 +197,12 @@ async function git(
   maxBytes = 16 * 1024 * 1024,
 ): Promise<Uint8Array> {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+  for (const key of Object.keys(env))
+    if (
+      key.toUpperCase().startsWith("GIT_") ||
+      ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"].includes(key.toUpperCase())
+    )
+      delete env[key];
   Object.assign(env, {
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
@@ -239,6 +258,7 @@ async function git(
       containProcessTree: true,
     },
   );
+  if (output.termination === "containment-failure") throw new GitContainmentError();
   if (output.code !== 0 || output.truncated || output.termination || output.stdoutMalformedUtf8)
     fail("Pinned Git acquisition failed or could not confirm process cleanup");
   const value = strictParse(
@@ -275,19 +295,44 @@ export async function captureSource(
       mkdirSync(hooks);
       mkdirSync(material);
       await git(["init", "--quiet", `--template=${hooks}`], acquired, options, hooks);
-      await git(
-        [
-          "fetch",
-          "--quiet",
-          "--no-tags",
-          "--depth=1",
-          request.source.repository,
-          request.source.commit,
-        ],
-        acquired,
-        options,
-        hooks,
+      const relay = await startGitFetchRelay(
+        request.source.repository,
+        gitTransportLimit(limits.maxSourceBytes, limits.maxSourceEntries),
+        options.signal,
       );
+      let acquisitionError: unknown;
+      try {
+        await git(
+          [
+            "-c",
+            `http.proxy=${relay.proxy}`,
+            "-c",
+            "fetch.unpackLimit=1",
+            "-c",
+            "transfer.unpackLimit=1",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--depth=1",
+            request.source.repository,
+            request.source.commit,
+          ],
+          acquired,
+          {
+            ...options,
+            signal: options.signal
+              ? AbortSignal.any([options.signal, relay.limitSignal])
+              : relay.limitSignal,
+          },
+          hooks,
+        );
+      } catch (error) {
+        acquisitionError = error;
+        throw error;
+      } finally {
+        await relay.close();
+        if (!(acquisitionError instanceof GitContainmentError)) relay.assertWithinBounds();
+      }
       if (
         decodeStrictUtf8V1(
           await git(["rev-parse", `${request.source.commit}^{commit}`], acquired, options, hooks),
@@ -325,6 +370,7 @@ export async function captureSource(
           return { mode: match![1]!, type: match![2]!, oid: match![3]!, path };
         });
       bound(members.length <= limits.maxSourceEntries, "source entries", limits.maxSourceEntries);
+      const membersByPath = new Map(members.map((member) => [member.path, member]));
       let bytesTotal = 0;
       for (const member of members) {
         const output = join(material, member.path);
@@ -353,10 +399,33 @@ export async function captureSource(
         mkdirSync(dirname(output), { recursive: true });
         if (member.mode === "120000") {
           const target = decodeStrictUtf8V1(bytes, "Git link target");
-          if (target.includes("\0") || isAbsolute(target) || /^[A-Za-z]:/.test(target))
+          if (
+            hasControl(target) ||
+            target.includes("\\") ||
+            isAbsolute(target) ||
+            /^[A-Za-z]:/.test(target)
+          )
             fail("Git link target is unsupported");
+          // Check components before lexical '..' removal: traversing a link changes its meaning.
+          const parts = member.path.split("/");
+          parts.pop();
+          const components = target.split("/");
+          for (const [index, component] of components.entries()) {
+            if (!component || component === ".") continue;
+            if (component === "..") {
+              if (!parts.length) fail("Git link target escapes pinned material");
+              parts.pop();
+            } else {
+              parts.push(component);
+              const traversed = membersByPath.get(parts.join("/"));
+              if (!traversed || traversed.mode === "120000")
+                fail("Git link target traverses a link or absent entry");
+              if (index < components.length - 1 && traversed.type !== "tree")
+                fail("Git link target traverses a non-directory entry");
+            }
+          }
           const containedTarget = contained(material, resolve(dirname(output), target));
-          const targetEntry = members.find((entry) => entry.path === containedTarget);
+          const targetEntry = membersByPath.get(containedTarget);
           if (!targetEntry) fail("Git link target is absent from pinned material");
           symlinkSync(
             relative(dirname(output), join(material, containedTarget)),

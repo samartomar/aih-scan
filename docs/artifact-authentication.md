@@ -61,6 +61,11 @@ Decoded limits include report/each annex 16 MiB, aggregate 64 MiB, artifact 96 M
 statement 128 KiB and attestation 1 MiB. Additional certificate, log, timestamp,
 proof and independently selected trust caps are enforced before crypto parsing.
 
-The test-only keyless fixtures establish bounded library mechanisms and product
-rejection of the research predicate. They do not establish production-format
-nonempty-annex conformance. See [publisher activation](production-publisher.md).
+Local synthetic CA/CT/Rekor fixtures exercise successful `authenticateArtifact`
+with the Scan predicate, a nonempty annex, original statement bytes and an expired
+leaf verified at witnessed signing time. They cover literal SAN/issuer/OID policy,
+historical identity consolidation, ambiguous identities and offline verification
+under independent test-only trust. Retained research and upstream fixtures cover
+library mechanisms and product rejection of the research predicate separately.
+These tests do not establish authentication by a maintained production publisher;
+the real production proof remains pending. See [publisher activation](production-publisher.md).

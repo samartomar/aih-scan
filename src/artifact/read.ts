@@ -42,7 +42,7 @@ export async function validateArtifact(bytes: Uint8Array): Promise<ValidatedArti
   for (const annex of raw.annexes) {
     const a = object(annex, ["id", "mediaType", "sha256", "byteLength", "bytesBase64"]);
     const id = text(a.id);
-    if (!/^annex\.[a-z0-9][a-z0-9.-]*$/.test(id) || id <= prior) invalid();
+    if (!/^annex\.[a-z0-9][a-z0-9._-]{0,249}$/.test(id) || id <= prior) invalid();
     prior = id;
     const mediaType = text(a.mediaType);
     digest(a.sha256);

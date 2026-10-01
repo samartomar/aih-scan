@@ -30,7 +30,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["id", "mediaType", "sha256", "byteLength", "bytesBase64"],
       "properties": {
-        "id": { "type": "string", "maxLength": 256, "pattern": "^annex\\.[a-z0-9][a-z0-9.-]*$" },
+        "id": { "type": "string", "maxLength": 256, "pattern": "^annex\\.[a-z0-9][a-z0-9._-]{0,249}$" },
         "mediaType": { "$ref": "#/$defs/label" }, "sha256": { "$ref": "#/$defs/digest" },
         "byteLength": { "$ref": "#/$defs/fileLength" }, "bytesBase64": { "$ref": "#/$defs/base64" }
       }

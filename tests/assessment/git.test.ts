@@ -11,6 +11,76 @@ afterEach(() => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+test.each([
+  ["y/../file", "Git link target traverses a link or absent entry"],
+  ["file/../sub/file", "Git link target traverses a non-directory entry"],
+  ["file/.", "Git link target traverses a non-directory entry"],
+  ["file/", "Git link target traverses a non-directory entry"],
+])("pinned Git refuses target %s rather than changing its traversal meaning", async (linkTarget, detail) => {
+  const root = mkdtempSync(join(tmpdir(), "aih-pinned-link-test-"));
+  roots.push(root);
+  const command = (args: string[], input?: string) =>
+    execFileSync("git", args, {
+      cwd: root,
+      input,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      },
+    });
+  command(["init", "--quiet"]);
+  mkdirSync(join(root, "sub", "deep"), { recursive: true });
+  writeFileSync(join(root, "file"), "lexically resolved but wrong target\n");
+  writeFileSync(join(root, "sub", "file"), "actual POSIX link resolution target\n");
+  writeFileSync(join(root, "sub", "deep", "member"), "fixture\n");
+  command(["add", "."]);
+  for (const [path, target] of [
+    ["x", linkTarget],
+    ["y", "sub/deep"],
+  ]) {
+    const oid = command(["hash-object", "-w", "--stdin"], target).toString().trim();
+    command(["update-index", "--add", "--cacheinfo", `120000,${oid},${path}`]);
+  }
+  command([
+    "-c",
+    "user.name=Scan fixture",
+    "-c",
+    "user.email=scan-fixture@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "Links",
+  ]);
+  const commit = command(["rev-parse", "HEAD"]).toString().trim();
+  vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv) => {
+    const args = JSON.parse(argv[2]!) as string[],
+      start = args.findIndex((arg) =>
+        ["init", "fetch", "rev-parse", "ls-tree", "cat-file"].includes(arg),
+      ),
+      tail = args.slice(start),
+      bytes = ["init", "fetch"].includes(tail[0]!) ? Buffer.alloc(0) : command(tail);
+    return {
+      code: 0,
+      stdout: JSON.stringify({ bytesBase64: bytes.toString("base64") }),
+      stderr: "",
+      truncated: false,
+    };
+  });
+  const result = await runScan({
+    schema: "urn:aihq:scan:request:1.0.0",
+    source: { kind: "git", repository: "https://example.invalid/fixture.git", commit },
+    selection: { paths: "all", excludedPaths: [] },
+    detectors: [{ detectorId: "detector.unavailable", configuration: {} }],
+  });
+  expect(result).toMatchObject({
+    status: "diagnostic",
+    phase: "capture",
+    diagnostics: [{ code: "invalid-input", detail }],
+  });
+  expect(result).not.toHaveProperty("scanId");
+});
 test("pinned Git material uses exact blob bytes and cannot execute source checkout hooks", async () => {
   const root = mkdtempSync(join(tmpdir(), "aih-pinned-git-test-"));
   roots.push(root);

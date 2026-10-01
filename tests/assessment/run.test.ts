@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { canonicalBytes } from "../../src/assessment/json.js";
+import { SEMGREP_VERSION_V1 } from "../../src/baseline/runtime-v1.js";
 import * as processBoundary from "../../src/cli/process-runner.js";
 import { runScan } from "../../src/public/host.js";
 import { readReport } from "../../src/public/read.js";
@@ -29,6 +30,125 @@ function request(root: string) {
     detectors: [{ detectorId: "detector.aih-native", configuration: {} }],
   };
 }
+function semgrepTransport(stdout: string, malformed = false) {
+  const nativeStat = fsBoundary.statSync(process.execPath),
+    actualStat = fsBoundary.statSync;
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+  vi.spyOn(fsBoundary, "statSync").mockImplementation(((
+    path: Parameters<typeof fsBoundary.statSync>[0],
+    ...args: unknown[]
+  ) =>
+    String(path) === "/usr/bin/bwrap" || String(path) === "/usr/local/bin/uv"
+      ? nativeStat
+      : Reflect.apply(actualStat, fsBoundary, [path, ...args])) as typeof fsBoundary.statSync);
+  vi.spyOn(processBoundary, "processRunner").mockImplementation(async (argv) => ({
+    code: 0,
+    stderr: "",
+    truncated: false,
+    stdout: argv.includes("--sarif")
+      ? stdout
+      : argv.at(-1) === "--version"
+        ? SEMGREP_VERSION_V1
+        : "",
+    ...(argv.includes("--sarif") && malformed ? { stdoutMalformedUtf8: true as const } : {}),
+  }));
+}
+function sarif(path: string, message = "fixture finding", extra = "") {
+  return JSON.stringify({
+    version: "2.1.0",
+    runs: [
+      {
+        tool: { driver: { name: "semgrep" } },
+        invocations: [{ executionSuccessful: true }],
+        results: [
+          {
+            ruleId: "fixture.rule",
+            level: "warning",
+            message: { text: message },
+            locations: [
+              { physicalLocation: { artifactLocation: { uri: path }, region: { startLine: 1 } } },
+            ],
+          },
+        ],
+        properties: { extra },
+      },
+    ],
+  });
+}
+function nativeAndSemgrep(root: string) {
+  return {
+    ...request(root),
+    selection: { paths: ["SKILL.md"], excludedPaths: [] },
+    detectors: [
+      { detectorId: "detector.aih-native", configuration: {} },
+      { detectorId: "detector.semgrep", configuration: {} },
+    ],
+  };
+}
+test.each([
+  ["unselected location", "outside.txt", "fixture finding", false],
+  ["unbound finding", "absent.txt", "fixture finding", false],
+  ["malformed annex bytes", "SKILL.md", "fixture finding", true],
+])("%s fails only that detector and preserves a reliable sibling and Scan ID", async (_kind, path, message, malformed) => {
+  const root = rootFixture();
+  writeFileSync(join(root, "SKILL.md"), "# Fixture\n");
+  writeFileSync(join(root, "outside.txt"), "other captured bytes\n");
+  semgrepTransport(sarif(path, message), malformed);
+  const result = await runScan(nativeAndSemgrep(root));
+  expect(result).toMatchObject({
+    status: "assessment",
+    report: {
+      completion: "partial",
+      results: [
+        {
+          outcome: "succeeded",
+          observations: [{ origin: "fresh" }],
+          coverage: { coveredPaths: ["SKILL.md"] },
+        },
+        {
+          outcome: "failed",
+          observations: [],
+          coverage: { coveredPaths: [], uncoveredPaths: ["SKILL.md"] },
+        },
+      ],
+    },
+  });
+  if (result.status === "assessment") {
+    expect(result.scanId).toMatch(/^scan:sha256:[0-9a-f]{64}$/);
+    expect(result.annexes).toHaveLength(1);
+    expect((await readReport(canonicalBytes(result.report))).status).toBe("read");
+    expect(JSON.stringify(result.report.results[1]!.diagnostics)).not.toContain(message);
+  }
+});
+test.each([
+  "per-annex",
+  "decoded-budget",
+  "artifact-budget",
+])("oversized later output respects %s and preserves native work", async (kind) => {
+  const root = rootFixture();
+  writeFileSync(join(root, "SKILL.md"), "# Fixture\n");
+  semgrepTransport(sarif("SKILL.md", "fixture finding", "x".repeat(24000)));
+  const result = await runScan({
+    ...nativeAndSemgrep(root),
+    limits:
+      kind === "per-annex"
+        ? { maxAnnexBytes: 16000 }
+        : kind === "decoded-budget"
+          ? { maxDecodedArtifactBytes: 24000 }
+          : { maxArtifactBytes: 24000 },
+  });
+  expect(result).toMatchObject({
+    status: "assessment",
+    report: {
+      results: [
+        { outcome: "succeeded", observations: [{ origin: "fresh" }] },
+        { outcome: "failed", observations: [], diagnostics: [{ code: "resource-limit" }] },
+      ],
+    },
+  });
+  if (result.status === "assessment") expect(result.annexes).toHaveLength(1);
+});
 test("a reliable native observation survives a refused sibling in one source-bound assessment", async () => {
   const root = mkdtempSync(join(tmpdir(), "aih-assessment-test-"));
   roots.push(root);
@@ -64,6 +184,29 @@ test("a reliable native observation survives a refused sibling in one source-bou
     expect(result.annexes.length).toBeGreaterThan(0);
     expect(JSON.stringify(result)).not.toContain(root);
   }
+});
+test("a native annex byte-binding mismatch fails only its detector", async () => {
+  const root = rootFixture();
+  writeFileSync(join(root, "SKILL.md"), "# Fixture\n");
+  semgrepTransport(sarif("SKILL.md"));
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  // Fault at the system digest boundary after native output creation, before annex admission.
+  vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) =>
+    new TextDecoder().decode(data).includes('"version":"2.1.0"')
+      ? new Uint8Array(32).buffer
+      : digest(algorithm, data),
+  );
+  const result = await runScan(nativeAndSemgrep(root));
+  expect(result).toMatchObject({
+    status: "assessment",
+    report: {
+      results: [
+        { outcome: "succeeded", observations: [{ origin: "fresh" }] },
+        { outcome: "failed", observations: [], diagnostics: [{ code: "detector-output-invalid" }] },
+      ],
+    },
+  });
+  if (result.status === "assessment") expect(result.annexes).toHaveLength(1);
 });
 test("root Git metadata is omitted while other dot files remain source-bound", async () => {
   const root = rootFixture();

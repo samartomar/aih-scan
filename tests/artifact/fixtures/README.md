@@ -15,5 +15,14 @@ Apache License 2.0, see the repository LICENSE. These test fixtures prove the
 pinned verifier's historical DSSE 0.0.2/RFC3161 mechanism only. They do not prove
 a production Scan statement or production trust policy.
 
-No private key is retained. No test makes a signing service request. A positive
-production-format nonempty-annex artifact remains a separate activation gate.
+`../synthetic-keyless.ts` creates a separate local fixture universe on each call:
+four ephemeral Node P-256 keypairs, a self-signed test CA, an expired leaf with a
+signed SCT, and a one-leaf Rekor proof/checkpoint plus inclusion promise. Its small
+DER/TLS encoder constructs test inputs; it never verifies certificates. The full
+product API verifies those inputs with the pinned upstream library, including a
+Scan statement with a nonempty annex and indented original payload bytes. All
+identities, roots and log URLs are explicitly test-only. No fixture private key
+is retained, exported or accepted as maintained publisher trust.
+
+No test makes a signing service request. Authentication of a real production
+publisher's production-format nonempty-annex artifact remains a separate gate.

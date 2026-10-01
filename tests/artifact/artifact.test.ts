@@ -6,7 +6,7 @@ import {
   prepareArtifact,
   signArtifact,
 } from "../../src/public/host.js";
-import { readArtifact } from "../../src/public/read.js";
+import { readArtifact, readReport } from "../../src/public/read.js";
 import { emptyReport } from "../assessment/fixtures.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -123,6 +123,22 @@ function supportedFixture() {
 }
 
 describe("local independent organization authentication", () => {
+  test("a supported report with an underscore annex ID roundtrips through preparation and artifact reading", async () => {
+    const fixture = supportedFixture();
+    fixture.report.annexes[0] = { ...fixture.report.annexes[0]!, id: "annex.raw_data" };
+    fixture.annexes[0] = { ...fixture.annexes[0]!, id: "annex.raw_data" };
+    const read = await readReport(Buffer.from(canonical(fixture.report)));
+    expect(read.status).toBe("read");
+    if (read.status !== "read") throw new Error("Supported report required");
+    const prepared = await prepareArtifact({ report: read.report, annexes: fixture.annexes });
+    expect(prepared.scanId).toBe(read.scanId);
+    expect(prepared.artifact.annexes[0]?.id).toBe("annex.raw_data");
+    expect(await readArtifact(prepared.bytes)).toMatchObject({
+      status: "read",
+      annexBytes: "checked",
+      report: { annexes: [{ id: "annex.raw_data" }] },
+    });
+  });
   test("authentication snapshots independently selected trust before any asynchronous byte validation", async () => {
     const key = organizationKey("initially-selected-identity");
     const signed = await signArtifact({

@@ -51,6 +51,18 @@ attributes, filters, line-ending conversion and source-provided checkout hooks
 cannot change or execute the pinned material. Unsupported modes, submodules and
 unrepresentable links cause capture refusal. Acquisition disables ambient Git
 configuration and hooks, bounds output, and contains the entire process tree.
+Git links that traverse another link or a regular file before further path
+components are refused rather than being rewritten with different traversal semantics.
+The fetch uses an owned loopback CONNECT relay for the exact repository authority.
+Git verifies end-to-end TLS; redirects and inherited proxy bypass are disabled.
+Before forwarding each chunk, the relay enforces an aggregate bidirectional
+transport budget of `maxSourceBytes + 1024 * maxSourceEntries + 1 MiB`, including
+retries. It permits at most eight connections and 8 KiB CONNECT headers. Crossing
+the budget closes the sockets and aborts the contained Git process tree. Git keeps
+the compressed pack instead of unpacking fetched objects into loose files;
+source entry and decoded blob bounds are checked separately during materialization.
+This transport budget is a separate acquisition limit and can refuse an otherwise
+small source if its protocol or metadata overhead exceeds the allowance.
 Optional `{ signal, gitCredentials: { username, password } }` host controls remain
 outside JSON. Credentials apply to the selected HTTPS origin; redirects are
 disabled. No credential, detector environment or local source path enters the report.
@@ -59,7 +71,12 @@ The current adapter supports one complete source-tree unit per detector. Its exa
 captured entries, requested output scope, resolved configuration, platform facts,
 released adapter dependency bytes, rule material and execution profile identify
 the unit. Successful units remain in an assessment when another detector fails,
-refuses or is cancelled. Failures leave their scope uncovered. A refused empty-source
+refuses or is cancelled. Output projection, findings scope, annex byte binding and
+report semantics are checked before admitting each detector's observation or annex.
+Malformed or oversized output fails that detector and preserves admitted siblings.
+Admission also enforces cumulative report, decoded artifact and encoded artifact
+budgets, reserving bounded diagnostic space for remaining detector slots. Diagnostic
+details remain generic rather than exposing vendor data. Failures leave their scope uncovered. A refused empty-source
 detector can have complete empty coverage while the assessment remains partial.
 Report completeness requires every detector to succeed with complete coverage.
 
@@ -103,8 +120,8 @@ Default/ceiling source budgets are 100,000 entries and 256 MiB of file bytes;
 request 2 MiB; report 16 MiB; each annex 16 MiB; decoded report plus annexes 64 MiB;
 artifact 96 MiB; statement 128 KiB; nesting 512. The default detector timeout is
 600,000 ms and the supported range is 100–3,600,000 ms. Callers may lower effective
-budgets, which are recorded in the report. Resource refusal names its limiting
-field and limit; evidence is never truncated into a complete result.
+budgets, which are recorded in the report. Resource failures are explicit;
+evidence is never truncated into a complete result.
 
 Versioned JSON Schema resources use `urn:aihq:scan:<name>:1.0.0` and JSON Schema
 2020-12. Their declarative shapes accompany the byte-profile and digest/coverage

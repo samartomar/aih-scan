@@ -211,6 +211,7 @@ export async function authenticateArtifact(input: {
     if (selected.trust.publishers.length === 0) return refuse("unknown-producer");
     const matches = new Set<string>();
     let failure: AssociationReason = "unknown-producer";
+    let policyMismatch = false;
     for (const publisher of selected.trust.publishers) {
       try {
         const verifier = new Verifier(
@@ -233,11 +234,14 @@ export async function authenticateArtifact(input: {
         if (
           signer.identity?.subjectAlternativeName !== publisher.policy.subjectAlternativeName ||
           signer.identity?.extensions?.issuer !== publisher.policy.issuer
-        )
+        ) {
+          policyMismatch = true;
           continue;
+        }
         matches.add(publisher.identity);
       } catch (error) {
-        if (!(error instanceof PolicyError)) failure = "invalid-signature";
+        if (error instanceof PolicyError) policyMismatch = true;
+        else failure = "invalid-signature";
       }
     }
     if (matches.size === 1)
@@ -247,7 +251,9 @@ export async function authenticateArtifact(input: {
         producerIdentity: [...matches][0],
         reportRead: "not-requested",
       };
-    return refuse(matches.size > 1 ? "unknown-producer" : failure);
+    // A cryptographically verified identity-policy refusal must not be hidden
+    // by an unrelated historical root that cannot verify this certificate.
+    return refuse(matches.size > 1 || policyMismatch ? "unknown-producer" : failure);
   } catch (error) {
     if (error instanceof ArtifactError) return refuse(error.reason);
     if (error instanceof Error && "code" in error && error.code === "resource-limit")
