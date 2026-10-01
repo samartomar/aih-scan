@@ -15,7 +15,7 @@ const run = (tool: string, args: string[]) =>
     encoding: "utf8",
   });
 
-describe("inert restricted publisher", () => {
+describe("restricted publisher", () => {
   test("unsigned candidate preparation cannot replace an existing or concurrently claimed output directory", async () => {
     const temporary = mkdtempSync(join(tmpdir(), "scan-candidate-race-"));
     try {
@@ -55,10 +55,10 @@ describe("inert restricted publisher", () => {
       rmSync(temporary, { recursive: true, force: true });
     }
   });
-  test("a merge cannot invoke the candidate and signing is confined to its dedicated exact identity", () => {
-    const path = ".github/workflow-templates/scan-report-publisher.yml";
+  test("a merge cannot invoke the activated publisher and signing is confined to its dedicated exact identity", () => {
+    const path = ".github/workflows/scan-report-publisher.yml";
     const workflow = parse(readFileSync(path, "utf8"));
-    expect(existsSync(".github/workflows/scan-report-publisher.yml")).toBe(false);
+    expect(existsSync(".github/workflow-templates/scan-report-publisher.yml")).toBe(true);
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow.permissions).toEqual({});
     expect(workflow.jobs["bounded-candidate"].permissions["id-token"]).toBeUndefined();

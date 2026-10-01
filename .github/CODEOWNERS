@@ -1,0 +1,14 @@
+# Required owner review protects the executable producer and independent trust.
+# Independent submitter/dispatcher separation is enforced by the workflows and
+# GitHub's protected branch/environment settings, not by Git author metadata.
+/.github/CODEOWNERS @samartomar
+/.github/workflows/ @samartomar
+/.github/workflow-templates/ @samartomar
+/.github/scan-report-trust.json @samartomar
+/package.json @samartomar
+/package-lock.json @samartomar
+/src/ @samartomar
+/tools/ @samartomar
+/schemas/ @samartomar
+/tsconfig*.json @samartomar
+/tests/artifact/ @samartomar
