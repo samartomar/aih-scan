@@ -18,12 +18,14 @@ Core decision, establish an organization trust root, or prove successful Core
 custody.
 
 The Unreleased immutable assessment API has a separate report-signing path.
-The prepared [report publisher](docs/production-publisher.md) is an inactive
-template, not an enabled production workflow or a package release. Before its
-activation, review the exact production protection and trust tuple, authorize a
-specific report-signing operation, and retain independent offline verification
-of the resulting production-format bundle. Local signing tests and research
-fixtures do not satisfy that production gate.
+The manual [report publisher](docs/production-publisher.md) admits only the
+reviewed main commit, designated independent actor and selected immutable upload
+custody. Source integration does not establish protected settings or authorize
+signing. Review the exact production protection/trust tuple, authorize the bounded
+operation and retain independent offline verification of its production-format
+bundle, including verification after actual leaf expiry. Local signing tests and
+research fixtures do not satisfy that production gate. Report signing does not
+publish this package.
 
 ## Historical release custody
 

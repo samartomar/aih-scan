@@ -39,9 +39,10 @@ Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
 The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
 byte bindings and cross-field semantics require the corresponding reader.
 
-These changes are unreleased. Production keyless activation still requires approved
-publisher protections and an authorized production-format signing/conformance run.
-The prepared workflow is inert. Package publication remains separately authorized.
+These changes are unreleased. Manual report workflows refuse admission without
+the exact reviewed main commit and independently selected upload custody. Protected
+publisher settings and an authorized production signing/conformance run remain
+separate acceptance gates. Package publication remains separately authorized.
 
 ### Historical package custody
 
