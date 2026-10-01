@@ -10,7 +10,7 @@ import {
   readSync,
 } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { parse } from "@babel/parser";
 
 /** A fresh, bounded installation snapshot shared only by one assessment. */
@@ -260,14 +260,14 @@ export function createImplementationDigester(options: {
     nodeOptions: process.env.NODE_OPTIONS ?? "",
   });
   const extractedImports = new Map<Buffer, string[]>();
-  const runtimeImports = (bytes: Buffer): string[] => {
+  const runtimeImports = (bytes: Buffer, file: string): string[] => {
     const cached = extractedImports.get(bytes);
     if (cached) return cached;
     // Bound allocation before parsing, then bound the syntax traversal independently.
     if (bytes.length > 1024 * 1024) unavailable();
     const ast = parse(bytes.toString("utf8"), {
       sourceType: "unambiguous",
-      plugins: ["typescript"],
+      plugins: [".ts", ".mts", ".cts"].includes(extname(file)) ? ["typescript"] : [],
       createImportExpressions: true,
       attachComment: false,
       allowReturnOutsideFunction: true,
@@ -427,7 +427,7 @@ export function createImplementationDigester(options: {
           if (local.has(file)) continue;
           const content = read(file);
           local.set(file, content.sha256);
-          for (const specifier of runtimeImports(content.bytes)) {
+          for (const specifier of runtimeImports(content.bytes, file)) {
             if (isBuiltin(specifier)) continue;
             if (specifier.startsWith("."))
               pending.push(resolve(dirname(file), specifier.replace(/\.js$/, options.extension)));
@@ -461,7 +461,7 @@ export function createImplementationDigester(options: {
               imports: [] as { specifier: string; local?: number; package?: string }[],
             };
             files.push(node);
-            const imports = runtimeImports(content.bytes);
+            const imports = runtimeImports(content.bytes, file);
             for (const specifier of imports) {
               if (isBuiltin(specifier)) continue;
               if (specifier.startsWith(".")) {

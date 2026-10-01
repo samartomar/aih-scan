@@ -45,7 +45,8 @@ signer. The public boundary checks are in:
   preserve unaffected observations; missing dependency material is an explicit
   refusal, changed startup conditions require current work, computed preload
   dependencies refuse, and relative preloads bind the startup module Node loaded.
-  Syntax-aware extraction includes commented literal calls and rejects indirect
+  Syntax-aware extraction uses each file's JavaScript or TypeScript syntax, includes
+  commented literal calls, and rejects indirect
   loading rather than treating omitted module bytes as unchanged input.
 - `tests/package-install-v2.test.ts` and its packed assessment consumer: retained
   and authenticated imported reuse through the actual installed public API.
@@ -83,7 +84,7 @@ its complete selected unit, native source identity runs fresh over the changed
 tree, and an unavailable detector remains explicitly refused. The report is partial.
 
 On Windows x64, Node 24.19.0, on 2026-10-01, the empty-retention first run took
-941.10 ms. Delta runs had a 616.83 ms median, compared with 731.86 ms when forcing
+904.51 ms. Delta runs had a 619.47 ms median, compared with 716.35 ms when forcing
 fresh detector work on the same changed source. Fresh/delta order alternated;
 the process and filesystem caches stayed warm. These are one host's observed
 end-to-end timings, including current source capture and report validation.

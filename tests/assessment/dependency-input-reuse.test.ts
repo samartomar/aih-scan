@@ -150,6 +150,7 @@ function installedFixture(
 import {createHash, generateKeyPairSync} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
 import {runScan, signArtifact} from ${JSON.stringify(pathToFileURL(join(first, "dist/public/host.js")).href)};
+await globalThis.__aihPreloadReady;
 const result = await runScan(${JSON.stringify(request)});
 if(result.status !== 'assessment') throw new Error('Fixture assessment required');
 const {privateKey, publicKey} = generateKeyPairSync('ed25519');
@@ -175,6 +176,7 @@ process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPr
       `
 import {readFileSync} from 'node:fs';
 import {runScan} from ${JSON.stringify(pathToFileURL(join(second, "dist/public/host.js")).href)};
+await globalThis.__aihPreloadReady;
 const result = await runScan({...${JSON.stringify(request)}, priorArtifacts:[{scanId:${JSON.stringify(original.scanId)},location:{kind:'file',path:${JSON.stringify(priorPath)}}}]}, {reuseTrust:JSON.parse(readFileSync(${JSON.stringify(trustPath)},'utf8'))});
 process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPreloadMarker}));
 `,
@@ -369,6 +371,10 @@ test("relative startup preloads resolve from each Node launch working directory"
 test.each([
   ["commented literal", "require /* acquisition comment */ ('./actual.cjs');\n"],
   ["escaped literal and identifier", "requ\\u0069re('.\\x2factual.cjs');\n"],
+  [
+    "JavaScript relational expression",
+    "globalThis.__aihPreloadReady = new Promise(resolve => { globalThis.__aihResolvePreload = resolve; });\nconst a=0,b=0; a < typeof import('./actual.cjs') > (b);\n",
+  ],
 ])(
   "a %s preload call binds the dependency actually executed by Node",
   (_kind, entry) => {
@@ -376,7 +382,7 @@ test.each([
       (installation) =>
         writeFileSync(
           join(installation, "preload/actual.cjs"),
-          "globalThis.__aihPreloadMarker = 'changed';\n",
+          "globalThis.__aihPreloadMarker = 'changed'; globalThis.__aihResolvePreload?.();\n",
         ),
       (current, original) => {
         expect(original.preloadMarker).toBe("original");
@@ -412,7 +418,7 @@ test.each([
         writeFileSync(join(directory, "entry.cjs"), entry);
         writeFileSync(
           join(directory, "actual.cjs"),
-          "globalThis.__aihPreloadMarker = 'original';\n",
+          "globalThis.__aihPreloadMarker = 'original'; globalThis.__aihResolvePreload?.();\n",
         );
         return ["--require", join(directory, "entry.cjs")];
       },
