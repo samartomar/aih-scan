@@ -16,13 +16,30 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=24.15.0 <25"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./contracts": {
+      "types": "./dist/public/contracts.d.ts",
+      "import": "./dist/public/contracts.js"
+    },
+    "./read": {
+      "types": "./dist/public/read.d.ts",
+      "import": "./dist/public/read.js"
+    },
+    "./host": {
+      "types": "./dist/public/host.d.ts",
+      "import": "./dist/public/host.js"
+    },
+    "./schemas/request/1.0.0.json": "./schemas/request/1.0.0.json",
+    "./schemas/run-result/1.0.0.json": "./schemas/run-result/1.0.0.json",
+    "./schemas/report/1.0.0.json": "./schemas/report/1.0.0.json",
+    "./schemas/artifact/1.0.0.json": "./schemas/artifact/1.0.0.json",
+    "./schemas/evidence-association/1.0.0.json": "./schemas/evidence-association/1.0.0.json",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -30,11 +47,13 @@
   },
   "files": [
     "dist",
+    "schemas",
     "tools/baseline-analyzers",
     "tools/verify-core-contract-lock-v2.mjs"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "generate:identity": "node tools/generate-package-identity.mjs",
+    "build": "npm run generate:identity && tsc -p tsconfig.build.json",
     "lint": "biome check .",
     "prepack": "npm run build",
     "repo:doctor": "node tools/repo-ai-tools.mjs doctor-codex",
@@ -55,6 +74,9 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
+    "@sigstore/bundle": "5.0.0",
+    "@sigstore/protobuf-specs": "0.5.0",
+    "@sigstore/verify": "4.1.2",
     "jsonc-parser": "3.3.1",
     "yaml": "2.9.1",
     "zod": "4.4.3"

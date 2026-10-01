@@ -61,7 +61,7 @@ describe("Cisco OCI direct/OCI equivalence workflow", () => {
         /actions\/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8\.0\.1/g,
       ) ?? [],
     ).toHaveLength(5);
-    expect(text.match(/node-version: 20/g) ?? []).toHaveLength(3);
+    expect(text.match(/node-version: "24\.15\.0"/g) ?? []).toHaveLength(3);
     expect(text).toContain("buildx-v0.34.1.linux-amd64");
     expect(text).toContain(buildxSha256);
     expect(text).toContain(buildkit);

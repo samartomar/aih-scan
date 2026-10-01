@@ -1,0 +1,1411 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "urn:aihq:scan:report:1.0.0"
+    },
+    "producer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "@aihq/scan"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "createdAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "local"
+            },
+            "capture": {
+              "type": "object",
+              "properties": {
+                "profile": {
+                  "type": "string",
+                  "const": "aih-source-capture-1"
+                },
+                "entries": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path",
+                          "sha256",
+                          "byteLength"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "directory"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "file-link"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "target": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path",
+                          "target",
+                          "sha256",
+                          "byteLength"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "directory-link"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "target": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path",
+                          "target"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "captureSha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "profile",
+                "entries",
+                "captureSha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "capture"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "git"
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^https:\\/\\/[^/@\\s]+(?:\\/[^?#\\s]*)?$"
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "capture": {
+              "type": "object",
+              "properties": {
+                "profile": {
+                  "type": "string",
+                  "const": "aih-source-capture-1"
+                },
+                "entries": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path",
+                          "sha256",
+                          "byteLength"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "directory"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "file-link"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "target": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path",
+                          "target",
+                          "sha256",
+                          "byteLength"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "directory-link"
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          },
+                          "target": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "path",
+                          "target"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "captureSha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "profile",
+                "entries",
+                "captureSha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "repository",
+            "commit",
+            "capture"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "selection": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+          }
+        },
+        "excludedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+          }
+        }
+      },
+      "required": [
+        "paths",
+        "excludedPaths"
+      ],
+      "additionalProperties": false
+    },
+    "requestedDetectors": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "detectorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "profileId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configuration": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "configurationSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "detectorId",
+          "profileId",
+          "configuration",
+          "configurationSha256"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "results": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "detectorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed",
+              "refused",
+              "cancelled"
+            ]
+          },
+          "observations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "observationId": {
+                  "type": "string",
+                  "pattern": "^observation:sha256:[0-9a-f]{64}$"
+                },
+                "body": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "const": "aih-observation-v1"
+                    },
+                    "input": {
+                      "type": "object",
+                      "properties": {
+                        "detectorId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                        },
+                        "detectorVersion": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                        },
+                        "adapterSha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "rulesSha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "configurationSha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "profileId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                        },
+                        "profileSha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "platform": {
+                          "type": "object",
+                          "properties": {
+                            "os": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "architecture": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "relevantFactsSha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            }
+                          },
+                          "required": [
+                            "os",
+                            "architecture",
+                            "relevantFactsSha256"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "scopeKind": {
+                          "type": "string",
+                          "enum": [
+                            "source-tree",
+                            "selected-closure"
+                          ]
+                        },
+                        "targetPaths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          }
+                        },
+                        "entries": {
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "file"
+                                  },
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "byteLength": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "path",
+                                  "sha256",
+                                  "byteLength"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "directory"
+                                  },
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "path"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "file-link"
+                                  },
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                  },
+                                  "target": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "byteLength": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "path",
+                                  "target",
+                                  "sha256",
+                                  "byteLength"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "directory-link"
+                                  },
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                  },
+                                  "target": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096,
+                                    "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "path",
+                                  "target"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "detectorId",
+                        "detectorVersion",
+                        "adapterSha256",
+                        "rulesSha256",
+                        "configurationSha256",
+                        "profileId",
+                        "profileSha256",
+                        "platform",
+                        "scopeKind",
+                        "targetPaths",
+                        "entries"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "startedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    },
+                    "completedAt": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+                    },
+                    "producer": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "const": "@aihq/scan"
+                        },
+                        "version": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "version"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "coverage": {
+                      "type": "object",
+                      "properties": {
+                        "coveredPaths": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096,
+                            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                          }
+                        }
+                      },
+                      "required": [
+                        "coveredPaths"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "rawOccurrenceFingerprint": {
+                            "type": "string",
+                            "pattern": "^raw-occurrence-v1:[0-9a-f]{64}$"
+                          },
+                          "multiplicity": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "rule": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "present"
+                                  },
+                                  "value": {
+                                    "type": "object",
+                                    "properties": {
+                                      "nativeRuleId": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                      },
+                                      "name": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                      }
+                                    },
+                                    "required": [
+                                      "nativeRuleId"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                  },
+                                  "detail": {
+                                    "type": "string",
+                                    "minLength": 0,
+                                    "maxLength": 4096
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "reason",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "severity": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "present"
+                                  },
+                                  "value": {
+                                    "type": "object",
+                                    "properties": {
+                                      "level": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                      },
+                                      "vendorSeverity": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 256,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                      }
+                                    },
+                                    "required": [
+                                      "level"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                  },
+                                  "detail": {
+                                    "type": "string",
+                                    "minLength": 0,
+                                    "maxLength": 4096
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "reason",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "message": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "present"
+                                  },
+                                  "value": {
+                                    "type": "string",
+                                    "minLength": 0,
+                                    "maxLength": 16384
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                  },
+                                  "detail": {
+                                    "type": "string",
+                                    "minLength": 0,
+                                    "maxLength": 4096
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "reason",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "location": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "present"
+                                  },
+                                  "value": {
+                                    "type": "object",
+                                    "properties": {
+                                      "path": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 4096,
+                                        "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                      },
+                                      "fileSha256": {
+                                        "type": "string",
+                                        "pattern": "^[0-9a-f]{64}$"
+                                      },
+                                      "startLine": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "path",
+                                      "fileSha256"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                  },
+                                  "detail": {
+                                    "type": "string",
+                                    "minLength": 0,
+                                    "maxLength": 4096
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "reason",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "supportingEvidence": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "present"
+                                  },
+                                  "value": {
+                                    "type": "object",
+                                    "properties": {
+                                      "annexId": {
+                                        "type": "string",
+                                        "pattern": "^annex\\.[a-z0-9][a-z0-9._-]{0,249}$"
+                                      },
+                                      "ordinal": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "annexId",
+                                      "ordinal"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "const": "unavailable"
+                                  },
+                                  "reason": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 256,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                  },
+                                  "detail": {
+                                    "type": "string",
+                                    "minLength": 0,
+                                    "maxLength": 4096
+                                  }
+                                },
+                                "required": [
+                                  "state",
+                                  "reason",
+                                  "detail"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "rawOccurrenceFingerprint",
+                          "multiplicity",
+                          "rule",
+                          "severity",
+                          "message",
+                          "location",
+                          "supportingEvidence"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "gaps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                          },
+                          "detail": {
+                            "type": "string",
+                            "minLength": 0,
+                            "maxLength": 4096
+                          }
+                        },
+                        "required": [
+                          "reason",
+                          "detail"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "annexIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^annex\\.[a-z0-9][a-z0-9._-]{0,249}$"
+                      }
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "input",
+                    "startedAt",
+                    "completedAt",
+                    "producer",
+                    "coverage",
+                    "findings",
+                    "gaps",
+                    "annexIds"
+                  ],
+                  "additionalProperties": false
+                },
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "fresh",
+                    "reused"
+                  ]
+                },
+                "fromScanId": {
+                  "type": "string",
+                  "pattern": "^scan:sha256:[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "observationId",
+                "body",
+                "origin"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "coverage": {
+            "type": "object",
+            "properties": {
+              "coveredPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                }
+              },
+              "excludedPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                }
+              },
+              "uncoveredPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                }
+              },
+              "complete": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "coveredPaths",
+              "excludedPaths",
+              "uncoveredPaths",
+              "complete"
+            ],
+            "additionalProperties": false
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$"
+                },
+                "detail": {
+                  "type": "string",
+                  "minLength": 0,
+                  "maxLength": 4096
+                },
+                "detectorId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                }
+              },
+              "required": [
+                "code",
+                "detail"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "detectorId",
+          "outcome",
+          "observations",
+          "coverage",
+          "diagnostics"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "completion": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
+    "annexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^annex\\.[a-z0-9][a-z0-9._-]{0,249}$"
+          },
+          "mediaType": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "mediaType",
+          "sha256",
+          "byteLength"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "effectiveLimits": {
+      "type": "object",
+      "properties": {
+        "maxSourceEntries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "maxSourceBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 268435456
+        },
+        "maxRequestBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        },
+        "maxReportBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "maxAnnexBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "maxDecodedArtifactBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        },
+        "maxArtifactBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100663296
+        },
+        "maxStatementBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 131072
+        },
+        "detectorTimeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 3600000
+        }
+      },
+      "required": [
+        "maxSourceEntries",
+        "maxSourceBytes",
+        "maxRequestBytes",
+        "maxReportBytes",
+        "maxAnnexBytes",
+        "maxDecodedArtifactBytes",
+        "maxArtifactBytes",
+        "maxStatementBytes",
+        "detectorTimeoutMs"
+      ],
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 4096
+          },
+          "detectorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "producer",
+    "createdAt",
+    "source",
+    "selection",
+    "requestedDetectors",
+    "results",
+    "completion",
+    "annexes",
+    "effectiveLimits",
+    "diagnostics"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    }
+  },
+  "$id": "urn:aihq:scan:report:1.0.0",
+  "description": "AIHQ restricted canonical JSON profile: well-formed NFC strings; nonnegative safe integer numbers; no duplicate keys. Source, observation, coverage and digest cross-field constraints also require the Scan reader."
+}

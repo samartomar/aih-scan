@@ -291,30 +291,21 @@ describe("Core Strict V2 compatibility lock", () => {
     ).toThrow();
   });
 
-  it("verifies the newest accepted Core and removes every Core checkout before scanner checks", () => {
+  it("keeps legacy lock verification explicit while package CI checks independent Scan contracts", () => {
     const workflow = ciWorkflow();
     expect(workflow).toContain(
       "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
     );
-    expect(workflow).toContain("node-version: 20");
+    expect(workflow).toContain('node-version: "24.15.0"');
     expect(workflow).toContain("cache: npm");
     expect(workflow).toContain(
       "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0",
     );
     expect(workflow).toContain('version: "0.12.13"');
-    // The contract gate runs against the newest accepted Core commit.
-    expect(workflow).toContain(`ref: ${AI_HARNESS_STRICT_V2_COMMIT}`);
-    expect(workflow).toContain("path: .core-contract");
-    // The packed-evidence gate keeps its own checkout at the Core package it pins, which
-    // must still be a member of the accepted set.
-    expect(workflow).toContain("path: .core-cold-evidence");
-    const coldEvidenceRef = /ref: ([0-9a-f]{40})\n\s+path: \.core-cold-evidence/u.exec(workflow);
-    expect(coldEvidenceRef?.[1]).toBeDefined();
-    expect(AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED).toContain(coldEvidenceRef?.[1]);
-    expect(lockVerifier()).toContain(coldEvidenceRef?.[1] ?? "unmatched");
-
-    const verifier = "node tools/verify-core-contract-lock-v2.mjs --core-root .core-contract";
-    expect(workflow).toContain(verifier);
+    expect(workflow).not.toContain("repository: samartomar/ai-harness");
+    expect(workflow).not.toContain(".core-contract");
+    expect(workflow).not.toContain(".core-cold-evidence");
+    expect(workflow).not.toContain("verify:cold-core-evidence");
     const verifierSource = lockVerifier();
     // The contract is the schema bytes; Core's package version is recorded, not required.
     expect(verifierSource).toContain('const corePackageName = "@aihq/core";');
@@ -329,32 +320,13 @@ describe("Core Strict V2 compatibility lock", () => {
     for (const digest of AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED)
       expect(verifierSource).toContain(digest);
 
-    const verifierIndex = workflow.indexOf(verifier);
-    const packedProof = "npm run verify:cold-core-evidence";
-    const packedProofIndex = workflow.indexOf(packedProof);
-    const cleanupIndex = workflow.indexOf("name: Remove exact Core contract checkout");
-    expect(verifierIndex).toBeGreaterThanOrEqual(0);
-    expect(packedProofIndex).toBeGreaterThan(verifierIndex);
-    expect(workflow).toContain(
-      "AIH_SCAN_CORE_SOURCE: $" + "{{ github.workspace }}/.core-cold-evidence",
-    );
-    expect(cleanupIndex).toBeGreaterThan(verifierIndex);
-    expect(cleanupIndex).toBeGreaterThan(packedProofIndex);
-    const cleanupEnd = workflow.indexOf("- run: npm run typecheck", cleanupIndex);
-    expect(cleanupEnd).toBeGreaterThan(cleanupIndex);
-    const cleanup = workflow.slice(cleanupIndex, cleanupEnd);
-    expect(cleanup).toContain('"$GITHUB_WORKSPACE/.core-contract"');
-    expect(cleanup).toContain('"$GITHUB_WORKSPACE/.core-cold-evidence"');
-    expect(cleanup).toContain('rm -rf -- "$core_root"');
-    expect(cleanup).toContain('test ! -e "$core_root"');
-    expect(cleanup).not.toMatch(/[?*]/);
     for (const check of [
       "npm run typecheck",
       "npm run lint",
       "npm run test:cov",
       "npm run build",
     ]) {
-      expect(workflow.indexOf(check)).toBeGreaterThan(cleanupIndex);
+      expect(workflow).toContain(check);
     }
   });
 });

@@ -117,6 +117,9 @@ const semgrepRules = [
   "",
 ].join("\n");
 
+/** Exact rule text executed by the Semgrep profiles; portable assessments bind these bytes. */
+export const SEMGREP_RULES_V1 = semgrepRules;
+
 export type BaselineProcessRunnerV1 = (
   argv: readonly string[],
   options: {
