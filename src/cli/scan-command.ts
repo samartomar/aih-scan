@@ -1,0 +1,432 @@
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  type Stats,
+  writeFileSync,
+} from "node:fs";
+import { dirname, resolve } from "node:path";
+import { prepareArtifact } from "../artifact/host.js";
+import { readArtifact } from "../artifact/read.js";
+import { base64Decode, canonicalBytes } from "../assessment/json.js";
+import { type RunScanOptions, runScan } from "../assessment/run.js";
+import type {
+  DetectorResult,
+  Diagnostic,
+  Finding,
+  Json,
+  ReportBody,
+  ScanRunResult,
+} from "../assessment/types.js";
+import { resolveDetectorCapabilityV1 } from "../capability/detector-capability-v1.js";
+
+export const scanExitCodes = {
+  complete: 0,
+  incomplete: 1,
+  findings: 1,
+  invalid: 2,
+  cancelled: 130,
+} as const;
+
+export const scanUsage = `${[
+  "Usage: aih-scan scan <directory> [options]",
+  "",
+  "Assesses one local directory and reports what each detector observed and covered.",
+  "",
+  "Options:",
+  "  --detector <id>        Run exactly the named detector; repeat for several.",
+  "                         Default: detector.aih-native and detector.aih-trust-lint.",
+  "                         A detector that cannot run is reported as refused or failed",
+  "                         and leaves the assessment incomplete.",
+  "  --json                 Write the complete run result as canonical JSON to stdout.",
+  "  --artifact <new-file>  Also save an unsigned portable artifact to a file that does",
+  "                         not exist yet; it is read back before the command succeeds.",
+  "  --fail-on-findings     Exit 1 when the assessment reports any finding.",
+  "  -h, --help             Print this help.",
+  "",
+  "Exit codes:",
+  "  0    complete assessment",
+  "  1    incomplete assessment, or findings with --fail-on-findings",
+  "  2    invalid input, no assessment, or the artifact could not be saved",
+  "  130  cancelled; finished results are still reported and saved",
+].join("\n")}\n`;
+
+export interface ScanCommandIo {
+  stdout: (text: string) => void;
+  stderr: (text: string) => void;
+  /** Aborted when the user cancels. */
+  cancellation?: AbortSignal;
+  /** Defaults to the assessment host's `runScan`. */
+  runScan?: (request: unknown, options: RunScanOptions) => Promise<ScanRunResult>;
+  /** Relative targets resolve against this directory. Defaults to `process.cwd()`. */
+  cwd?: string;
+}
+
+const defaultDetectors = ["detector.aih-native", "detector.aih-trust-lint"];
+
+/**
+ * The one place each detector's `configuration` is built. Later input discovery (MCP
+ * configuration paths and internal package scopes) replaces this function.
+ */
+export function detectorConfiguration(detectorId: string): Json {
+  if (detectorId === "detector.aih-trust-lint") return { internalScopes: [], mcpConfigPaths: [] };
+  if (detectorId === "detector.cisco-mcp-scanner") return { mcpConfigPaths: [] };
+  return {};
+}
+
+/** An invalid command: reported as `aih-scan: <message>` with exit 2 before any work. */
+class InvalidCommand extends Error {}
+function invalid(message: string): never {
+  throw new InvalidCommand(message);
+}
+
+interface ParsedArguments {
+  positionals: string[];
+  detectors: string[];
+  failOnFindings: boolean;
+  json: boolean;
+  artifact?: string;
+}
+
+function optionValue(args: readonly string[], index: number, name: string): string {
+  const value = args[index];
+  if (value === undefined || value.startsWith("-")) invalid(`${name} requires a value`);
+  return value;
+}
+
+function parseArguments(args: readonly string[]): ParsedArguments {
+  const parsed: ParsedArguments = {
+    positionals: [],
+    detectors: [],
+    failOnFindings: false,
+    json: false,
+  };
+  const single = new Set<string>();
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg !== "--detector" && arg.startsWith("--")) {
+      if (single.has(arg)) invalid(`duplicate option ${arg}`);
+      single.add(arg);
+    }
+    if (arg === "--detector") {
+      const value = optionValue(args, ++index, arg);
+      if (!resolveDetectorCapabilityV1(value)) invalid(`unknown detector ${value}`);
+      if (parsed.detectors.includes(value)) invalid(`duplicate detector ${value}`);
+      parsed.detectors.push(value);
+    } else if (arg === "--fail-on-findings") parsed.failOnFindings = true;
+    else if (arg === "--json") parsed.json = true;
+    else if (arg === "--artifact") parsed.artifact = optionValue(args, ++index, arg);
+    else if (arg.startsWith("-")) invalid(`unknown option ${arg}`);
+    else parsed.positionals.push(arg);
+  }
+  return parsed;
+}
+
+function resolveTarget(positionals: readonly string[], cwd: string): string {
+  if (positionals.length !== 1) invalid("scan requires exactly one target directory");
+  const path = resolve(cwd, positionals[0] as string);
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    invalid("the target does not exist or cannot be inspected");
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) invalid("the target is not a real directory");
+  return realpathSync.native(path);
+}
+
+const replacementCharacter = String.fromCodePoint(0xfffd);
+
+/**
+ * Detector and report text is data, never terminal input. Line breaks and tabs become
+ * spaces so a value cannot start a forged line; every other control or format character
+ * (escape sequences, bidirectional overrides, ...) becomes U+FFFD.
+ */
+function safe(text: string): string {
+  return text.replace(/[\n\r\t\p{Zl}\p{Zp}]/gu, " ").replace(/\p{C}/gu, replacementCharacter);
+}
+
+function diagnosticLine(diagnostic: Diagnostic, indent: string, naming: boolean): string {
+  const detector =
+    naming && diagnostic.detectorId !== undefined ? ` [${safe(diagnostic.detectorId)}]` : "";
+  return `${indent}${safe(diagnostic.code)}: ${safe(diagnostic.detail)}${detector}`;
+}
+
+function detectorLines(result: DetectorResult): string[] {
+  const origins = [...new Set(result.observations.map((observation) => observation.origin))];
+  const findings = result.observations.reduce(
+    (sum, observation) => sum + observation.body.findings.length,
+    0,
+  );
+  const covered = result.coverage.coveredPaths.length;
+  const selected = covered + result.coverage.uncoveredPaths.length;
+  return [
+    `  ${safe(result.detectorId)}: ${safe(result.outcome)}; origin ${safe(origins.join(", ") || "none")}; ` +
+      `${findings} ${findings === 1 ? "finding" : "findings"}; coverage ${covered}/${selected} ` +
+      (result.coverage.complete ? "complete" : "incomplete"),
+    ...result.diagnostics.map((diagnostic) => diagnosticLine(diagnostic, "    ", false)),
+  ];
+}
+
+const findingListCap = 20;
+
+function findingLine(detectorId: string, finding: Finding): string {
+  const severity = finding.severity.state === "present" ? finding.severity.value.level : "unknown";
+  const rule = finding.rule.state === "present" ? finding.rule.value.nativeRuleId : "unknown-rule";
+  const location =
+    finding.location.state === "present"
+      ? `${finding.location.value.path}${
+          finding.location.value.startLine === undefined
+            ? ""
+            : `:${finding.location.value.startLine}`
+        }`
+      : "unknown-location";
+  const message = finding.message.state === "present" ? finding.message.value : "(no message)";
+  return `  [${safe(severity)}] ${safe(rule)} ${safe(location)} (${safe(detectorId)}) ${safe(message)}`;
+}
+
+function findingCount(report: ReportBody): number {
+  return report.results
+    .flatMap((result) => result.observations)
+    .reduce((sum, observation) => sum + observation.body.findings.length, 0);
+}
+
+function findingLines(report: ReportBody): string[] {
+  const lines = report.results.flatMap((result) =>
+    result.observations.flatMap((observation) =>
+      observation.body.findings.map((finding) => findingLine(result.detectorId, finding)),
+    ),
+  );
+  if (lines.length === 0) return ["Findings: none"];
+  const hidden = lines.length - findingListCap;
+  return [
+    `Findings (${lines.length}):`,
+    ...lines.slice(0, findingListCap),
+    ...(hidden > 0
+      ? [
+          `  ... ${hidden} more ${hidden === 1 ? "finding" : "findings"} not shown; use --json or --artifact for the complete list`,
+        ]
+      : []),
+  ];
+}
+
+function annexLines(report: ReportBody): string[] {
+  if (report.annexes.length === 0) return ["Annexes: none"];
+  return [
+    `Annexes (${report.annexes.length}): per-detector evidence, never combined`,
+    ...report.annexes.map((annex) => {
+      const producer = report.results.find((result) =>
+        result.observations.some((observation) => observation.body.annexIds.includes(annex.id)),
+      );
+      return `  ${safe(annex.id)} ${safe(annex.mediaType)} ${annex.byteLength} bytes, from ${safe(producer?.detectorId ?? "an unknown detector")}`;
+    }),
+  ];
+}
+
+function diagnosticLines(result: Assessment): string[] {
+  const unique = new Map<string, Diagnostic>();
+  for (const diagnostic of [...result.report.diagnostics, ...result.diagnostics])
+    unique.set(JSON.stringify(diagnostic), diagnostic);
+  if (unique.size === 0) return ["Diagnostics: none"];
+  return [
+    `Diagnostics (${unique.size}):`,
+    ...[...unique.values()].map((diagnostic) => diagnosticLine(diagnostic, "  ", true)),
+  ];
+}
+
+function targetLine(target: string, report: ReportBody): string {
+  const entries = report.source.capture.entries;
+  const files = entries.filter((entry) => entry.kind === "file" || entry.kind === "file-link");
+  return `Target: ${safe(target)} (${files.length} ${files.length === 1 ? "file" : "files"}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"})`;
+}
+
+function humanSummary(result: ScanRunResult, target: string): string {
+  if (result.status !== "assessment")
+    return [
+      `No assessment (${safe(result.phase)} diagnostic)`,
+      ...result.diagnostics.map((diagnostic) => diagnosticLine(diagnostic, "  ", false)),
+      "",
+    ].join("\n");
+  return [
+    `Scan ID: ${safe(result.scanId)}`,
+    targetLine(target, result.report),
+    `Completion: ${safe(result.report.completion)}`,
+    "Detectors:",
+    ...result.report.results.flatMap(detectorLines),
+    ...findingLines(result.report),
+    ...annexLines(result.report),
+    ...diagnosticLines(result),
+    "",
+  ].join("\n");
+}
+
+type DirectorySnapshot = Readonly<{ path: string; realPath: string; stat: Stats }>;
+
+function sameFileReference(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** Every ancestor of an output path must be a real directory: no link or reparse point. */
+function parentChain(path: string): DirectorySnapshot[] {
+  const parents: DirectorySnapshot[] = [];
+  try {
+    for (let current = dirname(path); ; current = dirname(current)) {
+      const stat = lstatSync(current);
+      if (!stat.isDirectory() || stat.isSymbolicLink())
+        invalid("the artifact path has a linked or non-directory parent");
+      parents.push({ path: current, realPath: realpathSync.native(current), stat });
+      if (dirname(current) === current) return parents;
+    }
+  } catch (error) {
+    if (error instanceof InvalidCommand) throw error;
+    return invalid("the artifact directory does not exist or cannot be inspected");
+  }
+}
+
+/** The artifact must be a new file: refused before any scan work if the path is taken. */
+function assertNewArtifactPath(path: string): void {
+  let taken = true;
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+      invalid("the artifact path cannot be inspected");
+    taken = false;
+  }
+  if (taken) invalid("the artifact path already exists");
+  parentChain(path);
+}
+
+type Assessment = Extract<ScanRunResult, { status: "assessment" }>;
+
+/** Writes the unsigned artifact, then proves it by reading the saved bytes back. */
+async function saveArtifact(result: Assessment, path: string): Promise<void> {
+  const limit = result.report.effectiveLimits.maxAnnexBytes;
+  const prepared = await prepareArtifact({
+    report: result.report,
+    annexes: result.annexes.map(({ id, bytesBase64 }) => ({
+      id,
+      bytes: base64Decode(bytesBase64, limit),
+    })),
+  });
+  const parentsBefore = parentChain(path);
+  const descriptor = openSync(path, "wx", 0o600);
+  try {
+    const opened = fstatSync(descriptor);
+    const named = lstatSync(path);
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      !named.isFile() ||
+      named.isSymbolicLink() ||
+      !sameFileReference(opened, named)
+    )
+      throw new Error("the artifact file was replaced while it was created");
+    writeFileSync(descriptor, prepared.bytes);
+    const parentsAfter = parentChain(path);
+    if (
+      parentsAfter.length !== parentsBefore.length ||
+      parentsAfter.some(
+        (parent, index) =>
+          parent.path !== parentsBefore[index]?.path ||
+          parent.realPath !== parentsBefore[index]?.realPath ||
+          !sameFileReference(parent.stat, (parentsBefore[index] as DirectorySnapshot).stat),
+      )
+    )
+      throw new Error("the artifact directory was replaced while the file was written");
+  } finally {
+    closeSync(descriptor);
+  }
+  const read = await readArtifact(new Uint8Array(readFileSync(path)));
+  if (read.status !== "read" || read.scanId !== result.scanId)
+    throw new Error("the saved artifact did not read back as this assessment");
+}
+
+export async function runScanCommand(args: readonly string[], io: ScanCommandIo): Promise<number> {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    io.stdout(scanUsage);
+    return scanExitCodes.complete;
+  }
+  let target: string;
+  let parsed: ParsedArguments;
+  try {
+    parsed = parseArguments(args);
+    target = resolveTarget(parsed.positionals, io.cwd ?? process.cwd());
+    if (parsed.artifact !== undefined)
+      assertNewArtifactPath(resolve(io.cwd ?? process.cwd(), parsed.artifact));
+  } catch (error) {
+    if (!(error instanceof InvalidCommand)) throw error;
+    io.stderr(`aih-scan: ${safe(error.message)}\n`);
+    return scanExitCodes.invalid;
+  }
+  const request = {
+    schema: "urn:aihq:scan:request:1.0.0",
+    source: { kind: "local", path: target },
+    selection: { paths: "all", excludedPaths: [] },
+    detectors: (parsed.detectors.length ? parsed.detectors : defaultDetectors).map(
+      (detectorId) => ({
+        detectorId,
+        configuration: detectorConfiguration(detectorId),
+      }),
+    ),
+  };
+  const cancellation = new AbortController();
+  const forwardCancellation = () => cancellation.abort();
+  if (io.cancellation?.aborted) cancellation.abort();
+  else io.cancellation?.addEventListener("abort", forwardCancellation, { once: true });
+  try {
+    return await assess(parsed, request, target, io, cancellation.signal);
+  } finally {
+    io.cancellation?.removeEventListener("abort", forwardCancellation);
+  }
+}
+
+async function assess(
+  parsed: ParsedArguments,
+  request: unknown,
+  target: string,
+  io: ScanCommandIo,
+  signal: AbortSignal,
+): Promise<number> {
+  io.stderr(`aih-scan: assessing ${safe(target)}\n`);
+  const result = await (io.runScan ?? runScan)(request, { signal });
+  if (parsed.json) {
+    io.stdout(`${new TextDecoder().decode(canonicalBytes(result))}\n`);
+    io.stderr(
+      result.status === "assessment"
+        ? `aih-scan: ${safe(result.scanId)} is ${safe(result.report.completion)}\n`
+        : `aih-scan: no assessment (${safe(result.phase)} diagnostic)\n`,
+    );
+  } else io.stdout(humanSummary(result, target));
+  let artifactSaved = true;
+  if (result.status === "assessment" && parsed.artifact !== undefined) {
+    const path = resolve(io.cwd ?? process.cwd(), parsed.artifact);
+    try {
+      await saveArtifact(result, path);
+      (parsed.json ? io.stderr : io.stdout)(
+        `Artifact: ${safe(path)}\n` +
+          `  unsigned; authenticity unchecked; read back through the portable reader as ${safe(result.scanId)}\n`,
+      );
+    } catch (error) {
+      artifactSaved = false;
+      io.stderr(
+        `aih-scan: artifact not saved: ${safe(error instanceof Error ? error.message : "unknown failure")}\n`,
+      );
+    }
+  }
+  if (signal.aborted) {
+    io.stderr(
+      result.status === "assessment"
+        ? "aih-scan: cancelled; finished results are preserved\n"
+        : "aih-scan: cancelled; no assessment was produced\n",
+    );
+    return scanExitCodes.cancelled;
+  }
+  if (result.status !== "assessment" || !artifactSaved) return scanExitCodes.invalid;
+  if (result.report.completion === "partial") return scanExitCodes.incomplete;
+  if (parsed.failOnFindings && findingCount(result.report) > 0) return scanExitCodes.findings;
+  return scanExitCodes.complete;
+}
