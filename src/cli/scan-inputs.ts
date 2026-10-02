@@ -260,28 +260,62 @@ export function resolveScanInputs(
     mcpConfigPaths = discoverMcpConfigPaths(tree);
     supplied = false;
   }
-  const internalScopes = normalizeInternalScopes(explicit.internalScopes);
+  const notes = readers.map((detectorId) =>
+    mcpConfigPaths.length === 0
+      ? `${detectorId}: no MCP configuration found inside the target`
+      : supplied
+        ? `${detectorId}: using supplied MCP configuration: ${mcpConfigPaths.join(", ")}`
+        : `${detectorId}: discovered MCP configuration inside the target: ${mcpConfigPaths.join(", ")}`,
+  );
+  return configure(detectorIds, mcpConfigPaths, explicit.internalScopes, notes);
+}
+
+/**
+ * A Git source is acquired inside the assessment, so nothing can be discovered or
+ * contained before it runs: `--mcp-config` is refused and MCP-reading detectors receive
+ * no configuration paths. `--internal-scope` applies unchanged.
+ */
+export function resolveGitScanInputs(
+  detectorIds: readonly string[],
+  explicit: ExplicitScanInputs,
+): ScanInputsResolution {
+  if (explicit.mcpConfigPaths.length > 0)
+    return {
+      ok: false,
+      detail:
+        "--mcp-config applies only to local directories; MCP configuration is not read from Git sources",
+    };
+  if (explicit.internalScopes.length > 0 && !detectorIds.includes(TRUST_LINT_DETECTOR_ID_V1))
+    return {
+      ok: false,
+      detail: `--internal-scope requires ${TRUST_LINT_DETECTOR_ID_V1} to be selected`,
+    };
+  const notes = detectorIds
+    .filter((detectorId) => MCP_CONFIG_READERS.includes(detectorId))
+    .map(
+      (detectorId) => `${detectorId}: MCP configuration is not read from Git sources; none used`,
+    );
+  return configure(detectorIds, [], explicit.internalScopes, notes);
+}
+
+function configure(
+  detectorIds: readonly string[],
+  mcpConfigPaths: readonly string[],
+  suppliedScopes: readonly string[],
+  readerNotes: readonly string[],
+): ScanInputsResolution {
+  const internalScopes = normalizeInternalScopes(suppliedScopes);
   const scopesProblem = trustLintInternalScopesProblemV1(internalScopes);
   if (scopesProblem !== undefined) return { ok: false, detail: scopesProblem };
-  const notes: string[] = [];
-  for (const detectorId of readers) {
-    if (mcpConfigPaths.length === 0)
-      notes.push(`${detectorId}: no MCP configuration found inside the target`);
-    else
-      notes.push(
-        supplied
-          ? `${detectorId}: using supplied MCP configuration: ${mcpConfigPaths.join(", ")}`
-          : `${detectorId}: discovered MCP configuration inside the target: ${mcpConfigPaths.join(", ")}`,
-      );
-  }
+  const notes = [...readerNotes];
   if (detectorIds.includes(TRUST_LINT_DETECTOR_ID_V1) && internalScopes.length === 0)
     notes.push(`${TRUST_LINT_DETECTOR_ID_V1}: no internal scopes supplied`);
   const configurations = new Map<string, Json>();
   for (const detectorId of detectorIds) {
     if (detectorId === TRUST_LINT_DETECTOR_ID_V1)
-      configurations.set(detectorId, { internalScopes, mcpConfigPaths });
+      configurations.set(detectorId, { internalScopes, mcpConfigPaths: [...mcpConfigPaths] });
     else if (detectorId === CISCO_MCP_SCANNER_DETECTOR_ID_V1)
-      configurations.set(detectorId, { mcpConfigPaths });
+      configurations.set(detectorId, { mcpConfigPaths: [...mcpConfigPaths] });
   }
   return { ok: true, inputs: { configurations, notes } };
 }
