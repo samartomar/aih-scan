@@ -177,8 +177,8 @@ declared internal package scopes.
 - `--mcp-config <path>` replaces discovery with the files you name; repeat it for
   several. A relative path is read relative to the target and an absolute path
   must lead into it; an absolute path may be spelled through a link in an
-  ancestor of the target or a link to the target itself, but never through a link
-  inside the target. A path outside the target, through a linked parent, missing
+  ancestor of the target or a link to the target itself. Below the target, every
+  directory must be a real directory. A path outside the target, through a linked parent, missing
   or repeated is refused. It also needs a selected detector that reads MCP
   configuration (`detector.aih-trust-lint` or `detector.cisco-mcp-scanner`).
 - `--internal-scope <@scope>` declares an internal package scope for trust-lint;

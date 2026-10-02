@@ -12,7 +12,8 @@ import { INCOMING_MCP_CONFIG_FILES_V1 } from "../detectors/trust-lint/secrets.js
  * incoming MCP configuration names inside the target only — at the root and inside
  * directories that hold a `SKILL.md` — and resolves explicit `--mcp-config` /
  * `--internal-scope` values into the exact `configuration` each selected detector
- * validates. The walk matches capture: it never follows links, omits the root `.git`
+ * validates. The walk matches capture: it never descends through links (a `SKILL.md`
+ * link is only inspected to see whether it names a file), omits the root `.git`
  * (a nested `.git` is ordinary content) and is bounded by `limitCeilings.maxSourceEntries`.
  */
 

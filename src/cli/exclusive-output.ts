@@ -10,7 +10,7 @@ import {
 import { dirname, resolve } from "node:path";
 
 /**
- * The one exclusive file writer of the CLI: it creates a new file, never replaces one,
+ * An exclusive file writer for CLI outputs: it creates a new file, never replaces one,
  * and fails closed when a parent directory is a link or reparse point or when the file
  * or a parent changes while the file is written. `project-core-evidence` and
  * `scan --artifact` both write through it.
@@ -30,7 +30,7 @@ export class ExclusiveOutputError extends Error {
 export interface ExclusiveOutputPolicy {
   /** Names the output in refusals, as in `${label} already exists`. */
   readonly label: string;
-  /** Exclusive upper bound on the size; an empty output is refused too. */
+  /** Largest accepted size in bytes (inclusive); an empty output is refused too. */
   readonly maximumBytes: number;
 }
 
