@@ -17,11 +17,11 @@ import type {
   DetectorResult,
   Diagnostic,
   Finding,
-  Json,
   ReportBody,
   ScanRunResult,
 } from "../assessment/types.js";
 import { resolveDetectorCapabilityV1 } from "../capability/detector-capability-v1.js";
+import { resolveScanInputs, type ScanInputs } from "./scan-inputs.js";
 
 export const scanExitCodes = {
   complete: 0,
@@ -41,6 +41,16 @@ export const scanUsage = `${[
   "                         Default: detector.aih-native and detector.aih-trust-lint.",
   "                         A detector that cannot run is reported as refused or failed",
   "                         and leaves the assessment incomplete.",
+  "  --mcp-config <path>    Use this MCP configuration instead of the ones discovered",
+  "                         inside the target (at its root and in directories holding a",
+  "                         SKILL.md); repeat for several. A path outside the target,",
+  "                         through a linked parent, missing or duplicated is refused.",
+  "                         Requires a selected detector that reads MCP configuration",
+  "                         (detector.aih-trust-lint or detector.cisco-mcp-scanner).",
+  "  --internal-scope <@scope>",
+  "                         Declare an internal package scope for detector.aih-trust-lint;",
+  "                         repeat for several. Values are trimmed, lowercased,",
+  "                         @-prefixed, deduplicated and sorted before validation.",
   "  --json                 Write the complete run result as canonical JSON to stdout.",
   "  --artifact <new-file>  Also save an unsigned portable artifact to a file that does",
   "                         not exist yet; it is read back before the command succeeds.",
@@ -67,16 +77,6 @@ export interface ScanCommandIo {
 
 const defaultDetectors = ["detector.aih-native", "detector.aih-trust-lint"];
 
-/**
- * The one place each detector's `configuration` is built. Later input discovery (MCP
- * configuration paths and internal package scopes) replaces this function.
- */
-export function detectorConfiguration(detectorId: string): Json {
-  if (detectorId === "detector.aih-trust-lint") return { internalScopes: [], mcpConfigPaths: [] };
-  if (detectorId === "detector.cisco-mcp-scanner") return { mcpConfigPaths: [] };
-  return {};
-}
-
 /** An invalid command: reported as `aih-scan: <message>` with exit 2 before any work. */
 class InvalidCommand extends Error {}
 function invalid(message: string): never {
@@ -86,6 +86,8 @@ function invalid(message: string): never {
 interface ParsedArguments {
   positionals: string[];
   detectors: string[];
+  mcpConfigPaths: string[];
+  internalScopes: string[];
   failOnFindings: boolean;
   json: boolean;
   artifact?: string;
@@ -101,13 +103,16 @@ function parseArguments(args: readonly string[]): ParsedArguments {
   const parsed: ParsedArguments = {
     positionals: [],
     detectors: [],
+    mcpConfigPaths: [],
+    internalScopes: [],
     failOnFindings: false,
     json: false,
   };
   const single = new Set<string>();
+  const repeatable = new Set(["--detector", "--mcp-config", "--internal-scope"]);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] as string;
-    if (arg !== "--detector" && arg.startsWith("--")) {
+    if (!repeatable.has(arg) && arg.startsWith("--")) {
       if (single.has(arg)) invalid(`duplicate option ${arg}`);
       single.add(arg);
     }
@@ -116,7 +121,10 @@ function parseArguments(args: readonly string[]): ParsedArguments {
       if (!resolveDetectorCapabilityV1(value)) invalid(`unknown detector ${value}`);
       if (parsed.detectors.includes(value)) invalid(`duplicate detector ${value}`);
       parsed.detectors.push(value);
-    } else if (arg === "--fail-on-findings") parsed.failOnFindings = true;
+    } else if (arg === "--mcp-config") parsed.mcpConfigPaths.push(optionValue(args, ++index, arg));
+    else if (arg === "--internal-scope")
+      parsed.internalScopes.push(optionValue(args, ++index, arg));
+    else if (arg === "--fail-on-findings") parsed.failOnFindings = true;
     else if (arg === "--json") parsed.json = true;
     else if (arg === "--artifact") parsed.artifact = optionValue(args, ++index, arg);
     else if (arg.startsWith("-")) invalid(`unknown option ${arg}`);
@@ -226,6 +234,12 @@ function annexLines(report: ReportBody): string[] {
   ];
 }
 
+/** Specialized detector inputs the command resolved, reported as one note per line. */
+function inputLines(notes: readonly string[]): string[] {
+  if (notes.length === 0) return ["Inputs: none"];
+  return [`Inputs (${notes.length}):`, ...notes.map((note) => `  ${safe(note)}`)];
+}
+
 function diagnosticLines(result: Assessment): string[] {
   const unique = new Map<string, Diagnostic>();
   for (const diagnostic of [...result.report.diagnostics, ...result.diagnostics])
@@ -243,7 +257,7 @@ function targetLine(target: string, report: ReportBody): string {
   return `Target: ${safe(target)} (${files.length} ${files.length === 1 ? "file" : "files"}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"})`;
 }
 
-function humanSummary(result: ScanRunResult, target: string): string {
+function humanSummary(result: ScanRunResult, target: string, notes: readonly string[]): string {
   if (result.status !== "assessment")
     return [
       `No assessment (${safe(result.phase)} diagnostic)`,
@@ -258,6 +272,7 @@ function humanSummary(result: ScanRunResult, target: string): string {
     ...result.report.results.flatMap(detectorLines),
     ...findingLines(result.report),
     ...annexLines(result.report),
+    ...inputLines(notes),
     ...diagnosticLines(result),
     "",
   ].join("\n");
@@ -352,11 +367,19 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
   }
   let target: string;
   let parsed: ParsedArguments;
+  let inputs: ScanInputs;
   try {
     parsed = parseArguments(args);
     target = resolveTarget(parsed.positionals, io.cwd ?? process.cwd());
     if (parsed.artifact !== undefined)
       assertNewArtifactPath(resolve(io.cwd ?? process.cwd(), parsed.artifact));
+    const detectorIds = parsed.detectors.length ? parsed.detectors : defaultDetectors;
+    const resolved = resolveScanInputs(target, detectorIds, {
+      mcpConfigPaths: parsed.mcpConfigPaths,
+      internalScopes: parsed.internalScopes,
+    });
+    if (!resolved.ok) invalid(resolved.detail);
+    inputs = resolved.inputs;
   } catch (error) {
     if (!(error instanceof InvalidCommand)) throw error;
     io.stderr(`aih-scan: ${safe(error.message)}\n`);
@@ -369,7 +392,7 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
     detectors: (parsed.detectors.length ? parsed.detectors : defaultDetectors).map(
       (detectorId) => ({
         detectorId,
-        configuration: detectorConfiguration(detectorId),
+        configuration: inputs.configurations.get(detectorId) ?? {},
       }),
     ),
   };
@@ -378,7 +401,7 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
   if (io.cancellation?.aborted) cancellation.abort();
   else io.cancellation?.addEventListener("abort", forwardCancellation, { once: true });
   try {
-    return await assess(parsed, request, target, io, cancellation.signal);
+    return await assess(parsed, request, target, io, cancellation.signal, inputs.notes);
   } finally {
     io.cancellation?.removeEventListener("abort", forwardCancellation);
   }
@@ -390,8 +413,10 @@ async function assess(
   target: string,
   io: ScanCommandIo,
   signal: AbortSignal,
+  notes: readonly string[],
 ): Promise<number> {
   io.stderr(`aih-scan: assessing ${safe(target)}\n`);
+  if (parsed.json) for (const note of notes) io.stderr(`aih-scan: note: ${safe(note)}\n`);
   const result = await (io.runScan ?? runScan)(request, { signal });
   if (parsed.json) {
     io.stdout(`${new TextDecoder().decode(canonicalBytes(result))}\n`);
@@ -400,7 +425,7 @@ async function assess(
         ? `aih-scan: ${safe(result.scanId)} is ${safe(result.report.completion)}\n`
         : `aih-scan: no assessment (${safe(result.phase)} diagnostic)\n`,
     );
-  } else io.stdout(humanSummary(result, target));
+  } else io.stdout(humanSummary(result, target, notes));
   let artifactSaved = true;
   if (result.status === "assessment" && parsed.artifact !== undefined) {
     const path = resolve(io.cwd ?? process.cwd(), parsed.artifact);
