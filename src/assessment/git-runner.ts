@@ -7,8 +7,9 @@ import { base64Decode, ContractError, fail, hasControl, strictParse } from "./js
  * The hardened Git runner shared by pinned acquisition and remote ref resolution.
  * Git always runs through `git-command` under Scan's bounded process-tree runner, with
  * argument arrays only (never a shell), a scrubbed environment (no inherited GIT_* or
- * proxy variables, no system or global configuration, no terminal prompt), HTTPS as the
- * only transport, no redirects, verified TLS and an empty hooks directory.
+ * proxy variables, no askpass program, no system or global configuration, no terminal
+ * prompt), HTTPS as the only transport, no redirects, verified TLS and an empty hooks
+ * directory.
  */
 export interface PinnedGitOptions {
   signal?: AbortSignal;
@@ -30,13 +31,18 @@ export async function runPinnedGit(
   for (const key of Object.keys(env))
     if (
       key.toUpperCase().startsWith("GIT_") ||
-      ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"].includes(key.toUpperCase())
+      ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSH_ASKPASS"].includes(
+        key.toUpperCase(),
+      )
     )
       delete env[key];
   Object.assign(env, {
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
+    // Git asks GIT_ASKPASS, core.askPass, then SSH_ASKPASS before the terminal prompt; an
+    // empty GIT_ASKPASS ends that chain, so no credential dialog can appear.
+    GIT_ASKPASS: "",
     GIT_NO_REPLACE_OBJECTS: "1",
   });
   if (options.gitCredentials) {

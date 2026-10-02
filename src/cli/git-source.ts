@@ -2,7 +2,7 @@ import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startGitFetchRelay } from "../assessment/git-fetch-relay.js";
-import { runPinnedGit } from "../assessment/git-runner.js";
+import { GitContainmentError, runPinnedGit } from "../assessment/git-runner.js";
 import { repositoryShape } from "../assessment/shapes.js";
 import { decodeStrictUtf8V1 } from "../assessment/strict-json.js";
 
@@ -85,12 +85,24 @@ export function classifyScanTarget(spelling: string, cwd: string): ScanTarget {
 const refSyntax =
   "--ref must name a branch, a tag, refs/heads/<name>, refs/tags/<name> or a full 40-character commit";
 
-/** check-ref-format-like validation, applied before any Git process or network. */
-export function gitRefProblem(ref: string): string | undefined {
-  if (fullCommit.test(ref)) return undefined;
-  if (ref === "HEAD") return "--ref HEAD is the default; omit --ref to use the default branch";
+/**
+ * What a Git source asks for, parsed once: the default HEAD, a full commit used as given,
+ * a qualified branch or tag, or a short name that may be either.
+ */
+export type GitRefRequest =
+  | { readonly kind: "head" }
+  | { readonly kind: "commit"; readonly commit: string }
+  | { readonly kind: "branch"; readonly name: string }
+  | { readonly kind: "tag"; readonly name: string }
+  | { readonly kind: "either"; readonly name: string };
+
+export type GitRefParse =
+  | { readonly ok: true; readonly request: GitRefRequest }
+  | { readonly ok: false; readonly detail: string };
+
+function invalidRefName(ref: string): boolean {
   const components = ref.split("/");
-  if (
+  return (
     ref.length === 0 ||
     ref.length > 255 ||
     /[^\x21-\x7e]/.test(ref) ||
@@ -103,11 +115,24 @@ export function gitRefProblem(ref: string): string | undefined {
     ref.includes("@{") ||
     ref.includes("//") ||
     ref === "@" ||
-    components.some((component) => component.startsWith(".") || component.endsWith(".lock")) ||
-    (ref.startsWith("refs/") && !/^refs\/(heads|tags)\/./.test(ref))
-  )
-    return refSyntax;
-  return undefined;
+    components.some((component) => component.startsWith(".") || component.endsWith(".lock"))
+  );
+}
+
+/**
+ * Parses `--ref` (absent means the default HEAD) with check-ref-format-like rules,
+ * before any Git process or network.
+ */
+export function parseGitRef(ref: string | undefined): GitRefParse {
+  if (ref === undefined) return { ok: true, request: { kind: "head" } };
+  if (fullCommit.test(ref)) return { ok: true, request: { kind: "commit", commit: ref } };
+  if (ref === "HEAD")
+    return { ok: false, detail: "--ref HEAD is the default; omit --ref to use the default branch" };
+  if (invalidRefName(ref)) return { ok: false, detail: refSyntax };
+  if (/^refs\/heads\/./.test(ref)) return { ok: true, request: { kind: "branch", name: ref } };
+  if (/^refs\/tags\/./.test(ref)) return { ok: true, request: { kind: "tag", name: ref } };
+  if (ref.startsWith("refs/")) return { ok: false, detail: refSyntax };
+  return { ok: true, request: { kind: "either", name: ref } };
 }
 
 export interface ResolvedGitSource {
@@ -119,6 +144,7 @@ export interface ResolvedGitSource {
 
 const unavailable =
   "the Git repository is unavailable, requires credentials, or could not be resolved";
+const cleanupUnconfirmed = "Git process cleanup could not be confirmed";
 const malformedListing =
   "the Git repository returned an unsupported ref listing (only SHA-1 repositories are supported)";
 /** Ref listings are small; the relay bounds transport and the runner bounds the listing. */
@@ -158,107 +184,141 @@ function parseListing(bytes: Uint8Array): Listing {
   return { refs, ...(headTarget === undefined ? {} : { headTarget }) };
 }
 
-function select(listing: Listing, ref: string | undefined): { commit: string; ref?: string } {
-  const { refs } = listing;
-  if (ref === undefined) {
-    const commit = refs.get("HEAD");
-    if (commit === undefined)
-      refuse("the Git repository has no default branch (HEAD); name one with --ref");
-    const target = listing.headTarget;
-    return target !== undefined &&
-      /^refs\/heads\/./.test(target) &&
-      gitRefProblem(target) === undefined
-      ? { commit, ref: target }
-      : { commit };
+type ListedRequest = Exclude<GitRefRequest, { kind: "commit" }>;
+
+/** `ls-remote` patterns are tail matches; a tag's peeled `^{}` entry is listed only by name. */
+function listingPatterns(request: ListedRequest): string[] {
+  const tag = (name: string) => [name, `${name}^{}`];
+  switch (request.kind) {
+    case "head":
+      return ["HEAD"];
+    case "branch":
+      return [request.name];
+    case "tag":
+      return tag(request.name);
+    case "either":
+      return [`refs/heads/${request.name}`, ...tag(`refs/tags/${request.name}`)];
   }
-  const tag = (name: string) => {
-    const commit = refs.get(`${name}^{}`) ?? refs.get(name);
-    return commit === undefined ? undefined : { commit, ref: name };
-  };
+}
+
+/** Selects the exact requested ref from the listing; an annotated tag yields its commit. */
+function select(listing: Listing, request: ListedRequest): { commit: string; ref?: string } {
+  const { refs } = listing;
   const branch = (name: string) => {
     const commit = refs.get(name);
     return commit === undefined ? undefined : { commit, ref: name };
   };
-  const found = ref.startsWith("refs/heads/")
-    ? branch(ref)
-    : ref.startsWith("refs/tags/")
-      ? tag(ref)
-      : (() => {
-          const asBranch = branch(`refs/heads/${ref}`);
-          const asTag = tag(`refs/tags/${ref}`);
-          if (asBranch && asTag)
-            refuse(
-              `--ref ${ref} names both a branch and a tag; use refs/heads/${ref} or refs/tags/${ref}`,
-            );
-          return asBranch ?? asTag;
-        })();
+  const tag = (name: string) => {
+    const commit = refs.get(`${name}^{}`) ?? refs.get(name);
+    return commit === undefined ? undefined : { commit, ref: name };
+  };
+  if (request.kind === "head") {
+    const commit = refs.get("HEAD");
+    if (commit === undefined)
+      refuse("the Git repository has no default branch (HEAD); name one with --ref");
+    // The branch HEAD points to, as the server advertises it, when it is a valid branch name.
+    const target = listing.headTarget === undefined ? undefined : parseGitRef(listing.headTarget);
+    return target?.ok && target.request.kind === "branch"
+      ? { commit, ref: target.request.name }
+      : { commit };
+  }
+  let found: { commit: string; ref: string } | undefined;
+  if (request.kind === "branch") found = branch(request.name);
+  else if (request.kind === "tag") found = tag(request.name);
+  else {
+    const asBranch = branch(`refs/heads/${request.name}`);
+    const asTag = tag(`refs/tags/${request.name}`);
+    if (asBranch && asTag)
+      refuse(
+        `--ref ${request.name} names both a branch and a tag; use refs/heads/${request.name} or refs/tags/${request.name}`,
+      );
+    found = asBranch ?? asTag;
+  }
   if (found === undefined)
     refuse(
-      `--ref ${ref} was not found as a branch or tag; a commit must be the full 40-character hash`,
+      `--ref ${request.name} was not found as a branch or tag; a commit must be the full 40-character hash`,
     );
   return found;
 }
 
+/** Removes the resolver's own temporary directory, retrying transient Windows locks. */
+function removeStage(stage: string): boolean {
+  try {
+    rmSync(stage, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function listRefs(
+  stage: string,
+  repository: string,
+  request: ListedRequest,
+  signal: AbortSignal,
+): Promise<Listing> {
+  const hooks = join(stage, "empty-hooks");
+  const work = join(stage, "git");
+  mkdirSync(hooks);
+  mkdirSync(work);
+  let listing: Uint8Array;
+  try {
+    // An own empty repository stops Git from discovering any enclosing repository.
+    await runPinnedGit(["init", "--quiet", `--template=${hooks}`], work, { signal }, hooks);
+    const relay = await startGitFetchRelay(repository, transportBytes, signal);
+    try {
+      listing = await runPinnedGit(
+        [
+          "-c",
+          `http.proxy=${relay.proxy}`,
+          "-c",
+          "credential.helper=",
+          "ls-remote",
+          ...(request.kind === "head" ? ["--symref"] : []),
+          repository,
+          ...listingPatterns(request),
+        ],
+        work,
+        { signal: AbortSignal.any([signal, relay.limitSignal]) },
+        hooks,
+        listingBytes,
+      );
+    } finally {
+      await relay.close();
+    }
+    relay.assertWithinBounds();
+  } catch (error) {
+    if (error instanceof GitContainmentError) refuse(cleanupUnconfirmed);
+    refuse(unavailable);
+  }
+  return parseListing(listing);
+}
+
 /**
- * Resolves `ref` (a branch, tag, qualified ref or full commit), or the default HEAD,
- * to one full commit. A full commit is used as given; pinned acquisition verifies it.
- * Every failure is a {@link GitSourceRefusal} with a fixed message; Git's own output
- * is never surfaced. The caller distinguishes cancellation through its signal.
+ * Resolves a parsed ref request, or the default HEAD, to one full commit. A full commit
+ * is used as given; pinned acquisition verifies it. Every failure is a
+ * {@link GitSourceRefusal} with a fixed message; Git's own output is never surfaced. The
+ * caller distinguishes cancellation through its signal.
+ *
+ * The private temporary directory is removed on every path. If it cannot be removed
+ * after retries, a refusal already in flight is kept; otherwise the resolution is refused
+ * so that no assessment runs with an owned temporary left behind.
  */
 export async function resolveGitSource(
   repository: string,
-  ref: string | undefined,
+  request: GitRefRequest,
   signal: AbortSignal,
 ): Promise<ResolvedGitSource> {
-  if (ref !== undefined && fullCommit.test(ref)) return { repository, commit: ref };
-  // Patterns are tail matches; the listing is filtered to exact names afterwards. A tag's
-  // peeled `^{}` entry is listed only when it is requested by name.
-  const tags = (name: string) => [name, `${name}^{}`];
-  const patterns =
-    ref === undefined
-      ? ["HEAD"]
-      : ref.startsWith("refs/heads/")
-        ? [ref]
-        : ref.startsWith("refs/tags/")
-          ? tags(ref)
-          : [`refs/heads/${ref}`, ...tags(`refs/tags/${ref}`)];
+  if (request.kind === "commit") return { repository, commit: request.commit };
   const stage = mkdtempSync(join(tmpdir(), "aih-scan-git-source-"));
+  let resolved: { commit: string; ref?: string };
   try {
-    const hooks = join(stage, "empty-hooks");
-    const work = join(stage, "git");
-    mkdirSync(hooks);
-    mkdirSync(work);
-    let listing: Uint8Array;
-    try {
-      // An own empty repository stops Git from discovering any enclosing repository.
-      await runPinnedGit(["init", "--quiet", `--template=${hooks}`], work, { signal }, hooks);
-      const relay = await startGitFetchRelay(repository, transportBytes, signal);
-      try {
-        listing = await runPinnedGit(
-          [
-            "-c",
-            `http.proxy=${relay.proxy}`,
-            "-c",
-            "credential.helper=",
-            "ls-remote",
-            ...(ref === undefined ? ["--symref"] : []),
-            repository,
-            ...patterns,
-          ],
-          work,
-          { signal: AbortSignal.any([signal, relay.limitSignal]) },
-          hooks,
-          listingBytes,
-        );
-      } finally {
-        await relay.close();
-      }
-      relay.assertWithinBounds();
-    } catch {
-      refuse(unavailable);
-    }
-    return { repository, ...select(parseListing(listing), ref) };
-  } finally {
-    rmSync(stage, { recursive: true, force: true });
+    resolved = select(await listRefs(stage, repository, request, signal), request);
+  } catch (error) {
+    removeStage(stage);
+    throw error;
   }
+  if (!removeStage(stage))
+    refuse("a temporary Git directory could not be removed; no assessment was produced");
+  return { repository, ...resolved };
 }

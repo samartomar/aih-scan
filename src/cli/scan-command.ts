@@ -26,8 +26,9 @@ import {
 } from "./exclusive-output.js";
 import {
   classifyScanTarget,
+  type GitRefRequest,
   GitSourceRefusal,
-  gitRefProblem,
+  parseGitRef,
   type ResolvedGitSource,
   resolveGitSource,
 } from "./git-source.js";
@@ -54,7 +55,7 @@ export const scanUsage = `${[
   "  names a local directory instead when one exists with that spelling; use",
   "  https://github.com/owner/repo to force Git. Credentials, queries and fragments in",
   "  the URL and other schemes (http, ssh, git, file, user@host:path) are refused.",
-  "  Only public repositories that need no credentials can be assessed.",
+  "  Only repositories that need no credentials can be assessed.",
   "",
   "Options:",
   "  --ref <name>           Assess this branch, tag, refs/heads/<name>, refs/tags/<name>",
@@ -398,7 +399,13 @@ interface Target {
 /** The validated source before any network: a local directory or an unresolved Git source. */
 type PlannedSource =
   | { readonly kind: "local"; readonly path: string }
-  | { readonly kind: "git"; readonly repository: string; readonly ref?: string };
+  | {
+      readonly kind: "git";
+      readonly repository: string;
+      /** The --ref spelling as given, or HEAD. */
+      readonly requested: string;
+      readonly request: GitRefRequest;
+    };
 
 function planSource(parsed: ParsedArguments, cwd: string): PlannedSource {
   if (parsed.positionals.length !== 1) invalid("scan requires exactly one target directory");
@@ -408,10 +415,14 @@ function planSource(parsed: ParsedArguments, cwd: string): PlannedSource {
     if (parsed.ref !== undefined) invalid("--ref applies only to Git sources");
     return { kind: "local", path: resolveTarget(spelling, cwd) };
   }
-  if (parsed.ref === undefined) return { kind: "git", repository: classified.repository };
-  const problem = gitRefProblem(parsed.ref);
-  if (problem !== undefined) invalid(problem);
-  return { kind: "git", repository: classified.repository, ref: parsed.ref };
+  const ref = parseGitRef(parsed.ref);
+  if (!ref.ok) invalid(ref.detail);
+  return {
+    kind: "git",
+    repository: classified.repository,
+    requested: parsed.ref ?? "HEAD",
+    request: ref.request,
+  };
 }
 
 export async function runScanCommand(args: readonly string[], io: ScanCommandIo): Promise<number> {
@@ -459,8 +470,9 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
       target = { name: source.path };
       requestSource = { kind: "local", path: source.path };
     } else {
-      const git = await resolveGit(source, io, cancellation.signal);
-      if (typeof git === "number") return git;
+      const resolution = await resolveGit(source, io, cancellation.signal);
+      if (!resolution.ok) return resolution.exitCode;
+      const { git } = resolution;
       target = { name: git.repository, git };
       requestSource = { kind: "git", repository: git.repository, commit: git.commit };
     }
@@ -487,30 +499,35 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
   }
 }
 
-/** Resolves the Git source to one commit before any assessment, or returns a refusal's exit code. */
+/** A Git source resolved to one commit, or the exit code of a reported refusal. */
+type GitResolution =
+  | { readonly ok: true; readonly git: ResolvedGitSource }
+  | { readonly ok: false; readonly exitCode: number };
+
+/** Resolves the Git source to one commit before any assessment. */
 async function resolveGit(
   source: Extract<PlannedSource, { kind: "git" }>,
   io: ScanCommandIo,
   signal: AbortSignal,
-): Promise<ResolvedGitSource | number> {
-  const cancelled = () => {
+): Promise<GitResolution> {
+  const cancelled = (): GitResolution => {
     io.stderr("aih-scan: cancelled; no assessment was produced\n");
-    return scanExitCodes.cancelled;
+    return { ok: false, exitCode: scanExitCodes.cancelled };
   };
   if (signal.aborted) return cancelled();
-  const requested = neutralizeTerminalText(source.ref ?? "HEAD");
+  const requested = neutralizeTerminalText(source.requested);
   io.stderr(`aih-scan: resolving ${requested} of ${neutralizeTerminalText(source.repository)}\n`);
   let git: ResolvedGitSource;
   try {
-    git = await resolveGitSource(source.repository, source.ref, signal);
+    git = await resolveGitSource(source.repository, source.request, signal);
   } catch (error) {
     if (signal.aborted) return cancelled();
     if (!(error instanceof GitSourceRefusal)) throw error;
     io.stderr(`aih-scan: ${neutralizeTerminalText(error.message)}\n`);
-    return scanExitCodes.invalid;
+    return { ok: false, exitCode: scanExitCodes.invalid };
   }
   io.stderr(`aih-scan: resolved ${requested} to ${commitText(git)}\n`);
-  return git;
+  return { ok: true, git };
 }
 
 async function assess(

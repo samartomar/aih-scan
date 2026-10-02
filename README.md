@@ -169,7 +169,7 @@ assesses exactly that commit through the assessment API's pinned Git
 acquisition, which verifies the commit object.
 
 - Without `--ref`, the repository's default `HEAD` is used and the summary
-  names the branch it points to. `--ref <name>` selects a branch, a tag (an
+  names the branch it points to, as the server advertises it. `--ref <name>` selects a branch, a tag (an
   annotated tag is peeled to its commit), `refs/heads/<name>`,
   `refs/tags/<name>`, or a full 40-character commit, which is used as given. A
   name that is both a branch and a tag is refused; qualify it. Ref names are
@@ -186,17 +186,18 @@ acquisition, which verifies the commit object.
   SHA-256 repositories are refused with exit code `2`; Git's own messages are
   not printed.
 - The human summary prints the repository as the target and a `Commit:` line
-  with the commit and the ref it was resolved from. The `--json` result already
-  names the repository and commit in `report.source`; stderr also reports the
-  resolved commit, even when no assessment is produced. Detector defaults,
+  with the commit and the ref it was resolved from. With `--json`, stdout stays
+  the canonical run result, which names the repository and commit in
+  `report.source`; the resolved commit is also written to stderr, so it is
+  available even when no assessment is produced. Detector defaults,
   `--artifact`, `--fail-on-findings` and the exit codes are the same as for a
   local directory.
 - `--mcp-config` is refused for a Git source and MCP configuration is not
   discovered in it; `--internal-scope` still applies.
 - Git runs without a shell, with system and global Git configuration, hooks,
-  credential helpers, prompts and redirects disabled, through a bounded relay.
-  Temporary directories are private and removed on success, failure and
-  cancellation.
+  credential helpers, askpass programs, prompts and redirects disabled, through
+  a bounded relay. Temporary directories are private and removed on success,
+  failure and cancellation; if one cannot be removed, no assessment runs.
 
 **Detectors.** Without `--detector`, the command runs `detector.aih-native` and
 `detector.aih-trust-lint`. `--detector <id>` runs exactly the detectors you name;

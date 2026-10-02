@@ -106,6 +106,8 @@ interface Served {
   calls: string[][];
   /** The complete process argv of every runner call. */
   argv: string[][];
+  /** The environment of every runner call. */
+  envs: Readonly<Record<string, string>>[];
 }
 type Answer = (tail: string[], args: string[]) => ProcessRunnerResult | undefined;
 
@@ -120,12 +122,13 @@ function ok(bytes: Buffer | string): ProcessRunnerResult {
 
 /** Answers the hardened runner's Git subcommands from the fixture repository. */
 function serve(fixture: Fixture, answer: Answer = () => undefined): Served {
-  const served: Served = { calls: [], argv: [] };
+  const served: Served = { calls: [], argv: [], envs: [] };
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv, options) => {
     expect(options.containProcessTree).toBe(true);
     const args = JSON.parse(argv[2] as string) as string[];
     served.calls.push(args);
     served.argv.push([...argv]);
+    served.envs.push(options.env);
     const operation = args.findIndex((arg) =>
       ["init", "fetch", "ls-remote", "rev-parse", "ls-tree", "cat-file"].includes(arg),
     );
@@ -639,4 +642,81 @@ test("the scan usage documents Git sources and --ref", async () => {
     "https://github.com/owner/repo to force Git",
   ])
     expect(scanUsage).toContain(documented);
+});
+
+test("Git never inherits an askpass program, so no credential dialog can appear", async () => {
+  vi.stubEnv("SSH_ASKPASS", "/inherited/ssh-askpass");
+  vi.stubEnv("GIT_ASKPASS", "/inherited/git-askpass");
+  const fixture = repository();
+  const served = serve(fixture);
+  const result = await command([remote]);
+  expect(result.exit).toBe(0);
+  // Resolution and pinned acquisition both run through the hardened runner.
+  expect(lsRemoteCalls(served)).toHaveLength(1);
+  expect(served.calls.some((args) => args.includes("cat-file"))).toBe(true);
+  for (const env of served.envs) {
+    expect(Object.keys(env).filter((key) => key.toUpperCase() === "SSH_ASKPASS")).toEqual([]);
+    expect(env.GIT_ASKPASS).toBe("");
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+  }
+});
+
+test("a Git process whose cleanup cannot be confirmed is refused with its own message", async () => {
+  const fixture = repository();
+  serve(fixture, (tail) =>
+    tail[0] === "ls-remote"
+      ? {
+          code: 1,
+          stdout: "",
+          stderr: "",
+          truncated: true,
+          termination: "containment-failure",
+        }
+      : undefined,
+  );
+  const result = await command([remote]);
+  expect(result.exit).toBe(2);
+  expect(result.stderr).toContain("aih-scan: Git process cleanup could not be confirmed\n");
+  expect(result.stderr).not.toContain("unavailable");
+  expect(result.requests).toEqual([]);
+  expectOwnedTemporaryRemoved();
+});
+
+/** Makes removal of the resolver's own temporary directory fail. */
+function failResolverCleanup(): void {
+  const actual = fsBoundary.rmSync;
+  vi.spyOn(fsBoundary, "rmSync").mockImplementation(((
+    path: Parameters<typeof fsBoundary.rmSync>[0],
+    ...args: unknown[]
+  ) => {
+    if (String(path).includes("aih-scan-git-source-"))
+      throw Object.assign(new Error("busy"), { code: "EBUSY" });
+    return Reflect.apply(actual, fsBoundary, [path, ...args]);
+  }) as typeof fsBoundary.rmSync);
+}
+
+test("a resolved source whose temporary directory cannot be removed is refused, not assessed", async () => {
+  const fixture = repository();
+  serve(fixture);
+  failResolverCleanup();
+  const result = await command([remote]);
+  expect(result.exit).toBe(2);
+  expect(result.stderr).toContain(
+    "aih-scan: a temporary Git directory could not be removed; no assessment was produced\n",
+  );
+  expect(result.requests).toEqual([]);
+});
+
+test("a cleanup failure never replaces the refusal already being reported", async () => {
+  const fixture = repository();
+  serve(fixture, (tail) =>
+    tail[0] === "ls-remote" ? { code: 1, stdout: "", stderr: "", truncated: false } : undefined,
+  );
+  failResolverCleanup();
+  const result = await command([remote]);
+  expect(result.exit).toBe(2);
+  expect(result.stderr).toContain(
+    "aih-scan: the Git repository is unavailable, requires credentials, or could not be resolved\n",
+  );
+  expect(result.stderr).not.toContain("could not be removed");
 });

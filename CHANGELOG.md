@@ -19,6 +19,10 @@
   credentials, queries or fragments, other Git transports, ambiguous or invalid
   refs and SHA-256 repositories are refused with exit 2 without echoing the URL.
   `--mcp-config` applies to local directories only.
+- Git never inherits an askpass program: the hardened Git runner used by pinned
+  Git acquisition and ref resolution removes `SSH_ASKPASS` and sets an empty
+  `GIT_ASKPASS`, so a repository that asks for credentials fails without a
+  credential dialog.
 
 - Add strict material inventory comparison, portable `MaterialChange` contracts
   and a versioned schema. Compare published content and declared installation
