@@ -33,7 +33,9 @@ authenticate against their selected keys or publisher policies. Scanning, signin
 and publication are separate explicit operations.
 
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md)
-and the [production publisher plan](docs/production-publisher.md).
+and the [production publisher plan](docs/production-publisher.md). The
+`aih-scan scan` command runs an assessment against a local directory without
+writing code; see [Assess a local directory](#assess-a-local-directory).
 
 Compare declared installation material with `compareMaterialInventories` from
 `@aihq/scan/host`; see [material comparison](docs/material-change-comparison.md)
@@ -138,6 +140,74 @@ in-process analyzer for real against a throwaway fixture.
 `verify-capture-bundle.mjs` verifies a capture bundle you supply, under trust
 roots and an expected-claims policy you supply, and ships neither. Both scripts
 are repository documentation and are not part of the published tarball.
+
+## Assess a local directory
+
+`aih-scan scan` assesses one local directory and reports what each detector
+observed and what it covered. It needs Node `>=24.15.0 <25` and no other setup.
+It produces evidence only: it does not approve, qualify, admit or install the
+directory.
+
+```sh
+npx aih-scan scan ./skills
+npx aih-scan scan ./skills --fail-on-findings
+npx aih-scan scan ./skills --json --artifact ./skills-assessment.json
+npx aih-scan scan ./skills --detector detector.aih-native
+npx aih-scan scan --help
+```
+
+Save an artifact outside the directory you scan.
+
+**Detectors.** Without `--detector`, the command runs `detector.aih-native` and
+`detector.aih-trust-lint`. `--detector <id>` runs exactly the detectors you name;
+repeat it for several. A registered detector is not a working integration: a
+selected detector that cannot run here, for example `detector.skillspector`
+without its rules material, is reported as `refused` or `failed` with a
+diagnostic and leaves the assessment incomplete. It is never skipped silently.
+
+**Trust-lint inputs.** `detector.aih-trust-lint` reads MCP configuration and
+declared internal package scopes.
+
+- Without `--mcp-config`, the command discovers configuration inside the target
+  only: at its root and in each directory that holds a `SKILL.md`. Discovery never
+  follows links and skips the root `.git` directory; a nested `.git` is ordinary
+  content.
+- `--mcp-config <path>` replaces discovery with the files you name; repeat it for
+  several. A relative path is read relative to the target and an absolute path
+  must be inside it. A path outside the target, through a linked parent, missing
+  or repeated is refused. It also needs a selected detector that reads MCP
+  configuration (`detector.aih-trust-lint` or `detector.cisco-mcp-scanner`).
+- `--internal-scope <@scope>` declares an internal package scope for trust-lint;
+  repeat it for several. Values are trimmed, lowercased, `@`-prefixed,
+  deduplicated and sorted before validation.
+
+**Output.** The default output is a human summary: the Scan ID, the target, the
+completion state, one line per detector (outcome, origin, findings, coverage),
+the findings (the first 20; the rest are counted), the evidence annexes, the
+trust-lint inputs the command resolved and any diagnostics. A hardcoded-secret
+finding names its rule, file and key and never prints the secret value.
+
+- `--json` writes the complete run result as canonical JSON to stdout, the same
+  document `runScan` returns, with every annex included as base64. Progress and
+  notes go to stderr.
+- `--artifact <new-file>` also saves an unsigned portable artifact. The file must
+  not exist yet, and its parent directories must be real directories, not links.
+  The saved bytes are read back through the portable reader (`@aihq/scan/read`)
+  before the command reports success. The artifact has no attestation and its
+  authenticity stays unchecked until a caller authenticates it.
+- Each detector's evidence stays in its own annex, for example the SARIF
+  document of a detector that produces one. Scan never merges detector outputs
+  into one combined SARIF file.
+- `--fail-on-findings` makes any finding a failing exit code.
+
+**Exit codes.**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The assessment is complete. Findings alone do not fail the command. |
+| `1` | The assessment is incomplete (a detector refused, failed or covered only part of the target), or it found something and you passed `--fail-on-findings`. |
+| `2` | The input was invalid, no assessment was produced, or the artifact could not be saved. Invalid input is refused before any scanning. |
+| `130` | The command was cancelled. The first `SIGINT` or `SIGTERM` stops the assessment, reports and saves what finished, then exits. A second signal exits immediately with `130` and reports nothing more. |
 
 ## Install and verify the package boundary
 
