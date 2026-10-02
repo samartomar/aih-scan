@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, type TestContext, test } from "vitest";
 import { runScan } from "../../src/assessment/run.js";
 import { runScanCommand, type ScanCommandIo } from "../../src/cli/scan-command.js";
 
@@ -456,4 +456,163 @@ test("a scan without specialized inputs says Inputs: none", async () => {
   const run = harness();
   expect(await runScanCommand(["--detector", "detector.aih-native", root], run.io)).toBe(0);
   expect(run.stdout().split("\n")).toContain("Inputs: none");
+});
+
+/** Links `path` to the directory `target`; false where the platform cannot create the link. */
+function linkDirectory(target: string, path: string): boolean {
+  try {
+    symlinkSync(target, path, "junction");
+    return true;
+  } catch {
+    return false;
+  }
+}
+/** The trust-lint detector alone, with explicit `--mcp-config` values. */
+function trustLintWithConfigs(target: string, ...configs: string[]): string[] {
+  return [
+    target,
+    "--detector",
+    "detector.aih-trust-lint",
+    ...configs.flatMap((config) => ["--mcp-config", config]),
+  ];
+}
+
+test("--mcp-config accepts an absolute path spelled through a link in an ancestor of the target", async (context) => {
+  const parent = fixture({ "real/target/mcp.json": "{}\n" });
+  if (!linkDirectory(join(parent, "real"), join(parent, "alias"))) return context.skip();
+  const requests: unknown[] = [];
+  const run = harness(observing(requests));
+  expect(
+    await runScanCommand(
+      trustLintWithConfigs(
+        join(parent, "real", "target"),
+        join(parent, "alias", "target", "mcp.json"),
+      ),
+      run.io,
+    ),
+  ).toBe(0);
+  expect(requestedConfigurations(requests)).toEqual([
+    ["detector.aih-trust-lint", { internalScopes: [], mcpConfigPaths: ["mcp.json"] }],
+  ]);
+});
+
+test("--mcp-config accepts an absolute path spelled through a link to the target itself", async (context) => {
+  const parent = fixture({ "target/skill/SKILL.md": "# S\n", "target/skill/mcp.json": "{}\n" });
+  if (!linkDirectory(join(parent, "target"), join(parent, "alias"))) return context.skip();
+  const requests: unknown[] = [];
+  const run = harness(observing(requests));
+  expect(
+    await runScanCommand(
+      trustLintWithConfigs(join(parent, "target"), join(parent, "alias", "skill", "mcp.json")),
+      run.io,
+    ),
+  ).toBe(0);
+  expect(requestedConfigurations(requests)).toEqual([
+    ["detector.aih-trust-lint", { internalScopes: [], mcpConfigPaths: ["skill/mcp.json"] }],
+  ]);
+});
+
+test("--mcp-config refuses an aliased absolute path that never reaches the target", async (context) => {
+  const parent = fixture({ "real/target/mcp.json": "{}\n", "real/other/mcp.json": "{}\n" });
+  if (!linkDirectory(join(parent, "real"), join(parent, "alias"))) return context.skip();
+  const calls: unknown[] = [];
+  const run = harness(refusing(calls));
+  expect(
+    await runScanCommand(
+      trustLintWithConfigs(
+        join(parent, "real", "target"),
+        join(parent, "alias", "other", "mcp.json"),
+      ),
+      run.io,
+    ),
+  ).toBe(2);
+  expect(run.stderr()).toContain("outside the target directory");
+  expect(calls).toEqual([]);
+});
+
+/** An aliased absolute path whose components below the target include a link: always refused. */
+async function expectLinkInsideTargetRefused(
+  context: TestContext,
+  linkName: string,
+  linkTarget: (target: string) => string,
+): Promise<void> {
+  const parent = fixture({
+    "real/target/inner/SKILL.md": "# S\n",
+    "real/target/inner/mcp.json": "{}\n",
+  });
+  const target = join(parent, "real", "target");
+  if (
+    !linkDirectory(join(parent, "real"), join(parent, "alias")) ||
+    !linkDirectory(linkTarget(target), join(target, linkName))
+  )
+    return context.skip();
+  const calls: unknown[] = [];
+  const run = harness(refusing(calls));
+  expect(
+    await runScanCommand(
+      trustLintWithConfigs(target, join(parent, "alias", "target", linkName, "mcp.json")),
+      run.io,
+    ),
+  ).toBe(2);
+  expect(run.stderr()).toContain("linked or non-directory parent");
+  expect(calls).toEqual([]);
+}
+test("--mcp-config refuses an aliased absolute path through a link inside the target", async (context) => {
+  await expectLinkInsideTargetRefused(context, "link", (target) => join(target, "inner"));
+});
+test("--mcp-config refuses an aliased absolute path through a link inside the target that points back at the target", async (context) => {
+  await expectLinkInsideTargetRefused(context, "loop", (target) => target);
+});
+
+test("discovery ignores a SKILL.md directory, so its sibling configuration is not discovered", async () => {
+  const root = fixture({ "skill/SKILL.md/.keep": "", "skill/mcp.json": "{}\n" });
+  const requests: unknown[] = [];
+  const run = harness(observing(requests));
+  expect(await runScanCommand([root, "--detector", "detector.aih-trust-lint"], run.io)).toBe(0);
+  expect(requestedConfigurations(requests)).toEqual([
+    ["detector.aih-trust-lint", { internalScopes: [], mcpConfigPaths: [] }],
+  ]);
+  expect(run.stdout()).toContain("detector.aih-trust-lint: succeeded");
+});
+
+test("discovery ignores a SKILL.md that links to a directory, so its sibling configuration is not discovered", async (context) => {
+  const root = fixture({ "other/.keep": "", "skill/mcp.json": "{}\n" });
+  if (!linkDirectory(join(root, "other"), join(root, "skill", "SKILL.md"))) return context.skip();
+  const requests: unknown[] = [];
+  const run = harness(observing(requests));
+  // The detector refuses any directory link in its source ("unsupported-source-entry"), so
+  // the scan is partial. What matters is that the request itself is valid: nothing was
+  // discovered for a directory that capture does not treat as a skill directory.
+  expect(await runScanCommand([root, "--detector", "detector.aih-trust-lint"], run.io)).toBe(1);
+  expect(requestedConfigurations(requests)).toEqual([
+    ["detector.aih-trust-lint", { internalScopes: [], mcpConfigPaths: [] }],
+  ]);
+  expect(run.stdout()).toContain("unsupported-source-entry");
+  expect(run.stdout()).not.toContain("detector-options-invalid");
+});
+
+test("discovery treats a SKILL.md that links to a file as marking a skill directory", async (context) => {
+  const root = fixture({ "docs/skill-text.md": "# S\n", "skill/mcp.json": "{}\n" });
+  try {
+    symlinkSync(join(root, "docs", "skill-text.md"), join(root, "skill", "SKILL.md"), "file");
+  } catch {
+    return context.skip();
+  }
+  const requests: unknown[] = [];
+  const run = harness(observing(requests));
+  expect(await runScanCommand([root, "--detector", "detector.aih-trust-lint"], run.io)).toBe(0);
+  expect(requestedConfigurations(requests)).toEqual([
+    ["detector.aih-trust-lint", { internalScopes: [], mcpConfigPaths: ["skill/mcp.json"] }],
+  ]);
+});
+
+test("discovery lists a path once when the root and a skill directory both name it", async () => {
+  // `.cursor/mcp.json` is a root name and also `mcp.json` inside a `.cursor` skill directory.
+  const root = fixture({ ".cursor/SKILL.md": "# S\n", ".cursor/mcp.json": "{}\n" });
+  const requests: unknown[] = [];
+  const run = harness(observing(requests));
+  expect(await runScanCommand([root, "--detector", "detector.aih-trust-lint"], run.io)).toBe(0);
+  expect(requestedConfigurations(requests)).toEqual([
+    ["detector.aih-trust-lint", { internalScopes: [], mcpConfigPaths: [".cursor/mcp.json"] }],
+  ]);
 });

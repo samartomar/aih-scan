@@ -7,11 +7,10 @@ import {
   lstatSync,
   openSync,
   readFileSync,
-  realpathSync,
   type Stats,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   canonicalBaselineVetAttestationEnvelopeV1Bytes,
   parseBaselineVetAttestationEnvelopeV1Json,
@@ -42,6 +41,7 @@ import {
   runBaselineVetRequestSetV1,
 } from "./baseline/request-set-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
+import { ExclusiveOutputError, writeNewSafeOutput } from "./cli/exclusive-output.js";
 import { runScanCommand, scanExitCodes } from "./cli/scan-command.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
@@ -85,9 +85,6 @@ function sameIdentity(left: Stats, right: Stats): boolean {
     left.mtimeMs === right.mtimeMs &&
     left.ctimeMs === right.ctimeMs
   );
-}
-function sameFileReference(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
 }
 function readBoundedRegularFile(path: string, label: string, maximumBytes: number): Buffer {
   const resolved = resolve(path);
@@ -249,68 +246,12 @@ function writeNew(path: string, bytes: Uint8Array): void {
   }
 }
 
-type DirectorySnapshot = Readonly<{ path: string; realPath: string; stat: Stats }>;
-function safeOutputParents(path: string): readonly DirectorySnapshot[] {
-  const parents: DirectorySnapshot[] = [];
-  for (let current = dirname(path); ; current = dirname(current)) {
-    const stat = lstatSync(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) fail("output parent link or reparse");
-    parents.push({ path: current, realPath: realpathSync.native(current), stat });
-    const next = dirname(current);
-    if (next === current) return parents;
-  }
-}
-function sameParents(
-  left: readonly DirectorySnapshot[],
-  right: readonly DirectorySnapshot[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (entry, index) =>
-        entry.path === right[index]?.path &&
-        entry.realPath === right[index]?.realPath &&
-        sameFileReference(entry.stat, right[index]?.stat ?? entry.stat),
-    )
-  );
-}
 function writeNewSafeProjection(path: string, bytes: Uint8Array): void {
-  const output = resolve(path);
-  if (!bytes.byteLength || bytes.byteLength > maxInputBytes) fail("projection output bounds");
   try {
-    lstatSync(output);
-    fail("projection output already exists");
+    writeNewSafeOutput(path, bytes, { label: "projection output", maximumBytes: maxInputBytes });
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      // Must-not-exist is the only acceptable pre-write output state.
-    } else throw error;
-  }
-  const beforeParents = safeOutputParents(output);
-  const descriptor = openSync(output, "wx", 0o600);
-  try {
-    const before = fstatSync(descriptor);
-    const outputStat = lstatSync(output);
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      !outputStat.isFile() ||
-      outputStat.isSymbolicLink() ||
-      outputStat.nlink !== 1 ||
-      !sameIdentity(before, outputStat)
-    )
-      fail("projection output replacement");
-    writeFileSync(descriptor, bytes);
-    const after = fstatSync(descriptor);
-    const afterOutput = lstatSync(output);
-    if (
-      after.nlink !== 1 ||
-      !sameFileReference(before, after) ||
-      !sameFileReference(after, afterOutput) ||
-      !sameParents(beforeParents, safeOutputParents(output))
-    )
-      fail("projection output replacement");
-  } finally {
-    closeSync(descriptor);
+    if (error instanceof ExclusiveOutputError) fail(error.message);
+    throw error;
   }
 }
 function projectCoreEvidence(args: readonly string[]): void {

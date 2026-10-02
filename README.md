@@ -156,7 +156,9 @@ npx aih-scan scan ./skills --detector detector.aih-native
 npx aih-scan scan --help
 ```
 
-Save an artifact outside the directory you scan.
+We recommend saving an artifact outside the directory you scan: a later scan of
+that directory would otherwise count the artifact file as part of its content.
+The command does not enforce this.
 
 **Detectors.** Without `--detector`, the command runs `detector.aih-native` and
 `detector.aih-trust-lint`. `--detector <id>` runs exactly the detectors you name;
@@ -174,7 +176,9 @@ declared internal package scopes.
   content.
 - `--mcp-config <path>` replaces discovery with the files you name; repeat it for
   several. A relative path is read relative to the target and an absolute path
-  must be inside it. A path outside the target, through a linked parent, missing
+  must lead into it; an absolute path may be spelled through a link in an
+  ancestor of the target or a link to the target itself, but never through a link
+  inside the target. A path outside the target, through a linked parent, missing
   or repeated is refused. It also needs a selected detector that reads MCP
   configuration (`detector.aih-trust-lint` or `detector.cisco-mcp-scanner`).
 - `--internal-scope <@scope>` declares an internal package scope for trust-lint;
@@ -192,6 +196,8 @@ finding names its rule, file and key and never prints the secret value.
   notes go to stderr.
 - `--artifact <new-file>` also saves an unsigned portable artifact. The file must
   not exist yet, and its parent directories must be real directories, not links.
+  A linked parent is refused even when the link is a system convention: on macOS
+  `/tmp` is a link to `/private/tmp`, so name `/private/tmp/...` instead.
   The saved bytes are read back through the portable reader (`@aihq/scan/read`)
   before the command reports success. The artifact has no attestation and its
   authenticity stays unchecked until a caller authenticates it.

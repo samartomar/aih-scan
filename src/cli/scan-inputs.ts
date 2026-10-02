@@ -1,7 +1,9 @@
-import { lstatSync, readdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Json, limitCeilings } from "../assessment/types.js";
+import { CISCO_MCP_SCANNER_DETECTOR_ID_V1 } from "../detectors/cisco-mcp-scanner/index.js";
 import { mcpConfigPathsProblemV1 } from "../detectors/mcp-config-paths-v1.js";
+import { TRUST_LINT_DETECTOR_ID_V1 } from "../detectors/trust-lint/findings.js";
 import { trustLintInternalScopesProblemV1 } from "../detectors/trust-lint/options.js";
 import { INCOMING_MCP_CONFIG_FILES_V1 } from "../detectors/trust-lint/secrets.js";
 
@@ -14,12 +16,10 @@ import { INCOMING_MCP_CONFIG_FILES_V1 } from "../detectors/trust-lint/secrets.js
  * (a nested `.git` is ordinary content) and is bounded by `limitCeilings.maxSourceEntries`.
  */
 
-export const TRUST_LINT_DETECTOR_ID = "detector.aih-trust-lint";
-export const CISCO_MCP_SCANNER_DETECTOR_ID = "detector.cisco-mcp-scanner";
 /** The detectors that read MCP configuration (C2a §2.1, §4.1). */
 const MCP_CONFIG_READERS: readonly string[] = [
-  TRUST_LINT_DETECTOR_ID,
-  CISCO_MCP_SCANNER_DETECTOR_ID,
+  TRUST_LINT_DETECTOR_ID_V1,
+  CISCO_MCP_SCANNER_DETECTOR_ID_V1,
 ];
 
 /** The per-detector `configuration` values and the input notes the command reports. */
@@ -42,6 +42,15 @@ export interface ExplicitScanInputs {
 interface TargetTree {
   readonly paths: ReadonlySet<string>;
   readonly skillDirs: readonly string[];
+}
+
+/** Whether a link resolves to a regular file; a broken link or a directory link does not. */
+function linksToFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -72,10 +81,11 @@ function walkTarget(root: string): TargetTree {
       } catch {
         continue;
       }
-      // A linked entry is never descended into; a link named SKILL.md still marks its
-      // directory, because capture records the link itself in the selection.
+      // A linked entry is never descended into. A SKILL.md marks its directory only when
+      // capture would select it: a regular file, or a link to a file (a link to a
+      // directory is recorded as a directory link, which is never selected).
       if (stat.isSymbolicLink()) {
-        if (name === "SKILL.md") skillDirs.add(relative);
+        if (name === "SKILL.md" && linksToFile(join(directory, name))) skillDirs.add(relative);
       } else if (stat.isDirectory()) {
         visit(join(directory, name), path);
       } else if (stat.isFile() && name === "SKILL.md") {
@@ -90,38 +100,58 @@ function walkTarget(root: string): TargetTree {
 /**
  * Core's incoming-MCP discovery order (C2a §2.1): the root first, then each skill
  * directory in localeCompare order, the names in `INCOMING_MCP_CONFIG_FILES_V1` order —
- * the exact order `mcpConfigPathsProblemV1` requires. Only paths present in the tree.
+ * the exact order `mcpConfigPathsProblemV1` requires. Every candidate path appears once,
+ * at its first position: `.cursor/mcp.json` is both a root name and `mcp.json` inside a
+ * `.cursor` skill directory.
  */
-function discoverMcpConfigPaths(tree: TargetTree): string[] {
-  const found: string[] = [];
-  for (const dir of new Set(["", ...tree.skillDirs])) {
-    for (const name of INCOMING_MCP_CONFIG_FILES_V1) {
-      const path = dir === "" ? name : `${dir}/${name}`;
-      if (tree.paths.has(path)) found.push(path);
-    }
-  }
-  return found;
+function discoveryOrder(tree: TargetTree): string[] {
+  const order = new Set<string>();
+  for (const dir of new Set(["", ...tree.skillDirs]))
+    for (const name of INCOMING_MCP_CONFIG_FILES_V1)
+      order.add(dir === "" ? name : `${dir}/${name}`);
+  return [...order];
 }
 
-/** Every candidate path in Core's discovery order, mapped to its rank. */
-function discoveryRanks(tree: TargetTree): Map<string, number> {
-  const ranks = new Map<string, number>();
-  let rank = 0;
-  for (const dir of new Set(["", ...tree.skillDirs])) {
-    for (const name of INCOMING_MCP_CONFIG_FILES_V1) {
-      const path = dir === "" ? name : `${dir}/${name}`;
-      if (!ranks.has(path)) ranks.set(path, rank++);
-    }
-  }
-  return ranks;
+/** The candidates present in the tree, in discovery order. */
+function discoverMcpConfigPaths(tree: TargetTree): string[] {
+  return discoveryOrder(tree).filter((path) => tree.paths.has(path));
 }
 
 /**
- * Resolves explicit `--mcp-config` values against the real target. A value is relative
- * to the target or absolute inside it; anything escaping the target (`..`, absolute
- * elsewhere), passing through a linked or non-directory parent, naming a missing entry
- * or repeating an earlier value is refused. The survivors are sorted into Core's
- * discovery order and checked by the one shared validator, `mcpConfigPathsProblemV1`.
+ * Where an absolute value sits below the target, however it is spelled. The shallowest
+ * ancestor of the value whose real path is the target is the anchor, so a link in an
+ * ancestor of the target (or a link to the target itself) is accepted; `undefined` when
+ * no ancestor is the target. Choosing the shallowest anchor keeps a link inside the
+ * target, even one that points back at the target, below the anchor, where the caller
+ * refuses it.
+ */
+function relativeBelowTarget(target: string, absolute: string): string | undefined {
+  const value = resolve(absolute);
+  const ancestors: string[] = [];
+  for (let current = dirname(value); ; current = dirname(current)) {
+    ancestors.unshift(current);
+    if (dirname(current) === current) break;
+  }
+  for (const ancestor of ancestors) {
+    let real: string;
+    try {
+      real = realpathSync.native(ancestor);
+    } catch {
+      continue;
+    }
+    if (real === target) return relative(ancestor, value);
+  }
+  return undefined;
+}
+
+/**
+ * Resolves explicit `--mcp-config` values against the real target. A relative value
+ * resolves against the target; an absolute value must lead into it, directly or through
+ * a link in an ancestor of the target (see `relativeBelowTarget`). Anything escaping the
+ * target (`..`, absolute elsewhere), passing through a linked or non-directory parent
+ * inside the target, naming a missing entry or repeating an earlier value is refused.
+ * The survivors are sorted into Core's discovery order and checked by the one shared
+ * validator, `mcpConfigPathsProblemV1`.
  */
 function explicitMcpConfigPaths(
   target: string,
@@ -132,10 +162,19 @@ function explicitMcpConfigPaths(
   | { readonly ok: false; readonly detail: string } {
   const resolved: string[] = [];
   for (const raw of supplied) {
-    // Containment is lexical plus a real-parent check: the target is already a real
-    // path and every containing directory must be a real directory, never a link.
-    const rel = relative(target, resolve(target, raw));
-    if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+    // Containment is lexical for a relative value and anchored at the target's real path
+    // for an absolute one; either way every directory below the target must be a real
+    // directory, never a link.
+    const rel = isAbsolute(raw)
+      ? relativeBelowTarget(target, raw)
+      : relative(target, resolve(target, raw));
+    if (
+      rel === undefined ||
+      rel === "" ||
+      rel === ".." ||
+      rel.startsWith(`..${sep}`) ||
+      isAbsolute(rel)
+    )
       return { ok: false, detail: `--mcp-config ${raw} is outside the target directory` };
     const segments = rel.split(sep);
     let parent = target;
@@ -163,7 +202,7 @@ function explicitMcpConfigPaths(
       return { ok: false, detail: `--mcp-config ${raw} duplicates an earlier --mcp-config` };
     resolved.push(path);
   }
-  const ranks = discoveryRanks(tree);
+  const ranks = new Map(discoveryOrder(tree).map((path, rank) => [path, rank]));
   const ordered = [...resolved].sort(
     (left, right) =>
       (ranks.get(left) ?? Number.MAX_SAFE_INTEGER) - (ranks.get(right) ?? Number.MAX_SAFE_INTEGER),
@@ -203,10 +242,10 @@ export function resolveScanInputs(
       ok: false,
       detail: `--mcp-config requires a selected detector that reads MCP configuration (${MCP_CONFIG_READERS.join(" or ")})`,
     };
-  if (explicit.internalScopes.length > 0 && !detectorIds.includes(TRUST_LINT_DETECTOR_ID))
+  if (explicit.internalScopes.length > 0 && !detectorIds.includes(TRUST_LINT_DETECTOR_ID_V1))
     return {
       ok: false,
-      detail: `--internal-scope requires ${TRUST_LINT_DETECTOR_ID} to be selected`,
+      detail: `--internal-scope requires ${TRUST_LINT_DETECTOR_ID_V1} to be selected`,
     };
   const tree = walkTarget(target);
   let mcpConfigPaths: string[];
@@ -234,13 +273,13 @@ export function resolveScanInputs(
           : `${detectorId}: discovered MCP configuration inside the target: ${mcpConfigPaths.join(", ")}`,
       );
   }
-  if (detectorIds.includes(TRUST_LINT_DETECTOR_ID) && internalScopes.length === 0)
-    notes.push(`${TRUST_LINT_DETECTOR_ID}: no internal scopes supplied`);
+  if (detectorIds.includes(TRUST_LINT_DETECTOR_ID_V1) && internalScopes.length === 0)
+    notes.push(`${TRUST_LINT_DETECTOR_ID_V1}: no internal scopes supplied`);
   const configurations = new Map<string, Json>();
   for (const detectorId of detectorIds) {
-    if (detectorId === TRUST_LINT_DETECTOR_ID)
+    if (detectorId === TRUST_LINT_DETECTOR_ID_V1)
       configurations.set(detectorId, { internalScopes, mcpConfigPaths });
-    else if (detectorId === CISCO_MCP_SCANNER_DETECTOR_ID)
+    else if (detectorId === CISCO_MCP_SCANNER_DETECTOR_ID_V1)
       configurations.set(detectorId, { mcpConfigPaths });
   }
   return { ok: true, inputs: { configurations, notes } };

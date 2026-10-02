@@ -456,6 +456,39 @@ test.each(unusableArtifactPaths)("--artifact refuses %s before running", async (
   expect(readdirSync(join(outputs, "real"))).toEqual([".keep"]);
 });
 
+test("--artifact tells the user to use a real path when a parent directory is a link", async () => {
+  const root = fixture({ "SKILL.md": "# Fixture\n" });
+  const outputs = fixture({ "real/.keep": "" });
+  symlinkSync(join(outputs, "real"), join(outputs, "linked"), "junction");
+  const run = harness();
+  expect(
+    await runScanCommand(["--artifact", join(outputs, "linked", "new.json"), root], run.io),
+  ).toBe(2);
+  expect(run.stderr()).toMatch(/^aih-scan: .*linked or non-directory parent; use a real path/);
+});
+
+test("--artifact is not saved when the file read back differs from the bytes written", async () => {
+  const root = fixture({ "SKILL.md": "# Fixture\n" });
+  const path = join(fixture(), "scan.artifact.json");
+  const actualRead = fsBoundary.readFileSync;
+  vi.spyOn(fsBoundary, "readFileSync").mockImplementation(((
+    target: Parameters<typeof fsBoundary.readFileSync>[0],
+    ...args: unknown[]
+  ) =>
+    String(target) === path
+      ? Buffer.from("replaced after it was written\n")
+      : Reflect.apply(actualRead, fsBoundary, [
+          target,
+          ...args,
+        ])) as typeof fsBoundary.readFileSync);
+  const run = harness();
+  expect(await runScanCommand(["--artifact", path, root], run.io)).toBe(2);
+  expect(run.stderr()).toContain(
+    "aih-scan: artifact not saved: the saved artifact differs from the bytes that were written\n",
+  );
+  expect(run.stdout()).not.toContain("Artifact:");
+});
+
 test("--artifact never replaces a file that appears while the scan runs", async () => {
   const root = fixture({ "SKILL.md": "# Fixture\n" });
   const outputs = fixture();

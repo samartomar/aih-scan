@@ -1,26 +1,29 @@
-import {
-  closeSync,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  realpathSync,
-  type Stats,
-  writeFileSync,
-} from "node:fs";
-import { dirname, resolve } from "node:path";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { prepareArtifact } from "../artifact/host.js";
 import { readArtifact } from "../artifact/read.js";
 import { base64Decode, canonicalBytes } from "../assessment/json.js";
 import { type RunScanOptions, runScan } from "../assessment/run.js";
-import type {
-  DetectorResult,
-  Diagnostic,
-  Finding,
-  ReportBody,
-  ScanRunResult,
+import {
+  type DetectorResult,
+  type Diagnostic,
+  defaultLimits,
+  type Finding,
+  type ReportBody,
+  type ScanRequest,
+  type ScanRunResult,
+  schemas,
 } from "../assessment/types.js";
 import { resolveDetectorCapabilityV1 } from "../capability/detector-capability-v1.js";
+import { TRUST_LINT_DETECTOR_ID_V1 } from "../detectors/trust-lint/findings.js";
+import {
+  assertOutputAbsent,
+  ExclusiveOutputError,
+  type ExclusiveOutputPolicy,
+  type ExclusiveOutputProblem,
+  safeOutputParents,
+  writeNewSafeOutput,
+} from "./exclusive-output.js";
 import { resolveScanInputs, type ScanInputs } from "./scan-inputs.js";
 
 export const scanExitCodes = {
@@ -43,8 +46,11 @@ export const scanUsage = `${[
   "                         and leaves the assessment incomplete.",
   "  --mcp-config <path>    Use this MCP configuration instead of the ones discovered",
   "                         inside the target (at its root and in directories holding a",
-  "                         SKILL.md); repeat for several. A path outside the target,",
-  "                         through a linked parent, missing or duplicated is refused.",
+  "                         SKILL.md); repeat for several. A relative path resolves",
+  "                         against the target; an absolute path must lead into it, and",
+  "                         may be spelled through a link in an ancestor of the target.",
+  "                         A path outside the target, through a link inside it, missing",
+  "                         or duplicated is refused.",
   "                         Requires a selected detector that reads MCP configuration",
   "                         (detector.aih-trust-lint or detector.cisco-mcp-scanner).",
   "  --internal-scope <@scope>",
@@ -54,6 +60,8 @@ export const scanUsage = `${[
   "  --json                 Write the complete run result as canonical JSON to stdout.",
   "  --artifact <new-file>  Also save an unsigned portable artifact to a file that does",
   "                         not exist yet; it is read back before the command succeeds.",
+  "                         Every parent directory must be a real directory: a linked",
+  "                         parent (macOS /tmp is one) is refused, so use a real path.",
   "  --fail-on-findings     Exit 1 when the assessment reports any finding.",
   "  -h, --help             Print this help.",
   "",
@@ -75,7 +83,7 @@ export interface ScanCommandIo {
   cwd?: string;
 }
 
-const defaultDetectors = ["detector.aih-native", "detector.aih-trust-lint"];
+const defaultDetectors = ["detector.aih-native", TRUST_LINT_DETECTOR_ID_V1];
 
 /** An invalid command: reported as `aih-scan: <message>` with exit 2 before any work. */
 class InvalidCommand extends Error {}
@@ -153,14 +161,20 @@ const replacementCharacter = String.fromCodePoint(0xfffd);
  * spaces so a value cannot start a forged line; every other control or format character
  * (escape sequences, bidirectional overrides, ...) becomes U+FFFD.
  */
-function safe(text: string): string {
+function neutralizeTerminalText(text: string): string {
   return text.replace(/[\n\r\t\p{Zl}\p{Zp}]/gu, " ").replace(/\p{C}/gu, replacementCharacter);
 }
 
-function diagnosticLine(diagnostic: Diagnostic, indent: string, naming: boolean): string {
+function diagnosticLine(
+  diagnostic: Diagnostic,
+  indent: string,
+  options: { showDetector: boolean },
+): string {
   const detector =
-    naming && diagnostic.detectorId !== undefined ? ` [${safe(diagnostic.detectorId)}]` : "";
-  return `${indent}${safe(diagnostic.code)}: ${safe(diagnostic.detail)}${detector}`;
+    options.showDetector && diagnostic.detectorId !== undefined
+      ? ` [${neutralizeTerminalText(diagnostic.detectorId)}]`
+      : "";
+  return `${indent}${neutralizeTerminalText(diagnostic.code)}: ${neutralizeTerminalText(diagnostic.detail)}${detector}`;
 }
 
 function detectorLines(result: DetectorResult): string[] {
@@ -172,10 +186,12 @@ function detectorLines(result: DetectorResult): string[] {
   const covered = result.coverage.coveredPaths.length;
   const selected = covered + result.coverage.uncoveredPaths.length;
   return [
-    `  ${safe(result.detectorId)}: ${safe(result.outcome)}; origin ${safe(origins.join(", ") || "none")}; ` +
+    `  ${neutralizeTerminalText(result.detectorId)}: ${neutralizeTerminalText(result.outcome)}; origin ${neutralizeTerminalText(origins.join(", ") || "none")}; ` +
       `${findings} ${findings === 1 ? "finding" : "findings"}; coverage ${covered}/${selected} ` +
       (result.coverage.complete ? "complete" : "incomplete"),
-    ...result.diagnostics.map((diagnostic) => diagnosticLine(diagnostic, "    ", false)),
+    ...result.diagnostics.map((diagnostic) =>
+      diagnosticLine(diagnostic, "    ", { showDetector: false }),
+    ),
   ];
 }
 
@@ -193,7 +209,7 @@ function findingLine(detectorId: string, finding: Finding): string {
         }`
       : "unknown-location";
   const message = finding.message.state === "present" ? finding.message.value : "(no message)";
-  return `  [${safe(severity)}] ${safe(rule)} ${safe(location)} (${safe(detectorId)}) ${safe(message)}`;
+  return `  [${neutralizeTerminalText(severity)}] ${neutralizeTerminalText(rule)} ${neutralizeTerminalText(location)} (${neutralizeTerminalText(detectorId)}) ${neutralizeTerminalText(message)}`;
 }
 
 function findingCount(report: ReportBody): number {
@@ -229,7 +245,7 @@ function annexLines(report: ReportBody): string[] {
       const producer = report.results.find((result) =>
         result.observations.some((observation) => observation.body.annexIds.includes(annex.id)),
       );
-      return `  ${safe(annex.id)} ${safe(annex.mediaType)} ${annex.byteLength} bytes, from ${safe(producer?.detectorId ?? "an unknown detector")}`;
+      return `  ${neutralizeTerminalText(annex.id)} ${neutralizeTerminalText(annex.mediaType)} ${annex.byteLength} bytes, from ${neutralizeTerminalText(producer?.detectorId ?? "an unknown detector")}`;
     }),
   ];
 }
@@ -237,7 +253,7 @@ function annexLines(report: ReportBody): string[] {
 /** Specialized detector inputs the command resolved, reported as one note per line. */
 function inputLines(notes: readonly string[]): string[] {
   if (notes.length === 0) return ["Inputs: none"];
-  return [`Inputs (${notes.length}):`, ...notes.map((note) => `  ${safe(note)}`)];
+  return [`Inputs (${notes.length}):`, ...notes.map((note) => `  ${neutralizeTerminalText(note)}`)];
 }
 
 function diagnosticLines(result: Assessment): string[] {
@@ -247,27 +263,31 @@ function diagnosticLines(result: Assessment): string[] {
   if (unique.size === 0) return ["Diagnostics: none"];
   return [
     `Diagnostics (${unique.size}):`,
-    ...[...unique.values()].map((diagnostic) => diagnosticLine(diagnostic, "  ", true)),
+    ...[...unique.values()].map((diagnostic) =>
+      diagnosticLine(diagnostic, "  ", { showDetector: true }),
+    ),
   ];
 }
 
 function targetLine(target: string, report: ReportBody): string {
   const entries = report.source.capture.entries;
   const files = entries.filter((entry) => entry.kind === "file" || entry.kind === "file-link");
-  return `Target: ${safe(target)} (${files.length} ${files.length === 1 ? "file" : "files"}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"})`;
+  return `Target: ${neutralizeTerminalText(target)} (${files.length} ${files.length === 1 ? "file" : "files"}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"})`;
 }
 
 function humanSummary(result: ScanRunResult, target: string, notes: readonly string[]): string {
   if (result.status !== "assessment")
     return [
-      `No assessment (${safe(result.phase)} diagnostic)`,
-      ...result.diagnostics.map((diagnostic) => diagnosticLine(diagnostic, "  ", false)),
+      `No assessment (${neutralizeTerminalText(result.phase)} diagnostic)`,
+      ...result.diagnostics.map((diagnostic) =>
+        diagnosticLine(diagnostic, "  ", { showDetector: false }),
+      ),
       "",
     ].join("\n");
   return [
-    `Scan ID: ${safe(result.scanId)}`,
+    `Scan ID: ${neutralizeTerminalText(result.scanId)}`,
     targetLine(target, result.report),
-    `Completion: ${safe(result.report.completion)}`,
+    `Completion: ${neutralizeTerminalText(result.report.completion)}`,
     "Detectors:",
     ...result.report.results.flatMap(detectorLines),
     ...findingLines(result.report),
@@ -278,41 +298,41 @@ function humanSummary(result: ScanRunResult, target: string, notes: readonly str
   ].join("\n");
 }
 
-type DirectorySnapshot = Readonly<{ path: string; realPath: string; stat: Stats }>;
+/** One exclusive writer for the artifact, the same one `project-core-evidence` writes through. */
+const artifactOutput: ExclusiveOutputPolicy = {
+  label: "artifact output",
+  maximumBytes: defaultLimits.maxArtifactBytes,
+};
 
-function sameFileReference(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+const artifactRefusals: Record<ExclusiveOutputProblem, string> = {
+  bounds: "the artifact is empty or larger than the artifact size limit",
+  exists: "the artifact path already exists",
+  "linked-parent":
+    "the artifact path has a linked or non-directory parent; use a real path (a link such as macOS /tmp is refused)",
+  replaced: "the artifact file or its directory was replaced while the file was written",
+};
+
+function artifactFailure(error: unknown): string {
+  if (error instanceof ExclusiveOutputError) return artifactRefusals[error.problem];
+  return error instanceof Error ? error.message : "unknown failure";
 }
 
-/** Every ancestor of an output path must be a real directory: no link or reparse point. */
-function parentChain(path: string): DirectorySnapshot[] {
-  const parents: DirectorySnapshot[] = [];
-  try {
-    for (let current = dirname(path); ; current = dirname(current)) {
-      const stat = lstatSync(current);
-      if (!stat.isDirectory() || stat.isSymbolicLink())
-        invalid("the artifact path has a linked or non-directory parent");
-      parents.push({ path: current, realPath: realpathSync.native(current), stat });
-      if (dirname(current) === current) return parents;
-    }
-  } catch (error) {
-    if (error instanceof InvalidCommand) throw error;
-    return invalid("the artifact directory does not exist or cannot be inspected");
-  }
+function refuseArtifact(error: unknown, uninspectable: string): never {
+  return invalid(error instanceof ExclusiveOutputError ? artifactFailure(error) : uninspectable);
 }
 
-/** The artifact must be a new file: refused before any scan work if the path is taken. */
+/** The artifact must be a new file in real directories: refused before any scan work. */
 function assertNewArtifactPath(path: string): void {
-  let taken = true;
   try {
-    lstatSync(path);
+    assertOutputAbsent(path, artifactOutput.label);
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-      invalid("the artifact path cannot be inspected");
-    taken = false;
+    refuseArtifact(error, "the artifact path cannot be inspected");
   }
-  if (taken) invalid("the artifact path already exists");
-  parentChain(path);
+  try {
+    safeOutputParents(path);
+  } catch (error) {
+    refuseArtifact(error, "the artifact directory does not exist or cannot be inspected");
+  }
 }
 
 type Assessment = Extract<ScanRunResult, { status: "assessment" }>;
@@ -327,35 +347,11 @@ async function saveArtifact(result: Assessment, path: string): Promise<void> {
       bytes: base64Decode(bytesBase64, limit),
     })),
   });
-  const parentsBefore = parentChain(path);
-  const descriptor = openSync(path, "wx", 0o600);
-  try {
-    const opened = fstatSync(descriptor);
-    const named = lstatSync(path);
-    if (
-      !opened.isFile() ||
-      opened.nlink !== 1 ||
-      !named.isFile() ||
-      named.isSymbolicLink() ||
-      !sameFileReference(opened, named)
-    )
-      throw new Error("the artifact file was replaced while it was created");
-    writeFileSync(descriptor, prepared.bytes);
-    const parentsAfter = parentChain(path);
-    if (
-      parentsAfter.length !== parentsBefore.length ||
-      parentsAfter.some(
-        (parent, index) =>
-          parent.path !== parentsBefore[index]?.path ||
-          parent.realPath !== parentsBefore[index]?.realPath ||
-          !sameFileReference(parent.stat, (parentsBefore[index] as DirectorySnapshot).stat),
-      )
-    )
-      throw new Error("the artifact directory was replaced while the file was written");
-  } finally {
-    closeSync(descriptor);
-  }
-  const read = await readArtifact(new Uint8Array(readFileSync(path)));
+  writeNewSafeOutput(path, prepared.bytes, artifactOutput);
+  const saved = readFileSync(path);
+  if (!saved.equals(prepared.bytes))
+    throw new Error("the saved artifact differs from the bytes that were written");
+  const read = await readArtifact(new Uint8Array(saved));
   if (read.status !== "read" || read.scanId !== result.scanId)
     throw new Error("the saved artifact did not read back as this assessment");
 }
@@ -365,15 +361,20 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
     io.stdout(scanUsage);
     return scanExitCodes.complete;
   }
+  const cwd = io.cwd ?? process.cwd();
   let target: string;
   let parsed: ParsedArguments;
+  let artifactPath: string | undefined;
+  let detectorIds: readonly string[];
   let inputs: ScanInputs;
   try {
     parsed = parseArguments(args);
-    target = resolveTarget(parsed.positionals, io.cwd ?? process.cwd());
-    if (parsed.artifact !== undefined)
-      assertNewArtifactPath(resolve(io.cwd ?? process.cwd(), parsed.artifact));
-    const detectorIds = parsed.detectors.length ? parsed.detectors : defaultDetectors;
+    target = resolveTarget(parsed.positionals, cwd);
+    if (parsed.artifact !== undefined) {
+      artifactPath = resolve(cwd, parsed.artifact);
+      assertNewArtifactPath(artifactPath);
+    }
+    detectorIds = parsed.detectors.length ? parsed.detectors : defaultDetectors;
     const resolved = resolveScanInputs(target, detectorIds, {
       mcpConfigPaths: parsed.mcpConfigPaths,
       internalScopes: parsed.internalScopes,
@@ -382,26 +383,32 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
     inputs = resolved.inputs;
   } catch (error) {
     if (!(error instanceof InvalidCommand)) throw error;
-    io.stderr(`aih-scan: ${safe(error.message)}\n`);
+    io.stderr(`aih-scan: ${neutralizeTerminalText(error.message)}\n`);
     return scanExitCodes.invalid;
   }
-  const request = {
-    schema: "urn:aihq:scan:request:1.0.0",
+  const request: ScanRequest = {
+    schema: schemas.request,
     source: { kind: "local", path: target },
     selection: { paths: "all", excludedPaths: [] },
-    detectors: (parsed.detectors.length ? parsed.detectors : defaultDetectors).map(
-      (detectorId) => ({
-        detectorId,
-        configuration: inputs.configurations.get(detectorId) ?? {},
-      }),
-    ),
+    detectors: detectorIds.map((detectorId) => ({
+      detectorId,
+      configuration: inputs.configurations.get(detectorId) ?? {},
+    })),
   };
   const cancellation = new AbortController();
   const forwardCancellation = () => cancellation.abort();
   if (io.cancellation?.aborted) cancellation.abort();
   else io.cancellation?.addEventListener("abort", forwardCancellation, { once: true });
   try {
-    return await assess(parsed, request, target, io, cancellation.signal, inputs.notes);
+    return await assess(
+      parsed,
+      request,
+      target,
+      artifactPath,
+      io,
+      cancellation.signal,
+      inputs.notes,
+    );
   } finally {
     io.cancellation?.removeEventListener("abort", forwardCancellation);
   }
@@ -409,36 +416,37 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
 
 async function assess(
   parsed: ParsedArguments,
-  request: unknown,
+  request: ScanRequest,
   target: string,
+  artifactPath: string | undefined,
   io: ScanCommandIo,
   signal: AbortSignal,
   notes: readonly string[],
 ): Promise<number> {
-  io.stderr(`aih-scan: assessing ${safe(target)}\n`);
-  if (parsed.json) for (const note of notes) io.stderr(`aih-scan: note: ${safe(note)}\n`);
+  io.stderr(`aih-scan: assessing ${neutralizeTerminalText(target)}\n`);
+  if (parsed.json)
+    for (const note of notes) io.stderr(`aih-scan: note: ${neutralizeTerminalText(note)}\n`);
   const result = await (io.runScan ?? runScan)(request, { signal });
   if (parsed.json) {
     io.stdout(`${new TextDecoder().decode(canonicalBytes(result))}\n`);
     io.stderr(
       result.status === "assessment"
-        ? `aih-scan: ${safe(result.scanId)} is ${safe(result.report.completion)}\n`
-        : `aih-scan: no assessment (${safe(result.phase)} diagnostic)\n`,
+        ? `aih-scan: ${neutralizeTerminalText(result.scanId)} is ${neutralizeTerminalText(result.report.completion)}\n`
+        : `aih-scan: no assessment (${neutralizeTerminalText(result.phase)} diagnostic)\n`,
     );
   } else io.stdout(humanSummary(result, target, notes));
   let artifactSaved = true;
-  if (result.status === "assessment" && parsed.artifact !== undefined) {
-    const path = resolve(io.cwd ?? process.cwd(), parsed.artifact);
+  if (result.status === "assessment" && artifactPath !== undefined) {
     try {
-      await saveArtifact(result, path);
+      await saveArtifact(result, artifactPath);
       (parsed.json ? io.stderr : io.stdout)(
-        `Artifact: ${safe(path)}\n` +
-          `  unsigned; authenticity unchecked; read back through the portable reader as ${safe(result.scanId)}\n`,
+        `Artifact: ${neutralizeTerminalText(artifactPath)}\n` +
+          `  unsigned; authenticity unchecked; read back through the portable reader as ${neutralizeTerminalText(result.scanId)}\n`,
       );
     } catch (error) {
       artifactSaved = false;
       io.stderr(
-        `aih-scan: artifact not saved: ${safe(error instanceof Error ? error.message : "unknown failure")}\n`,
+        `aih-scan: artifact not saved: ${neutralizeTerminalText(artifactFailure(error))}\n`,
       );
     }
   }
