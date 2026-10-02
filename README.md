@@ -169,9 +169,10 @@ assesses exactly that commit through the assessment API's pinned Git
 acquisition, which verifies the commit object.
 
 - Without `--ref`, the repository's default `HEAD` is used and the summary
-  names the branch it points to, as the server advertises it. `--ref <name>` selects a branch, a tag (an
-  annotated tag is peeled to its commit), `refs/heads/<name>`,
-  `refs/tags/<name>`, or a full 40-character commit, which is used as given. A
+  names the branch it points to, as the server advertises it.
+  `--ref <name>` selects a branch, a tag (an annotated tag is peeled to its
+  commit), `refs/heads/<name>`, `refs/tags/<name>`, or a full 40-character
+  commit, which is used as given. A
   name that is both a branch and a tag is refused; qualify it. Ref names are
   validated before any network access, and `--ref` with a local directory is
   refused.
