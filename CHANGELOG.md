@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add `aih-scan scan <directory>` to assess a local directory from the command line.
+  It runs the native and trust-lint detectors by default or the detectors you name,
+  discovers MCP configuration inside the target or reads `--mcp-config` and
+  `--internal-scope` inputs, and prints a human summary or `--json` run result.
+  `--artifact` saves an unsigned portable artifact that is read back before success;
+  detector annexes stay separate and a selected detector that cannot run is reported
+  as refused. Exit codes are 0, 1, 2 and 130; a first `SIGINT` or `SIGTERM` cancels
+  and reports, a second exits immediately.
+
 - Add strict material inventory comparison, portable `MaterialChange` contracts
   and a versioned schema. Compare published content and declared installation
   metadata independently of findings; partial inventory never proves removal.

@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -453,6 +454,94 @@ function expectRejectedInstalledBin(
   return result.stderr;
 }
 
+/** Runs `aih-scan scan <args>` through the installed bin and reports exit status and output. */
+function runInstalledScan(project: string, args: readonly string[]) {
+  return rejectedInstalledBin(project, ["scan", ...args]);
+}
+
+/**
+ * Runs the installed CLI entry under a wrapper that hands the named signals to the process's
+ * own handlers as soon as the scan announces it started. Node delivers an operating-system
+ * signal to those same listeners, so this reaches the installed handlers on every platform;
+ * a Windows console child cannot receive a real SIGINT from a test without being terminated.
+ * The wrapper replaces NODE_OPTIONS preloads, which the assessment host refuses by design.
+ */
+function runInstalledScanWithSignals(
+  project: string,
+  args: readonly string[],
+  signals: readonly string[],
+) {
+  writeFileSync(
+    join(project, "deliver-signals.mjs"),
+    [
+      "const signals = process.env.AIH_SCAN_TEST_SIGNALS.split(',').filter(Boolean);",
+      "const write = process.stderr.write.bind(process.stderr);",
+      "let delivered = false;",
+      "process.stderr.write = (chunk, ...rest) => {",
+      "  const accepted = write(chunk, ...rest);",
+      '  if (!delivered && String(chunk).startsWith("aih-scan: assessing")) {',
+      "    delivered = true;",
+      "    for (const signal of signals) process.emit(signal, signal);",
+      "  }",
+      "  return accepted;",
+      "};",
+      'await import("./node_modules/@aihq/scan/dist/cli.js");',
+    ].join("\n"),
+  );
+  const result = spawnSync(process.execPath, ["deliver-signals.mjs", "scan", ...args], {
+    cwd: project,
+    encoding: "utf8",
+    env: { ...process.env, AIH_SCAN_TEST_SIGNALS: signals.join(",") },
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+/**
+ * POSIX only: starts the installed bin on a target and sends it a real SIGINT as soon as it
+ * announces the assessment. A Windows console child cannot be sent SIGINT without being
+ * terminated, so there the delivered-signal runs above cover the handlers instead.
+ */
+function interruptInstalledScan(project: string, target: string) {
+  return new Promise<{ status: number | null; stdout: string; stderr: string }>((settle, fail) => {
+    const child = spawn(
+      join(project, "node_modules", ".bin", "aih-scan"),
+      ["scan", target, "--json"],
+      {
+        cwd: project,
+      },
+    );
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    let stdout = "";
+    let stderr = "";
+    let interrupted = false;
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+      if (!interrupted && stderr.includes("aih-scan: assessing")) {
+        interrupted = true;
+        child.kill("SIGINT");
+      }
+    });
+    child.on("error", fail);
+    child.on("close", (status) => {
+      clearTimeout(watchdog);
+      settle({ status, stdout, stderr });
+    });
+  });
+}
+
+/** A disposable real directory for scan targets and artifacts, removed after the test. */
+function scanTemporaryDirectory(prefix: string): string {
+  const path = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
+  temporaryDirectories.push(path);
+  return path;
+}
+
+// Assembled from parts so the fixture never looks like a credential in this repository.
+const scanFixtureSecret = ["sk-live", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
+
 describe("npm CLI resolution", () => {
   it("accepts a validated absolute npm_execpath and otherwise uses an installed npm CLI", () => {
     const directory = mkdtempSync(join(tmpdir(), "aih-scan-npm-cli-"));
@@ -832,6 +921,140 @@ describe("published V2 package installation", () => {
     expect(runInstalledBin(directory, ["baseline-inspect", "--help"])).toContain(
       "Usage: aih-scan baseline-inspect",
     );
+
+    // Local assessment through the installed bin (samartomar/aih-scan#90).
+    expect(runInstalledBin(directory, ["--help"])).toContain("scan ...");
+    const scanHelp = runInstalledScan(directory, ["--help"]);
+    expect(scanHelp.status).toBe(0);
+    expect(scanHelp.stdout).toContain("Usage: aih-scan scan");
+
+    // Scan targets are disposable directories, never this checkout or the consumer project.
+    const scanBase = scanTemporaryDirectory("aih-scan-cli-target-");
+    const scanTarget = join(scanBase, "target");
+    mkdirSync(scanTarget);
+    writeFileSync(join(scanTarget, "SKILL.md"), "# Fixture\n");
+    writeFileSync(
+      join(scanTarget, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: { x: { command: "node", env: { API_KEY: scanFixtureSecret } } },
+      }),
+    );
+    // The artifact goes to its own directory, never into the scanned target.
+    const artifactPath = join(scanTemporaryDirectory("aih-scan-cli-artifact-"), "assessment.json");
+    const scanned = runInstalledScan(directory, [scanTarget, "--json", "--artifact", artifactPath]);
+    expect(scanned.status).toBe(0);
+    expect(`${scanned.stdout}${scanned.stderr}`).not.toContain(scanFixtureSecret);
+    const assessment = JSON.parse(scanned.stdout) as {
+      status?: unknown;
+      scanId?: unknown;
+      report?: { completion?: unknown; annexes?: { mediaType: string }[] };
+      annexes?: { bytesBase64: string }[];
+    };
+    expect(assessment).toMatchObject({ status: "assessment", report: { completion: "complete" } });
+    expect(assessment.report?.annexes?.map(({ mediaType }) => mediaType)).toContain(
+      "application/sarif+json",
+    );
+    // The annex bytes are base64 in stdout, so the value is also checked once decoded.
+    for (const annex of assessment.annexes ?? [])
+      expect(Buffer.from(annex.bytesBase64, "base64").toString("utf8")).not.toContain(
+        scanFixtureSecret,
+      );
+    writeFileSync(
+      join(directory, "scan-artifact-reader.mjs"),
+      [
+        'import { readFileSync } from "node:fs";',
+        'import { readArtifact } from "@aihq/scan/read";',
+        "const bytes = readFileSync(process.argv[2]);",
+        "const result = await readArtifact(new Uint8Array(bytes));",
+        'const attested = Object.hasOwn(JSON.parse(bytes.toString("utf8")), "attestation");',
+        "console.log(JSON.stringify({ status: result.status, scanId: result.scanId, authenticity: result.authenticity, attested }));",
+      ].join("\n"),
+    );
+    expect(
+      JSON.parse(
+        execFileSync(process.execPath, ["scan-artifact-reader.mjs", artifactPath], {
+          cwd: directory,
+          encoding: "utf8",
+          stdio: "pipe",
+        }),
+      ),
+    ).toEqual({
+      status: "read",
+      scanId: assessment.scanId,
+      authenticity: "unchecked",
+      attested: false,
+    });
+
+    const flagged = runInstalledScan(directory, [scanTarget, "--fail-on-findings"]);
+    expect(flagged.status).toBe(1);
+    expect(flagged.stdout).toContain("mcp.hardcoded-secret");
+    expect(`${flagged.stdout}${flagged.stderr}`).not.toContain(scanFixtureSecret);
+
+    // Registration is not a working integration: a selected detector that cannot run is
+    // reported as refused and leaves the assessment incomplete.
+    const refused = runInstalledScan(directory, [
+      scanTarget,
+      "--detector",
+      "detector.aih-native",
+      "--detector",
+      "detector.skillspector",
+    ]);
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toContain("detector.skillspector: refused");
+    expect(refused.stdout).toContain("rules-material-unavailable");
+
+    // Invalid input yields no assessment: exit 2 with nothing on stdout.
+    const outsideConfig = join(scanBase, "outside.mcp.json");
+    writeFileSync(outsideConfig, "{}\n");
+    const savedArtifact = readFileSync(artifactPath);
+    for (const args of [
+      [scanTarget, "--mcp-config", outsideConfig],
+      [join(scanBase, "missing-target")],
+      [scanTarget, "--artifact", artifactPath],
+    ]) {
+      const invalid = runInstalledScan(directory, args);
+      expect(invalid.status).toBe(2);
+      expect(invalid.stdout).toBe("");
+      expect(invalid.stderr).toMatch(/^aih-scan: /);
+    }
+    expect(readFileSync(artifactPath).equals(savedArtifact)).toBe(true);
+
+    // The first signal cancels the assessment; finished results are still reported.
+    const interrupted = runInstalledScanWithSignals(directory, [scanTarget, "--json"], ["SIGINT"]);
+    expect(interrupted.status).toBe(130);
+    expect(interrupted.stderr).toContain("SIGINT received");
+    expect(interrupted.stderr).toContain("cancelled");
+    expect(JSON.parse(interrupted.stdout)).toHaveProperty("status");
+    const terminated = runInstalledScanWithSignals(directory, [scanTarget, "--json"], ["SIGTERM"]);
+    expect(terminated.status).toBe(130);
+    expect(terminated.stderr).toContain("SIGTERM received");
+    expect(JSON.parse(terminated.stdout)).toHaveProperty("status");
+
+    // A second signal gives up on the graceful report: immediate exit, no result written.
+    const abandoned = runInstalledScanWithSignals(
+      directory,
+      [scanTarget, "--json"],
+      ["SIGINT", "SIGINT"],
+    );
+    expect(abandoned.status).toBe(130);
+    expect(abandoned.stdout).toBe("");
+    expect(abandoned.stderr).toContain("SIGINT received");
+    expect(abandoned.stderr).not.toContain("cancelled");
+
+    if (process.platform !== "win32") {
+      // A large target keeps the assessment running while the real signal arrives.
+      const large = scanTemporaryDirectory("aih-scan-cli-large-");
+      for (let group = 0; group < 200; group++) {
+        mkdirSync(join(large, `group-${group}`));
+        for (let file = 0; file < 100; file++)
+          writeFileSync(join(large, `group-${group}`, `file-${file}.txt`), "fixture\n");
+      }
+      const signalled = await interruptInstalledScan(directory, large);
+      expect(signalled.status).toBe(130);
+      expect(signalled.stderr).toContain("SIGINT received");
+      expect(signalled.stderr).toContain("cancelled");
+      expect(JSON.parse(signalled.stdout)).toHaveProperty("status");
+    }
 
     const keyPair = generateKeyPairSync("ed25519");
     const keyId = `ed25519:${sha256(keyPair.publicKey.export({ format: "der", type: "spki" }))}`;
@@ -1223,5 +1446,7 @@ describe("published V2 package installation", () => {
         "expected.json",
       ]),
     ).toBe("invalid ScanAttestationV2: signature verification\n");
-  }, 60_000);
+    // The installed `scan` assessments raised this single pack/install test from about
+    // 23 s to 32 s alone on Windows; under full-suite load it then exceeded 60 s.
+  }, 120_000);
 });
