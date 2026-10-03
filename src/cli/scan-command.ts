@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 import { prepareArtifact } from "../artifact/host.js";
 import { readArtifact } from "../artifact/read.js";
 import { base64Decode, canonicalBytes } from "../assessment/json.js";
-import { type RunScanOptions, runScan } from "../assessment/run.js";
+import {
+  type PrepareDetectorConfigurations,
+  type RunScanOptions,
+  runScanPrepared,
+} from "../assessment/run.js";
 import {
   type DetectorResult,
   type Diagnostic,
@@ -76,8 +80,8 @@ export const scanUsage = `${[
   "                         or duplicated is refused.",
   "                         Requires a selected detector that reads MCP configuration",
   "                         (detector.aih-trust-lint or detector.cisco-mcp-scanner).",
-  "                         Local directories only: MCP configuration is not read from",
-  "                         Git sources.",
+  "                         For a Git source the path must be relative to the repository",
+  "                         and is checked against the pinned commit; a host path is refused.",
   "  --internal-scope <@scope>",
   "                         Declare an internal package scope for detector.aih-trust-lint;",
   "                         repeat for several. Values are trimmed, lowercased,",
@@ -102,8 +106,16 @@ export interface ScanCommandIo {
   stderr: (text: string) => void;
   /** Aborted when the user cancels. */
   cancellation?: AbortSignal;
-  /** Defaults to the assessment host's `runScan`. */
-  runScan?: (request: unknown, options: RunScanOptions) => Promise<ScanRunResult>;
+  /**
+   * Defaults to the assessment host's `runScan`. A Git source also receives the
+   * post-capture preparation that resolves its MCP configuration from the captured
+   * snapshot; an override that omits it runs with the request's own configuration.
+   */
+  runScan?: (
+    request: unknown,
+    options: RunScanOptions,
+    prepare?: PrepareDetectorConfigurations,
+  ) => Promise<ScanRunResult>;
   /** Relative targets resolve against this directory. Defaults to `process.cwd()`. */
   cwd?: string;
 }
@@ -408,7 +420,7 @@ type PlannedSource =
     };
 
 function planSource(parsed: ParsedArguments, cwd: string): PlannedSource {
-  if (parsed.positionals.length !== 1) invalid("scan requires exactly one target directory");
+  if (parsed.positionals.length !== 1) invalid("scan requires exactly one target");
   const spelling = parsed.positionals[0] as string;
   const classified = classifyScanTarget(spelling, cwd);
   if (classified.kind === "local") {
@@ -436,6 +448,7 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
   let artifactPath: string | undefined;
   let detectorIds: readonly string[];
   let inputs: ScanInputs;
+  let prepare: PrepareDetectorConfigurations | undefined;
   try {
     parsed = parseArguments(args);
     source = planSource(parsed, cwd);
@@ -448,12 +461,16 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
       mcpConfigPaths: parsed.mcpConfigPaths,
       internalScopes: parsed.internalScopes,
     };
-    const resolved =
-      source.kind === "local"
-        ? resolveScanInputs(source.path, detectorIds, explicit)
-        : resolveGitScanInputs(detectorIds, explicit);
-    if (!resolved.ok) invalid(resolved.detail);
-    inputs = resolved.inputs;
+    if (source.kind === "local") {
+      const resolved = resolveScanInputs(source.path, detectorIds, explicit);
+      if (!resolved.ok) invalid(resolved.detail);
+      inputs = resolved.inputs;
+    } else {
+      const resolved = resolveGitScanInputs(detectorIds, explicit);
+      if (!resolved.ok) invalid(resolved.detail);
+      inputs = resolved.inputs;
+      prepare = resolved.inputs.prepare;
+    }
   } catch (error) {
     if (!(error instanceof InvalidCommand || error instanceof GitSourceRefusal)) throw error;
     io.stderr(`aih-scan: ${neutralizeTerminalText(error.message)}\n`);
@@ -493,6 +510,7 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
       io,
       cancellation.signal,
       inputs.notes,
+      prepare,
     );
   } finally {
     io.cancellation?.removeEventListener("abort", forwardCancellation);
@@ -537,17 +555,21 @@ async function assess(
   artifactPath: string | undefined,
   io: ScanCommandIo,
   signal: AbortSignal,
+  /** Read after the run: a Git source's notes are known only once its snapshot is captured. */
   notes: readonly string[],
+  prepare: PrepareDetectorConfigurations | undefined,
 ): Promise<number> {
   io.stderr(
     `aih-scan: assessing ${neutralizeTerminalText(target.name)}${
       target.git === undefined ? "" : ` at ${neutralizeTerminalText(target.git.commit)}`
     }\n`,
   );
-  if (parsed.json)
-    for (const note of notes) io.stderr(`aih-scan: note: ${neutralizeTerminalText(note)}\n`);
-  const result = await (io.runScan ?? runScan)(request, { signal });
+  const noteLine = (note: string) => `aih-scan: note: ${neutralizeTerminalText(note)}\n`;
+  const announced = parsed.json ? notes.length : 0;
+  if (parsed.json) for (const note of notes) io.stderr(noteLine(note));
+  const result = await (io.runScan ?? runScanPrepared)(request, { signal }, prepare);
   if (parsed.json) {
+    for (const note of notes.slice(announced)) io.stderr(noteLine(note));
     io.stdout(`${new TextDecoder().decode(canonicalBytes(result))}\n`);
     io.stderr(
       result.status === "assessment"

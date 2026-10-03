@@ -10,10 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { readArtifact } from "../../src/artifact/read.js";
-import { runScan } from "../../src/assessment/run.js";
+import { runScan, runScanPrepared } from "../../src/assessment/run.js";
 import type { ScanRunResult } from "../../src/assessment/types.js";
 import type { ProcessRunnerResult } from "../../src/cli/process-runner.js";
 import * as processBoundary from "../../src/cli/process-runner.js";
@@ -188,9 +188,9 @@ async function command(args: string[], extra: Partial<ScanCommandIo> = {}) {
   const requests: { source: unknown }[] = [];
   const seen: { result?: ScanRunResult } = {};
   const run = harness({
-    runScan: async (request, options) => {
+    runScan: async (request, options, prepare) => {
       requests.push(request as { source: unknown });
-      seen.result = await runScan(request, options);
+      seen.result = await runScanPrepared(request, options, prepare);
       return seen.result;
     },
     ...extra,
@@ -417,13 +417,129 @@ test("--ref with a local directory is refused", async () => {
   expect(result.requests).toEqual([]);
 });
 
-test("--mcp-config with a Git source is refused before any Git process", async () => {
+/** Commits the files to the fixture's checked-out branch; returns the new commit. */
+function commitFiles(fixture: Fixture, files: Record<string, string>): string {
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(fixture.root, path)), { recursive: true });
+    writeFileSync(join(fixture.root, path), text);
+  }
+  fixture.git(["add", "."]);
+  fixture.git([
+    "-c",
+    "user.name=Scan fixture",
+    "-c",
+    "user.email=scan-fixture@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "Add files",
+  ]);
+  return fixture.git(["rev-parse", "HEAD"]).trim();
+}
+
+const secret = `ghp_${"a1".repeat(18)}`;
+const secretConfig = `${JSON.stringify({ mcpServers: { demo: { env: { GITHUB_TOKEN: secret } } } })}\n`;
+
+/** The trust-lint configuration a completed assessment recorded in its report. */
+function trustLintConfiguration(result: { seen: { result?: ScanRunResult } }): unknown {
+  const run = result.seen.result;
+  if (run?.status !== "assessment") throw new Error("expected an assessment");
+  return run.report.requestedDetectors.find((d) => d.detectorId === "detector.aih-trust-lint")
+    ?.configuration;
+}
+
+test("a .mcp.json inside the Git target is discovered and linted like a local one", async () => {
+  const fixture = repository();
+  const commit = commitFiles(fixture, { ".mcp.json": secretConfig });
+  serve(fixture);
+  const result = await command([remote]);
+  expect(result.exit).toBe(0);
+  expect(result.stdout).toContain("mcp.hardcoded-secret");
+  expect(result.stdout).not.toContain(secret);
+  expect(result.stderr).not.toContain(secret);
+  const run = result.seen.result;
+  if (run?.status !== "assessment") throw new Error("expected an assessment");
+  expect(run.report.source).toMatchObject({ kind: "git", repository: remote, commit });
+  expect(run.report.completion).toBe("complete");
+  expect(trustLintConfiguration(result)).toEqual({
+    internalScopes: [],
+    mcpConfigPaths: [".mcp.json"],
+  });
+  expectOwnedTemporaryRemoved();
+});
+
+test.each([
+  ["a POSIX path", "/etc/mcp.json"],
+  ["a Windows drive path", "C:Userssomeonemcp.json"],
+  ["a UNC path", "\\hostsharemcp.json"],
+])("--mcp-config with %s is refused for a Git source before any Git process", async (_name, path) => {
   const served = serve(repository());
-  const result = await command([remote, "--mcp-config", "mcp.json"]);
+  const result = await command([remote, "--mcp-config", path]);
   expect(result.exit).toBe(2);
   expect(result.stderr).toBe(
-    "aih-scan: --mcp-config applies only to local directories; MCP configuration is not read from Git sources\n",
+    `aih-scan: --mcp-config ${path} must be relative to the Git target, not a host path\n`,
   );
+  expect(served.calls).toEqual([]);
+  expect(result.requests).toEqual([]);
+});
+
+test("--mcp-config names a file of the Git target and replaces discovery", async () => {
+  const fixture = repository();
+  commitFiles(fixture, {
+    ".mcp.json": "{}\n",
+    "skills/alpha/SKILL.md": "# Alpha\n",
+    "skills/alpha/mcp.json": secretConfig,
+  });
+  serve(fixture);
+  const result = await command([remote, "--mcp-config", "skills/alpha/mcp.json"]);
+  expect(result.exit).toBe(0);
+  expect(result.stdout).toContain("mcp.hardcoded-secret");
+  expect(result.stdout).not.toContain(secret);
+  expect(trustLintConfiguration(result)).toEqual({
+    internalScopes: [],
+    mcpConfigPaths: ["skills/alpha/mcp.json"],
+  });
+  expectOwnedTemporaryRemoved();
+});
+
+test.each([
+  ["missing from the target", "absent/mcp.json", "does not exist inside the target"],
+  ["outside the target", "../mcp.json", "outside the target directory"],
+])("--mcp-config %s is refused for a Git source with no assessment", async (_name, path, why) => {
+  const fixture = repository();
+  serve(fixture);
+  const result = await command([remote, "--mcp-config", path, "--json"]);
+  expect(result.exit).toBe(2);
+  expect(result.seen.result).toMatchObject({
+    status: "diagnostic",
+    phase: "request",
+    diagnostics: [{ code: "invalid-input", detail: expect.stringContaining(why) }],
+  });
+  expectOwnedTemporaryRemoved();
+});
+
+test("a Git target without MCP configuration is complete and says none was found", async () => {
+  const fixture = repository();
+  serve(fixture);
+  const result = await command([remote]);
+  expect(result.exit).toBe(0);
+  expect(result.stdout).toContain(
+    "detector.aih-trust-lint: no MCP configuration found inside the target",
+  );
+  expect(trustLintConfiguration(result)).toEqual({ internalScopes: [], mcpConfigPaths: [] });
+});
+
+test("--mcp-config with a Git source still needs a detector that reads MCP configuration", async () => {
+  const served = serve(repository());
+  const result = await command([
+    remote,
+    "--detector",
+    "detector.aih-native",
+    "--mcp-config",
+    "m.json",
+  ]);
+  expect(result.exit).toBe(2);
+  expect(result.stderr).toContain("--mcp-config requires a selected detector");
   expect(served.calls).toEqual([]);
 });
 

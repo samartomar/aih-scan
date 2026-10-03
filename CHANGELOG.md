@@ -18,7 +18,9 @@
   artifact carry it in `report.source` without a schema change. URLs with
   credentials, queries or fragments, other Git transports, ambiguous or invalid
   refs and SHA-256 repositories are refused with exit 2 without echoing the URL.
-  `--mcp-config` applies to local directories only.
+  MCP configuration is discovered in the pinned commit as for a local directory,
+  and `--mcp-config` accepts repository-relative paths checked against the
+  captured snapshot; host absolute paths are refused.
 - Git never inherits an askpass program: the hardened Git runner used by pinned
   Git acquisition and ref resolution removes `SSH_ASKPASS` and sets an empty
   `GIT_ASKPASS`, so a repository that asks for credentials fails without a

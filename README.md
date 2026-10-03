@@ -193,8 +193,13 @@ acquisition, which verifies the commit object.
   available even when no assessment is produced. Detector defaults,
   `--artifact`, `--fail-on-findings` and the exit codes are the same as for a
   local directory.
-- `--mcp-config` is refused for a Git source and MCP configuration is not
-  discovered in it; `--internal-scope` still applies.
+- MCP configuration is discovered in the pinned commit exactly as in a local
+  directory, and `--mcp-config <path>` names files inside it; the path must be
+  relative to the repository and is checked against the captured snapshot. A host
+  absolute path is refused before Git runs, and a path that is outside the
+  repository, missing or repeated is refused with no assessment. A repository
+  with no MCP configuration is not partial; the summary says none was found.
+  `--internal-scope` applies unchanged.
 - Git runs without a shell, with system and global Git configuration, hooks,
   credential helpers, askpass programs, prompts and redirects disabled, through
   a bounded relay. Temporary directories are private and removed on success,
