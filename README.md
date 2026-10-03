@@ -34,8 +34,8 @@ and publication are separate explicit operations.
 
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md)
 and the [production publisher plan](docs/production-publisher.md). The
-`aih-scan scan` command runs an assessment against a local directory without
-writing code; see [Assess a local directory](#assess-a-local-directory).
+`aih-scan scan` command runs an assessment against a local directory or an exact
+Git commit without writing code; see [Assess a local directory or Git repository](#assess-a-local-directory-or-git-repository).
 
 Compare declared installation material with `compareMaterialInventories` from
 `@aihq/scan/host`; see [material comparison](docs/material-change-comparison.md)
@@ -141,12 +141,13 @@ in-process analyzer for real against a throwaway fixture.
 roots and an expected-claims policy you supply, and ships neither. Both scripts
 are repository documentation and are not part of the published tarball.
 
-## Assess a local directory
+## Assess a local directory or Git repository
 
-`aih-scan scan` assesses one local directory and reports what each detector
-observed and what it covered. It needs Node `>=24.15.0 <25` and no other setup.
-It produces evidence only: it does not approve, qualify, admit or install the
-directory.
+`aih-scan scan` assesses one local directory, or one exact commit of a Git
+repository, and reports what each detector observed and what it covered. It
+needs Node `>=24.15.0 <25` (and `git` on the `PATH` for Git sources) and no
+other setup. It produces evidence only: it does not approve, qualify, admit or
+install the directory or repository.
 
 ```sh
 npx aih-scan scan ./skills
@@ -154,11 +155,55 @@ npx aih-scan scan ./skills --fail-on-findings
 npx aih-scan scan ./skills --json --artifact ./skills-assessment.json
 npx aih-scan scan ./skills --detector detector.aih-native
 npx aih-scan scan --help
+npx aih-scan scan https://github.com/owner/repo
+npx aih-scan scan owner/repo --ref v1.2.0 --json
 ```
 
 We recommend saving an artifact outside the directory you scan: a later scan of
 that directory would otherwise count the artifact file as part of its content.
 The command does not enforce this.
+
+**Git sources.** An `https://` URL or a GitHub `owner/repo` is a Git source.
+The command first resolves it to one full commit with `git ls-remote`, then
+assesses exactly that commit through the assessment API's pinned Git
+acquisition, which verifies the commit object.
+
+- Without `--ref`, the repository's default `HEAD` is used and the summary
+  names the branch it points to, as the server advertises it.
+  `--ref <name>` selects a branch, a tag (an annotated tag is peeled to its
+  commit), `refs/heads/<name>`, `refs/tags/<name>`, or a full 40-character
+  commit, which is used as given. A
+  name that is both a branch and a tag is refused; qualify it. Ref names are
+  validated before any network access, and `--ref` with a local directory is
+  refused.
+- `owner/repo` (with an optional `.git`) means
+  `https://github.com/owner/repo.git` only when no local path has that
+  spelling; an existing path is assessed as a local directory, exactly as
+  before. Spell `https://github.com/owner/repo` to force Git.
+- Only repositories that need no credentials can be assessed. A URL with a
+  user, password or token, a query or a fragment is refused, as are `http://`,
+  `ssh://`, `git://`, `file://` and `user@host:path` sources; refusals never
+  repeat the URL. An unavailable repository, one that asks for credentials and
+  SHA-256 repositories are refused with exit code `2`; Git's own messages are
+  not printed.
+- The human summary prints the repository as the target and a `Commit:` line
+  with the commit and the ref it was resolved from. With `--json`, stdout stays
+  the canonical run result, which names the repository and commit in
+  `report.source`; the resolved commit is also written to stderr, so it is
+  available even when no assessment is produced. Detector defaults,
+  `--artifact`, `--fail-on-findings` and the exit codes are the same as for a
+  local directory.
+- MCP configuration is discovered in the pinned commit exactly as in a local
+  directory, and `--mcp-config <path>` names files inside it; the path must be
+  relative to the repository and is checked against the captured snapshot. A host
+  absolute path is refused before Git runs, and a path that is outside the
+  repository, missing or repeated is refused with no assessment. A repository
+  with no MCP configuration is not partial; the summary says none was found.
+  `--internal-scope` applies unchanged.
+- Git runs without a shell, with system and global Git configuration, hooks,
+  credential helpers, askpass programs, prompts and redirects disabled, through
+  a bounded relay. Temporary directories are private and removed on success,
+  failure and cancellation; if one cannot be removed, no assessment runs.
 
 **Detectors.** Without `--detector`, the command runs `detector.aih-native` and
 `detector.aih-trust-lint`. `--detector <id>` runs exactly the detectors you name;

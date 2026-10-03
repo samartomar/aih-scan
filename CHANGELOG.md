@@ -10,6 +10,21 @@
   detector annexes stay separate and a selected detector that cannot run is reported
   as refused. Exit codes are 0, 1, 2 and 130; a first `SIGINT` or `SIGTERM` cancels
   and reports, a second exits immediately.
+- `aih-scan scan` also accepts an `https://` Git URL or a GitHub `owner/repo`
+  (a local path with that spelling still wins). The default `HEAD`, or a branch,
+  tag or full commit named with `--ref`, is resolved to one full commit through
+  the hardened Git runner, then assessed through the existing pinned Git
+  acquisition. The summary and stderr report the commit; the JSON result and
+  artifact carry it in `report.source` without a schema change. URLs with
+  credentials, queries or fragments, other Git transports, ambiguous or invalid
+  refs and SHA-256 repositories are refused with exit 2 without echoing the URL.
+  MCP configuration is discovered in the pinned commit as for a local directory,
+  and `--mcp-config` accepts repository-relative paths checked against the
+  captured snapshot; host absolute paths are refused.
+- Git never inherits an askpass program: the hardened Git runner used by pinned
+  Git acquisition and ref resolution removes `SSH_ASKPASS` and sets an empty
+  `GIT_ASKPASS`, so a repository that asks for credentials fails without a
+  credential dialog.
 
 - Add strict material inventory comparison, portable `MaterialChange` contracts
   and a versioned schema. Compare published content and declared installation

@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 import { prepareArtifact } from "../artifact/host.js";
 import { readArtifact } from "../artifact/read.js";
 import { base64Decode, canonicalBytes } from "../assessment/json.js";
-import { type RunScanOptions, runScan } from "../assessment/run.js";
+import {
+  type PrepareDetectorConfigurations,
+  type RunScanOptions,
+  runScanPrepared,
+} from "../assessment/run.js";
 import {
   type DetectorResult,
   type Diagnostic,
@@ -24,7 +28,15 @@ import {
   safeOutputParents,
   writeNewSafeOutput,
 } from "./exclusive-output.js";
-import { resolveScanInputs, type ScanInputs } from "./scan-inputs.js";
+import {
+  classifyScanTarget,
+  type GitRefRequest,
+  GitSourceRefusal,
+  parseGitRef,
+  type ResolvedGitSource,
+  resolveGitSource,
+} from "./git-source.js";
+import { resolveGitScanInputs, resolveScanInputs, type ScanInputs } from "./scan-inputs.js";
 
 export const scanExitCodes = {
   complete: 0,
@@ -36,10 +48,24 @@ export const scanExitCodes = {
 
 export const scanUsage = `${[
   "Usage: aih-scan scan <directory> [options]",
+  "       aih-scan scan <https-url | owner/repo> [--ref <name>] [options]",
   "",
-  "Assesses one local directory and reports what each detector observed and covered.",
+  "Assesses one local directory, or one exact commit of a Git repository, and reports",
+  "what each detector observed and covered.",
+  "",
+  "Git sources:",
+  "  An https:// URL, or a GitHub owner/repo, is resolved to one full commit before the",
+  "  assessment; the summary shows that commit and the ref it came from. owner/repo",
+  "  names a local directory instead when one exists with that spelling; use",
+  "  https://github.com/owner/repo to force Git. Credentials, queries and fragments in",
+  "  the URL and other schemes (http, ssh, git, file, user@host:path) are refused.",
+  "  Only repositories that need no credentials can be assessed.",
   "",
   "Options:",
+  "  --ref <name>           Assess this branch, tag, refs/heads/<name>, refs/tags/<name>",
+  "                         or full 40-character commit of a Git source instead of its",
+  "                         default HEAD. A name that is both a branch and a tag is",
+  "                         refused; qualify it.",
   "  --detector <id>        Run exactly the named detector; repeat for several.",
   "                         Default: detector.aih-native and detector.aih-trust-lint.",
   "                         A detector that cannot run is reported as refused or failed",
@@ -54,6 +80,8 @@ export const scanUsage = `${[
   "                         or duplicated is refused.",
   "                         Requires a selected detector that reads MCP configuration",
   "                         (detector.aih-trust-lint or detector.cisco-mcp-scanner).",
+  "                         For a Git source the path must be relative to the repository",
+  "                         and is checked against the pinned commit; a host path is refused.",
   "  --internal-scope <@scope>",
   "                         Declare an internal package scope for detector.aih-trust-lint;",
   "                         repeat for several. Values are trimmed, lowercased,",
@@ -78,8 +106,16 @@ export interface ScanCommandIo {
   stderr: (text: string) => void;
   /** Aborted when the user cancels. */
   cancellation?: AbortSignal;
-  /** Defaults to the assessment host's `runScan`. */
-  runScan?: (request: unknown, options: RunScanOptions) => Promise<ScanRunResult>;
+  /**
+   * Defaults to the assessment host's `runScan`. A Git source also receives the
+   * post-capture preparation that resolves its MCP configuration from the captured
+   * snapshot; an override that omits it runs with the request's own configuration.
+   */
+  runScan?: (
+    request: unknown,
+    options: RunScanOptions,
+    prepare?: PrepareDetectorConfigurations,
+  ) => Promise<ScanRunResult>;
   /** Relative targets resolve against this directory. Defaults to `process.cwd()`. */
   cwd?: string;
 }
@@ -100,6 +136,7 @@ interface ParsedArguments {
   failOnFindings: boolean;
   json: boolean;
   artifact?: string;
+  ref?: string;
 }
 
 function optionValue(args: readonly string[], index: number, name: string): string {
@@ -136,15 +173,15 @@ function parseArguments(args: readonly string[]): ParsedArguments {
     else if (arg === "--fail-on-findings") parsed.failOnFindings = true;
     else if (arg === "--json") parsed.json = true;
     else if (arg === "--artifact") parsed.artifact = optionValue(args, ++index, arg);
+    else if (arg === "--ref") parsed.ref = optionValue(args, ++index, arg);
     else if (arg.startsWith("-")) invalid(`unknown option ${arg}`);
     else parsed.positionals.push(arg);
   }
   return parsed;
 }
 
-function resolveTarget(positionals: readonly string[], cwd: string): string {
-  if (positionals.length !== 1) invalid("scan requires exactly one target directory");
-  const path = resolve(cwd, positionals[0] as string);
+function resolveTarget(spelling: string, cwd: string): string {
+  const path = resolve(cwd, spelling);
   let stat: ReturnType<typeof lstatSync>;
   try {
     stat = lstatSync(path);
@@ -270,13 +307,21 @@ function diagnosticLines(result: Assessment): string[] {
   ];
 }
 
-function targetLine(target: string, report: ReportBody): string {
+function targetLines(target: Target, report: ReportBody): string[] {
   const entries = report.source.capture.entries;
   const files = entries.filter((entry) => entry.kind === "file" || entry.kind === "file-link");
-  return `Target: ${neutralizeTerminalText(target)} (${files.length} ${files.length === 1 ? "file" : "files"}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"})`;
+  return [
+    `Target: ${neutralizeTerminalText(target.name)} (${files.length} ${files.length === 1 ? "file" : "files"}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"})`,
+    ...(target.git === undefined ? [] : [`Commit: ${commitText(target.git)}`]),
+  ];
 }
 
-function humanSummary(result: ScanRunResult, target: string, notes: readonly string[]): string {
+/** `<commit>` or `<commit> (<ref>)`: the exact commit and the ref it was resolved from. */
+function commitText(git: ResolvedGitSource): string {
+  return `${neutralizeTerminalText(git.commit)}${git.ref === undefined ? "" : ` (${neutralizeTerminalText(git.ref)})`}`;
+}
+
+function humanSummary(result: ScanRunResult, target: Target, notes: readonly string[]): string {
   if (result.status !== "assessment")
     return [
       `No assessment (${neutralizeTerminalText(result.phase)} diagnostic)`,
@@ -287,7 +332,7 @@ function humanSummary(result: ScanRunResult, target: string, notes: readonly str
     ].join("\n");
   return [
     `Scan ID: ${neutralizeTerminalText(result.scanId)}`,
-    targetLine(target, result.report),
+    ...targetLines(target, result.report),
     `Completion: ${neutralizeTerminalText(result.report.completion)}`,
     "Detectors:",
     ...result.report.results.flatMap(detectorLines),
@@ -357,50 +402,106 @@ async function saveArtifact(result: Assessment, path: string): Promise<void> {
     throw new Error("the saved artifact did not read back as this assessment");
 }
 
+/** What the summary names: a local directory, or a repository and its resolved commit. */
+interface Target {
+  readonly name: string;
+  readonly git?: ResolvedGitSource;
+}
+
+/** The validated source before any network: a local directory or an unresolved Git source. */
+type PlannedSource =
+  | { readonly kind: "local"; readonly path: string }
+  | {
+      readonly kind: "git";
+      readonly repository: string;
+      /** The --ref spelling as given, or HEAD. */
+      readonly requested: string;
+      readonly request: GitRefRequest;
+    };
+
+function planSource(parsed: ParsedArguments, cwd: string): PlannedSource {
+  if (parsed.positionals.length !== 1) invalid("scan requires exactly one target");
+  const spelling = parsed.positionals[0] as string;
+  const classified = classifyScanTarget(spelling, cwd);
+  if (classified.kind === "local") {
+    if (parsed.ref !== undefined) invalid("--ref applies only to Git sources");
+    return { kind: "local", path: resolveTarget(spelling, cwd) };
+  }
+  const ref = parseGitRef(parsed.ref);
+  if (!ref.ok) invalid(ref.detail);
+  return {
+    kind: "git",
+    repository: classified.repository,
+    requested: parsed.ref ?? "HEAD",
+    request: ref.request,
+  };
+}
+
 export async function runScanCommand(args: readonly string[], io: ScanCommandIo): Promise<number> {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     io.stdout(scanUsage);
     return scanExitCodes.complete;
   }
   const cwd = io.cwd ?? process.cwd();
-  let target: string;
+  let source: PlannedSource;
   let parsed: ParsedArguments;
   let artifactPath: string | undefined;
   let detectorIds: readonly string[];
   let inputs: ScanInputs;
+  let prepare: PrepareDetectorConfigurations | undefined;
   try {
     parsed = parseArguments(args);
-    target = resolveTarget(parsed.positionals, cwd);
+    source = planSource(parsed, cwd);
     if (parsed.artifact !== undefined) {
       artifactPath = resolve(cwd, parsed.artifact);
       assertNewArtifactPath(artifactPath);
     }
     detectorIds = parsed.detectors.length ? parsed.detectors : defaultDetectors;
-    const resolved = resolveScanInputs(target, detectorIds, {
+    const explicit = {
       mcpConfigPaths: parsed.mcpConfigPaths,
       internalScopes: parsed.internalScopes,
-    });
-    if (!resolved.ok) invalid(resolved.detail);
-    inputs = resolved.inputs;
+    };
+    if (source.kind === "local") {
+      const resolved = resolveScanInputs(source.path, detectorIds, explicit);
+      if (!resolved.ok) invalid(resolved.detail);
+      inputs = resolved.inputs;
+    } else {
+      const resolved = resolveGitScanInputs(detectorIds, explicit);
+      if (!resolved.ok) invalid(resolved.detail);
+      inputs = resolved.inputs;
+      prepare = resolved.inputs.prepare;
+    }
   } catch (error) {
-    if (!(error instanceof InvalidCommand)) throw error;
+    if (!(error instanceof InvalidCommand || error instanceof GitSourceRefusal)) throw error;
     io.stderr(`aih-scan: ${neutralizeTerminalText(error.message)}\n`);
     return scanExitCodes.invalid;
   }
-  const request: ScanRequest = {
-    schema: schemas.request,
-    source: { kind: "local", path: target },
-    selection: { paths: "all", excludedPaths: [] },
-    detectors: detectorIds.map((detectorId) => ({
-      detectorId,
-      configuration: inputs.configurations.get(detectorId) ?? {},
-    })),
-  };
   const cancellation = new AbortController();
   const forwardCancellation = () => cancellation.abort();
   if (io.cancellation?.aborted) cancellation.abort();
   else io.cancellation?.addEventListener("abort", forwardCancellation, { once: true });
   try {
+    let target: Target;
+    let requestSource: ScanRequest["source"];
+    if (source.kind === "local") {
+      target = { name: source.path };
+      requestSource = { kind: "local", path: source.path };
+    } else {
+      const resolution = await resolveGit(source, io, cancellation.signal);
+      if (!resolution.ok) return resolution.exitCode;
+      const { git } = resolution;
+      target = { name: git.repository, git };
+      requestSource = { kind: "git", repository: git.repository, commit: git.commit };
+    }
+    const request: ScanRequest = {
+      schema: schemas.request,
+      source: requestSource,
+      selection: { paths: "all", excludedPaths: [] },
+      detectors: detectorIds.map((detectorId) => ({
+        detectorId,
+        configuration: inputs.configurations.get(detectorId) ?? {},
+      })),
+    };
     return await assess(
       parsed,
       request,
@@ -409,26 +510,66 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
       io,
       cancellation.signal,
       inputs.notes,
+      prepare,
     );
   } finally {
     io.cancellation?.removeEventListener("abort", forwardCancellation);
   }
 }
 
+/** A Git source resolved to one commit, or the exit code of a reported refusal. */
+type GitResolution =
+  | { readonly ok: true; readonly git: ResolvedGitSource }
+  | { readonly ok: false; readonly exitCode: number };
+
+/** Resolves the Git source to one commit before any assessment. */
+async function resolveGit(
+  source: Extract<PlannedSource, { kind: "git" }>,
+  io: ScanCommandIo,
+  signal: AbortSignal,
+): Promise<GitResolution> {
+  const cancelled = (): GitResolution => {
+    io.stderr("aih-scan: cancelled; no assessment was produced\n");
+    return { ok: false, exitCode: scanExitCodes.cancelled };
+  };
+  if (signal.aborted) return cancelled();
+  const requested = neutralizeTerminalText(source.requested);
+  io.stderr(`aih-scan: resolving ${requested} of ${neutralizeTerminalText(source.repository)}\n`);
+  let git: ResolvedGitSource;
+  try {
+    git = await resolveGitSource(source.repository, source.request, signal);
+  } catch (error) {
+    if (signal.aborted) return cancelled();
+    if (!(error instanceof GitSourceRefusal)) throw error;
+    io.stderr(`aih-scan: ${neutralizeTerminalText(error.message)}\n`);
+    return { ok: false, exitCode: scanExitCodes.invalid };
+  }
+  io.stderr(`aih-scan: resolved ${requested} to ${commitText(git)}\n`);
+  return { ok: true, git };
+}
+
 async function assess(
   parsed: ParsedArguments,
   request: ScanRequest,
-  target: string,
+  target: Target,
   artifactPath: string | undefined,
   io: ScanCommandIo,
   signal: AbortSignal,
+  /** Read after the run: a Git source's notes are known only once its snapshot is captured. */
   notes: readonly string[],
+  prepare: PrepareDetectorConfigurations | undefined,
 ): Promise<number> {
-  io.stderr(`aih-scan: assessing ${neutralizeTerminalText(target)}\n`);
-  if (parsed.json)
-    for (const note of notes) io.stderr(`aih-scan: note: ${neutralizeTerminalText(note)}\n`);
-  const result = await (io.runScan ?? runScan)(request, { signal });
+  io.stderr(
+    `aih-scan: assessing ${neutralizeTerminalText(target.name)}${
+      target.git === undefined ? "" : ` at ${neutralizeTerminalText(target.git.commit)}`
+    }\n`,
+  );
+  const noteLine = (note: string) => `aih-scan: note: ${neutralizeTerminalText(note)}\n`;
+  const announced = parsed.json ? notes.length : 0;
+  if (parsed.json) for (const note of notes) io.stderr(noteLine(note));
+  const result = await (io.runScan ?? runScanPrepared)(request, { signal }, prepare);
   if (parsed.json) {
+    for (const note of notes.slice(announced)) io.stderr(noteLine(note));
     io.stdout(`${new TextDecoder().decode(canonicalBytes(result))}\n`);
     io.stderr(
       result.status === "assessment"

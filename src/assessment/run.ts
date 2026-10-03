@@ -369,7 +369,22 @@ function unsignedArtifact(
     }),
   };
 }
+/**
+ * Internal, post-capture preparation: from the private captured snapshot only, returns the
+ * `configuration` that replaces a requested detector's before detectors are resolved and
+ * hashed, or throws a `ContractError` refusing the request. It is not part of
+ * `RunScanOptions`; `runScan` never prepares.
+ */
+export type PrepareDetectorConfigurations = (snapshotRoot: string) => ReadonlyMap<string, Json>;
 export async function runScan(raw: unknown, options: RunScanOptions = {}): Promise<ScanRunResult> {
+  return runScanPrepared(raw, options);
+}
+/** `runScan` with an optional preparation step that reads the captured snapshot. */
+export async function runScanPrepared(
+  raw: unknown,
+  options: RunScanOptions = {},
+  prepare?: PrepareDetectorConfigurations,
+): Promise<ScanRunResult> {
   const diagnostic = (
     phase: "request" | "capture" | "assembly",
     error: unknown,
@@ -392,12 +407,28 @@ export async function runScan(raw: unknown, options: RunScanOptions = {}): Promi
   } catch (error) {
     return diagnostic("capture", error);
   }
+  let resolvable = request;
+  if (prepare !== undefined) {
+    try {
+      const configurations = prepare(captured.root);
+      resolvable = {
+        ...request,
+        detectors: request.detectors.map((detector) => ({
+          ...detector,
+          configuration: configurations.get(detector.detectorId) ?? detector.configuration,
+        })),
+      };
+    } catch (error) {
+      captured.cleanup();
+      return diagnostic("request", error);
+    }
+  }
   try {
     const implementationDigester = createImplementationDigester({
       moduleRoot: resolve(moduleDirectory, ".."),
       extension: extname(fileURLToPath(import.meta.url)),
     });
-    const resolved = await resolvedDetectors(request, captured.selection.paths),
+    const resolved = await resolvedDetectors(resolvable, captured.selection.paths),
       results: DetectorResult[] = [],
       annexes: AnnexDescriptor[] = [],
       payloads: { id: string; bytesBase64: string }[] = [];
