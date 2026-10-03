@@ -470,8 +470,9 @@ test("a .mcp.json inside the Git target is discovered and linted like a local on
 
 test.each([
   ["a POSIX path", "/etc/mcp.json"],
-  ["a Windows drive path", "C:Userssomeonemcp.json"],
-  ["a UNC path", "\\hostsharemcp.json"],
+  ["a Windows drive path", String.raw`C:\Users\someone\mcp.json`],
+  ["a Windows drive-relative path", String.raw`C:relative\mcp.json`],
+  ["a UNC path", String.raw`\\host\share\mcp.json`],
 ])("--mcp-config with %s is refused for a Git source before any Git process", async (_name, path) => {
   const served = serve(repository());
   const result = await command([remote, "--mcp-config", path]);
@@ -498,6 +499,27 @@ test("--mcp-config names a file of the Git target and replaces discovery", async
   expect(trustLintConfiguration(result)).toEqual({
     internalScopes: [],
     mcpConfigPaths: ["skills/alpha/mcp.json"],
+  });
+  expectOwnedTemporaryRemoved();
+});
+
+test("duplicate --mcp-config paths in a Git target are refused after capture", async () => {
+  const fixture = repository();
+  commitFiles(fixture, { ".mcp.json": "{}\n" });
+  serve(fixture);
+  const result = await command([
+    remote,
+    "--mcp-config",
+    ".mcp.json",
+    "--mcp-config",
+    ".mcp.json",
+    "--json",
+  ]);
+  expect(result.exit).toBe(2);
+  expect(result.seen.result).toMatchObject({
+    status: "diagnostic",
+    phase: "request",
+    diagnostics: [{ code: "invalid-input", detail: expect.stringContaining("duplicates") }],
   });
   expectOwnedTemporaryRemoved();
 });
