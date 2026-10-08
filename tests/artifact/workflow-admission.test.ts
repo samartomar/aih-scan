@@ -15,9 +15,9 @@ const context = (name: string) => ({
     repository_owner_id: "9993940",
     ref: "refs/heads/main",
     sha: "a".repeat(40),
-    actor: "stomar-tech",
-    actor_id: "333589491",
-    triggering_actor: "stomar-tech",
+    actor: "samartomar",
+    actor_id: "9993940",
+    triggering_actor: "samartomar",
     run_attempt: "1",
     workflow_ref: `samartomar/aih-scan/.github/workflows/scan-report-${name}.yml@refs/heads/main`,
   },
@@ -49,7 +49,7 @@ const admits = (expression: string, value: ReturnType<typeof context>) => {
   );
 };
 
-test("only the reviewed independent actor's first manual main run can enter each publisher job", () => {
+test("only the sole maintainer's reviewed first manual main run can enter each publisher job", () => {
   for (const name of ["publisher", "candidate-upload"]) {
     const config = workflow(name);
     expect(Object.keys(config.on)).toEqual(["workflow_dispatch"]);
@@ -64,15 +64,24 @@ test("only the reviewed independent actor's first manual main run can enter each
         repository_owner_id: "1",
         ref: "refs/heads/other",
         sha: "b".repeat(40),
-        actor: "samartomar",
-        actor_id: "9993940",
-        triggering_actor: "samartomar",
+        actor: "stomar-tech",
+        actor_id: "333589491",
+        triggering_actor: "stomar-tech",
         run_attempt: "2",
         workflow_ref: "samartomar/aih-scan/.github/workflows/other.yml@refs/heads/main",
       })) {
         const changed = structuredClone(selected);
         changed.github[key as keyof typeof changed.github] = value;
         expect(admits(job.if, changed), `${name}: refused ${key}`).toBe(false);
+      }
+      for (const identity of [
+        { actor: "other", actor_id: "9993940" },
+        { actor: "samartomar", actor_id: "1" },
+        { triggering_actor: "other" },
+      ]) {
+        const changed = structuredClone(selected);
+        Object.assign(changed.github, identity);
+        expect(admits(job.if, changed), `${name}: refused mismatched identity`).toBe(false);
       }
       const absent = structuredClone(selected);
       absent.vars.SCAN_REPORT_REVIEWED_HEAD = "";
@@ -197,6 +206,8 @@ test("producer freezes reviewed package data separately and runs without signing
 });
 
 function candidateBoundary() {
+  // Retained one-shot proof custody uses the historical dispatcher policy.
+  // Active frozen batches use check-refresh-run.mjs and the sole-owner policy.
   const temporary = mkdtempSync(join(tmpdir(), "scan-run-admission-"));
   const repository = { id: 1336836161, full_name: "samartomar/aih-scan", owner: { id: 9993940 } };
   const actor = { login: "stomar-tech", id: 333589491 };
