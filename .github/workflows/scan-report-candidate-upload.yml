@@ -1,6 +1,18 @@
-name: One-shot reviewed Scan candidate upload
+name: Frozen Scan production refresh
 on:
   workflow_dispatch:
+    inputs:
+      phase:
+        description: Freeze and review before running pinned source data
+        required: true
+        type: choice
+        options:
+          - freeze
+          - run
+      input_json:
+        description: Exact reviewed input JSON bytes; freeze only
+        required: false
+        type: string
 permissions: {}
 concurrency:
   group: scan-report-candidate-upload
@@ -9,43 +21,121 @@ jobs:
   upload:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
-      - name: Materialize only exact reviewed data
-        shell: bash
-        run: |
+      - run: npm ci --ignore-scripts && npm run build
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+        if: ${{ inputs.phase == 'run' }}
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: 0.12.13
+        if: ${{ inputs.phase == 'run' }}
+      - name: Prepare fixed Linux namespace runtime
+        run: |-
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
+          sudo apparmor_parser --replace /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
+          case "$python_prefix" in /usr|/usr/*) exit 1;; esac
+          sudo cp -a "${python_prefix}/." /usr/local/
+          sudo install -m 0644 "${python_prefix}/lib/libpython3.13.so.1.0" /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
+          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
+          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
+        if: ${{ inputs.phase == 'run' }}
+      - name: Freeze reviewed input with a packed installed scanner
+        if: ${{ inputs.phase == 'freeze' }}
+        env:
+          INPUT_JSON: ${{ inputs.input_json }}
+          INPUT_SHA: ${{ vars.SCAN_REFRESH_INPUT_SHA256 }}
+        run: |-
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/frozen"
           node --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { mkdirSync, writeFileSync } from 'node:fs';
-          const inputs = [
-            ['artifact.json', 'eyJhbm5leGVzIjpbeyJieXRlTGVuZ3RoIjoyNDYsImJ5dGVzQmFzZTY0IjoiZXlKbWFXeGxjeUk2VzNzaVlubDBaWE1pT2pFek9Dd2ljR0YwYUNJNklsTkxTVXhNTG0xa0lpd2ljMmhoTWpVMklqb2laamd4T0RVNU9UaGxZelEyTkdNMVl6bGtOV1psTXpWak1qRTFOMlV3WVdReU5Ua3pZelZrTlRJeU5EYzVOMkl5TkRBMk1HRXdNVFprWmpBM09XUTNOeUo5WFN3aWNISnZkRzlqYjJ3aU9pSkNZWE5sYkdsdVpVNWhkR2wyWlU5aWMyVnlkbUYwYVc5dVZqRWlMQ0p6YjNWeVkyVlVjbVZsVTJoaE1qVTJJam9pTm1Oak5ERTBOak16T0RCaVpETmxNamxoWW1ZeE5URXhaREZpT0RKaE1HTmpaR0ZpWW1GbFptVTFZV0ZoWWpkaE9ESTRNakprWmpZM1pHWmpaV1prTUNKOSIsImlkIjoiYW5uZXguNTQ5ZDU5YjNkNWY1YTFkN2VjN2IyZjIzYzNkOWI5YjU3YzI3ZGE3MjM1OGVkOTRjN2E1N2FkMGJmMzQyYTZiYiIsIm1lZGlhVHlwZSI6ImFwcGxpY2F0aW9uL3ZuZC5haWguYmFzZWxpbmUtbmF0aXZlK2pzb24iLCJzaGEyNTYiOiI2MDk2Y2QzNTAxNGEyMDhhYzZkNjJkNWJiNWY4MGVmYjBkODYzYTAyNDY0ZDM4ZjQ0MGNhYzc0MTJjM2IxZmY5In1dLCJyZXBvcnQiOnsiYnl0ZUxlbmd0aCI6MzUwOCwiYnl0ZXNCYXNlNjQiOiJleUpoYm01bGVHVnpJanBiZXlKaWVYUmxUR1Z1WjNSb0lqb3lORFlzSW1sa0lqb2lZVzV1WlhndU5UUTVaRFU1WWpOa05XWTFZVEZrTjJWak4ySXlaakl6WXpOa09XSTVZalUzWXpJM1pHRTNNak0xT0dWa09UUmpOMkUxTjJGa01HSm1NelF5WVRaaVlpSXNJbTFsWkdsaFZIbHdaU0k2SW1Gd2NHeHBZMkYwYVc5dUwzWnVaQzVoYVdndVltRnpaV3hwYm1VdGJtRjBhWFpsSzJwemIyNGlMQ0p6YUdFeU5UWWlPaUkyTURrMlkyUXpOVEF4TkdFeU1EaGhZelprTmpKa05XSmlOV1k0TUdWbVlqQmtPRFl6WVRBeU5EWTBaRE00WmpRME1HTmhZemMwTVRKak0ySXhabVk1SW4xZExDSmpiMjF3YkdWMGFXOXVJam9pWTI5dGNHeGxkR1VpTENKamNtVmhkR1ZrUVhRaU9pSXlNREkyTFRFd0xUQXhWREV3T2pJM09qVXhMamswTWxvaUxDSmthV0ZuYm05emRHbGpjeUk2VzEwc0ltVm1abVZqZEdsMlpVeHBiV2wwY3lJNmV5SmtaWFJsWTNSdmNsUnBiV1Z2ZFhSTmN5STZOakF3TURBd0xDSnRZWGhCYm01bGVFSjVkR1Z6SWpveE5qYzNOekl4Tml3aWJXRjRRWEowYVdaaFkzUkNlWFJsY3lJNk1UQXdOall6TWprMkxDSnRZWGhFWldOdlpHVmtRWEowYVdaaFkzUkNlWFJsY3lJNk5qY3hNRGc0TmpRc0ltMWhlRkpsY0c5eWRFSjVkR1Z6SWpveE5qYzNOekl4Tml3aWJXRjRVbVZ4ZFdWemRFSjVkR1Z6SWpveU1EazNNVFV5TENKdFlYaFRiM1Z5WTJWQ2VYUmxjeUk2TWpZNE5ETTFORFUyTENKdFlYaFRiM1Z5WTJWRmJuUnlhV1Z6SWpveE1EQXdNREFzSW0xaGVGTjBZWFJsYldWdWRFSjVkR1Z6SWpveE16RXdOeko5TENKd2NtOWtkV05sY2lJNmV5SnVZVzFsSWpvaVFHRnBhSEV2YzJOaGJpSXNJblpsY25OcGIyNGlPaUl3TGpVdU1DSjlMQ0p5WlhGMVpYTjBaV1JFWlhSbFkzUnZjbk1pT2x0N0ltTnZibVpwWjNWeVlYUnBiMjRpT250OUxDSmpiMjVtYVdkMWNtRjBhVzl1VTJoaE1qVTJJam9pTkRReE16Wm1ZVE0xTldJek5qYzRZVEV4TkRaaFpERTJaamRsT0RZME9XVTVOR1ppTkdaak1qRm1aVGMzWlRnek1UQmpNRFl3WmpZeFkyRmhabVk0WVNJc0ltUmxkR1ZqZEc5eVNXUWlPaUprWlhSbFkzUnZjaTVoYVdndGJtRjBhWFpsSWl3aWNISnZabWxzWlVsa0lqb2lhVzR0Y0hKdlkyVnpjeTF1WVhScGRtVXRkakVpZlYwc0luSmxjM1ZzZEhNaU9sdDdJbU52ZG1WeVlXZGxJanA3SW1OdmJYQnNaWFJsSWpwMGNuVmxMQ0pqYjNabGNtVmtVR0YwYUhNaU9sc2lVMHRKVEV3dWJXUWlYU3dpWlhoamJIVmtaV1JRWVhSb2N5STZXMTBzSW5WdVkyOTJaWEpsWkZCaGRHaHpJanBiWFgwc0ltUmxkR1ZqZEc5eVNXUWlPaUprWlhSbFkzUnZjaTVoYVdndGJtRjBhWFpsSWl3aVpHbGhaMjV2YzNScFkzTWlPbHRkTENKdlluTmxjblpoZEdsdmJuTWlPbHQ3SW1KdlpIa2lPbnNpWVc1dVpYaEpaSE1pT2xzaVlXNXVaWGd1TlRRNVpEVTVZak5rTldZMVlURmtOMlZqTjJJeVpqSXpZek5rT1dJNVlqVTNZekkzWkdFM01qTTFPR1ZrT1RSak4yRTFOMkZrTUdKbU16UXlZVFppWWlKZExDSmpiMjF3YkdWMFpXUkJkQ0k2SWpJd01qWXRNVEF0TURGVU1UQTZNamM2TlRFdU9UTXlXaUlzSW1OdmRtVnlZV2RsSWpwN0ltTnZkbVZ5WldSUVlYUm9jeUk2V3lKVFMwbE1UQzV0WkNKZGZTd2labWx1WkdsdVozTWlPbHRkTENKbWIzSnRZWFFpT2lKaGFXZ3RiMkp6WlhKMllYUnBiMjR0ZGpFaUxDSm5ZWEJ6SWpwYmV5SmtaWFJoYVd3aU9pSlVhR1VnWVdsb0xXNWhkR2wyWlNCdmRYUndkWFFnYVhNZ1lTQnpiM1Z5WTJVZ2FXUmxiblJwZEhrZ2IySnpaWEoyWVhScGIyNHNJRzV2ZENCaElHWnBibVJwYm1keklISmxjRzl5ZEN3Z2MyOGdibThnY25Wc1pTd2djMlYyWlhKcGRIa3NJRzFsYzNOaFoyVWdiM0lnYkc5allYUnBiMjRnYVhNZ1pHVnlhWFpsWkNCbWNtOXRJR2wwTGlJc0luSmxZWE52YmlJNkluTmhjbWxtTFc1dmRDMXBiblJsY25CeVpYUmxaQ0o5TEhzaVpHVjBZV2xzSWpvaVZHaHBjeUJ5ZFc0bmN5QmhibTVsZUNCaWVYUmxjeUJoY21VZ2RHaGxJR0Z1WVd4NWVtVnlKM01nYjNkdUlHOTFkSEIxZEM0Z1UyTmhiaUJpYVc1a2N5QjBhR1Z0SUdKNUlHUnBaMlZ6ZENCaGJtUWdaRzlsY3lCdWIzUWdjR0Z5YzJVZ2RHaGxiU3dnYzI4Z2JtOGdiV1Z6YzJGblpTQnZjaUJzYjJOaGRHbHZiaUJwY3lCeVpYQnZjblJsWkNCaGJtUWdkR2hsSUdWdGNIUjVJR3hwYzNRZ2FYTWdibTkwSUdFZ1kyeGhhVzBnZEdoaGRDQnViM1JvYVc1bklIZGhjeUJtYjNWdVpDNGlMQ0p5WldGemIyNGlPaUptYVc1a2FXNW5MVzFsYzNOaFoyVXRZVzVrTFd4dlkyRjBhVzl1TFc1dmRDMXlaV0ZrTFdaeWIyMHRZVzV1WlhnaWZTeDdJbVJsZEdGcGJDSTZJa0VnYzJsdVoyeGxMV0Z1WVd4NWVtVnlJRzlpYzJWeWRtRjBhVzl1SUdSbFkyeGhjbVZ6SUc1dklHOWpZM1Z5Y21WdVkyVWdabUZqZEhNc0lITnZJR2wwSUdSbFkyeGhjbVZ6SUc1dklITmxkbVZ5YVhSNUlHVnBkR2hsY2k0Z1FXSnpaVzUwSUhObGRtVnlhWFI1SUdseklISmxjRzl5ZEdWa0lHRnpJR0ZpYzJWdWRDd2dibVYyWlhJZ1pHVm1ZWFZzZEdWa0xpSXNJbkpsWVhOdmJpSTZJbk5sZG1WeWFYUjVMVzV2ZEMxa1pXTnNZWEpsWkMxaWVTMWhkSFJsYzNSaGRHbHZiaUo5TEhzaVpHVjBZV2xzSWpvaVZHaGxjMlVnWm1sdVpHbHVaM01nWVhKbElHVjJhV1JsYm1ObElHOXViSGt1SUZSb1pYa2daM0poYm5RZ2JtOGdjWFZoYkdsbWFXTmhkR2x2Yml3Z1lYQndjbTkyWVd3c0lHbHVjM1JoYkd4aGRHbHZiaXdnYjJKelpYSjJZWFJwYjI0Z2IzSWdaV1ptWldOMElHRjFkR2h2Y21sMGVTNGlMQ0p5WldGemIyNGlPaUp1YnkxbFptWmxZM1F0YjNJdGNYVmhiR2xtYVdOaGRHbHZiaTFoZFhSb2IzSnBkSGtpZlYwc0ltbHVjSFYwSWpwN0ltRmtZWEIwWlhKVGFHRXlOVFlpT2lJMllUaGpNREE1Tm1abU9HUXdZVGMyTmpSa09XVTBOemhqWlRNMU1tSmlaakUzTURKak5qZzVNRGcyTnpobVlUQTJZMk5oWmpnNFl6RTFNVE0xWkdFNElpd2lZMjl1Wm1sbmRYSmhkR2x2YmxOb1lUSTFOaUk2SWpRME1UTTJabUV6TlRWaU16WTNPR0V4TVRRMllXUXhObVkzWlRnMk5EbGxPVFJtWWpSbVl6SXhabVUzTjJVNE16RXdZekEyTUdZMk1XTmhZV1ptT0dFaUxDSmtaWFJsWTNSdmNrbGtJam9pWkdWMFpXTjBiM0l1WVdsb0xXNWhkR2wyWlNJc0ltUmxkR1ZqZEc5eVZtVnljMmx2YmlJNkltNWhkR2wyWlM0d01UUm1ZbVEyTVRSaE5XRWlMQ0psYm5SeWFXVnpJanBiZXlKaWVYUmxUR1Z1WjNSb0lqb3hNemdzSW10cGJtUWlPaUptYVd4bElpd2ljR0YwYUNJNklsTkxTVXhNTG0xa0lpd2ljMmhoTWpVMklqb2laamd4T0RVNU9UaGxZelEyTkdNMVl6bGtOV1psTXpWak1qRTFOMlV3WVdReU5Ua3pZelZrTlRJeU5EYzVOMkl5TkRBMk1HRXdNVFprWmpBM09XUTNOeUo5WFN3aWNHeGhkR1p2Y20waU9uc2lZWEpqYUdsMFpXTjBkWEpsSWpvaWVEWTBJaXdpYjNNaU9pSjNhVzR6TWlJc0luSmxiR1YyWVc1MFJtRmpkSE5UYUdFeU5UWWlPaUkzTkRBeVpUSTBOV0V3T0dWbFpqRXlNekV5TlRnM1lXRTVNRFl3WVRBNE9EWTRZV1JsWW1aallXSmtNRGhsWlRJMFpUbGxOamMwTURWbE16WTBOMkpsSW4wc0luQnliMlpwYkdWSlpDSTZJbWx1TFhCeWIyTmxjM010Ym1GMGFYWmxMWFl4SWl3aWNISnZabWxzWlZOb1lUSTFOaUk2SW1SaFptVTVOVGs1TnpWbVlqWXpNek01T0dKaE1ERXpZVFkyT1dReE1UaGlOMlJsTmpreVlqRTBOMk5qTkRJMU4yTmlOREJsWXpFellqRXdNamxpTW1VaUxDSnlkV3hsYzFOb1lUSTFOaUk2SWpSbU5UTmpaR0V4T0dNeVltRmhNR013TXpVMFltSTFaamxoTTJWalltVTFaV1F4TW1GaU5HUTRaVEV4WW1FNE56TmpNbVl4TVRFMk1USXdNbUk1TkRVaUxDSnpZMjl3WlV0cGJtUWlPaUp6YjNWeVkyVXRkSEpsWlNJc0luUmhjbWRsZEZCaGRHaHpJanBiSWxOTFNVeE1MbTFrSWwxOUxDSndjbTlrZFdObGNpSTZleUp1WVcxbElqb2lRR0ZwYUhFdmMyTmhiaUlzSW5abGNuTnBiMjRpT2lJd0xqVXVNQ0o5TENKemRHRnlkR1ZrUVhRaU9pSXlNREkyTFRFd0xUQXhWREV3T2pJM09qVXhMamt4T1ZvaWZTd2liMkp6WlhKMllYUnBiMjVKWkNJNkltOWljMlZ5ZG1GMGFXOXVPbk5vWVRJMU5qb3hZemMzWlRRME5EQm1aV1ZqWmpJMk5UWXpNV05oTmpsbFkyVTFabVJrTnpCaFpEUXdPV1JsTW1JM09HWTJaR1V3WlRFMU5qWXhZelZpWlRZelpHTmhJaXdpYjNKcFoybHVJam9pWm5KbGMyZ2lmVjBzSW05MWRHTnZiV1VpT2lKemRXTmpaV1ZrWldRaWZWMHNJbk5qYUdWdFlTSTZJblZ5YmpwaGFXaHhPbk5qWVc0NmNtVndiM0owT2pFdU1DNHdJaXdpYzJWc1pXTjBhVzl1SWpwN0ltVjRZMngxWkdWa1VHRjBhSE1pT2x0ZExDSndZWFJvY3lJNld5SlRTMGxNVEM1dFpDSmRmU3dpYzI5MWNtTmxJanA3SW1OaGNIUjFjbVVpT25zaVkyRndkSFZ5WlZOb1lUSTFOaUk2SWpWaE5HRmxNek5tWXprNFlUSmlOVE13WW1RMllUbGhPV1kxT1RKbU5HRmpOelU1WlRGak5HWTNNR1F5TjJaalpETXdNamxrTnpZd09ERmtNR000T0RnaUxDSmxiblJ5YVdWeklqcGJleUppZVhSbFRHVnVaM1JvSWpveE16Z3NJbXRwYm1RaU9pSm1hV3hsSWl3aWNHRjBhQ0k2SWxOTFNVeE1MbTFrSWl3aWMyaGhNalUySWpvaVpqZ3hPRFU1T1RobFl6UTJOR00xWXpsa05XWmxNelZqTWpFMU4yVXdZV1F5TlRrell6VmtOVEl5TkRjNU4ySXlOREEyTUdFd01UWmtaakEzT1dRM055SjlYU3dpY0hKdlptbHNaU0k2SW1GcGFDMXpiM1Z5WTJVdFkyRndkSFZ5WlMweEluMHNJbXRwYm1RaU9pSnNiMk5oYkNKOWZRPT0iLCJtZWRpYVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIiwic2NoZW1hIjoidXJuOmFpaHE6c2NhbjpyZXBvcnQ6MS4wLjAiLCJzaGEyNTYiOiJiNGIyMjA2YzZkN2NjNjVhMzRiNDlmMTBkMWE0YTBkOTgzNzg2YjVhOTczMzRlOTIyYmRkMWZhZWZjYTExMDMwIn0sInNjYW5JZCI6InNjYW46c2hhMjU2OmZkNWU4ODZkYzI5MDkwMTExMGQ4MmVjNDVlMmY0NDRiOGZhMWIyYzA1ZjFiYmU3MDI4Y2JiYjRlODgwYmM0ZGQiLCJzY2hlbWEiOiJ1cm46YWlocTpzY2FuOmFydGlmYWN0OjEuMC4wIn0=', 5585, 'bac82f592646ca58eaea3eb38c9f48ddd430f4440612ba7ef76a908552d61634'],
-            ['statement.json', 'eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJwcmVkaWNhdGUiOnsiYW5uZXhNYW5pZmVzdFNoYTI1NiI6ImYzMjMxZmE0YjUzOTcwNTkyYWM3ZTA0ZTQ3YzU1ZjgzNWFjOTcyZGQ0MWQwZmIxZGYxOTE3NTEyNzY3YTE0MDAiLCJyZXBvcnRCeXRlTGVuZ3RoIjozNTA4LCJyZXBvcnRTY2hlbWEiOiJ1cm46YWlocTpzY2FuOnJlcG9ydDoxLjAuMCIsInNjYW5JZCI6InNjYW46c2hhMjU2OmZkNWU4ODZkYzI5MDkwMTExMGQ4MmVjNDVlMmY0NDRiOGZhMWIyYzA1ZjFiYmU3MDI4Y2JiYjRlODgwYmM0ZGQifSwicHJlZGljYXRlVHlwZSI6InVybjphaWhxOnNjYW46YXJ0aWZhY3QtYXR0ZXN0YXRpb246MS4wLjAiLCJzdWJqZWN0IjpbeyJkaWdlc3QiOnsic2hhMjU2IjoiYjRiMjIwNmM2ZDdjYzY1YTM0YjQ5ZjEwZDFhNGEwZDk4Mzc4NmI1YTk3MzM0ZTkyMmJkZDFmYWVmY2ExMTAzMCJ9LCJuYW1lIjoic2Nhbi1yZXBvcnQifV19', 483, '15844fd0e376154a85a52fc8eb7a6c1b5b1fe906deb62408c2e222afe4cb5e33'],
-          ];
-          mkdirSync('candidate', { mode: 0o700 });
-          for (const [name, encoded, length, digest] of inputs) {
-            const bytes = Buffer.from(encoded, 'base64');
-            if (bytes.length !== length || createHash('sha256').update(bytes).digest('hex') !== digest)
-              throw new Error('Reviewed data mismatch');
-            writeFileSync(`candidate/${name}`, bytes, { flag: 'wx', mode: 0o600 });
-          }
+          import {writeFileSync} from 'node:fs';
+          import {canonicalBytes,parseJson,sha256,validateInput} from './tools/refresh/contracts.mjs';
+          const bytes=Buffer.from(process.env.INPUT_JSON,'utf8');
+          if(sha256(bytes)!==process.env.INPUT_SHA)throw Error('Reviewed input digest mismatch');
+          const input=validateInput(parseJson(bytes));
+          if(input.scannerSourceCommit!==process.env.GITHUB_SHA||!canonicalBytes(input.runtime).equals(canonicalBytes({node:process.version,platform:process.platform,architecture:process.arch})))throw Error('Frozen source or runtime mismatch');
+          writeFileSync(process.env.RUNNER_TEMP+'/input.json',bytes,{flag:'wx'});
           NODE
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        id: unsigned
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/frozen" > "$RUNNER_TEMP/pack.json"
+          node --input-type=module <<'NODE'
+          import {readFileSync,renameSync,writeFileSync,mkdirSync} from 'node:fs';
+          const dir=process.env.RUNNER_TEMP+'/frozen',file=JSON.parse(readFileSync(process.env.RUNNER_TEMP+'/pack.json'))[0].filename;
+          renameSync(dir+'/'+file,dir+'/scanner.tgz');mkdirSync(dir+'/consumer');writeFileSync(dir+'/consumer/package.json',JSON.stringify({name:'scan-refresh-consumer',version:'0.0.0',private:true,type:'module'}),{flag:'wx'});
+          NODE
+          (cd "$RUNNER_TEMP/frozen/consumer" && npm install --ignore-scripts --no-audit --no-fund --save-exact ../scanner.tgz)
+          node tools/refresh/refresh.mjs freeze --input "$RUNNER_TEMP/input.json" --scanner-tgz "$RUNNER_TEMP/frozen/scanner.tgz" --scanner-install "$RUNNER_TEMP/frozen/consumer" --out "$RUNNER_TEMP/frozen/manifest.json"
+          node tools/artifact/refresh-publication.mjs retain "$RUNNER_TEMP/frozen" "$RUNNER_TEMP/frozen/scanner.tgz" "$RUNNER_TEMP/frozen/consumer"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: scan-unsigned-artifact
-          path: candidate/artifact.json
+          name: scan-refresh-frozen
+          path: |-
+            ${{ runner.temp }}/frozen/manifest.json
+            ${{ runner.temp }}/frozen/scanner.tgz
+            ${{ runner.temp }}/frozen/consumer-package-lock.json
+            ${{ runner.temp }}/frozen/custody.json
           if-no-files-found: error
-          compression-level: 0
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        id: statement
+          compression-level: 0
+        if: ${{ inputs.phase == 'freeze' }}
+      - name: Verify independently selected freeze run before downloading data
+        if: ${{ inputs.phase == 'run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ vars.SCAN_REFRESH_FROZEN_RUN_ID }}
+          ARCHIVE_ID: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_ID }}
+          ARCHIVE_DIGEST: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_DIGEST }}
+          HEAD: ${{ vars.SCAN_REPORT_REVIEWED_HEAD }}
+        run: |-
+          set -euo pipefail
+          case "$RUN_ID" in ''|*[!0-9]*) exit 1;; esac
+          test "${#RUN_ID}" -le 16
+          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID" > run.json
+          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID/artifacts?per_page=100" > archives.json
+          node tools/artifact/check-refresh-run.mjs run.json archives.json "$RUN_ID" "$HEAD" "$ARCHIVE_ID" "$ARCHIVE_DIGEST" scan-refresh-frozen
+      - if: ${{ inputs.phase == 'run' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: scan-detached-statement
-          path: candidate/statement.json
+          artifact-ids: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_ID }}
+          digest-mismatch: error
+          run-id: ${{ vars.SCAN_REFRESH_FROZEN_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: frozen
+      - name: Execute frozen batch serially; retain truthful partial and diagnostic rows
+        if: ${{ inputs.phase == 'run' }}
+        env:
+          MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
+        run: |-
+          set -euo pipefail
+          node tools/artifact/install-retained-scanner.mjs frozen "$MANIFEST_SHA" "$RUNNER_TEMP/scanner-work/consumer"
+          set +e
+          node tools/refresh/refresh.mjs run --manifest frozen/manifest.json --scanner-tgz frozen/scanner.tgz --scanner-install "$RUNNER_TEMP/scanner-work/consumer" --out "$RUNNER_TEMP/candidate"
+          status=$?
+          set -e
+          case "$status" in 0|1) ;; *) exit "$status";; esac
+          node tools/artifact/refresh-publication.mjs retain "$RUNNER_TEMP/candidate" frozen/scanner.tgz "$RUNNER_TEMP/scanner-work/consumer"
+          node tools/artifact/refresh-publication.mjs check "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" "$RUNNER_TEMP/selection.json" transport
+          printf 'Producer coverage exit: %s; see every terminal row in inventory.json.\n' "$status"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-candidate
+          path: ${{ runner.temp }}/candidate/
           if-no-files-found: error
-          compression-level: 0
           retention-days: 30
+          compression-level: 0
+        if: ${{ inputs.phase == 'run' }}

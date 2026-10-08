@@ -32,8 +32,9 @@ unchanged report bytes. `attachAttestation` checks bindings; callers separately
 authenticate against their selected keys or publisher policies. Scanning, signing
 and publication are separate explicit operations.
 
-See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md)
-and the [production publisher plan](docs/production-publisher.md). The
+See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
+[maintainer refresh](docs/production-refresh.md) and the
+[protected production publisher](docs/production-publisher.md). The
 `aih-scan scan` command runs an assessment against a local directory or an exact
 Git commit without writing code; see [Assess a local directory or Git repository](#assess-a-local-directory-or-git-repository).
 
@@ -51,6 +52,22 @@ These changes are unreleased. Manual report workflows refuse admission without
 the exact reviewed main commit and independently selected upload custody. Protected
 publisher settings and an authorized production signing/conformance run remain
 separate acceptance gates. Package publication remains separately authorized.
+
+### Explicit maintainer refresh
+
+Maintainers freeze one reviewed seven-source batch, then run the independent
+assessment producer with the exact packed scanner. The production profile names
+native identity, trust lint, binding gate and Semgrep; it records source commits,
+scope, configuration, every detector outcome and original annexes. Cisco and
+SkillSpector coverage is unavailable in this profile; Snyk is outside it.
+
+Read-only production, protected detached signing and independent final assembly
+have separate permissions. Authenticated artifacts and their verified inventory
+use immutable report releases, independent of scanner package releases and Actions
+artifact retention. Unsigned candidates remain explicitly unsigned. Follow the
+[refresh runbook](docs/production-refresh.md) for exact input and output custody,
+installed-consumer acceptance and baseline retirement after replacement acceptance.
+Catalog preparation continues independently of Scan.
 
 ### Historical package custody
 

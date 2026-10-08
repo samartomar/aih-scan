@@ -78,11 +78,11 @@ describe("restricted publisher", () => {
       s.uses?.startsWith("actions/download-artifact@"),
     );
     expect(downloads.map((s: { with: { name: string } }) => s.with.name)).toEqual([
-      "checked-detached-statement",
+      "checked-detached-statements",
     ]);
     expect(workflow.jobs["authenticate-before-promotion"].permissions["id-token"]).toBeUndefined();
     expect(JSON.stringify(workflow.jobs["authenticate-before-promotion"].steps)).toContain(
-      "verify-promotion.mjs",
+      "refresh-publication.mjs assemble",
     );
     for (const job of Object.values(workflow.jobs) as { steps: { uses?: string }[] }[]) {
       for (const step of job.steps)
