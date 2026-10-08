@@ -139,3 +139,79 @@ jobs:
           retention-days: 30
           compression-level: 0
         if: ${{ inputs.phase == 'run' }}
+      - id: failure-evidence
+        name: Retain bounded NONPUBLISHABLE original failure evidence
+        if: ${{ failure() && inputs.phase == 'run' }}
+        run: node tools/artifact/retain-failure-evidence.mjs "$RUNNER_TEMP/candidate" frozen "$RUNNER_TEMP/failure-evidence"
+      - name: Upload NONPUBLISHABLE failure root
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.root == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-root
+          path: ${{ runner.temp }}/failure-evidence/root/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure mattpocock--skills
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_0 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-mattpocock--skills
+          path: ${{ runner.temp }}/failure-evidence/targets/mattpocock--skills/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure affaan-m--ECC
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_1 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-affaan-m--ECC
+          path: ${{ runner.temp }}/failure-evidence/targets/affaan-m--ECC/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure anthropics--skills
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_2 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-anthropics--skills
+          path: ${{ runner.temp }}/failure-evidence/targets/anthropics--skills/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure obra--superpowers
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_3 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-obra--superpowers
+          path: ${{ runner.temp }}/failure-evidence/targets/obra--superpowers/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure nextlevelbuilder--ui-ux-pro-max-skill
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_4 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-nextlevelbuilder--ui-ux-pro-max-skill
+          path: ${{ runner.temp }}/failure-evidence/targets/nextlevelbuilder--ui-ux-pro-max-skill/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure DietrichGebert--ponytail
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_5 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-DietrichGebert--ponytail
+          path: ${{ runner.temp }}/failure-evidence/targets/DietrichGebert--ponytail/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure samartomar--aih-extensions
+        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_6 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-samartomar--aih-extensions
+          path: ${{ runner.temp }}/failure-evidence/targets/samartomar--aih-extensions/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

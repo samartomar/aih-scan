@@ -13,12 +13,24 @@ import {
 import { loadScanner } from "../refresh/scanner.mjs";
 
 try {
-  if (process.argv.length !== 5)
+  const independentReader = process.argv[5] === "independent-reader";
+  if (!(process.argv.length === 5 || (process.argv.length === 6 && independentReader)))
     throw new Error("Expected retained directory, manifest SHA and exclusive consumer path");
   const [, , retained, expectedSha, output] = process.argv;
   const manifestBytes = readRegular(join(retained, "manifest.json"), 2097152);
   if (sha256(manifestBytes) !== expectedSha) throw new Error("Frozen input substitution");
   const manifest = validateManifest(parseJson(manifestBytes, 2097152, true));
+  if (
+    !independentReader &&
+    !canonicalBytes(manifest.runtime).equals(
+      canonicalBytes({
+        node: process.version,
+        platform: process.platform,
+        architecture: process.arch,
+      }),
+    )
+  )
+    throw new Error("Actual runtime differs from frozen execution runtime");
   const custody = parseJson(readRegular(join(retained, "custody.json"), 2097152), 2097152, true);
   const lockBytes = readRegular(join(retained, "consumer-package-lock.json"), 8 * 1024 * 1024);
   const lock = parseJson(lockBytes, 8 * 1024 * 1024);
@@ -77,8 +89,28 @@ try {
     output,
     manifest.scanner.sourceCommit,
   );
-  if (!canonicalBytes(scanner.identity).equals(canonicalBytes(manifest.scanner)))
+  if (
+    !canonicalBytes({
+      ...scanner.identity,
+      installationSha256: independentReader
+        ? manifest.scanner.installationSha256
+        : scanner.identity.installationSha256,
+    }).equals(canonicalBytes(manifest.scanner))
+  )
     throw new Error("Actual installation differs from frozen identity");
+  if (independentReader)
+    writeFileSync(
+      join(output, "reader-custody.json"),
+      canonicalBytes({
+        schema: "urn:aihq:scan:independent-reader-custody:1.0.0",
+        scanner: scanner.identity,
+        runtime: { node: process.version, platform: process.platform, architecture: process.arch },
+        producerScanner: manifest.scanner,
+        producerRuntime: manifest.runtime,
+        consumerLockSha256: sha256(lockBytes),
+      }),
+      { flag: "wx", mode: 0o600 },
+    );
   process.stdout.write(
     `${JSON.stringify({ event: "scan-refresh-install.completed", phase: "retained-installation", batchId: manifest.batchId, inputSha256: expectedSha, installationSha256: scanner.identity.installationSha256 })}\n`,
   );

@@ -163,11 +163,25 @@ export async function validateCandidate({
   expectedManifestSha256,
   expectedSelectionSha256,
   retainedPublication = false,
+  readerInstallationSha256,
 }) {
+  if (readerInstallationSha256 !== undefined) {
+    assert(retainedPublication, "Independent reader cannot admit producer candidates");
+    digest(readerInstallationSha256);
+  }
   digest(expectedManifestSha256);
   const manifestBytes = bytesAt(candidate, "manifest.json", 2097152);
   assert(sha256(manifestBytes) === expectedManifestSha256, "Frozen manifest digest differs");
   const manifest = validateManifest(parseJson(manifestBytes, 2097152, true));
+  if (readerInstallationSha256 === undefined)
+    assert(
+      equal(manifest.runtime, {
+        node: process.version,
+        platform: process.platform,
+        architecture: process.arch,
+      }),
+      "Actual runtime differs from frozen execution runtime",
+    );
   const custody = jsonAt(candidate, "custody.json", 2097152);
   object(custody, ["schema", "scanner", "runtime", "consumerLockSha256"]);
   assert(
@@ -188,7 +202,16 @@ export async function validateCandidate({
     scannerInstall,
     manifest.scanner.sourceCommit,
   );
-  assert(equal(scanner.identity, manifest.scanner), "Installed package differs");
+  if (readerInstallationSha256 === undefined)
+    assert(equal(scanner.identity, manifest.scanner), "Installed package differs");
+  else
+    assert(
+      equal(
+        { ...scanner.identity, installationSha256: manifest.scanner.installationSha256 },
+        manifest.scanner,
+      ) && scanner.identity.installationSha256 === readerInstallationSha256,
+      "Independently selected reader package or installation differs",
+    );
   const inventoryName = retainedPublication ? "producer-inventory.json" : "inventory.json";
   const inventory = jsonAt(candidate, inventoryName);
   object(inventory, [
@@ -482,6 +505,7 @@ export async function validatePublication({
   expectedManifestSha256,
   expectedSelectionSha256,
   trust,
+  readerInstallationSha256,
 }) {
   const checked = await validateCandidate({
     candidate: directory,
@@ -489,6 +513,7 @@ export async function validatePublication({
     expectedManifestSha256,
     expectedSelectionSha256,
     retainedPublication: true,
+    readerInstallationSha256,
   });
   const published = jsonAt(directory, "inventory.json");
   const receipt = jsonAt(directory, "publication.json", 2097152);

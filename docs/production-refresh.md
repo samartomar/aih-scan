@@ -1,7 +1,8 @@
 # Frozen production refresh
 
-The refresh is a finite maintainer operation with three separately reviewed phases:
-freeze input, execute the frozen batch, then publish selected assessments. The two
+The refresh is a finite maintainer operation: freeze input, execute the frozen batch,
+review the candidate, protected signing/assembly, review final custody, maintainer release
+publication, offline acceptance, then any authorized baseline retirement. The two
 manual workflows run only the reviewed main commit and first run attempt by
 `stomar-tech`. Each new invocation needs its own authorization and bounded budget.
 This operation does not allocate or publish an npm version.
@@ -70,24 +71,68 @@ executable. The next job independently attaches and authenticates each supplied
 bundle under `.github/scan-report-trust.json`. Bad supplied bundles refuse assembly;
 missing bundles remain explicitly unsigned. Partial assessments remain partial.
 
-The final job has contents-write authority and no signing token. It restores the
-same installed package, independently reauthenticates the exact selected artifacts
-and inventory, and checks the repository immutable-release setting before any
-release write. That setting must already be enabled; the workflow does not change
-repository protection or settings. It creates a draft release, uploads exclusive
-asset names, and publishes only after the complete asset set is present. Existing
-equal bytes are a safe retry; changed bytes or a missing asset on a published
-release refuse. A failed draft retains completed uploads for bounded recovery.
+Actions ends with the bounded `scan-refresh-final-publication` artifact after strict
+restoration, independent reauthentication and measured transport admission. Every
+Actions job except the protected signer has read-only authority; none writes releases.
+
+Review the successful publisher run and all three artifact records. Independently select
+its final immutable artifact ID/service digest, reviewed current main head, manifest digest
+and signing-selection digest. Download the selected exact archive for reader preparation,
+check its service ZIP digest and bounded receipt contents, then install its retained package:
+
+```sh
+node tools/artifact/install-retained-scanner.mjs reviewed-final MANIFEST_SHA scratch/reader independent-reader
+```
+
+This explicit mode retains exact tarball/lock/name/version/source identity and verifies
+every packed Scan file, but measures the actual reader installation/runtime separately.
+Read `scratch/reader/reader-custody.json`, independently select its installation SHA,
+and create canonical `final-selection.json` with exactly these fields:
+
+```json
+{"finalArtifactDigest":"sha256:<64 lowercase hex>","finalArtifactId":"<positive decimal ID>","manifestSha256":"<64 lowercase hex>","publisherRunId":"<positive decimal ID>","readerInstallationSha256":"<independently selected 64 lowercase hex>","repository":"samartomar/aih-scan","schema":"urn:aihq:scan:final-publication-selection:1.0.0","selectionSha256":"<64 lowercase hex>","sourceHead":"<reviewed current main 40 lowercase hex>"}
+```
+
+Producer/check/sign/assembly paths keep strict frozen installation and runtime defaults.
+The final artifact cannot select its own verifier identity. A Windows maintainer reader
+does not relabel the recorded Linux execution tuple. With the reviewed clean tools on
+the selected main commit and normal `samartomar` gh authentication, publish:
+
+```sh
+node tools/artifact/publish-final.mjs final-selection.json scratch/reader scratch/final-custody
+```
+
+The exclusive output retains raw `final.zip`, operator selection, run/artifact metadata,
+independent maintained trust, original publication files and `publication-custody.json`.
+The CLI rechecks current main/operator, successful publisher attempt/workflow/actor,
+immutable artifact ID and raw ZIP digest before extracting; it refuses traversal,
+duplicate/link/extra entries and archive/expanded bounds. It checks every original
+receipt file and reauthenticates all supplied assessments using the installed public APIs.
+Maintained trust comes from the reviewed checkout, never the downloaded artifact.
+
+Normal gh API authentication then queries the live immutable-release setting. Disabled
+settings or administration permission refusal stop before writes. The operation creates
+a draft, uploads exclusive names, and publishes only after all exact assets exist.
+Published tag lookup does not find drafts: authenticated discovery inspects at most
+five pages of 100 releases and refuses ambiguity or exhausted pagination. A failed
+draft retains completed uploads; equal published retries do not overwrite bytes.
+Recovery needs separately reviewed authorization. No command deletes or replaces assets.
 
 ## Durable discovery and offline acceptance
 
 The report release tag is `scan-report-batch-<batch SHA-256>`, separate from
 software releases. Root assets are `manifest.json`, `producer-inventory.json`,
 `inventory.json`, `selection.json`, `scanner.tgz`, `consumer-package-lock.json`,
-`custody.json` and `publication.json`. Target paths are flattened by replacing `/`
+`custody.json`, `publication.json` and the additional final `publication-custody.json`.
+The latter binds the original receipt SHA, raw ZIP, final run/artifact selectors,
+producer attribution, independent reader runtime/tree, package lock and trust SHA.
+It is a separate transport asset; original receipt and inventory bytes remain exact.
+Target paths are flattened by replacing `/`
 with `--`: for example `targets--anthropics--skills--authenticated.json`.
 `publication.json` records original relative paths, asset names, lengths and hashes.
-Restore those paths before using the local verifier.
+Restore those paths before using the local verifier. Keep the additional
+`publication-custody.json` beside the restored publication directory; the original
+receipt verifier deliberately refuses extra files inside that directory.
 
 The versioned publication inventory accounts for all seven roster entries. It
 retains source diagnostics, every detector terminal row, original measurements,
@@ -123,6 +168,19 @@ bytes plus 1 KiB per file plus 64 KiB archive slack exceed 768 MiB. The receivin
 checker additionally verifies the actual service archive size and selected digest.
 No target, annex or terminal row is dropped to fit transport.
 
+Preparation or aggregate transport refusal keeps the run failed and retains clearly
+nonpublishable recovery evidence through eight separate artifact names:
+`scan-refresh-NONPUBLISHABLE-root` and one `scan-refresh-NONPUBLISHABLE-<owner>--<repo>`
+per roster source. The root index records every original as retained, absent or refused,
+including unfinished sources. Valid original result/artifact/statement/candidate bytes
+and available manifest/inventory/custody/package/lock remain exact. Each source archive
+is bounded by 128 MiB result + 96 MiB artifact + 128 KiB statement + 2 MiB candidate;
+root originals have 204 MiB total allowance plus a 2 MiB index. Including file metadata
+and 64 KiB ZIP slack, every archive is below 256 MiB. No annex is truncated to fit.
+These names and failed/incomplete run metadata cannot enter signing or final publication.
+Upload/network/platform failure can still prevent retention; inspect each upload outcome
+and preserve any available exact originals. There is no platform-wide durability guarantee.
+
 First inspect the structured boundary event (`event`, `phase`, run correlation
 where available), then the manifest/custody and all seven inventory rows. Check
 source capture versus detector refusal, actual installation/runtime mismatch,
@@ -131,3 +189,8 @@ Preserve failed outputs and draft assets. Authentication failure never becomes a
 authenticated row. Stop admission by clearing the reviewed-head variable and
 canceling a pending run before environment approval. A retry, new signing run,
 profile change or changed selection needs its own reviewed authorization.
+
+The real installed seven-source Linux CI fixture retains complete four-detector/Semgrep
+assertions. Its child process has an 18-minute deadline and the test a 20-minute outer
+deadline, within the 30-minute job. A timeout reports child status, signal and bounded
+output. These test deadlines do not change production detector/resource limits.

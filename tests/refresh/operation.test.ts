@@ -273,7 +273,11 @@ manifest.batchId=batchId(manifest);writeFileSync(process.argv[3],canonicalBytes(
         "--out",
         output,
       ],
-      { encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+      },
     );
     expect(result.status).toBe(2);
     if (scenario === "existing")
@@ -445,10 +449,26 @@ cp.spawn=function(executable,args,options){if(executable===process.execPath&&typ
         "--out",
         output,
       ],
-      { encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+        // First hosted seven-source proof took 12.1 minutes. Bound the child
+        // below the 20-minute assertion budget without changing detector limits.
+        timeout: 18 * 60 * 1000,
+        killSignal: "SIGTERM",
+      },
     );
     expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
+    expect(
+      result.status,
+      JSON.stringify({
+        signal: result.signal,
+        error: result.error?.message,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      }),
+    ).toBe(0);
     const inventory = JSON.parse(readFileSync(join(output, "inventory.json"), "utf8"));
     expect(inventory.targets).toHaveLength(7);
     for (const target of inventory.targets) {
@@ -466,5 +486,5 @@ cp.spawn=function(executable,args,options){if(executable===process.execPath&&typ
       expect(target.measurements.annexBytes).toBeGreaterThan(0);
     }
   },
-  600000,
+  20 * 60 * 1000,
 );

@@ -179,7 +179,12 @@ test("producer freezes reviewed package data separately and runs without signing
   expect(body).not.toContain("id-token");
   expect(steps.some((step) => step.uses?.includes("actions/attest@"))).toBe(false);
   expect(
-    steps.filter((step) => step.uses?.includes("upload-artifact@")).map((step) => step.with?.name),
+    steps
+      .filter(
+        (step) =>
+          step.uses?.includes("upload-artifact@") && !step.with?.name?.includes("NONPUBLISHABLE"),
+      )
+      .map((step) => step.with?.name),
   ).toEqual(["scan-refresh-frozen", "scan-refresh-candidate"]);
   const custody = steps.findIndex((step) => step.run?.includes("check-refresh-run.mjs"));
   const download = steps.findIndex((step) => step.uses?.includes("download-artifact@"));
@@ -473,8 +478,10 @@ test("signing alone has token authority and authenticated publication stays behi
   });
   expect(jobs.signer.needs).toBe("bounded-candidate");
   expect(jobs["authenticate-before-promotion"].needs).toEqual(["bounded-candidate", "signer"]);
-  expect(jobs["publish-immutable"].needs).toBe("authenticate-before-promotion");
-  expect(jobs["publish-immutable"].permissions).toEqual({ contents: "write" });
+  expect(jobs["publish-immutable"]).toBeUndefined();
+  expect(Object.keys(jobs)).toHaveLength(3);
+  expect(JSON.stringify(jobs)).not.toContain('"contents":"write"');
+  expect(JSON.stringify(jobs)).toContain("scan-refresh-final-publication");
   for (const job of Object.values(jobs) as {
     "continue-on-error"?: boolean;
     steps: { "continue-on-error"?: boolean }[];

@@ -152,6 +152,24 @@ export function parseJson(bytes, maximum = 2 * 1024 * 1024, canonical = false) {
     );
     if (!match) throw new Error("Invalid JSON token");
     index += match[0].length;
+    if (!/^(?:null|true|false)$/.test(match[0])) {
+      // Control numbers must name an exact nonnegative safe integer, before a
+      // double conversion can round a fraction or underflow it to zero.
+      const token = match[0];
+      if (token.length > 1100 || token.startsWith("-"))
+        throw new Error("Invalid bounded control number");
+      const parts = /^(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token);
+      let digits = (parts[1] + (parts[2] ?? "")).replace(/^0+/, "");
+      if (digits === "") return 0;
+      const trailing = /0*$/.exec(digits)[0].length;
+      digits = digits.slice(0, digits.length - trailing);
+      const scale = BigInt(parts[3] ?? "0") - BigInt((parts[2] ?? "").length) + BigInt(trailing);
+      if (scale < 0n || scale > 15n || BigInt(digits.length) + scale > 16n)
+        throw new Error("Lossy or out-of-range control number");
+      const exact = BigInt(digits) * 10n ** scale;
+      if (exact > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Unsafe control number");
+      return Number(exact);
+    }
     return JSON.parse(match[0]);
   };
   const result = read();

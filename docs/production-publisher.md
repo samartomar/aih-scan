@@ -4,8 +4,10 @@ The reusable frozen seven-source operation is described in [production refresh](
 Both manual workflows require the exact reviewed main commit, repository and owner IDs,
 first run attempt and dispatcher `stomar-tech` (GitHub user 333589491). Merges do not dispatch them.
 Only the `scan-report-signing-prod` signer receives OIDC and attestation-write permissions.
-Candidate acquisition and assembly have read-only authority; final immutable release publication
-has contents-write authority and no signing token. External Actions are full-commit pinned.
+Candidate acquisition and assembly have read-only authority. Actions finishes with
+`scan-refresh-final-publication`; it has no release-write job. Final immutable release
+transport uses the normal maintainer's existing `gh` authentication, without extracting
+or exporting credentials. External Actions are full-commit pinned.
 
 The maintained signing identity remains
 `https://github.com/samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main`,
@@ -25,6 +27,24 @@ The dispatcher and reviewer accounts belong to one human. Account and permission
 preserves the existing role/protection boundary and does not establish independent human review.
 Dispatcher access and the protected environment's human approval remain external activation gates.
 The immutable-release setting must be enabled before any report-release write is admitted.
+Its administration-read endpoint is queried by the normal maintainer route; the workflow's
+contents-read token cannot establish this setting. Disabled settings or permission refusal
+stop publication before any release write. The operation never changes repository settings.
+
+The operator independently selects the successful publisher run, first attempt, reviewed
+current main head, immutable final artifact ID/service digest, manifest/selection digests,
+and independently prepared reader installation digest. The final CLI checks normal operator
+`samartomar`, repository identity, current main, exact publisher workflow/dispatcher and all
+three run artifacts before downloading the selected archive. It verifies the raw service ZIP
+digest and bounds, refuses unsafe/duplicate/linked/extra entries, and authenticates every
+supplied assessment using exact retained package/lock bytes and maintained independent trust.
+The reader's actual runtime and installation remain separate from frozen Linux execution claims.
+See [production refresh](production-refresh.md) for the closed selection and CLI arguments.
+
+`publish-final.mjs` is the production entrypoint. The former `publish-refresh-release.mjs`
+command always refuses; its lower-level exports exist for boundary fixtures. The separately
+published `publication-custody.json` binds final selectors, service ZIP bytes, original receipt,
+package/lock, trust and actual verifier identity without changing the original receipt or inventory.
 
 The original one-shot template, detached-statement helper, promotion helper, historical reader
 and historical production proof remain available as compatibility evidence. They do not

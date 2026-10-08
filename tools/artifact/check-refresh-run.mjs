@@ -23,7 +23,12 @@ export function checkRefreshRun(
 ) {
   const expectedRun = identifier(runId),
     expectedArtifact = identifier(artifactId);
-  if (!["scan-refresh-candidate", "scan-refresh-frozen"].includes(name))
+  const final = name === "scan-refresh-final-publication";
+  if (
+    !["scan-refresh-candidate", "scan-refresh-frozen", "scan-refresh-final-publication"].includes(
+      name,
+    )
+  )
     throw new Error("Unknown artifact purpose");
   if (!/^[0-9a-f]{40}$/.test(head) || !/^sha256:[0-9a-f]{64}$/.test(serviceDigest))
     throw new Error("Invalid custody selector");
@@ -40,7 +45,10 @@ export function checkRefreshRun(
     run.conclusion !== "success" ||
     run.head_sha !== head ||
     run.head_branch !== "main" ||
-    run.path !== ".github/workflows/scan-report-candidate-upload.yml" ||
+    run.path !==
+      (final
+        ? ".github/workflows/scan-report-publisher.yml"
+        : ".github/workflows/scan-report-candidate-upload.yml") ||
     !repo(run.repository) ||
     !repo(run.head_repository) ||
     !actor(run.actor) ||
@@ -48,12 +56,40 @@ export function checkRefreshRun(
   )
     throw new Error("Candidate run custody refused");
   if (
-    artifacts.total_count !== 1 ||
+    artifacts.total_count !== (final ? 3 : 1) ||
     !Array.isArray(artifacts.artifacts) ||
-    artifacts.artifacts.length !== 1
+    artifacts.artifacts.length !== (final ? 3 : 1)
   )
     throw new Error("Candidate archive set refused");
-  const archive = artifacts.artifacts[0];
+  const ids = new Set(),
+    expectedNames = new Set(
+      final
+        ? [
+            "checked-detached-statements",
+            "scan-refresh-attestations",
+            "scan-refresh-final-publication",
+          ]
+        : [name],
+    );
+  for (const item of artifacts.artifacts) {
+    if (
+      !expectedNames.delete(item.name) ||
+      !Number.isSafeInteger(item.id) ||
+      item.id < 1 ||
+      ids.has(item.id) ||
+      item.expired !== false ||
+      !/^sha256:[0-9a-f]{64}$/.test(item.digest) ||
+      item.workflow_run?.id !== expectedRun ||
+      item.workflow_run?.head_sha !== head ||
+      !Number.isSafeInteger(item.size_in_bytes) ||
+      item.size_in_bytes < 1 ||
+      item.size_in_bytes > (item.name === name ? archiveCeiling : 8 * 1024 * 1024)
+    )
+      throw new Error("Unexpected auxiliary artifact custody");
+    ids.add(item.id);
+  }
+  const archive = artifacts.artifacts.find((item) => item.id === expectedArtifact);
+  if (!archive) throw new Error("Selected archive is absent");
   if (
     archive.id !== expectedArtifact ||
     archive.name !== name ||

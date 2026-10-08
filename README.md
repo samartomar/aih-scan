@@ -60,11 +60,15 @@ assessment producer with the exact packed scanner. The production profile names
 native identity, trust lint, binding gate and Semgrep; it records source commits,
 scope, configuration, every detector outcome and original annexes. Cisco and
 SkillSpector coverage is unavailable in this profile; Snyk is outside it.
+This operation runs full assessments of the pinned sources; it does not load prior
+reports for unchanged-observation reuse.
 
 Read-only production, protected detached signing and independent final assembly
 have separate permissions. Authenticated artifacts and their verified inventory
 use immutable report releases, independent of scanner package releases and Actions
-artifact retention. Unsigned candidates remain explicitly unsigned. Follow the
+artifact retention. Final publication uses the normal maintainer's authenticated
+GitHub CLI after checking the selected publisher output and authenticating its exact
+bytes independently. Unsigned candidates remain explicitly unsigned. Follow the
 [refresh runbook](docs/production-refresh.md) for exact input and output custody,
 installed-consumer acceptance and baseline retirement after replacement acceptance.
 Catalog preparation continues independently of Scan.

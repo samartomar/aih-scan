@@ -272,38 +272,8 @@ jobs:
         run: node tools/artifact/refresh-publication.mjs verify-publication publication "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" "$SELECTION_SHA" .github/scan-report-trust.json transport
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: scan-refresh-authenticated-publication
+          name: scan-refresh-final-publication
           path: publication/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-  publish-immutable:
-    needs: authenticate-before-promotion
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_MANIFEST_SHA256 != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.manifest_sha256 == vars.SCAN_REPORT_MANIFEST_SHA256 && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: 24.15.0
-      - run: npm ci --ignore-scripts && npm run build
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: scan-refresh-authenticated-publication
-          digest-mismatch: error
-          path: publication
-      - name: Independently reauthenticate durable inventory without signing permissions
-        env: *a1
-        run: |-
-          node tools/artifact/install-retained-scanner.mjs publication "$MANIFEST_SHA" "$RUNNER_TEMP/scanner-work/consumer"
-          node tools/artifact/refresh-publication.mjs verify-publication publication "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" "$SELECTION_SHA" .github/scan-report-trust.json
-      - name: Publish complete immutable batch or preserve an exact existing batch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node tools/artifact/publish-refresh-release.mjs publication "$GITHUB_SHA"
