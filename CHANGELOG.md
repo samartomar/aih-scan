@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add a maintainer refresh operation for the seven active sources using frozen
+  commits and an exact packed scanner. Record complete source and detector
+  accounting, resource measurements, partial results and original annexes.
+- Replace the fixed report proof with reusable protected detached publication and
+  durable immutable report discovery through independently verified maintainer
+  publication. Preserve publisher trust and historical APIs; baseline production
+  retirement requires real replacement acceptance.
+- Patch the development dependency source-map-js to 1.2.2 in the lockfile.
+
 - Add `aih-scan scan <directory>` to assess a local directory from the command line.
   It runs the native and trust-lint detectors by default or the detectors you name,
   discovers MCP configuration inside the target or reads `--mcp-config` and

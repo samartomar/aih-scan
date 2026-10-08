@@ -3,15 +3,15 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: Reviewed unsigned producer run ID
+        description: Independently reviewed candidate run ID
         required: true
         type: string
-      statement_sha256:
-        description: Independently reviewed detached statement SHA-256
+      manifest_sha256:
+        description: Reviewed frozen manifest SHA-256
         required: true
         type: string
-      expected_scan_id:
-        description: Independently reviewed immutable Scan ID
+      selection_sha256:
+        description: Reviewed seven-source signing selection SHA-256
         required: true
         type: string
 permissions: {}
@@ -20,134 +20,260 @@ concurrency:
   cancel-in-progress: false
 jobs:
   bounded-candidate:
-    # Data acquisition has no signing permission and executes no candidate code.
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_UNSIGNED_ARTIFACT_ID != '' && vars.SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_STATEMENT_ARTIFACT_ID != '' && vars.SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.statement_sha256 == '15844fd0e376154a85a52fc8eb7a6c1b5b1fe906deb62408c2e222afe4cb5e33' && inputs.expected_scan_id == 'scan:sha256:fd5e886dc290901110d82ec45e2f444b8fa1b2c05f1bbe7028cbbb4e880bc4dd'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_MANIFEST_SHA256 != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.manifest_sha256 == vars.SCAN_REPORT_MANIFEST_SHA256 && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
       - run: npm ci --ignore-scripts && npm run build
-      - name: Verify the independently selected upload run and immutable artifact custody
+      - name: Verify immutable candidate run custody before download
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_RUN_ID: ${{ vars.SCAN_REPORT_CANDIDATE_RUN_ID }}
-          REVIEWED_HEAD: ${{ vars.SCAN_REPORT_REVIEWED_HEAD }}
-          UNSIGNED_ID: ${{ vars.SCAN_REPORT_UNSIGNED_ARTIFACT_ID }}
-          UNSIGNED_DIGEST: ${{ vars.SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST }}
-          STATEMENT_ID: ${{ vars.SCAN_REPORT_STATEMENT_ARTIFACT_ID }}
-          STATEMENT_DIGEST: ${{ vars.SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST }}
-        shell: bash
-        run: |
+          RUN_ID: ${{ vars.SCAN_REPORT_CANDIDATE_RUN_ID }}
+          HEAD: ${{ vars.SCAN_REPORT_REVIEWED_HEAD }}
+          ARCHIVE_ID: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}
+          ARCHIVE_DIGEST: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST }}
+        run: |-
           set -euo pipefail
-          case "$CANDIDATE_RUN_ID" in ''|*[!0-9]*) exit 1;; esac
-          test "${#CANDIDATE_RUN_ID}" -le 16
-          gh api "repos/samartomar/aih-scan/actions/runs/$CANDIDATE_RUN_ID" > candidate-run.json
-          gh api "repos/samartomar/aih-scan/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" > candidate-artifacts.json
-          node tools/artifact/check-candidate-run.mjs candidate-run.json candidate-artifacts.json "$CANDIDATE_RUN_ID" "$REVIEWED_HEAD" "$UNSIGNED_ID" "$UNSIGNED_DIGEST" "$STATEMENT_ID" "$STATEMENT_DIGEST"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          case "$RUN_ID" in ''|*[!0-9]*) exit 1;; esac
+          test "${#RUN_ID}" -le 16
+          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID" > run.json
+          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID/artifacts?per_page=100" > archives.json
+          node tools/artifact/check-refresh-run.mjs run.json archives.json "$RUN_ID" "$HEAD" "$ARCHIVE_ID" "$ARCHIVE_DIGEST"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          artifact-ids: ${{ vars.SCAN_REPORT_STATEMENT_ARTIFACT_ID }}
+          artifact-ids: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}
           digest-mismatch: error
           run-id: ${{ inputs.candidate_run_id }}
           github-token: ${{ github.token }}
-          path: detached
-      - name: Validate only bounded statement data
-        env:
-          EXPECTED_SHA256: ${{ inputs.statement_sha256 }}
-        run: node tools/artifact/check-statement.mjs detached/statement.json "$EXPECTED_SHA256" predicate.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          path: candidate
+      - name: Validate exact retained installation and every frozen candidate row
+        env: &a1
+          MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
+          SELECTION_SHA: ${{ vars.SCAN_REPORT_SELECTION_SHA256 }}
+        run: |-
+          node tools/artifact/install-retained-scanner.mjs candidate "$MANIFEST_SHA" "$RUNNER_TEMP/scanner-work/consumer"
+          node tools/artifact/refresh-publication.mjs check candidate "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" selection.json
+          node tools/artifact/refresh-publication.mjs prepare-signing candidate selection.json "$SELECTION_SHA" signing
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: checked-detached-statement
-          path: detached/statement.json
+          name: checked-detached-statements
+          path: signing/
           if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
   signer:
     needs: bounded-candidate
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_UNSIGNED_ARTIFACT_ID != '' && vars.SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_STATEMENT_ARTIFACT_ID != '' && vars.SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.statement_sha256 == '15844fd0e376154a85a52fc8eb7a6c1b5b1fe906deb62408c2e222afe4cb5e33' && inputs.expected_scan_id == 'scan:sha256:fd5e886dc290901110d82ec45e2f444b8fa1b2c05f1bbe7028cbbb4e880bc4dd'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_MANIFEST_SHA256 != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.manifest_sha256 == vars.SCAN_REPORT_MANIFEST_SHA256 && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    environment: scan-report-signing-prod
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
       - run: npm ci --ignore-scripts && npm run build
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: checked-detached-statement
-          path: detached
-      - name: Recheck exact detached bytes inside signer
-        id: statement
-        env:
-          EXPECTED_SHA256: ${{ inputs.statement_sha256 }}
-        run: node tools/artifact/check-statement.mjs detached/statement.json "$EXPECTED_SHA256" predicate.json
-      - name: Sign minimal fixed statement through the managed public route
-        id: attest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+          name: checked-detached-statements
+          digest-mismatch: error
+          path: signing
+      - id: checked
+        name: Recheck only bounded detached statements against independently selected digest
+        env: *a1
+        run: node tools/artifact/refresh-publication.mjs recheck-signing signing "$SELECTION_SHA"
+      - id: attest_0
+        if: ${{ steps.checked.outputs.count > 0 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-name: scan-report
-          subject-digest: ${{ steps.statement.outputs.digest }}
+          subject-digest: ${{ steps.checked.outputs.digest_0 }}
           predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
-          predicate-path: predicate.json
-      - name: Retain detached bundle only
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          predicate-path: signing/predicate-0.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 0 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_0.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-0.json"
+      - id: attest_1
+        if: ${{ steps.checked.outputs.count > 1 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
-          name: scan-detached-bundle
-          path: ${{ steps.attest.outputs.bundle-path }}
+          subject-name: scan-report
+          subject-digest: ${{ steps.checked.outputs.digest_1 }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: signing/predicate-1.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 1 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_1.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-1.json"
+      - id: attest_2
+        if: ${{ steps.checked.outputs.count > 2 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: scan-report
+          subject-digest: ${{ steps.checked.outputs.digest_2 }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: signing/predicate-2.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 2 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_2.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-2.json"
+      - id: attest_3
+        if: ${{ steps.checked.outputs.count > 3 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: scan-report
+          subject-digest: ${{ steps.checked.outputs.digest_3 }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: signing/predicate-3.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 3 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_3.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-3.json"
+      - id: attest_4
+        if: ${{ steps.checked.outputs.count > 4 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: scan-report
+          subject-digest: ${{ steps.checked.outputs.digest_4 }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: signing/predicate-4.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 4 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_4.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-4.json"
+      - id: attest_5
+        if: ${{ steps.checked.outputs.count > 5 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: scan-report
+          subject-digest: ${{ steps.checked.outputs.digest_5 }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: signing/predicate-5.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 5 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_5.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-5.json"
+      - id: attest_6
+        if: ${{ steps.checked.outputs.count > 6 }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-name: scan-report
+          subject-digest: ${{ steps.checked.outputs.digest_6 }}
+          predicate-type: urn:aihq:scan:artifact-attestation:1.0.0
+          predicate-path: signing/predicate-6.json
+          show-summary: false
+      - if: ${{ steps.checked.outputs.count > 6 }}
+        env:
+          BUNDLE_PATH: ${{ steps.attest_6.outputs.bundle-path }}
+        run: |-
+          mkdir -p bundles
+          cp -- "$BUNDLE_PATH" "bundles/bundle-6.json"
+      - run: |-
+          mkdir -p bundles
+          printf "complete\n" > bundles/signing-complete.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-attestations
+          path: bundles/
           if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+    environment: scan-report-signing-prod
   authenticate-before-promotion:
-    needs: signer
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_UNSIGNED_ARTIFACT_ID != '' && vars.SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_STATEMENT_ARTIFACT_ID != '' && vars.SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.statement_sha256 == '15844fd0e376154a85a52fc8eb7a6c1b5b1fe906deb62408c2e222afe4cb5e33' && inputs.expected_scan_id == 'scan:sha256:fd5e886dc290901110d82ec45e2f444b8fa1b2c05f1bbe7028cbbb4e880bc4dd'
+    needs:
+      - bounded-candidate
+      - signer
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_MANIFEST_SHA256 != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.manifest_sha256 == vars.SCAN_REPORT_MANIFEST_SHA256 && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
       - run: npm ci --ignore-scripts && npm run build
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Verify immutable candidate run custody before download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ vars.SCAN_REPORT_CANDIDATE_RUN_ID }}
+          HEAD: ${{ vars.SCAN_REPORT_REVIEWED_HEAD }}
+          ARCHIVE_ID: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}
+          ARCHIVE_DIGEST: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST }}
+        run: |-
+          set -euo pipefail
+          case "$RUN_ID" in ''|*[!0-9]*) exit 1;; esac
+          test "${#RUN_ID}" -le 16
+          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID" > run.json
+          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID/artifacts?per_page=100" > archives.json
+          node tools/artifact/check-refresh-run.mjs run.json archives.json "$RUN_ID" "$HEAD" "$ARCHIVE_ID" "$ARCHIVE_DIGEST" > actions-custody.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          artifact-ids: ${{ vars.SCAN_REPORT_UNSIGNED_ARTIFACT_ID }}
+          artifact-ids: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}
           digest-mismatch: error
           run-id: ${{ inputs.candidate_run_id }}
           github-token: ${{ github.token }}
-          path: unsigned
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          path: candidate
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: scan-detached-bundle
-          path: bundle
-      - name: Authenticate independently before declaring publication output
+          name: scan-refresh-attestations
+          digest-mismatch: error
+          path: bundles
+      - env: *a1
+        run: |-
+          test "$(cat bundles/signing-complete.txt)" = complete
+          rm -- bundles/signing-complete.txt
+          node tools/artifact/install-retained-scanner.mjs candidate "$MANIFEST_SHA" "$RUNNER_TEMP/scanner-work/consumer"
+          node tools/artifact/refresh-publication.mjs assemble candidate "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" "$SELECTION_SHA" bundles .github/scan-report-trust.json publication actions-custody.json
+      - name: Verify assembled bytes and measured publication transport before upload
         env:
-          EXPECTED_SCAN_ID: ${{ inputs.expected_scan_id }}
-        run: |
-          mapfile -t bundle_files < <(find bundle -maxdepth 1 -type f -name '*.json')
-          test "${#bundle_files[@]}" -eq 1
-          node tools/artifact/verify-promotion.mjs unsigned/artifact.json "${bundle_files[0]}" .github/scan-report-trust.json "$EXPECTED_SCAN_ID" authenticated.scan.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
+          SELECTION_SHA: ${{ vars.SCAN_REPORT_SELECTION_SHA256 }}
+        run: node tools/artifact/refresh-publication.mjs verify-publication publication "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" "$SELECTION_SHA" .github/scan-report-trust.json transport
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: independently-authenticated-scan-report
-          path: authenticated.scan.json
+          name: scan-refresh-final-publication
+          path: publication/
           if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

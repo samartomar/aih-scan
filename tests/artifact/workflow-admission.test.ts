@@ -1,13 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { parse } from "yaml";
 
-const statementSha = "15844fd0e376154a85a52fc8eb7a6c1b5b1fe906deb62408c2e222afe4cb5e33";
-const scanId = "scan:sha256:fd5e886dc290901110d82ec45e2f444b8fa1b2c05f1bbe7028cbbb4e880bc4dd";
 const workflow = (name: string) =>
   parse(readFileSync(`.github/workflows/scan-report-${name}.yml`, "utf8"));
 const context = (name: string) => ({
@@ -27,22 +24,27 @@ const context = (name: string) => ({
   vars: {
     SCAN_REPORT_REVIEWED_HEAD: "a".repeat(40),
     SCAN_REPORT_CANDIDATE_RUN_ID: "123",
-    SCAN_REPORT_UNSIGNED_ARTIFACT_ID: "456",
-    SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST: "sha256:" + "b".repeat(64),
-    SCAN_REPORT_STATEMENT_ARTIFACT_ID: "457",
-    SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST: "sha256:" + "c".repeat(64),
+    SCAN_REPORT_CANDIDATE_ARTIFACT_ID: "456",
+    SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST: "sha256:" + "b".repeat(64),
+    SCAN_REPORT_MANIFEST_SHA256: "c".repeat(64),
+    SCAN_REPORT_SELECTION_SHA256: "d".repeat(64),
   },
-  inputs: { candidate_run_id: "123", statement_sha256: statementSha, expected_scan_id: scanId },
+  inputs: {
+    candidate_run_id: "123",
+    manifest_sha256: "c".repeat(64),
+    selection_sha256: "d".repeat(64),
+  },
 });
 // Evaluate the actual admission expression from reviewed configuration. These
 // guards use only context-property comparisons and boolean operators.
 const admits = (expression: string, value: ReturnType<typeof context>) => {
-  expect(expression).toMatch(/^[a-zA-Z0-9_.'@/\- :&|=!]+$/);
+  expect(expression).toMatch(/^[a-zA-Z0-9_.'@/\- :&|=!()]+$/);
   return Boolean(
-    new Function("github", "vars", "inputs", `return (${expression});`)(
+    new Function("github", "vars", "inputs", "always", `return (${expression});`)(
       value.github,
       value.vars,
       value.inputs,
+      () => true,
     ),
   );
 };
@@ -78,8 +80,8 @@ test("only the reviewed independent actor's first manual main run can enter each
       if (name === "publisher") {
         for (const [key, value] of Object.entries({
           candidate_run_id: "124",
-          statement_sha256: "0".repeat(64),
-          expected_scan_id: "scan:sha256:" + "0".repeat(64),
+          manifest_sha256: "0".repeat(64),
+          selection_sha256: "0".repeat(64),
         })) {
           const changed = structuredClone(selected);
           changed.inputs[key as keyof typeof changed.inputs] = value;
@@ -89,10 +91,10 @@ test("only the reviewed independent actor's first manual main run can enter each
         noUpload.vars.SCAN_REPORT_CANDIDATE_RUN_ID = "";
         expect(admits(job.if, noUpload)).toBe(false);
         for (const key of [
-          "SCAN_REPORT_UNSIGNED_ARTIFACT_ID",
-          "SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST",
-          "SCAN_REPORT_STATEMENT_ARTIFACT_ID",
-          "SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST",
+          "SCAN_REPORT_CANDIDATE_ARTIFACT_ID",
+          "SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST",
+          "SCAN_REPORT_MANIFEST_SHA256",
+          "SCAN_REPORT_SELECTION_SHA256",
         ] as const) {
           const missing = structuredClone(selected);
           missing.vars[key] = "";
@@ -110,19 +112,19 @@ test("publisher checks run custody before the signer, downloads selected immutab
     uses?: string;
     with?: Record<string, string>;
   }[];
-  const check = candidateSteps.findIndex((step) => step.run?.includes("check-candidate-run.mjs"));
+  const check = candidateSteps.findIndex((step) => step.run?.includes("check-refresh-run.mjs"));
   const download = candidateSteps.findIndex((step) => step.uses?.includes("download-artifact"));
   expect(check).toBeGreaterThan(-1);
   expect(check).toBeLessThan(download);
   expect(candidateSteps[download]?.with?.["artifact-ids"]).toBe(
-    "${{ vars.SCAN_REPORT_STATEMENT_ARTIFACT_ID }}",
+    "${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}",
   );
   expect(candidateSteps[download]?.with?.["digest-mismatch"]).toBe("error");
   const promotion = config.jobs["authenticate-before-promotion"].steps;
   expect(
     promotion.find((step: { with?: { "artifact-ids"?: string } }) => step.with?.["artifact-ids"])
       ?.with["artifact-ids"],
-  ).toBe("${{ vars.SCAN_REPORT_UNSIGNED_ARTIFACT_ID }}");
+  ).toBe("${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}");
   expect(
     promotion.find((step: { with?: { "artifact-ids"?: string } }) => step.with?.["artifact-ids"])
       ?.with["digest-mismatch"],
@@ -160,42 +162,38 @@ test("the required automatic CI check has one unique verify display name", () =>
   ]);
 });
 
-test("unsigned upload materializes only the exact reviewed immutable data without executing Scan", () => {
+test("producer freezes reviewed package data separately and runs without signing authority", () => {
   const config = workflow("candidate-upload");
-  expect(config.jobs.upload.permissions).toEqual({});
+  expect(config.jobs.upload.permissions).toEqual({ contents: "read", actions: "read" });
+  expect(config.on.workflow_dispatch.inputs.phase.options).toEqual(["freeze", "run"]);
+  const steps = config.jobs.upload.steps as {
+    run?: string;
+    uses?: string;
+    with?: Record<string, string>;
+  }[];
+  const body = JSON.stringify(steps);
+  const execution = steps.find((step) => step.run?.includes("run-workflow.sh"));
+  const wrapper = readFileSync("tools/refresh/run-workflow.sh", "utf8");
+  expect(body).toContain("refresh.mjs freeze");
+  expect(execution?.run).toMatch(/^exec bash tools\/refresh\/run-workflow\.sh /);
+  expect(wrapper).toContain("refresh.mjs run");
+  expect(body).toContain("install-retained-scanner.mjs");
+  expect(body).toContain("retain");
+  expect(wrapper).toContain("0|1");
+  expect(body).not.toContain("id-token");
+  expect(steps.some((step) => step.uses?.includes("actions/attest@"))).toBe(false);
   expect(
-    config.jobs.upload.steps.some((step: { uses?: string }) => step.uses?.includes("checkout")),
-  ).toBe(false);
-  const script = config.jobs.upload.steps.find((step: { run?: string }) => step.run)?.run as string;
-  const javascript = script.split("<<'NODE'\n")[1]?.split("\nNODE")[0];
-  expect(javascript).toBeDefined();
-  const temporary = mkdtempSync(join(tmpdir(), "scan-reviewed-upload-"));
-  try {
-    const result = spawnSync(process.execPath, ["--input-type=module"], {
-      input: javascript,
-      cwd: temporary,
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const artifact = readFileSync(join(temporary, "candidate/artifact.json"));
-    const statement = readFileSync(join(temporary, "candidate/statement.json"));
-    expect(artifact.length).toBe(5585);
-    expect(createHash("sha256").update(artifact).digest("hex")).toBe(
-      "bac82f592646ca58eaea3eb38c9f48ddd430f4440612ba7ef76a908552d61634",
-    );
-    expect(statement.length).toBe(483);
-    expect(createHash("sha256").update(statement).digest("hex")).toBe(statementSha);
-    const report = JSON.parse(artifact.toString());
-    expect(report.scanId).toBe(scanId);
-    expect(report.annexes[0].byteLength).toBe(246);
-    expect(
-      createHash("sha256")
-        .update(Buffer.from(report.annexes[0].bytesBase64, "base64"))
-        .digest("hex"),
-    ).toBe("6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9");
-  } finally {
-    rmSync(temporary, { recursive: true, force: true });
-  }
+    steps
+      .filter(
+        (step) =>
+          step.uses?.includes("upload-artifact@") && !step.with?.name?.includes("NONPUBLISHABLE"),
+      )
+      .map((step) => step.with?.name),
+  ).toEqual(["scan-refresh-frozen", "scan-refresh-candidate"]);
+  const custody = steps.findIndex((step) => step.run?.includes("check-refresh-run.mjs"));
+  const download = steps.findIndex((step) => step.uses?.includes("download-artifact@"));
+  expect(custody).toBeGreaterThan(-1);
+  expect(download).toBeGreaterThan(custody);
 });
 
 function candidateBoundary() {
@@ -483,7 +481,11 @@ test("signing alone has token authority and authenticated publication stays behi
     actions: "read",
   });
   expect(jobs.signer.needs).toBe("bounded-candidate");
-  expect(jobs["authenticate-before-promotion"].needs).toBe("signer");
+  expect(jobs["authenticate-before-promotion"].needs).toEqual(["bounded-candidate", "signer"]);
+  expect(jobs["publish-immutable"]).toBeUndefined();
+  expect(Object.keys(jobs)).toHaveLength(3);
+  expect(JSON.stringify(jobs)).not.toContain('"contents":"write"');
+  expect(JSON.stringify(jobs)).toContain("scan-refresh-final-publication");
   for (const job of Object.values(jobs) as {
     "continue-on-error"?: boolean;
     steps: { "continue-on-error"?: boolean }[];
@@ -496,11 +498,15 @@ test("signing alone has token authority and authenticated publication stays behi
     uses?: string;
     "continue-on-error"?: boolean;
   }[];
-  const authentication = steps.findIndex((step) => step.run?.includes("verify-promotion.mjs"));
+  const authentication = steps.findIndex((step) =>
+    step.run?.includes("refresh-publication.mjs assemble"),
+  );
   const publication = steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact@"));
   expect(authentication).toBeGreaterThan(-1);
   expect(publication).toBeGreaterThan(authentication);
   expect(steps[authentication]?.["continue-on-error"]).not.toBe(true);
   expect(steps[authentication]?.run).not.toMatch(/\|\|\s*true/);
-  expect(steps[authentication]?.run?.trim().split("\n").at(-1)).toContain("verify-promotion.mjs");
+  expect(steps[authentication]?.run?.trim().split("\n").at(-1)).toContain(
+    "refresh-publication.mjs assemble",
+  );
 });

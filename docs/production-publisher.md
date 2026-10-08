@@ -1,120 +1,62 @@
 # Restricted Scan report publisher
 
-The manual workflows `.github/workflows/scan-report-candidate-upload.yml` and
-`.github/workflows/scan-report-publisher.yml` prepare one reviewed report operation.
-Neither runs on a merge. Both refuse admission without the exact reviewed main
-commit in `SCAN_REPORT_REVIEWED_HEAD`; their presence does not establish protected
-settings, signing authorization, authenticated publication or an npm release.
-The original files under `.github/workflow-templates/` remain inert references.
+The reusable frozen seven-source operation is described in [production refresh](production-refresh.md).
+Both manual workflows require the exact reviewed main commit, repository and owner IDs,
+first run attempt and dispatcher `stomar-tech` (GitHub user 333589491). Merges do not dispatch them.
+Only the `scan-report-signing-prod` signer receives OIDC and attestation-write permissions.
+Candidate acquisition and assembly have read-only authority. Actions finishes with
+`scan-refresh-final-publication`; it has no release-write job. Final immutable release
+transport uses the normal maintainer's existing `gh` authentication, without extracting
+or exporting credentials. External Actions are full-commit pinned.
+Actions ZIP API downloads negotiate `application/vnd.github+json` while retaining
+the redirected ZIP response as exact binary bytes. Release-asset downloads use
+`application/octet-stream`; release uploads negotiate JSON responses with a
+separate `Content-Type: application/octet-stream` for their original binary body.
 
-Submit and dispatch from the single authenticated independent account designated
-for this operation. The owner is code owner and signing-environment reviewer.
-The selected dispatcher is stomar-tech (GitHub User 333589491); samartomar performs required owner review.
-
-The signer identity is
+The maintained signing identity remains
 `https://github.com/samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main`,
-issuer `https://token.actions.githubusercontent.com`, repository ID `1336836161`,
-owner ID `9993940`. Exact actor login/ID, initial triggering actor and run attempt
-one are enforced in each job. Reruns are refused, including owner-initiated reruns.
-All external Actions are full-commit pinned. Candidate acquisition has read-only
-repository/Actions permissions; only the protected signer receives `id-token`
-and attestation-write permissions.
+issuer `https://token.actions.githubusercontent.com`, repository ID `1336836161`, owner ID `9993940`.
+The exact independently maintained `.github/scan-report-trust.json` bytes and public Sigstore
+roots remain unchanged. The certificate policy pins signer URI, GitHub-hosted runner,
+repository/owner identity, main ref, top-level caller, manual event and public visibility.
+Package consumers still select their own trust; this operational policy is not a runtime default.
 
-The independently selected trust file is `.github/scan-report-trust.json`, an
-exact-byte copy of the reviewed candidate. Its publisher identity remains
-`aihq-scan-production-candidate`; activation does not rename or weaken its policy.
-Its DER constraints pin signer URI, GitHub-hosted runner, repository/owner URI,
-source ref, top-level caller workflow, manual trigger and public visibility.
-Only the reviewed public Sigstore roots are selected, not the GitHub private
-instance or research smoke identity. This operational configuration supplies no
-runtime default trust to package consumers.
+The current branch protection requires the unique `verify` check, administrator enforcement,
+stale-approval dismissal and resolved conversations, and prevents force pushes/deletion.
+It currently requires zero PR approvals and does not require code-owner or latest-push approval.
+CODEOWNERS records ownership; it does not establish an enforced approval requirement.
+The signing environment is main-only with reviewer `samartomar`, prevent-self-review enabled
+and administrator bypass disabled. Reobserve these actual settings before activation.
+The dispatcher and reviewer accounts belong to one human. Account and permission separation
+preserves the existing role/protection boundary and does not establish independent human review.
+Dispatcher access and the protected environment's human approval remain external activation gates.
+The immutable-release setting must be enabled before any report-release write is admitted.
+Its administration-read endpoint is queried by the normal maintainer route; the workflow's
+contents-read token cannot establish this setting. Disabled settings or permission refusal
+stop publication before any release write. The operation never changes repository settings.
 
-## Protect and review before admitting a run
+The operator independently selects the successful publisher run, first attempt, reviewed
+current main head, immutable final artifact ID/service digest, manifest/selection digests,
+and independently prepared reader installation digest. The final CLI checks normal operator
+`samartomar`, repository identity, current main, exact publisher workflow/dispatcher and all
+three run artifacts before downloading the selected archive. It verifies the raw service ZIP
+digest and bounds, refuses unsafe/duplicate/linked/extra entries, and authenticates every
+supplied assessment using exact retained package/lock bytes and maintained independent trust.
+The reader's actual runtime and installation remain separate from frozen Linux execution claims.
+See [production refresh](production-refresh.md) for the closed selection and CLI arguments.
 
-Protect `main`, including administrators: require a pull request, independent
-approval, code-owner review, dismissal of stale approvals, approval of the latest
-push, resolved conversations and the unique CI check `verify`. Disallow force
-push/deletion and unrestricted bypass. `.github/CODEOWNERS` protects itself,
-workflows, independent trust, dependency/TypeScript configuration, executable
-source, tools, schemas and artifact boundary tests. The Cisco verification check
-has its own display name, `verify-cisco-oci-equivalence`.
+`publish-final.mjs` is the production entrypoint. The former `publish-refresh-release.mjs`
+command always refuses; its lower-level exports exist for boundary fixtures. The separately
+published `publication-custody.json` binds final selectors, service ZIP bytes, original receipt,
+package/lock, trust and actual verifier identity without changing the original receipt or inventory.
 
-Create the dedicated `scan-report-signing-prod` environment with required reviewer
-`samartomar`, prevent self review, disable admin bypass and restrict deployment
-branches to `main`. No environment secret is required. Reobserve actual settings
-and access; another baseline or npm environment does not establish these gates.
-After the activation commit is independently reviewed, approved and merged,
-set `SCAN_REPORT_REVIEWED_HEAD` to that exact full main commit. An absent or stale
-value disables admission. Do not insert a proposed commit or bypass a reviewer.
+The original one-shot template, detached-statement helper, promotion helper, historical reader
+and historical production proof remain available as compatibility evidence. They do not
+establish success for a current frozen batch. A durable partial inventory retains all seven
+sources, including no-ID diagnostics and unsigned/refused rows. Retirement acceptance still
+requires every target to have a complete, authenticated assessment for the declared profile,
+or an explicit owner decision addressing a refusal or profile change.
 
-## One unsigned upload, then one protected signing request
-
-The upload workflow contains only the exact harmless retained data. It performs
-no checkout, scan, candidate execution or signing. It rechecks the byte lengths
-and SHA-256 values before writing the two files exclusively and uploading them
-as separate immutable artifacts. Their retention is 30 days.
-This operation's fixed harmless report and complete annex bytes are embedded in
-the public upload workflow and are therefore public. Only the minimal detached
-statement is submitted to Sigstore; those report/annex bytes are outside its payload.
-
-| File | Bytes | SHA-256 |
-| --- | ---: | --- |
-| artifact.json | 5585 | bac82f592646ca58eaea3eb38c9f48ddd430f4440612ba7ef76a908552d61634 |
-| statement.json | 483 | 15844fd0e376154a85a52fc8eb7a6c1b5b1fe906deb62408c2e222afe4cb5e33 |
-
-The immutable Scan ID is
-`scan:sha256:fd5e886dc290901110d82ec45e2f444b8fa1b2c05f1bbe7028cbbb4e880bc4dd`.
-The complete native annex is 246 bytes, SHA-256
-`6096cd35014a208ac6d62d5bb5f80efb0d863a02464d38f440cac7412c3b1ff9`.
-The publisher's admission guards fix that statement digest and Scan ID.
-
-Dispatch the upload once at the reviewed main commit. After success, independently
-record its actual run and artifact IDs/service digests and populate:
-
-- `SCAN_REPORT_CANDIDATE_RUN_ID`
-- `SCAN_REPORT_UNSIGNED_ARTIFACT_ID` and `SCAN_REPORT_UNSIGNED_ARTIFACT_DIGEST`
-- `SCAN_REPORT_STATEMENT_ARTIFACT_ID` and `SCAN_REPORT_STATEMENT_ARTIFACT_DIGEST`
-
-IDs are exact positive decimal service IDs; digests use `sha256:` plus 64 lowercase
-hex characters. Service archive digests differ from the file digests above. Missing
-selection refuses all publisher jobs. Never invent a run or artifact identity.
-
-Dispatch the publisher once with that selected `candidate_run_id`, the exact
-`statement_sha256` and `expected_scan_id` above. Before signing, bounded
-`check-candidate-run.mjs` validates successful first-attempt manual upload provenance,
-exact repository/head/workflow/actor and the two selected immutable artifacts.
-It refuses ambiguity, expiry, oversized uploads and mismatching IDs/digests.
-Refusals emit only fixed stage codes for selectors, raw run/artifact metadata,
-run/actor custody and artifact custody/ambiguity; no input or dependency errors
-are echoed. Preserve the code and retained metadata when diagnosing a failed run.
-Downloads use exact artifact IDs. Trusted `check-statement.mjs` rechecks the
-reviewed detached bytes and closed minimal statement before and inside the signer.
-
-The signer receives only bounded detached statement data, not a scanner, report,
-target checkout or candidate executable. The managed public action signs its
-fixed subject/predicate. Public witnesses disclose only this minimal statement,
-digests/Scan ID and signer metadata; report/annex bytes are outside the payload.
-Trusted final assembly separately obtains the unsigned artifact and bundle;
-`verify-promotion.mjs` independently authenticates their exact bindings under
-selected trust before writing/uploading the authenticated result. Failed
-authentication creates no promoted output. Final assembly has no signing token.
-
-## Acceptance and stop conditions
-
-Retain the actual bundle, output and independently selected trust/root bytes.
-Verify the production predicate and nonempty annex with the isolated installed
-offline consumer: exact issuer/SAN/OIDs and original payload bytes, altered
-annex/statement refusal, missing/wrong roots and witnesses, equivalent historical
-policy consolidation and disagreement refusal. Reverify after the real leaf
-expires using witnessed signing time. Local synthetic/research successes do not
-complete this production gate; acceptance stays open until the real proof exists.
-
-Authorize only the recorded upload and one protected signing run. Any failed run
-is retained as evidence; another signing attempt requires explicit authorization.
-Monitor the run and environment approval, then retain exact output custody.
-Disable each manual workflow after its single authorized run reaches a terminal
-state. After the publisher terminates, clear `SCAN_REPORT_REVIEWED_HEAD` while
-retaining selected IDs/digests and evidence. To stop admission early, clear that
-head variable and cancel pending runs before approval. Existing
-immutable bytes and failed-run records remain; no deletion or re-signing is an
-automatic rollback. This operation does not publish an npm package.
+This operation does not allocate a version or publish an npm package. Clear the reviewed-head
+admission variable after the authorized bounded operation reaches a terminal state, preserving
+all selected immutable IDs, digests, published bytes and failed-run evidence.
