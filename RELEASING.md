@@ -19,8 +19,10 @@ custody.
 
 The Unreleased immutable assessment API has a separate report-signing path.
 The manual [report publisher](docs/production-publisher.md) admits only the
-reviewed main commit, designated independent actor and selected immutable upload
-custody. Source integration does not establish protected settings or authorize
+reviewed main commit, sole maintainer `samartomar` and selected immutable upload
+custody. The same owner initiates the run and supplies required protected human
+signing approval, including approval of their own run; this does not establish
+independent human review. Source integration does not establish protected settings or authorize
 signing. Review the exact production protection/trust tuple, authorize the bounded
 operation and retain independent offline verification of its production-format
 bundle, including verification after actual leaf expiry. Local signing tests and

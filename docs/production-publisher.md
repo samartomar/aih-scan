@@ -2,7 +2,9 @@
 
 The reusable frozen seven-source operation is described in [production refresh](production-refresh.md).
 Both manual workflows require the exact reviewed main commit, repository and owner IDs,
-first run attempt and dispatcher `stomar-tech` (GitHub user 333589491). Merges do not dispatch them.
+first run attempt and dispatcher `samartomar` (GitHub user 9993940). The triggering actor
+must also be `samartomar`. Active freeze, candidate and final custody require both actors'
+exact login and numeric ID. Merges do not dispatch these workflows.
 Only the `scan-report-signing-prod` signer receives OIDC and attestation-write permissions.
 Candidate acquisition and assembly have read-only authority. Actions finishes with
 `scan-refresh-final-publication`; it has no release-write job. Final immutable release
@@ -25,11 +27,12 @@ The current branch protection requires the unique `verify` check, administrator 
 stale-approval dismissal and resolved conversations, and prevents force pushes/deletion.
 It currently requires zero PR approvals and does not require code-owner or latest-push approval.
 CODEOWNERS records ownership; it does not establish an enforced approval requirement.
-The signing environment is main-only with reviewer `samartomar`, prevent-self-review enabled
-and administrator bypass disabled. Reobserve these actual settings before activation.
-The dispatcher and reviewer accounts belong to one human. Account and permission separation
-preserves the existing role/protection boundary and does not establish independent human review.
-Dispatcher access and the protected environment's human approval remain external activation gates.
+The single-maintainer signing policy requires a main-only environment with reviewer
+`samartomar`, prevent-self-review disabled and administrator bypass disabled. Verify these
+actual settings before activation; the operation does not change them. Human approval is
+still required: the sole maintainer initiates the run and may approve their own signing job.
+This policy does not establish independent human review or require an alternate account.
+The protected environment's human approval remains an external activation gate.
 The immutable-release setting must be enabled before any report-release write is admitted.
 Its administration-read endpoint is queried by the normal maintainer route; the workflow's
 contents-read token cannot establish this setting. Disabled settings or permission refusal
@@ -52,8 +55,11 @@ package/lock, trust and actual verifier identity without changing the original r
 
 The original one-shot template, detached-statement helper, promotion helper, historical reader
 and historical production proof remain available as compatibility evidence. They do not
-establish success for a current frozen batch. A durable partial inventory retains all seven
-sources, including no-ID diagnostics and unsigned/refused rows. Retirement acceptance still
+establish success for a current frozen batch. The legacy `check-candidate-run.mjs` and its
+historical dispatcher policy remain unchanged; active batch custody uses
+`check-refresh-run.mjs` with the single-maintainer policy above.
+A durable partial inventory retains all seven sources, including no-ID diagnostics
+and unsigned/refused rows. Retirement acceptance still
 requires every target to have a complete, authenticated assessment for the declared profile,
 or an explicit owner decision addressing a refusal or profile change.
 

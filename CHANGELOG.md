@@ -9,6 +9,9 @@
   durable immutable report discovery through independently verified maintainer
   publication. Preserve publisher trust and historical APIs; baseline production
   retirement requires real replacement acceptance.
+- Admit only the sole maintainer `samartomar` to active manual refresh and final
+  custody; retain required human signing approval, allowing the owner to approve
+  their own run. Preserve historical fixed-proof actor policy and signing trust.
 - Patch the development dependency source-map-js to 1.2.2 in the lockfile.
 
 - Add `aih-scan scan <directory>` to assess a local directory from the command line.

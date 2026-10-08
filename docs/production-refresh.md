@@ -4,7 +4,10 @@ The refresh is a finite maintainer operation: freeze input, execute the frozen b
 review the candidate, protected signing/assembly, review final custody, maintainer release
 publication, offline acceptance, then any authorized baseline retirement. The two
 manual workflows run only the reviewed main commit and first run attempt by
-`stomar-tech`. Each new invocation needs its own authorization and bounded budget.
+`samartomar` (GitHub user 9993940), including the triggering actor. The same sole
+maintainer supplies the protected signing environment's human approval and may
+approve their own initiated run. This does not establish independent human review.
+Each new invocation needs its own authorization and bounded budget.
 This operation does not allocate or publish an npm version.
 
 ## Freeze and execute

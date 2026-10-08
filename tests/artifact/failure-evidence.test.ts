@@ -50,9 +50,9 @@ test("actual cleanup guards admit cancellation without a preceding failure and n
     workflow_ref:
       "samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main",
     sha: "a".repeat(40),
-    actor: "stomar-tech",
-    actor_id: "333589491",
-    triggering_actor: "stomar-tech",
+    actor: "samartomar",
+    actor_id: "9993940",
+    triggering_actor: "samartomar",
     run_attempt: "1",
   };
   const job = (always: () => boolean) =>

@@ -36,7 +36,7 @@ export function checkRefreshRun(
     value?.id === 1336836161 &&
     value.full_name === "samartomar/aih-scan" &&
     value.owner?.id === 9993940;
-  const actor = (value) => value?.id === 333589491 && value.login === "stomar-tech";
+  const actor = (value) => value?.id === 9993940 && value.login === "samartomar";
   if (
     run.id !== expectedRun ||
     run.run_attempt !== 1 ||

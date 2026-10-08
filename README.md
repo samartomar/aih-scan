@@ -64,9 +64,11 @@ This operation runs full assessments of the pinned sources; it does not load pri
 reports for unchanged-observation reuse.
 
 Read-only production, protected detached signing and independent final assembly
-have separate permissions. Authenticated artifacts and their verified inventory
-use immutable report releases, independent of scanner package releases and Actions
-artifact retention. Final publication uses the normal maintainer's authenticated
+have separate permissions. The sole maintainer `samartomar` initiates the manual
+workflows and approves protected signing, including their own initiated run;
+this is not independent human review. Authenticated artifacts and their verified
+inventory use immutable report releases, independent of scanner package releases
+and Actions artifact retention. Final publication uses the normal maintainer's authenticated
 GitHub CLI after checking the selected publisher output and authenticating its exact
 bytes independently. Unsigned candidates remain explicitly unsigned. Follow the
 [refresh runbook](docs/production-refresh.md) for exact input and output custody,

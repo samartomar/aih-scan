@@ -43,7 +43,7 @@ test("final metadata CLI refuses malformed/duplicate metadata, failed or repeate
     const head = "a".repeat(40),
       digest = `sha256:${"b".repeat(64)}`,
       repository = { id: 1336836161, full_name: "samartomar/aih-scan", owner: { id: 9993940 } },
-      actor = { id: 333589491, login: "stomar-tech" };
+      actor = { id: 9993940, login: "samartomar" };
     const run = {
       id: 123,
       run_attempt: 1,
@@ -101,7 +101,7 @@ test("final metadata CLI refuses malformed/duplicate metadata, failed or repeate
       "{",
       JSON.stringify({ ...run, run_attempt: 2 }),
       JSON.stringify({ ...run, conclusion: "failure" }),
-      JSON.stringify({ ...run, actor: { id: 9993940, login: "samartomar" } }),
+      JSON.stringify({ ...run, actor: { id: 333589491, login: "stomar-tech" } }),
       JSON.stringify(run).padEnd(1048577, " "),
     ])
       expect(invoke(bytes).status).toBe(2);
@@ -128,6 +128,89 @@ test("final metadata CLI refuses malformed/duplicate metadata, failed or repeate
     );
     expect(bypass.status).toBe(2);
     expect(JSON.parse(bypass.stderr).event).toBe("scan-refresh-release.refused");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  "scan-refresh-frozen",
+  "scan-refresh-candidate",
+  "scan-refresh-final-publication",
+])("active metadata CLI admits sole-owner %s custody and refuses wrong actor or triggering actor identities", (purpose) => {
+  const directory = mkdtempSync(join(tmpdir(), "scan-owner-custody-"));
+  try {
+    const head = "a".repeat(40),
+      digest = `sha256:${"b".repeat(64)}`;
+    const repository = { id: 1336836161, full_name: "samartomar/aih-scan", owner: { id: 9993940 } };
+    const owner = { id: 9993940, login: "samartomar" };
+    const final = purpose === "scan-refresh-final-publication";
+    const run = {
+      id: 123,
+      run_attempt: 1,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      head_sha: head,
+      head_branch: "main",
+      path: final
+        ? ".github/workflows/scan-report-publisher.yml"
+        : ".github/workflows/scan-report-candidate-upload.yml",
+      repository,
+      head_repository: repository,
+      actor: owner,
+      triggering_actor: owner,
+    };
+    const names = final
+      ? ["checked-detached-statements", "scan-refresh-attestations", purpose]
+      : [purpose];
+    const artifacts = {
+      total_count: names.length,
+      artifacts: names.map((name, i) => ({
+        id: name === purpose ? 456 : 454 + i,
+        name,
+        digest,
+        expired: false,
+        size_in_bytes: 100,
+        workflow_run: { id: 123, head_sha: head },
+      })),
+    };
+    const runPath = join(directory, "run.json"),
+      archivePath = join(directory, "artifacts.json");
+    writeFileSync(archivePath, JSON.stringify(artifacts));
+    const invoke = (metadata: unknown) => {
+      writeFileSync(runPath, JSON.stringify(metadata));
+      return spawnSync(
+        process.execPath,
+        [
+          "tools/artifact/check-refresh-run.mjs",
+          runPath,
+          archivePath,
+          "123",
+          head,
+          "456",
+          digest,
+          purpose,
+        ],
+        { encoding: "utf8", windowsHide: true },
+      );
+    };
+    const accepted = invoke(run);
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(JSON.parse(accepted.stdout).event).toBe("scan-refresh-custody.verified");
+    for (const field of ["actor", "triggering_actor"] as const) {
+      for (const identity of [
+        { id: 333589491, login: "stomar-tech" },
+        { id: 9993940, login: "stomar-tech" },
+        { id: 333589491, login: "samartomar" },
+        { id: 9993940, login: "other" },
+        { id: 1, login: "samartomar" },
+      ]) {
+        const refused = invoke({ ...run, [field]: identity });
+        expect(refused.status, `${purpose}: ${field} ${identity.login}/${identity.id}`).toBe(2);
+        expect(JSON.parse(refused.stderr).event).toBe("scan-refresh-custody.refused");
+      }
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
