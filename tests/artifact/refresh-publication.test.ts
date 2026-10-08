@@ -190,7 +190,9 @@ test("packed consumer validates every candidate binding and isolates bounded sig
       join(temporary, "wrong-selection"),
     ]).status,
   ).toBe(2);
-  const inventoryPath = join(candidate, "inventory.json"),
+  const mutable = join(temporary, "binding-candidate");
+  cpSync(candidate, mutable, { recursive: true });
+  const inventoryPath = join(mutable, "inventory.json"),
     bytes = readFileSync(inventoryPath),
     inventory = JSON.parse(bytes.toString());
   inventory.targets[0].detectors.pop();
@@ -199,7 +201,7 @@ test("packed consumer validates every candidate binding and isolates bounded sig
     execute([
       "tools/artifact/refresh-publication.mjs",
       "check",
-      candidate,
+      mutable,
       consumer,
       manifestSha,
       join(temporary, "wrong-inventory"),
@@ -342,9 +344,9 @@ test("annex or statement substitution is refused before any signing directory is
   expect(existsSync(output)).toBe(false);
 }, 60000);
 
-test("assembly authenticates supplied bundles before exclusive output and retains unsigned siblings", () => {
-  const output = join(temporary, "durable");
-  const custodyPath = join(temporary, "actions-custody.json");
+function assembledFixture(name: string) {
+  const output = join(temporary, name),
+    custodyPath = join(temporary, name + "-custody.json");
   const manifest = JSON.parse(readFileSync(join(candidate, "manifest.json"), "utf8"));
   writeFileSync(
     custodyPath,
@@ -354,7 +356,7 @@ test("assembly authenticates supplied bundles before exclusive output and retain
       runId: 123,
       head: manifest.scanner.sourceCommit,
       artifactId: 456,
-      serviceDigest: `sha256:${"b".repeat(64)}`,
+      serviceDigest: "sha256:" + "b".repeat(64),
       archiveBytes: 1000,
     }),
   );
@@ -372,6 +374,10 @@ test("assembly authenticates supplied bundles before exclusive output and retain
   ];
   const result = execute(args);
   expect(result.status, result.stderr).toBe(0);
+  return { output, args, manifest };
+}
+test("assembly authenticates supplied bundles before exclusive output and retains unsigned siblings", () => {
+  const { output, args, manifest } = assembledFixture("assembly-durable");
   const inventory = JSON.parse(readFileSync(join(output, "inventory.json"), "utf8"));
   expect(inventory.targets).toHaveLength(7);
   expect(inventory.targets[0].authenticity).toBe("authenticated");
@@ -432,7 +438,8 @@ for(const mode of ['ambiguous','exhausted']){discovery=mode;let refused=false;tr
 files.set(1,Buffer.from('collision'));let refused=false;try{await publishRelease({directory,transport});}catch{refused=true;}if(!refused)throw Error('Collision accepted');
 enabled=false;const before=calls.length;refused=false;try{await publishRelease({directory,transport});}catch(e){refused=e.code==='immutable-releases-disabled';}if(!refused||before!==calls.length)throw Error('Disabled immutability wrote release');`,
   );
-  const result = execute([driver, join(temporary, "durable")]);
+  const { output } = assembledFixture("http-durable");
+  const result = execute([driver, output]);
   expect(result.status, result.stderr).toBe(0);
 });
 
@@ -492,13 +499,13 @@ const [directory,consumer,root,manifestSha256,selectionSha256]=process.argv.slic
 let strictRefused=false;try{await validatePublication({directory,scannerInstall:reader,expectedManifestSha256:manifestSha256,expectedSelectionSha256:selectionSha256,trust:JSON.parse(trustBytes)});}catch{strictRefused=true;}if(!strictRefused)throw Error('Strict producer identity relaxed');
 const parts=[],central=[];let offset=0;for(const path of [...receipt.assets.map(a=>a.path),'publication.json']){const name=Buffer.from(path),data=readFileSync(join(directory,path)),crc=crc32(data),local=Buffer.alloc(30),head=Buffer.alloc(46);local.writeUInt32LE(0x04034b50);local.writeUInt32LE(crc,14);local.writeUInt32LE(data.length,18);local.writeUInt32LE(data.length,22);local.writeUInt16LE(name.length,26);head.writeUInt32LE(0x02014b50);head.writeUInt32LE(crc,16);head.writeUInt32LE(data.length,20);head.writeUInt32LE(data.length,24);head.writeUInt16LE(name.length,28);head.writeUInt32LE(offset,42);parts.push(local,name,data);central.push(head,name);offset+=30+name.length+data.length;}const centralBytes=Buffer.concat(central),end=Buffer.alloc(22),count=receipt.assets.length+1;end.writeUInt32LE(0x06054b50);end.writeUInt16LE(count,8);end.writeUInt16LE(count,10);end.writeUInt32LE(centralBytes.length,12);end.writeUInt32LE(offset,16);const zip=Buffer.concat([...parts,centralBytes,end]);
 const selected={schema:'urn:aihq:scan:final-publication-selection:1.0.0',repository:'samartomar/aih-scan',sourceHead:manifest.scanner.sourceCommit,publisherRunId:'123',finalArtifactId:'456',finalArtifactDigest:'sha256:'+sha256(zip),manifestSha256,selectionSha256,readerInstallationSha256:scanner.identity.installationSha256},repository={id:1336836161,full_name:'samartomar/aih-scan',owner:{id:9993940}},actor={id:333589491,login:'stomar-tech'},run={id:123,run_attempt:1,event:'workflow_dispatch',status:'completed',conclusion:'success',head_sha:selected.sourceHead,head_branch:'main',path:'.github/workflows/scan-report-publisher.yml',repository,head_repository:repository,actor,triggering_actor:actor},artifacts={total_count:3,artifacts:['checked-detached-statements','scan-refresh-attestations','scan-refresh-final-publication'].map((name,i)=>({id:454+i,name,digest:i===2?selected.finalArtifactDigest:'sha256:'+'b'.repeat(64),expired:false,size_in_bytes:i===2?zip.length:100,workflow_run:{id:123,head_sha:selected.sourceHead}}))};let mode='normal',release=null,writes=0;const files=new Map();
-const command=(exe,args,options)=>{if(exe!=='gh'||args[0]!=='api'||args.includes('token'))throw Error('Only labelled normal gh subprocess allowed');const path=args[1],method=args[args.indexOf('--method')+1];let body,status=200;if(path==='user')body={login:mode==='operator'?'other':'samartomar',id:9993940};else if(path.endsWith('/git/ref/heads/main'))body={ref:'refs/heads/main',object:{type:'commit',sha:mode==='main'?'a'.repeat(40):selected.sourceHead}};else if(path==='repos/samartomar/aih-scan')body=repository;else if(path.endsWith('/actions/runs/123'))body={...run,run_attempt:mode==='attempt'?2:1};else if(path.includes('/artifacts?'))body=mode==='ambiguity'?{...artifacts,total_count:4}:artifacts;else if(path.endsWith('/456/zip'))body=mode==='zip-digest'?Buffer.from('substituted archive'):zip;else if(path.endsWith('/immutable-releases')){body={enabled:true};if(mode==='403')status=403;}else if(path.includes('/releases/tags/')){body=release&&!release.draft?release:{};if(!release||release.draft)status=404;}else if(path.includes('/releases?'))body=release?[release]:[];else if(path.endsWith('/releases')&&method==='POST'){writes++;const b=JSON.parse(options.input);body=release={id:1,tag_name:b.tag_name,draft:true,assets:[]};status=201;}else if(path.includes('uploads.github.com')){writes++;const name=new URL(path).searchParams.get('name'),id=files.size+1;if(release.assets.some(a=>a.name===name))throw Error('Asset overwrite');files.set(id,Buffer.from(options.input));release.assets.push({id,name,size:options.input.length});body={id};status=201;}else if(path.includes('/releases/assets/'))body=files.get(Number(path.split('/').at(-1)));else if(method==='PATCH'){writes++;release.draft=false;release.immutable=true;body=release;}else throw Error('Unexpected external command');return {status:status<400?0:1,stdout:Buffer.concat([Buffer.from('HTTP/2.0 '+status+' OK\\r\\n\\r\\n'),Buffer.isBuffer(body)?body:Buffer.from(JSON.stringify(body))]),stderr:Buffer.alloc(0)};};
+const command=(exe,args,options)=>{if(exe!=='gh'||args[0]!=='api'||args.includes('token'))throw Error('Only labelled normal gh subprocess allowed');const path=args[1],method=args[args.indexOf('--method')+1],headers=args.filter((_,i)=>args[i-1]==='-H');if(path.endsWith('/zip')&&!headers.includes('Accept: application/vnd.github+json'))throw Error('Actions415');if(path.includes('uploads.github.com')&&(!headers.includes('Accept: application/vnd.github+json')||!headers.includes('Content-Type: application/octet-stream')))throw Error('Upload415');if(path.includes('/releases/assets/')&&!headers.includes('Accept: application/octet-stream'))throw Error('AssetJSON');let body,status=200;if(path==='user')body={login:mode==='operator'?'other':'samartomar',id:9993940};else if(path.endsWith('/git/ref/heads/main'))body={ref:'refs/heads/main',object:{type:'commit',sha:mode==='main'?'a'.repeat(40):selected.sourceHead}};else if(path==='repos/samartomar/aih-scan')body=repository;else if(path.endsWith('/actions/runs/123'))body={...run,run_attempt:mode==='attempt'?2:1};else if(path.includes('/artifacts?'))body=mode==='ambiguity'?{...artifacts,total_count:4}:artifacts;else if(path.endsWith('/456/zip'))body=mode==='zip-digest'?Buffer.from('substituted archive'):zip;else if(path.endsWith('/immutable-releases')){body={enabled:true};if(mode==='403')status=403;}else if(path.includes('/releases/tags/')){body=release&&!release.draft?release:{};if(!release||release.draft)status=404;}else if(path.includes('/releases?'))body=release?[release]:[];else if(path.endsWith('/releases')&&method==='POST'){writes++;const b=JSON.parse(options.input);body=release={id:1,tag_name:b.tag_name,draft:true,assets:[]};status=201;}else if(path.includes('uploads.github.com')){writes++;const name=new URL(path).searchParams.get('name'),id=files.size+1;if(release.assets.some(a=>a.name===name))throw Error('Asset overwrite');files.set(id,Buffer.from(options.input));release.assets.push({id,name,size:options.input.length});body={id};status=201;}else if(path.includes('/releases/assets/'))body=files.get(Number(path.split('/').at(-1)));else if(method==='PATCH'){writes++;release.draft=false;release.immutable=true;body=release;}else throw Error('Unexpected external command');return {status:status<400?0:1,stdout:Buffer.concat([Buffer.from('HTTP/2.0 '+status+' OK\\r\\n\\r\\n'),Buffer.isBuffer(body)?body:Buffer.from(JSON.stringify(body))]),stderr:Buffer.alloc(0)};};
 let i=0;for(const failure of ['operator','main','attempt','ambiguity','zip-digest','reader','403']){mode=failure;let refused=false;try{await publishFinal({selection:failure==='reader'?{...selected,readerInstallationSha256:manifest.scanner.installationSha256}:selected,scannerInstall:reader,output:join(root,'final-refused-'+i++),trustBytes,command});}catch{refused=true;}if(!refused||writes)throw Error('Final refusal wrote or accepted '+failure);}
 mode='normal';const output=join(root,'final-complete'),result=await publishFinal({selection:selected,scannerInstall:reader,output,trustBytes,command});if(result.assetCount!==receipt.assets.length+2||!release.immutable)throw Error('Final durable custody absent');const custody=JSON.parse(readFileSync(join(output,'publication-custody.json')));if(custody.reader.scanner.installationSha256!==selected.readerInstallationSha256||custody.producer.scanner.installationSha256!==manifest.scanner.installationSha256||custody.authenticatedTargets!==1)throw Error('Reader relabelled producer or skipped reauthentication');if(!readFileSync(join(output,'publication','manifest.json')).equals(readFileSync(join(directory,'manifest.json'))))throw Error('Frozen claims changed');`,
   );
   const result = execute([
     driver,
-    join(temporary, "durable"),
+    assembledFixture("final-durable").output,
     consumer,
     temporary,
     manifestSha,

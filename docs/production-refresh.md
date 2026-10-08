@@ -42,6 +42,11 @@ diagnostic capture failures is retained; a source without a valid assessment has
 no Scan ID. Exit 0 means all assessments complete, exit 1 means a completed
 truthful partial/diagnostic batch, and exit 2 means custody/preparation failed.
 An exit-2 directory is inspection evidence and cannot enter publication.
+The maintainer run CLI connects SIGINT/SIGTERM to the installed producer's abort
+signal. Graceful interruption stops new source/detector work, retains completed
+original siblings, and writes all seven rows with diagnostic/no-ID states for
+unfinished sources. It emits `scan-refresh.cancelled` and exits 2. Cancellation
+does not grant another attempt or make the interrupted batch promotable.
 
 ## Select and publish
 
@@ -180,6 +185,12 @@ and 64 KiB ZIP slack, every archive is below 256 MiB. No annex is truncated to f
 These names and failed/incomplete run metadata cannot enter signing or final publication.
 Upload/network/platform failure can still prevent retention; inspect each upload outcome
 and preserve any available exact originals. There is no platform-wide durability guarantee.
+The producer job preserves the original identity guards with `always()` so bounded
+cleanup remains eligible after cancellation. Ordinary setup/run/candidate-upload
+steps require success and a noncancelled state. Only NONPUBLISHABLE cleanup uses
+`failure() || cancelled()`, including cancellation with no preceding failed step.
+GitHub's cancellation cleanup window is finite; SIGKILL, forced runner loss or
+failed cleanup/upload can prevent retention. No recovery from those states is promised.
 
 First inspect the structured boundary event (`event`, `phase`, run correlation
 where available), then the manifest/custody and all seven inventory rows. Check

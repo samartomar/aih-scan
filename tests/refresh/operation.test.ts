@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -40,9 +40,27 @@ const input=JSON.parse(readFileSync(process.argv[2],'utf8'));
 const result=await freezeBatch({input,scannerTarball:process.argv[3],scannerInstall:process.argv[4],resolveRepository:async repository=>({repository,repositoryUrl:'https://github.com/'+repository+'.git'}),resolveRef:async()=>process.argv[5]});
 writeFileSync(process.argv[6],canonicalBytes(result));`,
   );
+  const boundary = join(temporary, "git-boundary.cjs");
+  const helper = join(temporary, "fixture-git-command.cjs");
   writeFileSync(
-    join(temporary, "fixture-git-command.cjs"),
+    helper,
     `const cp=require('node:child_process');const argv=JSON.parse(process.argv[2]);const operation=argv.findIndex(arg=>['init','fetch','rev-parse','ls-tree','cat-file'].includes(arg));const tail=argv.slice(operation);let bytes=Buffer.alloc(0);if(!['init','fetch'].includes(tail[0])){const result=cp.spawnSync('git',['--git-dir',${JSON.stringify(join(fixture, ".git"))},...tail],{windowsHide:true,maxBuffer:268435456});if(result.status!==0)process.exit(1);bytes=result.stdout;}process.stdout.write(JSON.stringify({bytesBase64:bytes.toString('base64')}));`,
+  );
+  writeFileSync(
+    boundary,
+    `const cp=require('node:child_process');const fs=require('node:fs');const moduleApi=require('node:module');const original=cp.spawn;const originalStat=fs.statSync;
+// Platform control permits exercising the portable producer fixture on Windows. It supplies no Linux execution evidence.
+Object.defineProperty(process,'platform',{value:'linux'});
+fs.statSync=function(path,...args){if(['/usr/bin/bwrap','/usr/local/bin/uv'].includes(String(path))){const error=new Error('Controlled unavailable prerequisite');error.code='ENOENT';throw error;}return originalStat.call(this,path,...args);};
+cp.spawn=function(executable,args,options){if(executable===process.execPath&&typeof args?.[0]==='string'&&args[0].endsWith('git-command.js'))return original(executable,[${JSON.stringify(helper)},...args.slice(1)],options);return original(executable,args,options);};moduleApi.syncBuiltinESMExports();`,
+  );
+  const runDriver = join(temporary, "run-driver.mjs");
+  writeFileSync(
+    runDriver,
+    `import { runBatch } from ${JSON.stringify(new URL("../../tools/refresh/refresh.mjs", import.meta.url).href)};
+import {readFileSync} from 'node:fs';
+const inventory=await runBatch({manifest:JSON.parse(readFileSync(process.argv[2],'utf8')),scannerTarball:process.argv[3],scannerInstall:process.argv[4],output:process.argv[5]});
+process.exitCode=inventory.targets.some(target=>target.status!=='assessment'||target.completion!=='complete')?1:0;`,
   );
 }
 beforeAll(() => {
@@ -304,29 +322,9 @@ test("run retains pinned Git bytes and every detector outcome when Semgrep is un
     ],
     fixture,
   );
-  const boundary = join(temporary, "git-boundary.cjs");
-  const helper = join(temporary, "fixture-git-command.cjs");
-  writeFileSync(
-    helper,
-    `const cp=require('node:child_process');const argv=JSON.parse(process.argv[2]);const operation=argv.findIndex(arg=>['init','fetch','rev-parse','ls-tree','cat-file'].includes(arg));const tail=argv.slice(operation);let bytes=Buffer.alloc(0);if(!['init','fetch'].includes(tail[0])){const result=cp.spawnSync('git',['--git-dir',${JSON.stringify(join(fixture, ".git"))},...tail],{windowsHide:true,maxBuffer:268435456});if(result.status!==0)process.exit(1);bytes=result.stdout;}process.stdout.write(JSON.stringify({bytesBase64:bytes.toString('base64')}));`,
-  );
-  writeFileSync(
-    boundary,
-    `const cp=require('node:child_process');const fs=require('node:fs');const moduleApi=require('node:module');const original=cp.spawn;const originalStat=fs.statSync;
-// Platform control permits exercising the portable producer fixture on Windows. It supplies no Linux execution evidence.
-Object.defineProperty(process,'platform',{value:'linux'});
-fs.statSync=function(path,...args){if(['/usr/bin/bwrap','/usr/local/bin/uv'].includes(String(path))){const error=new Error('Controlled unavailable prerequisite');error.code='ENOENT';throw error;}return originalStat.call(this,path,...args);};
-cp.spawn=function(executable,args,options){if(executable===process.execPath&&typeof args?.[0]==='string'&&args[0].endsWith('git-command.js'))return original(executable,[${JSON.stringify(helper)},...args.slice(1)],options);return original(executable,args,options);};moduleApi.syncBuiltinESMExports();`,
-  );
-  const output = join(temporary, "pinned-candidates");
-  const runDriver = join(temporary, "run-driver.mjs");
-  writeFileSync(
-    runDriver,
-    `import { runBatch } from ${JSON.stringify(new URL("../../tools/refresh/refresh.mjs", import.meta.url).href)};
-import {readFileSync} from 'node:fs';
-const inventory=await runBatch({manifest:JSON.parse(readFileSync(process.argv[2],'utf8')),scannerTarball:process.argv[3],scannerInstall:process.argv[4],output:process.argv[5]});
-process.exitCode=inventory.targets.some(target=>target.status!=='assessment'||target.completion!=='complete')?1:0;`,
-  );
+  const boundary = join(temporary, "git-boundary.cjs"),
+    runDriver = join(temporary, "run-driver.mjs"),
+    output = join(temporary, "pinned-candidates");
   const result = spawnSync(
     process.execPath,
     ["--require", boundary, runDriver, manifest, tarball, consumer, output],
@@ -415,6 +413,119 @@ manifest.batchId=batchId(manifest);writeFileSync(process.argv[2],canonicalBytes(
     expect(result).toMatchObject({ status: "diagnostic", phase: "capture" });
     expect(result).not.toHaveProperty("scanId");
   }
+}, 120000);
+
+test("interrupted maintainer CLI preserves completed sibling bytes, accounts for all seven sources and stops new capture/detector work", async () => {
+  const manifest = frozenFixture("interrupted"),
+    boundary = join(temporary, "interrupt-boundary.cjs"),
+    output = join(temporary, "interrupted-candidates"),
+    trace = join(temporary, "interrupt-fetches.log");
+  const base = readFileSync(join(temporary, "git-boundary.cjs"), "utf8");
+  writeFileSync(
+    boundary,
+    "const fixtureHostPlatform=process.platform;\n" +
+      base +
+      `
+// A genuine delayed Git child lets cancellation interrupt acquisition, before detectors.
+// On Windows only, translate fake-POSIX group addressing to the sole fixture child;
+// this boundary does not establish real Linux process-tree containment.
+if(fixtureHostPlatform==='win32'){const nativeKill=process.kill.bind(process);process.kill=(pid,...args)=>nativeKill(pid<0?-pid:pid,...args);}
+let fixtureFetches=0;const fixtureSpawn=cp.spawn;
+cp.spawn=function(executable,args,options){if(executable===process.execPath&&args?.[0]?.endsWith('git-command.js')&&JSON.parse(args[1]).includes('fetch')){fs.appendFileSync(${JSON.stringify(trace)},'fetch\\n');fixtureFetches++;if(fixtureFetches===2){const child=original(process.execPath,['-e','setTimeout(()=>{},60000)'],options);setImmediate(()=>process.send?.({phase:'second-source'}));return child;}}return fixtureSpawn(executable,args,options);};
+// Windows cannot deliver POSIX signals to Node. Only this labelled process ingress
+// translates real parent IPC into the same signal event; Linux sends actual SIGTERM.
+process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIGTERM');process.disconnect();}});process.channel?.unref();moduleApi.syncBuiltinESMExports();`,
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      "--require",
+      boundary,
+      join(repositoryRoot, "tools/refresh/refresh.mjs"),
+      "run",
+      "--manifest",
+      manifest,
+      "--scanner-tgz",
+      tarball,
+      "--scanner-install",
+      consumer,
+      "--out",
+      output,
+    ],
+    { windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] },
+  );
+  let stdout = "",
+    stderr = "",
+    originals: Map<string, Buffer> | undefined;
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.on("message", () => {
+    originals = new Map(
+      ["result.json", "artifact.json", "statement.json", "candidate.json"].map((name) => [
+        name,
+        readFileSync(join(output, "targets", "mattpocock--skills", name)),
+      ]),
+    );
+    if (process.platform === "win32") child.send("fixture-SIGTERM");
+    else child.kill("SIGTERM");
+  });
+  const status = await new Promise<number | null>((resolve, reject) => {
+    const deadline = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`Interrupted CLI did not finish bounded cleanup: ${stderr}`));
+    }, 20000);
+    child.once("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(deadline);
+      resolve(code);
+    });
+  });
+  expect(status, stderr).toBe(2);
+  expect(originals).toBeDefined();
+  expect(JSON.parse(stdout).event).toBe("scan-refresh.cancelled");
+  const inventory = JSON.parse(readFileSync(join(output, "inventory.json"), "utf8"));
+  expect(inventory.targets).toHaveLength(7);
+  expect(inventory.targets[0].status).toBe("assessment");
+  expect(
+    inventory.targets
+      .slice(1)
+      .every(
+        (row: { status: string; scanId?: string; detectors: { outcome: string }[] }) =>
+          row.status === "diagnostic" &&
+          !row.scanId &&
+          row.detectors.every((detector) => detector.outcome === "not-run"),
+      ),
+  ).toBe(true);
+  expect(readFileSync(trace, "utf8").trim().split("\n")).toHaveLength(2);
+  const recovery = join(temporary, "interrupted-evidence");
+  const retained = spawnSync(
+    process.execPath,
+    [
+      join(repositoryRoot, "tools/artifact/retain-failure-evidence.mjs"),
+      output,
+      join(temporary, "no-frozen"),
+      recovery,
+    ],
+    { encoding: "utf8", windowsHide: true },
+  );
+  expect(retained.status, retained.stderr).toBe(0);
+  for (const [name, bytes] of originals ?? [])
+    expect(readFileSync(join(recovery, "targets", "mattpocock--skills", name))).toEqual(bytes);
+  const index = JSON.parse(readFileSync(join(recovery, "root", "failure.json"), "utf8"));
+  expect(index.publishable).toBe(false);
+  expect(index.targets).toHaveLength(7);
+  expect(
+    index.targets.every(
+      (row: { files: { status: string }[] }) => row.files[0]?.status === "retained",
+    ),
+  ).toBe(true);
 }, 120000);
 
 test.skipIf(

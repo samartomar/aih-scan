@@ -324,7 +324,7 @@ export function ghTransport({ reviewedHead, command, api = ghApi({ command }) })
     async upload(id, name, bytes) {
       const response = api.bytes(
         `https://uploads.github.com/${base}/releases/${id}/assets?name=${encodeURIComponent(name)}`,
-        { method: "POST", body: bytes, accept: "application/octet-stream", timeout: 120000 },
+        { method: "POST", body: bytes, contentType: "application/octet-stream", timeout: 120000 },
       );
       if (response.status !== 201) throw new Error("Exclusive normal gh asset upload refused");
     },

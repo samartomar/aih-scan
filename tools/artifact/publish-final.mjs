@@ -66,7 +66,7 @@ export async function publishFinal({ selection, scannerInstall, output, trustByt
   );
   const archive = transport.api.bytes(
     `${base}/actions/artifacts/${selection.finalArtifactId}/zip`,
-    { accept: "application/octet-stream", maximum: archiveCeiling, timeout: 120000 },
+    { maximum: archiveCeiling, timeout: 120000 },
   );
   if (
     archive.status !== 200 ||

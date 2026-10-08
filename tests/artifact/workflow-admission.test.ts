@@ -38,12 +38,13 @@ const context = (name: string) => ({
 // Evaluate the actual admission expression from reviewed configuration. These
 // guards use only context-property comparisons and boolean operators.
 const admits = (expression: string, value: ReturnType<typeof context>) => {
-  expect(expression).toMatch(/^[a-zA-Z0-9_.'@/\- :&|=!]+$/);
+  expect(expression).toMatch(/^[a-zA-Z0-9_.'@/\- :&|=!()]+$/);
   return Boolean(
-    new Function("github", "vars", "inputs", `return (${expression});`)(
+    new Function("github", "vars", "inputs", "always", `return (${expression});`)(
       value.github,
       value.vars,
       value.inputs,
+      () => true,
     ),
   );
 };

@@ -5,6 +5,76 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { parse } from "yaml";
 
+test("actual cleanup guards admit cancellation without a preceding failure and never admit a successful candidate upload", () => {
+  const workflow = parse(
+      readFileSync(".github/workflows/scan-report-candidate-upload.yml", "utf8"),
+    ),
+    steps = workflow.jobs.upload.steps;
+  const eligible = (expression: string, failed: boolean, cancelled: boolean, phase = "run") =>
+    new Function(
+      "failure",
+      "cancelled",
+      "success",
+      "inputs",
+      "steps",
+      `return (${expression.replace(/^\$\{\{\s*|\s*\}\}$/g, "").replaceAll("steps.failure-evidence", 'steps["failure-evidence"]')});`,
+    )(
+      () => failed,
+      () => cancelled,
+      () => !failed && !cancelled,
+      { phase },
+      {
+        "failure-evidence": {
+          outputs: {
+            root: "true",
+            ...Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`target_${i}`, "true"])),
+          },
+        },
+      },
+    );
+  for (const step of steps.filter(
+    (step: { id?: string; with?: { name?: string } }) =>
+      step.id === "failure-evidence" || step.with?.name?.startsWith("scan-refresh-NONPUBLISHABLE-"),
+  )) {
+    expect(eligible(step.if, false, true)).toBe(true);
+    expect(eligible(step.if, true, false)).toBe(true);
+    expect(eligible(step.if, false, false)).toBe(false);
+    expect(eligible(step.if, false, true, "freeze")).toBe(false);
+  }
+  const github = {
+    event_name: "workflow_dispatch",
+    repository: "samartomar/aih-scan",
+    repository_id: "1336836161",
+    repository_owner_id: "9993940",
+    ref: "refs/heads/main",
+    workflow_ref:
+      "samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main",
+    sha: "a".repeat(40),
+    actor: "stomar-tech",
+    actor_id: "333589491",
+    triggering_actor: "stomar-tech",
+    run_attempt: "1",
+  };
+  const job = (always: () => boolean) =>
+    new Function("always", "github", "vars", `return (${workflow.jobs.upload.if});`)(
+      always,
+      github,
+      { SCAN_REPORT_REVIEWED_HEAD: github.sha },
+    );
+  expect(job(() => true)).toBe(true);
+  expect(job(() => false)).toBe(false);
+  const candidate = steps.find(
+    (step: { with?: { name?: string } }) => step.with?.name === "scan-refresh-candidate",
+  );
+  expect(eligible(candidate.if, false, true)).toBe(false);
+  for (const step of steps.filter(
+    (step: { id?: string; with?: { name?: string } }) =>
+      step.id !== "failure-evidence" &&
+      !step.with?.name?.startsWith("scan-refresh-NONPUBLISHABLE-"),
+  ))
+    expect(eligible(step.if, false, true)).toBe(false);
+});
+
 test("failed production workflow retains exact completed sibling bytes through nonpublishable bounded artifacts", () => {
   const directory = mkdtempSync(join(tmpdir(), "scan-failed-evidence-"));
   try {

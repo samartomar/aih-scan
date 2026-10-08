@@ -19,29 +19,32 @@ concurrency:
   cancel-in-progress: false
 jobs:
   upload:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1'
+    if: always() && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'stomar-tech' && github.actor_id == '333589491' && github.triggering_actor == 'stomar-tech' && github.run_attempt == '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - if: ${{ success() && !cancelled() }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - if: ${{ success() && !cancelled() }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
-      - run: npm ci --ignore-scripts && npm run build
+      - if: ${{ success() && !cancelled() }}
+        run: npm ci --ignore-scripts && npm run build
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.13"
-        if: ${{ inputs.phase == 'run' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
           version: 0.12.13
-        if: ${{ inputs.phase == 'run' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
       - name: Prepare fixed Linux namespace runtime
         run: |-
           set -euo pipefail
@@ -54,9 +57,9 @@ jobs:
           sudo install -m 0644 "${python_prefix}/lib/libpython3.13.so.1.0" /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
           sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
           sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
-        if: ${{ inputs.phase == 'run' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
       - name: Freeze reviewed input with a packed installed scanner
-        if: ${{ inputs.phase == 'freeze' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'freeze' }}
         env:
           INPUT_JSON: ${{ inputs.input_json }}
           INPUT_SHA: ${{ vars.SCAN_REFRESH_INPUT_SHA256 }}
@@ -92,9 +95,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-        if: ${{ inputs.phase == 'freeze' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'freeze' }}
       - name: Verify independently selected freeze run before downloading data
-        if: ${{ inputs.phase == 'run' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ vars.SCAN_REFRESH_FROZEN_RUN_ID }}
@@ -108,7 +111,7 @@ jobs:
           gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID" > run.json
           gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID/artifacts?per_page=100" > archives.json
           node tools/artifact/check-refresh-run.mjs run.json archives.json "$RUN_ID" "$HEAD" "$ARCHIVE_ID" "$ARCHIVE_DIGEST" scan-refresh-frozen
-      - if: ${{ inputs.phase == 'run' }}
+      - if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           artifact-ids: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_ID }}
@@ -117,7 +120,7 @@ jobs:
           github-token: ${{ github.token }}
           path: frozen
       - name: Execute frozen batch serially; retain truthful partial and diagnostic rows
-        if: ${{ inputs.phase == 'run' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
         env:
           MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
         run: |-
@@ -138,13 +141,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-        if: ${{ inputs.phase == 'run' }}
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
       - id: failure-evidence
         name: Retain bounded NONPUBLISHABLE original failure evidence
-        if: ${{ failure() && inputs.phase == 'run' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' }}
         run: node tools/artifact/retain-failure-evidence.mjs "$RUNNER_TEMP/candidate" frozen "$RUNNER_TEMP/failure-evidence"
       - name: Upload NONPUBLISHABLE failure root
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.root == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.root == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-root
@@ -153,7 +156,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure mattpocock--skills
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_0 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_0 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-mattpocock--skills
@@ -162,7 +165,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure affaan-m--ECC
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_1 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_1 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-affaan-m--ECC
@@ -171,7 +174,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure anthropics--skills
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_2 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_2 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-anthropics--skills
@@ -180,7 +183,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure obra--superpowers
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_3 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_3 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-obra--superpowers
@@ -189,7 +192,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure nextlevelbuilder--ui-ux-pro-max-skill
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_4 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_4 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-nextlevelbuilder--ui-ux-pro-max-skill
@@ -198,7 +201,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure DietrichGebert--ponytail
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_5 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_5 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-DietrichGebert--ponytail
@@ -207,7 +210,7 @@ jobs:
           compression-level: 0
           retention-days: 30
       - name: Upload NONPUBLISHABLE failure samartomar--aih-extensions
-        if: ${{ failure() && inputs.phase == 'run' && steps.failure-evidence.outputs.target_6 == 'true' }}
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_6 == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-NONPUBLISHABLE-samartomar--aih-extensions

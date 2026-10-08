@@ -10,6 +10,7 @@ export function ghApi({ command = spawnSync } = {}) {
       body,
       maximum = 2097152,
       accept = "application/vnd.github+json",
+      contentType = "application/json",
       timeout = 30000,
     } = {},
   ) {
@@ -24,13 +25,7 @@ export function ghApi({ command = spawnSync } = {}) {
       "-H",
       "X-GitHub-Api-Version: 2022-11-28",
     ];
-    if (body !== undefined)
-      args.push(
-        "--input",
-        "-",
-        "-H",
-        `Content-Type: ${accept === "application/octet-stream" ? "application/octet-stream" : "application/json"}`,
-      );
+    if (body !== undefined) args.push("--input", "-", "-H", `Content-Type: ${contentType}`);
     const result = command("gh", args, {
       input:
         body === undefined

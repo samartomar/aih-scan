@@ -4,6 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
+test("default gh commands negotiate JSON for Actions ZIP and uploads while retaining binary request content and release-asset Accept", () => {
+  const root = mkdtempSync(join(tmpdir(), "scan-gh-media-"));
+  try {
+    const driver = join(root, "media.mjs");
+    writeFileSync(
+      driver,
+      `import {ghTransport} from ${JSON.stringify(new URL("../../tools/artifact/publish-refresh-release.mjs", import.meta.url).href)};import {readFileSync} from 'node:fs';
+const command=(exe,args,options)=>{const path=args[1],headers=args.filter((_,i)=>args[i-1]==='-H');if(exe!=='gh'||args[0]!=='api')throw Error('Wrong subprocess');if(path.endsWith('/zip')&&!headers.includes('Accept: application/vnd.github+json'))throw Error('Actions415');if(path.includes('uploads.github.com')&&(!headers.includes('Accept: application/vnd.github+json')||!headers.includes('Content-Type: application/octet-stream')||!Buffer.isBuffer(options.input)))throw Error('Upload415');if(path.includes('/releases/assets/')&&!headers.includes('Accept: application/octet-stream'))throw Error('AssetJSON');return {status:0,stdout:Buffer.from('HTTP/2.0 '+(path.includes('uploads.github.com')?201:200)+' OK\\r\\n\\r\\nbinary'),stderr:Buffer.alloc(0)};};const transport=ghTransport({reviewedHead:'a'.repeat(40),command});transport.api.bytes('repos/samartomar/aih-scan/actions/artifacts/1/zip');await transport.upload(1,'fixture',Buffer.from('exact binary'));await transport.download(1,100);`,
+    );
+    const result = spawnSync(process.execPath, [driver], { encoding: "utf8", windowsHide: true });
+    expect(result.status, result.stderr).toBe(0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("normal gh subprocess checks operator/current main and refuses administration403 before writes without extracting a credential", () => {
   const directory = mkdtempSync(join(tmpdir(), "scan-normal-gh-"));
   try {

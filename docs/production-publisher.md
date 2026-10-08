@@ -8,6 +8,10 @@ Candidate acquisition and assembly have read-only authority. Actions finishes wi
 `scan-refresh-final-publication`; it has no release-write job. Final immutable release
 transport uses the normal maintainer's existing `gh` authentication, without extracting
 or exporting credentials. External Actions are full-commit pinned.
+Actions ZIP API downloads negotiate `application/vnd.github+json` while retaining
+the redirected ZIP response as exact binary bytes. Release-asset downloads use
+`application/octet-stream`; release uploads negotiate JSON responses with a
+separate `Content-Type: application/octet-stream` for their original binary body.
 
 The maintained signing identity remains
 `https://github.com/samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main`,

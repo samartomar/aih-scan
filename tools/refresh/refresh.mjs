@@ -142,18 +142,33 @@ export async function runBatch({ manifest, scannerTarball, scannerInstall, outpu
     mkdirSync(directory, { mode: 0o700 });
     let result;
     try {
-      scanner.verifyUnchanged();
-      result = await scanner.host.runScan(
-        {
-          schema: "urn:aihq:scan:request:1.0.0",
-          source: { kind: "git", repository: target.repositoryUrl, commit: target.commit },
-          selection: target.selection,
-          detectors: target.detectors,
-          limits: frozen.limits,
-        },
-        { signal },
-      );
-      scanner.verifyUnchanged();
+      if (signal?.aborted) {
+        result = {
+          schema: "urn:aihq:scan:run-result:1.0.0",
+          status: "diagnostic",
+          phase: "capture",
+          diagnostics: [
+            {
+              code: "producer-cancelled",
+              detail:
+                "This source was not started because the frozen batch was cancelled; no assessment identity is retained.",
+            },
+          ],
+        };
+      } else {
+        scanner.verifyUnchanged();
+        result = await scanner.host.runScan(
+          {
+            schema: "urn:aihq:scan:request:1.0.0",
+            source: { kind: "git", repository: target.repositoryUrl, commit: target.commit },
+            selection: target.selection,
+            detectors: target.detectors,
+            limits: frozen.limits,
+          },
+          { signal },
+        );
+        scanner.verifyUnchanged();
+      }
     } catch {
       result = {
         schema: "urn:aihq:scan:run-result:1.0.0",
@@ -335,16 +350,27 @@ async function cli() {
       `${JSON.stringify({ event: "scan-refresh.completed", phase: "freeze", runId: actionRunId(), batchId: manifest.batchId, manifestSha256: sha256(canonicalBytes(manifest)), targets: manifest.targets.length })}\n`,
     );
   } else {
-    const manifest = parseJson(readRegular(options.manifest, 2097152), 2097152, true),
+    const cancellation = new AbortController(),
+      onSignal = () => cancellation.abort();
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    let manifest, result;
+    try {
+      manifest = parseJson(readRegular(options.manifest, 2097152), 2097152, true);
       result = await runBatch({
         manifest,
         scannerTarball: options["scanner-tgz"],
         scannerInstall: options["scanner-install"],
         output,
+        signal: cancellation.signal,
       });
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+    }
     process.stdout.write(
       `${JSON.stringify({
-        event: "scan-refresh.completed",
+        event: cancellation.signal.aborted ? "scan-refresh.cancelled" : "scan-refresh.completed",
         phase: "run",
         runId: actionRunId(),
         inputSha256: sha256(canonicalBytes(manifest)),
@@ -353,6 +379,10 @@ async function cli() {
         targets: result.targets.length,
       })}\n`,
     );
+    if (cancellation.signal.aborted) {
+      process.exitCode = 2;
+      return;
+    }
     if (
       result.targets.some(
         (target) => target.status !== "assessment" || target.completion !== "complete",

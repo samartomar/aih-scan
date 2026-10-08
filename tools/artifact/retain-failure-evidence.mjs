@@ -50,7 +50,7 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
     schema: "urn:aihq:scan:nonpublishable-failure-evidence:1.0.0",
     publishable: false,
     phase: "candidate-production",
-    reason: "producer-or-preparation-or-transport-failure",
+    reason: "producer-or-preparation-or-transport-failure-or-cancellation",
     runId,
     root: [],
     targets: [],
