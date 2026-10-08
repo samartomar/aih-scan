@@ -63,7 +63,16 @@ beforeAll(() => {
     resolve(dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js"),
   ].find((path) => typeof path === "string" && existsSync(path));
   if (!npm) throw new Error("npm CLI unavailable");
-  const packed = execute([npm, "pack", "--json", "--pack-destination", temporary]);
+  // CI/verify builds first. Pack immutable prebuilt bytes without rewriting the
+  // shared dist tree that parallel historical subprocess consumers import.
+  const packed = execute([
+    npm,
+    "pack",
+    "--ignore-scripts",
+    "--json",
+    "--pack-destination",
+    temporary,
+  ]);
   expect(packed.status, packed.stderr).toBe(0);
   const tarball = join(temporary, "scanner.tgz");
   copyFileSync(join(temporary, JSON.parse(packed.stdout)[0].filename), tarball);

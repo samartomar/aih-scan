@@ -119,21 +119,18 @@ jobs:
           run-id: ${{ vars.SCAN_REFRESH_FROZEN_RUN_ID }}
           github-token: ${{ github.token }}
           path: frozen
-      - name: Execute frozen batch serially; retain truthful partial and diagnostic rows
+      - name: Restore exact retained scanner installation
         if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
         env:
           MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
         run: |-
           set -euo pipefail
           node tools/artifact/install-retained-scanner.mjs frozen "$MANIFEST_SHA" "$RUNNER_TEMP/scanner-work/consumer"
-          set +e
-          node tools/refresh/refresh.mjs run --manifest frozen/manifest.json --scanner-tgz frozen/scanner.tgz --scanner-install "$RUNNER_TEMP/scanner-work/consumer" --out "$RUNNER_TEMP/candidate"
-          status=$?
-          set -e
-          case "$status" in 0|1) ;; *) exit "$status";; esac
-          node tools/artifact/refresh-publication.mjs retain "$RUNNER_TEMP/candidate" frozen/scanner.tgz "$RUNNER_TEMP/scanner-work/consumer"
-          node tools/artifact/refresh-publication.mjs check "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/scanner-work/consumer" "$MANIFEST_SHA" "$RUNNER_TEMP/selection.json" transport
-          printf 'Producer coverage exit: %s; see every terminal row in inventory.json.\n' "$status"
+      - name: Execute frozen batch serially; retain truthful partial and diagnostic rows
+        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
+        env:
+          MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
+        run: exec bash tools/refresh/run-workflow.sh frozen/manifest.json frozen/scanner.tgz "$RUNNER_TEMP/scanner-work/consumer" "$RUNNER_TEMP/candidate" "$MANIFEST_SHA" "$RUNNER_TEMP/selection.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-refresh-candidate

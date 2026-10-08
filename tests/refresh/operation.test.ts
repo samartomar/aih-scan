@@ -65,12 +65,14 @@ process.exitCode=inventory.targets.some(target=>target.status!=='assessment'||ta
 }
 beforeAll(() => {
   temporary = mkdtempSync(join(tmpdir(), "scan-refresh-test-"));
+  // CI/verify builds first. Reuse those bytes: prepack would rewrite shared dist
+  // while parallel historical subprocess consumers are importing it.
   tarball = join(
     temporary,
     JSON.parse(
       run(
         process.execPath,
-        [npmCli, "pack", "--json", "--pack-destination", temporary],
+        [npmCli, "pack", "--ignore-scripts", "--json", "--pack-destination", temporary],
         repositoryRoot,
       ),
     )[0].filename,
@@ -415,11 +417,13 @@ manifest.batchId=batchId(manifest);writeFileSync(process.argv[2],canonicalBytes(
   }
 }, 120000);
 
-test("interrupted maintainer CLI preserves completed sibling bytes, accounts for all seven sources and stops new capture/detector work", async () => {
-  const manifest = frozenFixture("interrupted"),
-    boundary = join(temporary, "interrupt-boundary.cjs"),
-    output = join(temporary, "interrupted-candidates"),
-    trace = join(temporary, "interrupt-fetches.log");
+async function interruptedFixture(signal: NodeJS.Signals, shell: boolean) {
+  const identity = shell ? `shell-${signal}` : "interrupted";
+  const manifest = frozenFixture(identity),
+    boundary = join(temporary, `${identity}-boundary.cjs`),
+    output = join(temporary, `${identity}-candidates`),
+    trace = join(temporary, `${identity}-fetches.log`),
+    activePid = join(temporary, `${identity}-pid.txt`);
   const base = readFileSync(join(temporary, "git-boundary.cjs"), "utf8");
   writeFileSync(
     boundary,
@@ -431,31 +435,48 @@ test("interrupted maintainer CLI preserves completed sibling bytes, accounts for
 // this boundary does not establish real Linux process-tree containment.
 if(fixtureHostPlatform==='win32'){const nativeKill=process.kill.bind(process);process.kill=(pid,...args)=>nativeKill(pid<0?-pid:pid,...args);}
 let fixtureFetches=0;const fixtureSpawn=cp.spawn;
-cp.spawn=function(executable,args,options){if(executable===process.execPath&&args?.[0]?.endsWith('git-command.js')&&JSON.parse(args[1]).includes('fetch')){fs.appendFileSync(${JSON.stringify(trace)},'fetch\\n');fixtureFetches++;if(fixtureFetches===2){const child=original(process.execPath,['-e','setTimeout(()=>{},60000)'],options);setImmediate(()=>process.send?.({phase:'second-source'}));return child;}}return fixtureSpawn(executable,args,options);};
+cp.spawn=function(executable,args,options){if(executable===process.execPath&&args?.[0]?.endsWith('git-command.js')&&JSON.parse(args[1]).includes('fetch')){fs.appendFileSync(${JSON.stringify(trace)},'fetch\\n');fixtureFetches++;if(fixtureFetches===2){const child=original(process.execPath,['-e','setTimeout(()=>{},60000)'],options);fs.writeFileSync(${JSON.stringify(activePid)},String(process.pid));setImmediate(()=>process.send?.({phase:'second-source'}));return child;}}return fixtureSpawn(executable,args,options);};
 // Windows cannot deliver POSIX signals to Node. Only this labelled process ingress
 // translates real parent IPC into the same signal event; Linux sends actual SIGTERM.
 process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIGTERM');process.disconnect();}});process.channel?.unref();moduleApi.syncBuiltinESMExports();`,
   );
+  const cliArgs = [
+    "--require",
+    boundary,
+    join(repositoryRoot, "tools/refresh/refresh.mjs"),
+    "run",
+    "--manifest",
+    manifest,
+    "--scanner-tgz",
+    tarball,
+    "--scanner-install",
+    consumer,
+    "--out",
+    output,
+  ];
   const child = spawn(
-    process.execPath,
-    [
-      "--require",
-      boundary,
-      join(repositoryRoot, "tools/refresh/refresh.mjs"),
-      "run",
-      "--manifest",
-      manifest,
-      "--scanner-tgz",
-      tarball,
-      "--scanner-install",
-      consumer,
-      "--out",
-      output,
-    ],
-    { windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] },
+    shell ? "bash" : process.execPath,
+    shell
+      ? [
+          join(repositoryRoot, "tools/refresh/run-workflow.sh"),
+          manifest,
+          tarball,
+          consumer,
+          output,
+          "a".repeat(64),
+          join(temporary, `${identity}-selection.json`),
+        ]
+      : cliArgs,
+    {
+      cwd: repositoryRoot,
+      env: shell ? { ...process.env, NODE_OPTIONS: `--require=${boundary}` } : process.env,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe", shell ? "ignore" : "ipc"],
+    },
   );
   let stdout = "",
     stderr = "",
+    interruptedAt: number | undefined,
     originals: Map<string, Buffer> | undefined;
   child.stdout?.on("data", (chunk) => {
     stdout += chunk;
@@ -463,7 +484,8 @@ process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIG
   child.stderr?.on("data", (chunk) => {
     stderr += chunk;
   });
-  child.on("message", () => {
+  const interrupt = () => {
+    interruptedAt = Date.now();
     originals = new Map(
       ["result.json", "artifact.json", "statement.json", "candidate.json"].map((name) => [
         name,
@@ -471,24 +493,38 @@ process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIG
       ]),
     );
     if (process.platform === "win32") child.send("fixture-SIGTERM");
-    else child.kill("SIGTERM");
-  });
+    else child.kill(signal); // The shell test signals the actual Bash entry PID.
+  };
+  child.on("message", interrupt);
+  const poll = shell
+    ? setInterval(() => {
+        if (originals || !existsSync(activePid)) return;
+        interrupt();
+      }, 25)
+    : undefined;
   const status = await new Promise<number | null>((resolve, reject) => {
     const deadline = setTimeout(() => {
       child.kill("SIGKILL");
+      if (shell && existsSync(activePid))
+        process.kill(Number(readFileSync(activePid, "utf8")), "SIGKILL");
+      clearInterval(poll);
       reject(new Error(`Interrupted CLI did not finish bounded cleanup: ${stderr}`));
     }, 20000);
     child.once("error", (error) => {
       clearTimeout(deadline);
+      clearInterval(poll);
       reject(error);
     });
     child.once("close", (code) => {
       clearTimeout(deadline);
+      clearInterval(poll);
       resolve(code);
     });
   });
   expect(status, stderr).toBe(2);
   expect(originals).toBeDefined();
+  expect(interruptedAt).toBeDefined();
+  expect(Date.now() - (interruptedAt ?? 0)).toBeLessThan(7000);
   expect(JSON.parse(stdout).event).toBe("scan-refresh.cancelled");
   const inventory = JSON.parse(readFileSync(join(output, "inventory.json"), "utf8"));
   expect(inventory.targets).toHaveLength(7);
@@ -504,7 +540,8 @@ process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIG
       ),
   ).toBe(true);
   expect(readFileSync(trace, "utf8").trim().split("\n")).toHaveLength(2);
-  const recovery = join(temporary, "interrupted-evidence");
+  expect(existsSync(join(temporary, `${identity}-selection.json`))).toBe(false);
+  const recovery = join(temporary, `${identity}-evidence`);
   const retained = spawnSync(
     process.execPath,
     [
@@ -526,7 +563,19 @@ process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIG
       (row: { files: { status: string }[] }) => row.files[0]?.status === "retained",
     ),
   ).toBe(true);
+}
+
+test("interrupted maintainer CLI preserves completed sibling bytes, accounts for all seven sources and stops new capture/detector work", async () => {
+  await interruptedFixture("SIGTERM", false);
 }, 120000);
+
+test.skipIf(process.platform !== "linux").each(["SIGINT", "SIGTERM"] as const)(
+  "Linux workflow Bash entry-PID %s forwards cancellation and retains exact siblings and all seven rows",
+  async (signal) => {
+    await interruptedFixture(signal, true);
+  },
+  120000,
+);
 
 test.skipIf(
   process.platform !== "linux" ||

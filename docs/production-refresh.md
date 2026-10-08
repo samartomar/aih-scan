@@ -189,6 +189,10 @@ The producer job preserves the original identity guards with `always()` so bound
 cleanup remains eligible after cancellation. Ordinary setup/run/candidate-upload
 steps require success and a noncancelled state. Only NONPUBLISHABLE cleanup uses
 `failure() || cancelled()`, including cancellation with no preceding failed step.
+The execution step replaces its entry shell with `run-workflow.sh`. That wrapper
+forwards entry-PID SIGINT/SIGTERM to the active Node CLI and waits for its graceful
+seven-row cleanup. Cancellation exits 2 and prevents retention/check from admitting
+the output as a candidate; only the separate NONPUBLISHABLE path remains eligible.
 GitHub's cancellation cleanup window is finite; SIGKILL, forced runner loss or
 failed cleanup/upload can prevent retention. No recovery from those states is promised.
 

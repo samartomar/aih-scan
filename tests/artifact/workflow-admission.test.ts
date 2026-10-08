@@ -172,11 +172,14 @@ test("producer freezes reviewed package data separately and runs without signing
     with?: Record<string, string>;
   }[];
   const body = JSON.stringify(steps);
+  const execution = steps.find((step) => step.run?.includes("run-workflow.sh"));
+  const wrapper = readFileSync("tools/refresh/run-workflow.sh", "utf8");
   expect(body).toContain("refresh.mjs freeze");
-  expect(body).toContain("refresh.mjs run");
+  expect(execution?.run).toMatch(/^exec bash tools\/refresh\/run-workflow\.sh /);
+  expect(wrapper).toContain("refresh.mjs run");
   expect(body).toContain("install-retained-scanner.mjs");
   expect(body).toContain("retain");
-  expect(body).toContain("0|1");
+  expect(wrapper).toContain("0|1");
   expect(body).not.toContain("id-token");
   expect(steps.some((step) => step.uses?.includes("actions/attest@"))).toBe(false);
   expect(
