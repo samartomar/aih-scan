@@ -14,6 +14,14 @@ export function ghApi({ command = spawnSync } = {}) {
       timeout = 30000,
     } = {},
   ) {
+    if (body !== undefined && ["GET", "HEAD"].includes(method.toUpperCase()))
+      throw new Error("GET/HEAD request body refused");
+    const input =
+      body === undefined
+        ? undefined
+        : Buffer.isBuffer(body)
+          ? body
+          : Buffer.from(JSON.stringify(body));
     const args = [
       "api",
       path,
@@ -25,14 +33,17 @@ export function ghApi({ command = spawnSync } = {}) {
       "-H",
       "X-GitHub-Api-Version: 2022-11-28",
     ];
-    if (body !== undefined) args.push("--input", "-", "-H", `Content-Type: ${contentType}`);
+    if (input !== undefined)
+      args.push(
+        "--input",
+        "-",
+        "-H",
+        `Content-Type: ${contentType}`,
+        "-H",
+        `Content-Length: ${input.length}`,
+      );
     const result = command("gh", args, {
-      input:
-        body === undefined
-          ? undefined
-          : Buffer.isBuffer(body)
-            ? body
-            : Buffer.from(JSON.stringify(body)),
+      input,
       encoding: "buffer",
       maxBuffer: maximum + 65536,
       timeout,
