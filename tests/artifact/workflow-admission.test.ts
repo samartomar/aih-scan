@@ -33,6 +33,8 @@ const context = (name: string) => ({
     candidate_run_id: "123",
     manifest_sha256: "c".repeat(64),
     selection_sha256: "d".repeat(64),
+    recovery_head: "",
+    recovery_custody_base64: "",
   },
 });
 // Evaluate the actual admission expression from reviewed configuration. These
@@ -49,12 +51,18 @@ const admits = (expression: string, value: ReturnType<typeof context>) => {
   );
 };
 
-test("only the sole maintainer's reviewed first manual main run can enter each publisher job", () => {
+test("only the sole maintainer's reviewed first manual main run can enter each production publisher job", () => {
   for (const name of ["publisher", "candidate-upload"]) {
     const config = workflow(name);
     expect(Object.keys(config.on)).toEqual(["workflow_dispatch"]);
     expect(config.permissions).toEqual({});
-    for (const job of Object.values(config.jobs) as { if: string }[]) {
+    const productionJobs =
+      name === "publisher"
+        ? ["bounded-candidate", "signer", "authenticate-before-promotion"].map(
+            (id) => config.jobs[id],
+          )
+        : Object.values(config.jobs);
+    for (const job of productionJobs as { if: string }[]) {
       const selected = context(name);
       expect(admits(job.if, selected)).toBe(true);
       for (const [key, value] of Object.entries({
@@ -112,6 +120,77 @@ test("only the sole maintainer's reviewed first manual main run can enter each p
       }
     }
   }
+});
+
+test("retained recovery admits only the selected owner branch run and has draft-transfer authority alone", () => {
+  const config = workflow("publisher"),
+    job = config.jobs["transfer-retained-original"];
+  const selected = context("publisher");
+  selected.github.ref = "refs/heads/codex/scan-94-upload-framing";
+  selected.github.workflow_ref =
+    "samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/codex/scan-94-upload-framing";
+  selected.inputs.recovery_head = selected.github.sha;
+  selected.inputs.recovery_custody_base64 = "independently-reviewed-original-bytes";
+  selected.inputs.candidate_run_id = "37823479906";
+  selected.inputs.manifest_sha256 =
+    "d69505e26bfb0516ed43b0f8a96054546779cc6d4b6302442817f69b9f4247ab";
+  selected.inputs.selection_sha256 =
+    "c5193fc57c6ddc0deba91f054009c3cb3287e01507303ae189e643f45cbbe77e";
+  expect(admits(job.if, selected)).toBe(true);
+  expect(admits(job.if, context("publisher"))).toBe(false);
+  for (const [key, value] of Object.entries({
+    event_name: "push",
+    repository: "other/aih-scan",
+    repository_id: "1",
+    repository_owner_id: "1",
+    actor: "stomar-tech",
+    actor_id: "1",
+    triggering_actor: "stomar-tech",
+    run_attempt: "2",
+    sha: "b".repeat(40),
+    ref: "refs/heads/main",
+    workflow_ref: "other",
+  })) {
+    const changed = structuredClone(selected);
+    changed.github[key as keyof typeof changed.github] = value;
+    expect(admits(job.if, changed), `recovery refuses ${key}`).toBe(false);
+  }
+  for (const [key, value] of Object.entries({
+    recovery_head: "b".repeat(40),
+    recovery_custody_base64: "",
+    candidate_run_id: "1",
+    manifest_sha256: "0".repeat(64),
+    selection_sha256: "0".repeat(64),
+  })) {
+    const changed = structuredClone(selected);
+    changed.inputs[key as keyof typeof changed.inputs] = value;
+    expect(admits(job.if, changed), `recovery refuses ${key}`).toBe(false);
+  }
+  for (const name of ["bounded-candidate", "signer", "authenticate-before-promotion"]) {
+    expect(admits(config.jobs[name].if, selected), `${name} stays main-only`).toBe(false);
+  }
+  expect(job.permissions).toEqual({ contents: "write", actions: "read" });
+  expect(job.environment).toBeUndefined();
+  expect(job.needs).toBeUndefined();
+  expect(job["timeout-minutes"]).toBe(30);
+  expect(job["runs-on"]).toBe("ubuntu-24.04");
+  expect(job.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
+  expect(job.steps[1].with["node-version"]).toBe("24.15.0");
+  const helper = job.steps.find((step: { run?: string }) =>
+    step.run?.includes("recover-retained-final.mjs"),
+  );
+  expect(helper.env).toEqual({ GH_TOKEN: "${{ github.token }}" });
+  expect(helper.run).not.toMatch(/\$\{\{\s*inputs\./);
+  expect(JSON.stringify(job)).not.toMatch(
+    /actions\/attest@|id-token|attestations|environment|publish-final\.mjs|runScan|PATCH/,
+  );
+  const outcome = job.steps.at(-1);
+  expect(outcome.if).toBe("${{ always() }}");
+  expect(outcome.with.path).toBe("${{ runner.temp }}/retained-final-recovery/audit/");
+  for (const name of ["candidate_run_id", "manifest_sha256", "selection_sha256"])
+    expect(config.on.workflow_dispatch.inputs[name].required).toBe(true);
+  for (const name of ["recovery_head", "recovery_custody_base64"])
+    expect(config.on.workflow_dispatch.inputs[name].required).toBe(false);
 });
 
 test("publisher checks run custody before the signer, downloads selected immutable IDs and uses independently maintained trust", () => {
@@ -494,8 +573,17 @@ test("signing alone has token authority and authenticated publication stays behi
   expect(jobs.signer.needs).toBe("bounded-candidate");
   expect(jobs["authenticate-before-promotion"].needs).toEqual(["bounded-candidate", "signer"]);
   expect(jobs["publish-immutable"]).toBeUndefined();
-  expect(Object.keys(jobs)).toHaveLength(3);
-  expect(JSON.stringify(jobs)).not.toContain('"contents":"write"');
+  const productionJobs = Object.fromEntries(
+    ["bounded-candidate", "signer", "authenticate-before-promotion"].map((id) => [id, jobs[id]]),
+  );
+  expect(Object.keys(jobs).sort()).toEqual([
+    "authenticate-before-promotion",
+    "bounded-candidate",
+    "signer",
+    "transfer-retained-original",
+  ]);
+  expect(Object.keys(productionJobs)).toHaveLength(3);
+  expect(JSON.stringify(productionJobs)).not.toContain('"contents":"write"');
   expect(JSON.stringify(jobs)).toContain("scan-refresh-final-publication");
   for (const job of Object.values(jobs) as {
     "continue-on-error"?: boolean;
