@@ -28,6 +28,37 @@ export async function findRelease(tag, published, page) {
   throw new Error("Release discovery pagination budget exhausted");
 }
 
+// Embedded release.assets can omit failed/starter assets. Admit only a closed
+// dedicated collection, including every state, before any upload or promotion.
+async function collectAssets(id, page) {
+  if (!Number.isSafeInteger(id) || id < 1) throw new Error("Invalid release collection ID");
+  const assets = [],
+    ids = new Set(),
+    names = new Set();
+  for (let number = 1; number <= 3; number++) {
+    const rows = await page(number);
+    if (!Array.isArray(rows) || rows.length > 30)
+      throw new Error("Invalid bounded release asset page");
+    for (const asset of rows) {
+      if (
+        !asset ||
+        !Number.isSafeInteger(asset.id) ||
+        asset.id < 1 ||
+        typeof asset.name !== "string" ||
+        ids.has(asset.id) ||
+        names.has(asset.name)
+      )
+        throw new Error("Invalid or duplicate release collection asset");
+      ids.add(asset.id);
+      names.add(asset.name);
+      assets.push(asset);
+      if (assets.length > 64) throw new Error("Release asset collection budget exceeded");
+    }
+    if (rows.length < 30) return assets;
+  }
+  throw new Error("Release asset collection pagination exhausted");
+}
+
 export async function publishRelease({ directory, transport, custodyPath }) {
   const receiptBytes = readRegular(resolve(directory, "publication.json"), 2097152);
   const receipt = parseJson(receiptBytes, 2097152, true);
@@ -120,54 +151,71 @@ export async function publishRelease({ directory, transport, custodyPath }) {
       if (!release) throw error;
     }
   }
-  if (release.tag_name !== tag || !Array.isArray(release.assets) || release.assets.length > 64)
+  if (
+    release.tag_name !== tag ||
+    !Number.isSafeInteger(release.id) ||
+    release.id < 1 ||
+    typeof release.draft !== "boolean"
+  )
     throw new Error("Release identity refused");
-  const existing = new Map();
-  for (const asset of release.assets) {
-    if ((!names.has(asset.name) && asset.name !== "publication.json") || existing.has(asset.name))
-      throw new Error("Unexpected release asset collision");
-    existing.set(asset.name, asset);
-  }
-  for (const asset of assets) {
-    const prior = existing.get(asset.name);
-    if (prior) {
-      const bytes = await transport.download(prior.id, asset.byteLength);
+  const releaseId = release.id;
+  const expected = new Map(assets.map((asset) => [asset.name, asset]));
+  async function verifyCollection(complete, priorIds = new Map()) {
+    const collection = await transport.listAssets(releaseId);
+    const existing = new Map();
+    if (!Array.isArray(collection) || collection.length > 64)
+      throw new Error("Invalid release asset collection");
+    const ids = new Set();
+    // Validate every row before downloads, and every byte before any write.
+    for (const remote of collection) {
+      const asset = expected.get(remote?.name);
       if (
-        prior.size !== asset.byteLength ||
-        bytes.length !== asset.byteLength ||
-        sha256(bytes) !== asset.sha256
+        !asset ||
+        !Number.isSafeInteger(remote.id) ||
+        remote.id < 1 ||
+        existing.has(remote.name) ||
+        ids.has(remote.id) ||
+        remote.state !== "uploaded" ||
+        remote.size !== asset.byteLength ||
+        remote.digest !== `sha256:${asset.sha256}` ||
+        (priorIds.has(remote.name) && priorIds.get(remote.name) !== remote.id)
       )
+        throw new Error("Unexpected, incomplete or colliding release collection asset");
+      existing.set(remote.name, remote);
+      ids.add(remote.id);
+    }
+    if (complete && existing.size !== assets.length)
+      throw new Error("Complete release asset collection required");
+    for (const [name, remote] of existing) {
+      const asset = expected.get(name);
+      const bytes = await transport.download(remote.id, asset.byteLength);
+      if (bytes.length !== asset.byteLength || sha256(bytes) !== asset.sha256)
         throw new Error("Immutable release asset collision");
-    } else {
+    }
+    return existing;
+  }
+  const existing = await verifyCollection(!release.draft);
+  for (const asset of assets) {
+    if (!existing.has(asset.name)) {
       if (!release.draft) throw new Error("Published release is missing immutable data");
       await transport.upload(
-        release.id,
+        releaseId,
         asset.name,
         asset.bytes ?? readRegular(resolve(directory, asset.path), 128 * 1024 * 1024),
       );
     }
   }
-  if (release.draft) release = await transport.publish(release.id);
+  if (release.draft) {
+    await verifyCollection(true, new Map([...existing].map(([name, asset]) => [name, asset.id])));
+    release = await transport.publish(releaseId);
+  }
   if (release.immutable !== true)
     throw new Error(
       "GitHub immutable releases must be enabled; platform immutability not confirmed",
     );
-  if (
-    release.draft !== false ||
-    release.tag_name !== tag ||
-    !Array.isArray(release.assets) ||
-    release.assets.length !== assets.length ||
-    new Set(release.assets.map((asset) => asset.id)).size !== assets.length ||
-    release.assets.some(
-      (asset) =>
-        !Number.isSafeInteger(asset.id) ||
-        asset.id < 1 ||
-        !assets.some(
-          (expected) => expected.name === asset.name && expected.byteLength === asset.size,
-        ),
-    )
-  )
+  if (release.draft !== false || release.tag_name !== tag || release.id !== releaseId)
     throw new Error("Published immutable asset inventory differs");
+  await verifyCollection(true, new Map([...existing].map(([name, asset]) => [name, asset.id])));
   return {
     event: "scan-refresh-release.completed",
     phase: "durable-publication",
@@ -219,6 +267,8 @@ export function githubTransport({ token, reviewedHead, fetch: request = fetch })
         () => json(`/releases/tags/${tag}`),
         (page) => json(`/releases?per_page=100&page=${page}`),
       ),
+    listAssets: (id) =>
+      collectAssets(id, (page) => json(`/releases/${id}/assets?per_page=30&page=${page}`)),
     create: (tag) =>
       json("/releases", "POST", {
         tag_name: tag,
@@ -297,6 +347,10 @@ export function ghTransport({ reviewedHead, command, api = ghApi({ command }) })
         tag,
         () => api.json(`${base}/releases/tags/${tag}`),
         (page) => api.json(`${base}/releases?per_page=100&page=${page}`),
+      ),
+    listAssets: (id) =>
+      collectAssets(id, (page) =>
+        api.json(`${base}/releases/${id}/assets?per_page=30&page=${page}`),
       ),
     create: (tag) =>
       api.json(`${base}/releases`, {
