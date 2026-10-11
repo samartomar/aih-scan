@@ -529,8 +529,8 @@ receipt bindings, every annex, and the embedded custody signature. The embedded
 ephemeral public key makes the file portable but does not make that key trusted;
 publisher provenance is a separate verification boundary.
 
-`.github/workflows/baseline-publication.yml` is retained as a disabled historical
-producer after accepted replacement publication; it is not a current production path.
+`.github/workflows/baseline-publication.yml` is retained as a historical producer
+after accepted replacement publication; it is not a current production path.
 It was manual-dispatch only. It accepted either the digest-bound request-set inputs
 above or the optional exact Core request-client inputs, built publications in a
 read-only job, transferred them by artifact digest, and gave write/OIDC permissions
@@ -545,6 +545,9 @@ they ran as one set: each analyzer ran once for all of them. So a set was publis
 whole or not at all. When only some of its requests already had completed
 publications, the run stopped. A fresh `publication_generation` was dispatched to
 publish the whole set again.
+
+The rest of this section records that historical workflow's reuse and release
+rules as they stood.
 
 Reuse checks the 90-day public-report freshness policy against the original
 authenticated report signing date and the verified publication timestamp.

@@ -164,8 +164,8 @@ still reads the retained historical seven-report proof.
 ## Accepted first production batch
 
 The first production batch was accepted. New baseline production is retired: the
-baseline workflow file is kept unchanged as a historical producer and the workflow
-is disabled in repository settings. Historical reports, readers and the shared
+baseline workflow file is kept unchanged as a historical producer, and disabling the
+workflow in repository settings is part of closing samartomar/aih-scan#94. Historical reports, readers and the shared
 detector implementation remain available.
 
 | Item | Value |
@@ -179,8 +179,8 @@ detector implementation remain available.
 | Frozen manifest SHA-256 | `d69505e26bfb0516ed43b0f8a96054546779cc6d4b6302442817f69b9f4247ab` |
 | Candidate run | 37823479906, at source head `53dc0cffd2704f0cefd76b53abe850651d1e9505` |
 | Publisher run | 37828958516 |
-| Asset transfer run | 38101548439 (42 assets that could not be uploaded from the maintainer workstation; all 44 byte-verified against the retained originals before the single publish) |
-| Sources | mattpocock/skills@f3fc5632, affaan-m/ECC@ef648e01, anthropics/skills@683bc88e, obra/superpowers@8ca22dba, nextlevelbuilder/ui-ux-pro-max-skill@1a2c459b, DietrichGebert/ponytail@b088b2df, samartomar/aih-extensions@93b4290f |
+| Asset transfer run | 38101548439, a temporary transfer job that has since been removed (42 assets that could not be uploaded from the maintainer workstation; all 44 byte-verified against the retained originals before the single publish) |
+| Sources | mattpocock/skills@f3fc5632f401156837ee3872f14fe33ccf1024ea, affaan-m/ECC@ef648e01899ba3e8dc6371642deaaf64b4477775, anthropics/skills@683bc88e56f3e09ba94f7055977f3d3aa499f202, obra/superpowers@8ca22dba9a94f28898bbce59f2537ff4d87c747d, nextlevelbuilder/ui-ux-pro-max-skill@1a2c459b35f26116fd165b0a0f30597f252749ff, DietrichGebert/ponytail@b088b2df6e08d4306c6a3c3d575fe38c2d2d2989, samartomar/aih-extensions@93b4290f1896894e6fd3903fafd3a660d670fb2a |
 
 Independent installed-consumer acceptance on 2026-10-11 re-downloaded and checked
 all 44 durable assets. The four requested detectors succeeded for every source, and
