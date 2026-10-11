@@ -7,8 +7,9 @@
   accounting, resource measurements, partial results and original annexes.
 - Replace the fixed report proof with reusable protected detached publication and
   durable immutable report discovery through independently verified maintainer
-  publication. Preserve publisher trust and historical APIs; baseline production
-  retirement requires real replacement acceptance.
+  publication. Preserve publisher trust and historical APIs. The first production batch
+  is accepted and new baseline production is retired; historical reports, readers
+  and shared detector implementation remain available.
 - Admit only the sole maintainer `samartomar` to active manual refresh and final
   custody; retain required human signing approval, allowing the owner to approve
   their own run. Preserve historical fixed-proof actor policy and signing trust.
