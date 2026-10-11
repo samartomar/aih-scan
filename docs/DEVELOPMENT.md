@@ -19,7 +19,11 @@ publisher activation needs the separate steps in
 
 ## CI and release boundaries
 
-The local pre-commit hook runs typecheck, lint, and tests. Any CI added here may
+The local pre-commit hook runs typecheck, lint, and tests. It is inactive until a clone
+enables it with `git config core.hooksPath .githooks` (or `npm run repo:init`, which also
+installs the optional helpers below); installing dependencies does not enable it. CI runs
+`npm run verify:workflow-action-pins` and an `actionlint` job over `.github/workflows`.
+Biome lints `tools/**/*.mjs` but does not format them. Any CI added here may
 perform only read-only verification and must not run repository initialization.
 
 Every PR carries exactly one `semver:none|patch|minor|major` label. Repository-only

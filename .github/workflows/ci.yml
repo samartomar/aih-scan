@@ -29,6 +29,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run verify:workflow-action-pins
       - run: npm run build
       - run: npm run test:cov
       - name: Verify the fixed Python analyzer runtimes inside Bubblewrap
@@ -156,3 +157,23 @@ jobs:
         env:
           AIH_SCAN_REFRESH_LINUX_PROOF: "1"
         run: npx --no-install vitest run tests/refresh/operation.test.ts
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint workflows with a checksum-verified actionlint release
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tool_dir="$(mktemp -d)"
+          curl --fail --silent --show-error --location --output "${tool_dir}/${archive}"             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${tool_dir}/${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${tool_dir}/${archive}" --directory "${tool_dir}" actionlint
+          "${tool_dir}/actionlint" -color
