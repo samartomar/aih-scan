@@ -2,7 +2,7 @@
 
 The refresh is a finite maintainer operation: freeze input, execute the frozen batch,
 review the candidate, protected signing/assembly, review final custody, maintainer release
-publication, offline acceptance, then any authorized baseline retirement. The two
+publication and offline acceptance. New baseline production is retired. The two
 manual workflows run only the reviewed main commit and first run attempt by
 `samartomar` (GitHub user 9993940), including the triggering actor. The same sole
 maintainer supplies the protected signing environment's human approval and may
@@ -159,11 +159,36 @@ node tools/artifact/refresh-publication.mjs verify-publication publication scrat
 
 Read/authenticate each exact artifact and Scan ID through installed public Scan
 APIs and the current maintained installed Core consumer. Verify the legacy reader
-still reads the retained historical seven-report proof. Baseline retirement has
-a stricter acceptance gate: all seven current targets must be authenticated,
-complete and relevant to the declared four-detector profile, or an explicit owner
-decision must address the refusal/profile change. Durable partial publication
-alone does not satisfy that gate.
+still reads the retained historical seven-report proof.
+
+## Accepted first production batch
+
+The first production batch was accepted. New baseline production is retired: the
+baseline workflow file is kept unchanged as a historical producer and the workflow
+is disabled in repository settings. Historical reports, readers and the shared
+detector implementation remain available.
+
+| Item | Value |
+| --- | --- |
+| Release | [scan-report-batch-636c1710f88f0f0e6f41beecba42252668cf30d2cd6917dadaae73a4c529c5f4](https://github.com/samartomar/aih-scan/releases/tag/scan-report-batch-636c1710f88f0f0e6f41beecba42252668cf30d2cd6917dadaae73a4c529c5f4) |
+| Release id | 407274269 (immutable, 44 assets) |
+| Published at | 2026-10-11T01:26:55Z |
+| Batch id | `batch:sha256:636c1710f88f0f0e6f41beecba42252668cf30d2cd6917dadaae73a4c529c5f4` |
+| Final publication custody SHA-256 | `577cfbf09915fda2df9ef649970ba0df7a9db41455d8707c0aa8fadd2ebd3cf9` |
+| Publication receipt SHA-256 | `6ed0a926604c54fd23a7aeb2999127affd2e44cb76909efc39cf7e7597893e33` |
+| Frozen manifest SHA-256 | `d69505e26bfb0516ed43b0f8a96054546779cc6d4b6302442817f69b9f4247ab` |
+| Candidate run | 37823479906, at source head `53dc0cffd2704f0cefd76b53abe850651d1e9505` |
+| Publisher run | 37828958516 |
+| Asset transfer run | 38101548439 (42 assets that could not be uploaded from the maintainer workstation; all 44 byte-verified against the retained originals before the single publish) |
+| Sources | mattpocock/skills@f3fc5632, affaan-m/ECC@ef648e01, anthropics/skills@683bc88e, obra/superpowers@8ca22dba, nextlevelbuilder/ui-ux-pro-max-skill@1a2c459b, DietrichGebert/ponytail@b088b2df, samartomar/aih-extensions@93b4290f |
+
+Independent installed-consumer acceptance on 2026-10-11 re-downloaded and checked
+all 44 durable assets. The four requested detectors succeeded for every source, and
+installed `@aihq/scan` 0.5.0 and `@aihq/core` 1.0.0-dev.28 both authenticated every
+report, with zero network fetch attempts during acceptance. The accepted profile is
+native identity, trust lint, binding gate and Semgrep over the whole frozen captures.
+Cisco and SkillSpector were unavailable and Snyk is outside this profile; no vendor
+parity or MCP coverage is implied. See samartomar/aih-scan#94.
 
 ## Bounds and operator diagnosis
 

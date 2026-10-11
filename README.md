@@ -72,7 +72,8 @@ and Actions artifact retention. Final publication uses the normal maintainer's a
 GitHub CLI after checking the selected publisher output and authenticating its exact
 bytes independently. Unsigned candidates remain explicitly unsigned. Follow the
 [refresh runbook](docs/production-refresh.md) for exact input and output custody,
-installed-consumer acceptance and baseline retirement after replacement acceptance.
+installed-consumer acceptance. New baseline production is retired; historical
+reports, readers and shared detector implementation remain available.
 Catalog preparation continues independently of Scan.
 
 ### Historical package custody
@@ -528,22 +529,22 @@ receipt bindings, every annex, and the embedded custody signature. The embedded
 ephemeral public key makes the file portable but does not make that key trusted;
 publisher provenance is a separate verification boundary.
 
-`.github/workflows/baseline-publication.yml` is manual-dispatch only. It accepts
-either the digest-bound request-set inputs above or the optional exact Core
-request-client inputs, builds publications in a read-only
-job, transfers them by artifact digest, and gives write/OIDC permissions only to
-the protected publication job, which attests the exact publication files.
-Before analyzer setup, the build job checks for a
-completed publisher-and-request-addressed GitHub Release.
-Reuse requires the exact four-file closure, checksums,
-independent inspection, and GitHub attestation binding this workflow,
-`refs/heads/main`, and the current publisher commit. Only an absent release and
-tag is pending work; lookup, network, authentication, incomplete-release, or
-verification failures stop the run. Only pending requests reach analyzers, and
-they run as one set: each analyzer runs once for all of them. So a set is
-published whole or not at all. When only some of its requests already have
-completed publications, the run stops. Dispatch a fresh `publication_generation`
-to publish the whole set again.
+`.github/workflows/baseline-publication.yml` is retained as a disabled historical
+producer after accepted replacement publication; it is not a current production path.
+It was manual-dispatch only. It accepted either the digest-bound request-set inputs
+above or the optional exact Core request-client inputs, built publications in a
+read-only job, transferred them by artifact digest, and gave write/OIDC permissions
+only to the protected publication job, which attested the exact publication files.
+Before analyzer setup, the build job checked for a
+completed publisher-and-request-addressed GitHub Release. Reuse required the exact four-file
+closure, checksums, independent inspection, and GitHub attestation binding this
+workflow, `refs/heads/main`, and the then-current publisher commit. Only an absent
+release and tag was pending work; lookup, network, authentication, incomplete-release,
+or verification failures stopped the run. Only pending requests reached analyzers, and
+they ran as one set: each analyzer ran once for all of them. So a set was published
+whole or not at all. When only some of its requests already had completed
+publications, the run stopped. A fresh `publication_generation` was dispatched to
+publish the whole set again.
 
 Reuse checks the 90-day public-report freshness policy against the original
 authenticated report signing date and the verified publication timestamp.
