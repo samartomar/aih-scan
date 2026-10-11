@@ -177,6 +177,9 @@ describe("public API examples", () => {
         resolve(root, "examples", "load-scan.mjs"),
         join(fixture, "examples", "load-scan.mjs"),
       );
+      // Declare the stand-in as ESM itself, as the real package does, so the result does not
+      // depend on a stray package.json in a parent of the temp directory.
+      writeFileSync(join(fixture, "package.json"), JSON.stringify({ type: "module" }));
       writeFileSync(join(fixture, "dist", "index.js"), 'export const marker = "local-build";\n');
       const load = () =>
         spawnSync(

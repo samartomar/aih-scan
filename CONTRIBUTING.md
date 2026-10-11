@@ -9,4 +9,7 @@ maintainer-owned; external contributors need not apply them. Use `semver:none` o
 the merge requires no new public package bytes. See [VERSIONING.md](VERSIONING.md) and
 [RELEASING.md](RELEASING.md).
 
+The pre-commit hook in `.githooks` is not active after `npm ci --ignore-scripts`. Enable it
+once per clone with `git config core.hooksPath .githooks`; CI runs the same checks regardless.
+
 Sign off commits under the Developer Certificate of Origin with `git commit -s`.

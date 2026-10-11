@@ -5,6 +5,9 @@ This repository builds the `@aihq/scan` V2 API and CLI. Scan produces evidence; 
 [README.md](README.md) owns public usage and contract navigation.
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) owns contributor checks and helper setup;
 [RELEASING.md](RELEASING.md) owns release requirements.
+Before changing or operating the report publisher workflows, read
+[docs/production-publisher.md](docs/production-publisher.md) and
+[docs/production-refresh.md](docs/production-refresh.md).
 
 ## Safety boundaries
 

@@ -1,0 +1,8 @@
+# Existing shellcheck findings in workflows that this guardrail change does not edit.
+paths:
+  .github/workflows/cisco-linux-amd64-probe.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2034:warning:3:1: wheel appears unused'
+  .github/workflows/cisco-oci-equivalence.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2129:style:32:1: Consider using'
