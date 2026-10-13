@@ -1013,6 +1013,8 @@ describe("@aihq/scan release boundary (#12)", () => {
       files: [
         "dist",
         "schemas",
+        "docs/DETECTOR-DEFINITIONS.md",
+        "examples/detector-definitions",
         "tools/baseline-analyzers",
         "tools/verify-core-contract-lock-v2.mjs",
       ],

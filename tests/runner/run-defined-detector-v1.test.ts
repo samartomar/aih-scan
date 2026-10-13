@@ -69,7 +69,7 @@ beforeEach(() => {
   vi.stubEnv("USERPROFILE", home);
   vi.stubEnv("LOCALAPPDATA", join(home, "local"));
   vi.stubEnv("APPDATA", join(home, "roaming"));
-  if (process.platform !== "win32") vi.spyOn(process, "getuid").mockReturnValue(1000);
+  // Preserve the actual caller UID: fixture cache directories belong to that user.
   ruleBytes = "";
   scanOutput = undefined;
   scanEffect = undefined;
