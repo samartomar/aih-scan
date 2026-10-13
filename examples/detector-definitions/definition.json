@@ -1,0 +1,11 @@
+{
+  "schema": "urn:aihq:scan:detector-definition:1.0.0",
+  "detectorId": "organization.disallow-eval",
+  "version": "1",
+  "adapter": "semgrep-sarif-v1",
+  "profileId": "host-process-uv-v1",
+  "rules": {
+    "sha256": "8b280803a27704804257d182d9d8d3194d068c95af916c42831a584614a15bf5",
+    "byteLength": 171
+  }
+}

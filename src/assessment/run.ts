@@ -11,8 +11,18 @@ import { runBindingGateV1 } from "../detectors/binding-gate/index.js";
 import { runTrustLintV1 } from "../detectors/trust-lint/index.js";
 import { packageIdentity } from "../public/package-identity.js";
 import { type DetectorOptionsV1, readDetectorOptionsV1 } from "../runner/detector-options-v1.js";
-import { type RunDetectorV1Result, runDetectorV1 } from "../runner/run-detector-v1.js";
+import {
+  definedDetectorCapabilityV1,
+  type RunDetectorV1Result,
+  runDefinedDetectorV1,
+  runDetectorV1,
+} from "../runner/run-detector-v1.js";
 import { type CapturedSource, type CaptureOptions, captureSource } from "./capture.js";
+import {
+  type AdmittedSemgrepDefinitionV1,
+  admitDetectorDefinitionsV1,
+  type SuppliedDetectorDefinitionV1,
+} from "./detector-definition.js";
 import {
   createImplementationDigester,
   type ImplementationDigester,
@@ -67,6 +77,8 @@ import {
 } from "./types.js";
 
 export interface RunScanOptions extends CaptureOptions {
+  /** Closed portable definitions and exact rule bytes, admitted before source capture. */
+  detectorDefinitions?: readonly SuppliedDetectorDefinitionV1[];
   /**
    * A Scan-managed own-custody record of successful observations from earlier `runScan`
    * calls in this process, minted only by `createRetainedObservationsV1`. A value Scan did
@@ -131,10 +143,19 @@ const inProcessImplementations = new Map<
   ],
 ]);
 interface ResolvedDetector {
+  definition?: AdmittedSemgrepDefinitionV1;
   request: RequestedDetector;
   capability?: DetectorCapabilityV1;
   profile?: DetectorExecutionProfileV1;
   options?: DetectorOptionsV1;
+}
+function emptyConfiguration(configuration: Json): boolean {
+  return (
+    configuration !== null &&
+    typeof configuration === "object" &&
+    !Array.isArray(configuration) &&
+    Object.keys(configuration).length === 0
+  );
 }
 function configurationOptions(id: string, configuration: Json, paths: string[]) {
   const empty =
@@ -252,14 +273,21 @@ function observationInputFor(input: {
 async function resolvedDetectors(
   request: ScanRequest,
   paths: string[],
+  definitions: ReadonlyMap<string, AdmittedSemgrepDefinitionV1>,
 ): Promise<ResolvedDetector[]> {
   const resolved: ResolvedDetector[] = [];
   for (const detector of request.detectors) {
-    const capability = resolveDetectorCapabilityV1(detector.detectorId),
+    const definition = definitions.get(detector.detectorId);
+    if (definition && !emptyConfiguration(detector.configuration))
+      fail("Supplied detectors require empty configuration");
+    const capability = definition
+        ? definedDetectorCapabilityV1(definition)
+        : resolveDetectorCapabilityV1(detector.detectorId),
       profile = capability?.executionProfiles.find(
         (p) => p.id === (detector.profileId ?? capability.executionProfile.id),
       );
     const result: ResolvedDetector = {
+      ...(definition ? { definition } : {}),
       request: {
         detectorId: detector.detectorId,
         profileId: profile?.id ?? null,
@@ -269,7 +297,7 @@ async function resolvedDetectors(
       ...(capability ? { capability } : {}),
       ...(profile ? { profile } : {}),
     };
-    if (capability) {
+    if (capability && !definition) {
       const options = configurationOptions(detector.detectorId, detector.configuration, paths);
       if (!options.ok) fail("Detector configuration disagrees with resolved selection");
       if (options.options) result.options = options.options;
@@ -395,8 +423,19 @@ export async function runScanPrepared(
     diagnostics: [errorDiagnostic(error)],
   });
   let request: ScanRequest;
+  let definitions: ReadonlyMap<string, AdmittedSemgrepDefinitionV1>;
   try {
     request = requestSnapshot(raw);
+    definitions = await admitDetectorDefinitionsV1(options.detectorDefinitions);
+    for (const detector of request.detectors) {
+      const definition = definitions.get(detector.detectorId);
+      if (
+        definition &&
+        (!emptyConfiguration(detector.configuration) ||
+          (detector.profileId != null && detector.profileId !== definition.profileId))
+      )
+        fail("Supplied detectors require empty configuration and their declared execution profile");
+    }
   } catch (error) {
     return diagnostic("request", error);
   }
@@ -428,7 +467,7 @@ export async function runScanPrepared(
       moduleRoot: resolve(moduleDirectory, ".."),
       extension: extname(fileURLToPath(import.meta.url)),
     });
-    const resolved = await resolvedDetectors(resolvable, captured.selection.paths),
+    const resolved = await resolvedDetectors(resolvable, captured.selection.paths, definitions),
       results: DetectorResult[] = [],
       annexes: AnnexDescriptor[] = [],
       payloads: { id: string; bytesBase64: string }[] = [];
@@ -673,7 +712,10 @@ export async function runScanPrepared(
         );
         continue;
       }
-      const bindRules = detectorRuleBindings.get(id);
+      const definition = detector.definition;
+      const bindRules = definition
+        ? async () => definition.rules.sha256
+        : detectorRuleBindings.get(id);
       if (bindRules === undefined) {
         results.push(
           emptyResult(id, captured, "refused", [
@@ -707,6 +749,14 @@ export async function runScanPrepared(
         adapterSha256 = await implementationDigester.digest(
           ...(inProcess?.adapterRoots ?? ["runner/run-detector-v1"]),
         );
+        if (detector.definition)
+          adapterSha256 = await sha256(
+            canonicalBytes({
+              domain: "aih-supplied-detector-adapter-v1",
+              implementationSha256: adapterSha256,
+              definitionSha256: detector.definition.definitionSha256,
+            }),
+          );
         rulesSha256 = await bindRules(implementationDigester);
         implementationDigester.assertUnchanged();
       } catch {
@@ -855,19 +905,35 @@ export async function runScanPrepared(
               producer: packageIdentity,
               implementation: inProcess.implementation,
             })
-          : await runDetectorV1({
-              detectorId: id,
-              subject: {
-                kind: "source-tree",
-                sourceRoot: captured.root,
-                selectedClosurePaths: captured.selection.paths,
-                excludedPaths: captured.selection.excludedPaths,
-              },
-              executionProfileId: detector.profile.id,
-              signal: options.signal,
-              timeoutMs: limits.detectorTimeoutMs,
-              ...(detector.options ? { detectorOptions: detector.options } : {}),
-            });
+          : detector.definition
+            ? await runDefinedDetectorV1(
+                {
+                  detectorId: id,
+                  subject: {
+                    kind: "source-tree",
+                    sourceRoot: captured.root,
+                    selectedClosurePaths: captured.selection.paths,
+                    excludedPaths: captured.selection.excludedPaths,
+                  },
+                  executionProfileId: detector.definition.profileId,
+                  signal: options.signal,
+                  timeoutMs: limits.detectorTimeoutMs,
+                },
+                detector.definition,
+              )
+            : await runDetectorV1({
+                detectorId: id,
+                subject: {
+                  kind: "source-tree",
+                  sourceRoot: captured.root,
+                  selectedClosurePaths: captured.selection.paths,
+                  excludedPaths: captured.selection.excludedPaths,
+                },
+                executionProfileId: detector.profile.id,
+                signal: options.signal,
+                timeoutMs: limits.detectorTimeoutMs,
+                ...(detector.options ? { detectorOptions: detector.options } : {}),
+              });
       } catch {
         run = {
           outcome: "refused",
@@ -915,7 +981,7 @@ export async function runScanPrepared(
           format: "aih-observation-v1",
           input: observationInputFor({
             detectorId: id,
-            detectorVersion: native.analyzerVersion,
+            detectorVersion: detector.definition?.version ?? native.analyzerVersion,
             adapterSha256,
             rulesSha256,
             configurationSha256: detector.request.configurationSha256,

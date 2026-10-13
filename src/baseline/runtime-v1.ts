@@ -1283,6 +1283,7 @@ type HostUvSession = Readonly<{
 async function hostProcessUv(
   analyzer: "semgrep" | "cisco",
   input: HostUvSessionInput,
+  rulesUtf8: string = semgrepRules,
 ): Promise<AnalyzerOutput> {
   const project = analyzer === "semgrep" ? semgrepProject : ciscoProject;
   const version = analyzer === "semgrep" ? SEMGREP_VERSION_V1 : CISCO_SKILL_SCANNER_VERSION_V1;
@@ -1290,7 +1291,7 @@ async function hostProcessUv(
     const { run, tool, uvRun, hostRuntime } = session;
     const roots = hostRoots(input.sourceRoot);
     if (analyzer === "semgrep") {
-      writeFileSync(join(session.work, "rules.yml"), semgrepRules, {
+      writeFileSync(join(session.work, "rules.yml"), rulesUtf8, {
         encoding: "utf8",
         mode: 0o600,
         flag: "wx",
@@ -2038,6 +2039,8 @@ const PROFILE_ANALYZERS: Readonly<
  */
 export function createBaselineAnalyzerRunV1(
   options: {
+    /** Exact admitted rules for the internal host Semgrep definition dispatcher. */
+    readonly semgrepRulesUtf8?: string;
     readonly runner?: BaselineProcessRunnerV1;
     readonly env?: Readonly<NodeJS.ProcessEnv>;
     /**
@@ -2070,6 +2073,8 @@ export function createBaselineAnalyzerRunV1(
     acceptedImageDigests = Object.freeze([...options.skillspectorAcceptedImageDigests]);
   }
   const profile = options.executionProfileId;
+  if (options.semgrepRulesUtf8 !== undefined && profile !== "host-process-uv-v1")
+    fail("supplied Semgrep rules require host-process-uv-v1");
   if (profile !== undefined && !Object.hasOwn(PROFILE_ANALYZERS, profile))
     fail("unknown execution profile");
   const control: RunControl = Object.freeze({
@@ -2080,6 +2085,8 @@ export function createBaselineAnalyzerRunV1(
   const sweep: ResidualSweep | undefined =
     options.runner === undefined ? sweepResidualProcessesV1 : undefined;
   return async ({ analyzer, sourceRoot }) => {
+    if (options.semgrepRulesUtf8 !== undefined && analyzer !== "semgrep")
+      fail("supplied Semgrep rules cannot select another analyzer");
     if (profile !== undefined && !PROFILE_ANALYZERS[profile].includes(analyzer))
       fail(`${profile} does not run ${analyzer}`);
     if (control.signal?.aborted)
@@ -2102,13 +2109,17 @@ export function createBaselineAnalyzerRunV1(
         ),
       semgrep: () =>
         host
-          ? hostProcessUv("semgrep", {
-              sourceRoot,
-              runner,
-              callerEnv,
-              control,
-              ...(sweep === undefined ? {} : { sweep }),
-            })
+          ? hostProcessUv(
+              "semgrep",
+              {
+                sourceRoot,
+                runner,
+                callerEnv,
+                control,
+                ...(sweep === undefined ? {} : { sweep }),
+              },
+              options.semgrepRulesUtf8,
+            )
           : semgrep(sourceRoot, runner, env, control),
       cisco: () =>
         host

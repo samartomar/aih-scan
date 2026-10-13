@@ -594,6 +594,9 @@ describe("published V2 package installation", () => {
     expect(paths).toContain("tools/baseline-analyzers/cisco-skill-scanner/uv.lock");
     expect(paths).toContain("tools/baseline-analyzers/semgrep/uv.lock");
     expect(paths).toContain("README.md");
+    expect(paths).toContain("schemas/detector-definition/1.0.0.json");
+    expect(paths).toContain("docs/DETECTOR-DEFINITIONS.md");
+    expect(paths).toContain("examples/detector-definitions/definition.json");
     expect(paths).not.toContain("src/index.ts");
     expect(
       paths.some((path) =>

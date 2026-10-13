@@ -21,14 +21,14 @@ import {
 const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json", "utf8"));
 assert.deepEqual(contractSupport.package, { name: manifest.name, version: manifest.version });
 assert.equal(contractSupport.schema, "urn:aihq:package-support:1.0.0");
-assert.equal(contractSupport.contracts.length, 6);
-for (const name of ["request", "run-result", "report", "artifact", "evidence-association", "material-change"]) {
+assert.equal(contractSupport.contracts.length, 7);
+for (const name of ["request", "run-result", "report", "artifact", "evidence-association", "material-change", "detector-definition"]) {
   const schema = JSON.parse(readFileSync(fileURLToPath(import.meta.resolve(`@aihq/scan/schemas/${name}/1.0.0.json`)), "utf8"));
   assert.equal(schema.$id, `urn:aihq:scan:${name}:1.0.0`);
   assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
   assert.deepEqual(contractSupport.contracts.find(entry => entry.id === schema.$id), {
     id: schema.$id,
-    role: { request: "accepts", "run-result": "produces", report: "both", artifact: "both", "evidence-association": "accepts", "material-change": "both" }[name],
+    role: { request: "accepts", "run-result": "produces", report: "both", artifact: "both", "evidence-association": "accepts", "material-change": "both", "detector-definition": "accepts" }[name],
     schemaExport: `@aihq/scan/schemas/${name}/1.0.0.json`,
   });
 }

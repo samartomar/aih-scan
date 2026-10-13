@@ -17,6 +17,10 @@ load organization code into the Scanner process or grant governance authority.
 
 ### Unreleased assessment APIs
 
+Hosts can supply organization Semgrep rules as portable, hash-bound detector
+definitions through `runScan`. See [supplied detector definitions](docs/DETECTOR-DEFINITIONS.md)
+for the supported adapter, runtime limits, JSON/YAML example, and reuse boundary.
+
 The new assessment surface has three explicit entry points:
 
 | Entry | Purpose | Runtime |
