@@ -25,13 +25,13 @@ function temporary() {
   roots.push(root);
   return root;
 }
-async function definition() {
+async function definition(detectorId = "organization.prompt") {
   const rules = Buffer.from(customRules);
   const admitted = await admitDetectorDefinitionsV1([
     {
       definition: {
         schema: "urn:aihq:scan:detector-definition:1.0.0",
-        detectorId: "organization.prompt",
+        detectorId,
         version: "policy-revision-7",
         adapter: "semgrep-sarif-v1",
         profileId: "host-process-uv-v1",
@@ -43,7 +43,7 @@ async function definition() {
       rules,
     },
   ]);
-  const result = admitted.get("organization.prompt");
+  const result = admitted.get(detectorId);
   if (!result) throw new Error("Test definition was not admitted");
   return result;
 }
@@ -217,4 +217,25 @@ it("does not keep a definition result when its declared source changes during ex
   expect(await runDefinedDetectorV1(request(), await definition())).toMatchObject({
     outcome: "failed",
   });
+});
+
+it.each([
+  "constructor",
+  "toString",
+  "__proto__",
+])("runs the valid custom ID %s with the fixed Semgrep mechanism", async (detectorId) => {
+  const result = await runDefinedDetectorV1(
+    { ...request(), detectorId },
+    await definition(detectorId),
+  );
+  expect(result.outcome).toBe("succeeded");
+  if (result.outcome !== "succeeded" || result.evidence.kind !== "baseline-analyzer-observation-v1")
+    throw new Error(JSON.stringify(result));
+  expect(ruleBytes).toBe(customRules);
+  expect(result.capability.detectorId).toBe(detectorId);
+  expect(result.evidence.observation.analyzer).toBe("semgrep");
+  const run = JSON.parse(result.evidence.observation.bytes.toString("utf8")).runs[0];
+  expect(run.invocations[0].properties.aihScanCompletionV1.detectorId).toBe(detectorId);
+  expect(run.properties.aihDetectorDefinitionV1.detectorId).toBe(detectorId);
+  expect(result.findings.findings[0]?.detector).toMatchObject({ value: { id: detectorId } });
 });

@@ -1073,7 +1073,8 @@ async function runReadableRequestV1(
   const environments = engineEnvironmentsV1(capability.detectorId, input.env);
   const env = environments.host;
   const probe = input.prerequisiteProbe;
-  const engineAnalyzer = engineForV1(capability.detectorId, subject.kind);
+  // Supplied definitions select their fixed adapter, never the built-in engine registry.
+  const engineAnalyzer = definition ? undefined : engineForV1(capability.detectorId, subject.kind);
   if (engineAnalyzer !== undefined) {
     const preflight = enginePreflightRefusalV1(engineAnalyzer, {
       sourceRoot: subject.sourceRoot,
