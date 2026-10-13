@@ -11,12 +11,18 @@ export type {
   ReadArtifactResult,
   SigstoreBundle,
 } from "../artifact/types.js";
+export type { DetectorDefinitionV1 } from "../assessment/detector-definition.js";
 export * from "../assessment/types.js";
 export type * from "../material-change/types.js";
 export const contractSupport = Object.freeze({
   schema: "urn:aihq:package-support:1.0.0",
   package: packageIdentity,
   contracts: Object.freeze([
+    {
+      id: "urn:aihq:scan:detector-definition:1.0.0",
+      role: "accepts",
+      schemaExport: "@aihq/scan/schemas/detector-definition/1.0.0.json",
+    },
     { id: schemas.request, role: "accepts", schemaExport: "@aihq/scan/schemas/request/1.0.0.json" },
     {
       id: schemas.runResult,

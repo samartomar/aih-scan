@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aihq:scan:detector-definition:1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "detectorId", "version", "adapter", "profileId", "rules"],
+  "properties": {
+    "schema": { "const": "urn:aihq:scan:detector-definition:1.0.0" },
+    "detectorId": { "$ref": "#/$defs/label" },
+    "version": { "$ref": "#/$defs/label" },
+    "adapter": { "const": "semgrep-sarif-v1" },
+    "profileId": { "const": "host-process-uv-v1" },
+    "rules": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sha256", "byteLength"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "byteLength": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    }
+  },
+  "$defs": {
+    "label": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f]+$", "description": "At most 256 UTF-8 bytes; host admission also enforces this byte bound." }
+  }
+}

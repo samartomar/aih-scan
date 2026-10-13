@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AdmittedSemgrepDefinitionV1,
+  isAdmittedSemgrepDefinitionV1,
+} from "../assessment/detector-definition.js";
+import {
   assertBaselineAnalyzerSnapshotUnchangedV1,
   type BaselineAnalyzerV1,
   createBaselineAnalyzerSnapshotV1,
@@ -47,6 +51,7 @@ import { resolveHostExecutableV1 } from "../cli/host-executable.js";
 import {
   assertSafeRelativePosixPathV1,
   canonicalStrictJsonBytesV1,
+  canonicalStrictJsonSha256V1,
   codeUnitCompare,
   parseStrictJsonObjectV1,
 } from "../contract/strict-json-v1.js";
@@ -826,7 +831,83 @@ export async function runDetectorV1(request: unknown): Promise<RunDetectorV1Resu
   }
 }
 
-async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Result> {
+/** Data-only request for the admitted definition mechanism; no caller execution seams. */
+export interface DefinedDetectorRunRequestV1 {
+  readonly detectorId: string;
+  readonly subject: RunDetectorV1Request["subject"];
+  readonly executionProfileId?: "host-process-uv-v1";
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
+
+/** Derive supported execution facts without turning a custom detector into a built-in ID. */
+export function definedDetectorCapabilityV1(
+  definition: AdmittedSemgrepDefinitionV1,
+): DetectorCapabilityV1 {
+  if (!isAdmittedSemgrepDefinitionV1(definition))
+    throw new TypeError("Detector definition is not admitted");
+  const capability = resolveDetectorCapabilityV1("detector.semgrep");
+  if (!capability) throw new TypeError("Bundled Semgrep capability is unavailable");
+  const { capabilitySha256: _priorDigest, ...builtin } = capability;
+  const profile = builtin.executionProfiles.find((entry) => entry.id === "host-process-uv-v1");
+  if (!profile) throw new TypeError("Bundled host Semgrep profile is unavailable");
+  const base = {
+    ...builtin,
+    detectorId: definition.detectorId,
+    backend: "host-process-uv" as const,
+    executionProfile: profile,
+    executionProfiles: Object.freeze([profile]),
+    subjectKinds: Object.freeze(["source-tree"] as const),
+    supportedPlatforms: profile.supportedPlatforms,
+    prerequisites: profile.prerequisites,
+  };
+  return Object.freeze({
+    ...base,
+    capabilitySha256: canonicalStrictJsonSha256V1({
+      domain: "aih.detector-capability-v1",
+      capability: base,
+    }),
+  });
+}
+
+/** Internal assessment bridge. Only admitted immutable data selects the fixed mechanism. */
+export async function runDefinedDetectorV1(
+  request: DefinedDetectorRunRequestV1,
+  definition: AdmittedSemgrepDefinitionV1,
+): Promise<RunDetectorV1Result> {
+  try {
+    if (!isAdmittedSemgrepDefinitionV1(definition))
+      return refuse("unknown-detector", "The supplied detector definition is not admitted.");
+    const fields = ["detectorId", "subject", "executionProfileId", "signal", "timeoutMs"] as const;
+    if (
+      !isRecord(request) ||
+      Reflect.ownKeys(request).some(
+        (key) => typeof key !== "string" || !fields.includes(key as (typeof fields)[number]),
+      )
+    )
+      return refuse(
+        "execution-profile-unavailable",
+        "A supplied detector request accepts only subject and run controls.",
+      );
+    const snapshot = snapshotFields(request, fields, "");
+    if ("field" in snapshot || snapshot.value.detectorId !== definition.detectorId)
+      return refuse(
+        "unknown-detector",
+        "The requested detector does not match its admitted definition.",
+      );
+    return await runReadableRequestV1(snapshot.value, definition);
+  } catch {
+    return refuse(
+      "execution-profile-unavailable",
+      "The supplied detector request could not be read.",
+    );
+  }
+}
+
+async function runReadableRequestV1(
+  request: unknown,
+  definition?: AdmittedSemgrepDefinitionV1,
+): Promise<RunDetectorV1Result> {
   if (typeof request !== "object" || request === null || Array.isArray(request))
     return refuse("unknown-detector", "A run request must be an object naming a detector.");
   // Every caller field is read once, here, inside a guard. An accessor that throws makes
@@ -840,7 +921,9 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       }. Pass a plain data object naming a detector.`,
     );
   const detectorId = top.value.detectorId;
-  const capability = resolveDetectorCapabilityV1(detectorId);
+  const capability = definition
+    ? definedDetectorCapabilityV1(definition)
+    : resolveDetectorCapabilityV1(detectorId);
   if (capability === undefined)
     return refuse(
       "unknown-detector",
@@ -1007,7 +1090,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
         : ("caller-supplied" as const),
     prerequisiteProbe: probe === undefined ? "scan-owned-default" : "caller-supplied",
   });
-  const analyzerName = ANALYZER_BY_DETECTOR[capability.detectorId];
+  const analyzerName = definition ? "semgrep" : ANALYZER_BY_DETECTOR[capability.detectorId];
   const wholeTree = analyzerName !== undefined && WHOLE_TREE_ANALYZERS.has(analyzerName);
   const coverage = coverageRecord({
     seal: before,
@@ -1107,9 +1190,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
   }
 
   const analyzer: BaselineAnalyzerV1 | EngineAnalyzerV1 | undefined =
-    engineAnalyzer === undefined
-      ? ANALYZER_BY_DETECTOR[capability.detectorId]
-      : engineObservationAnalyzerV1(engineAnalyzer);
+    engineAnalyzer === undefined ? analyzerName : engineObservationAnalyzerV1(engineAnalyzer);
   if (analyzer === undefined)
     return refuse(
       "execution-profile-unavailable",
@@ -1172,6 +1253,7 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
       let observed: Awaited<ReturnType<ReturnType<typeof createBaselineAnalyzerRunV1>>>;
       try {
         const run = createBaselineAnalyzerRunV1({
+          ...(definition ? { semgrepRulesUtf8: definition.rules.utf8 } : {}),
           ...(input.runner === undefined ? {} : { runner: input.runner }),
           ...(input.env === undefined ? {} : { env: input.env }),
           ...(input.acceptedImageDigests === undefined
@@ -1303,6 +1385,24 @@ async function runReadableRequestV1(request: unknown): Promise<RunDetectorV1Resu
             scanBuilt: engineAnalyzer !== undefined && SCAN_BUILT_SARIF_ENGINES.has(engineAnalyzer),
           },
         );
+        if (definition) {
+          for (const run of log.runs) {
+            if (run.properties !== undefined && !isRecord(run.properties))
+              throw new TypeError("SARIF run properties must be an object");
+            const properties = run.properties ?? {};
+            if (Object.hasOwn(properties, "aihDetectorDefinitionV1"))
+              throw new TypeError("SARIF cannot supply Scan-owned definition identity");
+            run.properties = {
+              ...properties,
+              aihDetectorDefinitionV1: {
+                detectorId: definition.detectorId,
+                version: definition.version,
+                definitionSha256: definition.definitionSha256,
+                rulesSha256: definition.rules.sha256,
+              },
+            };
+          }
+        }
         normalized = { ...normalized, bytes: Buffer.from(canonicalStrictJsonBytesV1(log)) };
       } catch (error) {
         return failed("output", error);

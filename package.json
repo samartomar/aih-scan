@@ -36,6 +36,7 @@
       "import": "./dist/public/host.js"
     },
     "./schemas/request/1.0.0.json": "./schemas/request/1.0.0.json",
+    "./schemas/detector-definition/1.0.0.json": "./schemas/detector-definition/1.0.0.json",
     "./schemas/run-result/1.0.0.json": "./schemas/run-result/1.0.0.json",
     "./schemas/report/1.0.0.json": "./schemas/report/1.0.0.json",
     "./schemas/artifact/1.0.0.json": "./schemas/artifact/1.0.0.json",
@@ -49,6 +50,8 @@
   "files": [
     "dist",
     "schemas",
+    "docs/DETECTOR-DEFINITIONS.md",
+    "examples/detector-definitions",
     "tools/baseline-analyzers",
     "tools/verify-core-contract-lock-v2.mjs"
   ],
