@@ -48,3 +48,28 @@ tools/repo-ai-tools.mjs. Do not duplicate them in docs. Helpers do not install a
 engineering workflow. Keep local projections and caches ignored; do not commit them
 or delete shared caches to fix one project. Index data is advisory, never authority.
 Use Token Optimizer only on demand; no per-task report, coach, or graph prerequisite.
+
+## Ordinary CI selection
+
+The required `verify` job always reports on PRs and main pushes. Feature-branch
+pushes do not duplicate PR runs; superseded ordinary CI runs are cancelled.
+Publisher, signing, release and native-admission workflows keep their own routing.
+
+`node tools/ci-route.mjs --base <40-character-base> --head <40-character-head> --plan ci-plan.json`
+records the selected scope. `node tools/ci-route.mjs --run-tests ci-plan.json`
+runs that selection and propagates failures. Documentation edits run lint, action
+pin verification and routing checks. Known artifact/refresh tooling selects its
+module checks; source changes include affected package consumers or coverage.
+The real Python proof follows the baseline runtime's local import closure and
+host subprocess helpers. The packed seven-source refresh follows refresh tooling
+and its dynamically loaded public host/read/contracts entries. Analyzer resources,
+shared contracts, dependencies, build/workflow/routing changes and unknown paths
+retain full validation. Deleted/renamed paths, missing history and empty change
+sets also fail closed to full validation. Conditional and data-loaded dependencies
+outside these known boundaries must receive explicit routing or full fallback.
+
+The `CI` workflow's manual `full_validation` input defaults to true and preserves
+coverage plus both real-runtime proofs. `npm run verify` remains the complete local
+software check; ordinary focused checks do not claim its coverage or native-runtime
+results. CI records the plan in its job summary. The required status fails if any
+selected check fails; it never treats a failed selected check as inapplicable.

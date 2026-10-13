@@ -323,7 +323,7 @@ describe("Core Strict V2 compatibility lock", () => {
     for (const check of [
       "npm run typecheck",
       "npm run lint",
-      "npm run test:cov",
+      "node tools/ci-route.mjs --run-tests ci-plan.json",
       "npm run build",
     ]) {
       expect(workflow).toContain(check);
