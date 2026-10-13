@@ -43,8 +43,9 @@ it uses the same adapter, without Core or Catalog changes.
 A definition with a changed digest but unchanged bytes, a built-in detector ID,
 an unknown adapter/profile, or nonempty request configuration returns a
 `diagnostic` in the `request` phase before source capture. A supported definition
-with unavailable uv/Python returns a partial assessment with a `refused` detector;
-invalid rule syntax or unsuccessful analyzer output produces `failed`. Inspect
+with unavailable uv returns a partial assessment with a `refused` detector.
+Python discovery/availability or acquisition failure, invalid rule syntax, or
+unsuccessful analyzer output produces `failed`. Inspect
 `status`, `report.completion`, each detector's `outcome` and `diagnostics` before
 interpreting observations. Zero findings and successful parsing grant no approval.
 
