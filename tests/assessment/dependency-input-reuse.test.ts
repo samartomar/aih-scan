@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,26 +13,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { ScanRunResult } from "../../src/public/host.js";
+import { assemblePublicConsumerFixture, npmCliPath } from "../support/public-consumer-fixture.js";
 
 type Assessment = Extract<ScanRunResult, { status: "assessment" }> & { preloadMarker?: string };
-
-function npmCliPath(): string {
-  const configured = process.env.npm_execpath;
-  if (
-    configured &&
-    isAbsolute(configured) &&
-    basename(configured) === "npm-cli.js" &&
-    existsSync(configured)
-  )
-    return configured;
-  const nodeDirectory = dirname(process.execPath);
-  for (const candidate of [
-    join(nodeDirectory, "node_modules/npm/bin/npm-cli.js"),
-    resolve(nodeDirectory, "../lib/node_modules/npm/bin/npm-cli.js"),
-  ])
-    if (existsSync(candidate)) return candidate;
-  throw new Error("npm CLI entrypoint unavailable");
-}
 
 let templateRoot: string | undefined;
 let installationTemplate: string | undefined;
@@ -55,19 +37,8 @@ function removeTemporaryFixture(root: string): void {
 
 beforeAll(() => {
   templateRoot = mkdtempSync(join(tmpdir(), "aih-dependency-reuse-template-"));
-  const first = join(templateRoot, "installation"),
-    built = join(first, "dist");
-  mkdirSync(first);
-  execFileSync(
-    process.execPath,
-    [resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.build.json", "--outDir", built],
-    { stdio: "pipe" },
-  );
-
-  cpSync(resolve("package.json"), join(first, "package.json"));
-  cpSync(resolve("tools/baseline-analyzers"), join(first, "tools/baseline-analyzers"), {
-    recursive: true,
-  });
+  const first = join(templateRoot, "installation");
+  assemblePublicConsumerFixture(first);
   const packages = execFileSync(
     process.execPath,
     [npmCliPath(), "ls", "--omit=dev", "--all", "--parseable"],
