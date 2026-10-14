@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "vitest";
 import { runDetectorV1 } from "../../src/index.js";
 import { runScan } from "../../src/public/host.js";
+import { assemblePublicConsumerFixture } from "../support/public-consumer-fixture.js";
 
 test("the assessment native adapter preserves the public runner's original annex, including supported file links", async () => {
   const root = mkdtempSync(join(tmpdir(), "aih-adapter-parity-test-"));
@@ -66,19 +67,8 @@ test("the assessment native adapter preserves the public runner's original annex
 test("changing unrelated installed trust rules preserves native and binding observation reuse", () => {
   const root = mkdtempSync(join(tmpdir(), "aih-adapter-isolation-test-"));
   try {
-    const built = join(root, "built");
-    execFileSync(
-      process.execPath,
-      [resolve("node_modules/typescript/bin/tsc"), "-p", "tsconfig.build.json", "--outDir", built],
-      { cwd: resolve("."), stdio: "pipe" },
-    );
     const installed = join(root, "installed");
-    mkdirSync(installed);
-    cpSync(built, join(installed, "dist"), { recursive: true });
-    cpSync(resolve("package.json"), join(installed, "package.json"));
-    cpSync(resolve("tools/baseline-analyzers"), join(installed, "tools/baseline-analyzers"), {
-      recursive: true,
-    });
+    assemblePublicConsumerFixture(installed);
     symlinkSync(resolve("node_modules"), join(installed, "node_modules"), "junction");
     const source = join(root, "source");
     mkdirSync(source);
