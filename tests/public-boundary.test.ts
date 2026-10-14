@@ -100,6 +100,7 @@ describe("Strict V2 public boundary", () => {
       "./schemas/evidence-association/1.0.0.json": "./schemas/evidence-association/1.0.0.json",
       "./schemas/material-change/1.0.0.json": "./schemas/material-change/1.0.0.json",
       "./schemas/detector-definition/1.0.0.json": "./schemas/detector-definition/1.0.0.json",
+      "./schemas/examples/1.0.0.json": "./schemas/examples/1.0.0.json",
       // Additive and idiomatic: a consumer can locate the package root without deep
       // importing anything. No dist subpath becomes reachable.
       "./package.json": "./package.json",

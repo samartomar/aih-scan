@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, webcrypto } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { isBuiltin } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, SourceTextModule } from "node:vm";
@@ -32,7 +32,11 @@ for (const name of ["request", "run-result", "report", "artifact", "evidence-ass
     schemaExport: `@aihq/scan/schemas/${name}/1.0.0.json`,
   });
 }
-const examples = JSON.parse(readFileSync("node_modules/@aihq/scan/schemas/examples/1.0.0.json", "utf8")).examples;
+const require = createRequire(import.meta.url);
+const exampleDocument = JSON.parse(readFileSync(require.resolve("@aihq/scan/schemas/examples/1.0.0.json"), "utf8"));
+assert.match(exampleDocument.description, /Representative static JSON examples/);
+assert.match(exampleDocument.description, /unsigned and asserts no producer authenticity/);
+const examples = exampleDocument.examples;
 assert.equal(examples.length, 5);
 const canonicalExampleBytes = (value) => {
   const encode = item => Array.isArray(item) ? `[${item.map(encode).join(",")}]`
