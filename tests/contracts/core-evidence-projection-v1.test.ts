@@ -5,8 +5,8 @@ import {
   AI_HARNESS_DECISION_V2_SCHEMA_SHA256,
   AI_HARNESS_STRICT_V2_COMMIT,
 } from "../../src/core/core-contract-lock-v2.js";
+import { canonicalCoreOrganizationEvidenceEnvelopeV1Bytes } from "../../src/core/organization-evidence-envelope-v1.js";
 import {
-  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
   coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "../../src/index.js";

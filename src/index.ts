@@ -1,22 +1,23 @@
+// Legacy compatibility root of @aihq/scan. New assessment consumers use the
+// @aihq/scan/contracts, @aihq/scan/read and @aihq/scan/host entries. Every name
+// here is compatibility-only, except the bindings re-exported from ./legacy-root/
+// (retired baseline production and low-level serialization helpers), which are
+// deprecated.
+// The per-group status is published as the root entry of contractSupport and
+// described in the README "Legacy root" section.
 export {
   type BaselineVetTrustRootV1,
-  canonicalBaselineVetAttestationEnvelopeV1Bytes,
   parseBaselineVetAttestationEnvelopeV1Json,
   type SignedBaselineVetAttestationV1,
-  signBaselineVetBundleV1,
   type VerifiedBaselineVetAttestationV1,
   verifyBaselineVetAttestationV1,
 } from "./baseline/attestation-v1.js";
 export {
-  BASELINE_ANALYZERS_V1,
   type BaselineAnalyzerV1,
   type BaselineVetAnnexArtifactV1,
   type BaselineVetBatchResultV1,
   type BaselineVetReceiptV1,
   type BaselineVetRequestV1,
-  canonicalBaselineVetReceiptV1Bytes,
-  canonicalBaselineVetRequestV1Bytes,
-  createBaselineVetRequestV1,
   parseBaselineVetReceiptV1Json,
   parseBaselineVetRequestV1Json,
 } from "./baseline/batch-v1.js";
@@ -25,10 +26,6 @@ export {
   type BaselineVetDiscoveryV1,
   type BaselineVetPublicationV1,
   baselineVetPublicationResultV1,
-  canonicalBaselineVetDiscoveryV1Bytes,
-  canonicalBaselineVetPublicationV1Bytes,
-  createBaselineVetDiscoveryV1,
-  createBaselineVetPublicationV1,
   parseBaselineVetDiscoveryV1Json,
   parseBaselineVetPublicationV1Json,
   resolveBaselineVetDiscoveryV1,
@@ -59,7 +56,6 @@ export {
 } from "./core/core-contract-lock-v2.js";
 export {
   type CoreOrganizationEvidenceEnvelopeV1,
-  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
   coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "./core/organization-evidence-envelope-v1.js";
@@ -72,14 +68,30 @@ export {
   type ScanFindingV1,
 } from "./findings/scan-findings-v1.js";
 export {
+  BASELINE_ANALYZERS_V1,
+  canonicalBaselineVetAttestationEnvelopeV1Bytes,
+  canonicalBaselineVetDiscoveryV1Bytes,
+  canonicalBaselineVetPublicationV1Bytes,
+  canonicalBaselineVetReceiptV1Bytes,
+  canonicalBaselineVetRequestV1Bytes,
+  createBaselineVetDiscoveryV1,
+  createBaselineVetPublicationV1,
+  createBaselineVetRequestV1,
+  signBaselineVetBundleV1,
+} from "./legacy-root/baseline-production-v1.js";
+export {
   assertCompleteScanAnnexArtifactsV2,
+  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
+  canonicalDetectorRegistrationV1Bytes,
   canonicalDssePaeV2,
   canonicalScanAttestationEnvelopeBytesV2,
   canonicalScanCandidateBytesV2,
   canonicalSourceSealsV2Bytes,
-  createScanCandidateV2,
   ed25519KeyIdV2,
   isVerifiedScanAttestationV2,
+} from "./legacy-root/serialization-helpers-v2.js";
+export {
+  createScanCandidateV2,
   parseScanAttestationEnvelopeV2Json,
   parseScanCandidateV2Json,
   type ScanCandidateV2,
@@ -93,7 +105,6 @@ export { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation
 export { type SourceSealV2, sealSourceV2 } from "./observation/source-seal-v2.js";
 export { captureRegisteredDetectorCandidateV2 } from "./registration/capture-registered-detector-v2.js";
 export {
-  canonicalDetectorRegistrationV1Bytes,
   createDetectorRegistrationV1,
   type DetectorRegistrationEntryV1,
   type DetectorRegistrationV1,

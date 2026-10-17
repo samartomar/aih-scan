@@ -1,7 +1,23 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import * as attestationV1 from "../src/baseline/attestation-v1.js";
+import * as batchV1 from "../src/baseline/batch-v1.js";
+import * as publicationV1 from "../src/baseline/publication-v1.js";
+import * as coreEnvelopeV1 from "../src/core/organization-evidence-envelope-v1.js";
 import * as publicApi from "../src/index.js";
+import * as attestationV2 from "../src/observation/scan-attestation-v2.js";
+import { contractSupport } from "../src/public/contracts.js";
+import * as registrationV1 from "../src/registration/detector-registration-v1.js";
+
+const legacyImplementations: Record<string, unknown> = {
+  ...attestationV1,
+  ...batchV1,
+  ...publicationV1,
+  ...coreEnvelopeV1,
+  ...attestationV2,
+  ...registrationV1,
+};
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
@@ -77,6 +93,54 @@ describe("Strict V2 public boundary", () => {
       "writeScanCaptureBundleV2",
     ]);
     expect(read("src/index.ts")).not.toMatch(/observation\/.+-v1\.js/);
+  });
+
+  it("deprecates exactly the retired producers and serialization helpers and describes the legacy root", () => {
+    const deprecatedIn = (path: string) => {
+      const source = read(path);
+      const names = [
+        ...source.matchAll(/\/\*\*\n \* @deprecated[\s\S]*?\*\/\nexport const (\w+)/g),
+      ].map((match) => match[1] ?? "");
+      expect(source.match(/export /g)).toHaveLength(names.length);
+      return names.sort();
+    };
+    const producers = deprecatedIn("src/legacy-root/baseline-production-v1.ts");
+    expect(producers).toEqual([
+      "BASELINE_ANALYZERS_V1",
+      "canonicalBaselineVetAttestationEnvelopeV1Bytes",
+      "canonicalBaselineVetDiscoveryV1Bytes",
+      "canonicalBaselineVetPublicationV1Bytes",
+      "canonicalBaselineVetReceiptV1Bytes",
+      "canonicalBaselineVetRequestV1Bytes",
+      "createBaselineVetDiscoveryV1",
+      "createBaselineVetPublicationV1",
+      "createBaselineVetRequestV1",
+      "signBaselineVetBundleV1",
+    ]);
+    const helpers = deprecatedIn("src/legacy-root/serialization-helpers-v2.ts");
+    expect(helpers).toEqual([
+      "assertCompleteScanAnnexArtifactsV2",
+      "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
+      "canonicalDetectorRegistrationV1Bytes",
+      "canonicalDssePaeV2",
+      "canonicalScanAttestationEnvelopeBytesV2",
+      "canonicalScanCandidateBytesV2",
+      "canonicalSourceSealsV2Bytes",
+      "ed25519KeyIdV2",
+      "isVerifiedScanAttestationV2",
+    ]);
+    const deprecated = [...producers, ...helpers];
+    // Same bindings, not copies: deprecation changes no behavior.
+    const rootValues: Record<string, unknown> = { ...publicApi };
+    for (const name of deprecated) expect(rootValues[name]).toBe(legacyImplementations[name]);
+    const rootEntry = contractSupport.entries.find((entry) => entry.export === "@aihq/scan");
+    expect(rootEntry?.status).toBe("compatibility-only");
+    expect(
+      contractSupport.entries.filter((entry) => entry.status === "current").map((e) => e.export),
+    ).toEqual(["@aihq/scan/contracts", "@aihq/scan/read", "@aihq/scan/host"]);
+    const readme = read("README.md");
+    for (const name of [...deprecated, ...Object.keys(publicApi)])
+      expect(readme, name).toContain(`\`${name}\``);
   });
 
   it("makes the 0.x package boundary explicit without treating source as publication evidence", () => {

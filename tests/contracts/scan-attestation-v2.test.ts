@@ -1,7 +1,6 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { canonicalStrictJsonBytesV1 } from "../../src/contract/strict-json-v1.js";
-import { canonicalSourceSealsV2Bytes } from "../../src/index.js";
 import {
   createObservationKeyV1,
   createObservationSetV1,
@@ -9,6 +8,7 @@ import {
 import {
   canonicalDssePaeV2,
   canonicalScanAttestationEnvelopeBytesV2,
+  canonicalSourceSealsV2Bytes,
   createScanCandidateV2,
   ed25519KeyIdV2,
   isVerifiedScanAttestationV2,

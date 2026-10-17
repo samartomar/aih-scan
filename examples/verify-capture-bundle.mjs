@@ -168,7 +168,6 @@ if (args.subjectDigest !== undefined) {
     });
     projection = {
       organizationEvidenceDigest: scan.coreOrganizationEvidenceEnvelopeDigestV1(envelopeV1),
-      byteLength: scan.canonicalCoreOrganizationEvidenceEnvelopeV1Bytes(envelopeV1).byteLength,
     };
   } catch (error) {
     refuse(`projection failed: ${error instanceof Error ? error.message : "unknown"}`);

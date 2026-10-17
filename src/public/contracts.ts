@@ -43,8 +43,25 @@ export const contractSupport = Object.freeze({
     },
   ]),
   entries: Object.freeze([
-    { export: "@aihq/scan/contracts", runtime: "portable" },
-    { export: "@aihq/scan/read", runtime: "portable" },
-    { export: "@aihq/scan/host", runtime: "node", nodeRange: ">=24.15.0 <25" },
+    { export: "@aihq/scan/contracts", runtime: "portable", status: "current" },
+    { export: "@aihq/scan/read", runtime: "portable", status: "current" },
+    { export: "@aihq/scan/host", runtime: "node", nodeRange: ">=24.15.0 <25", status: "current" },
+    {
+      export: "@aihq/scan",
+      runtime: "node",
+      nodeRange: ">=24.15.0 <25",
+      status: "compatibility-only",
+      // Each operation group of the legacy root, its status and the current
+      // operation that replaces it for new work (null when nothing replaces it).
+      operations: Object.freeze([
+        { group: "v2-evidence-readers", status: "compatibility-only", use: "@aihq/scan/read" },
+        { group: "baseline-evidence-readers", status: "compatibility-only", use: null },
+        { group: "detector-execution", status: "compatibility-only", use: "@aihq/scan/host" },
+        { group: "v2-capture-and-signing", status: "compatibility-only", use: "@aihq/scan/host" },
+        { group: "legacy-core-evidence", status: "compatibility-only", use: null },
+        { group: "baseline-production", status: "deprecated", use: "@aihq/scan/host" },
+        { group: "v2-internal-helpers", status: "deprecated", use: null },
+      ]),
+    },
   ]),
 });
