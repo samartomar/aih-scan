@@ -655,6 +655,7 @@ describe("published V2 package installation", () => {
       installedVersion: "0.5.0",
       completion: "partial",
       read: "read",
+      coverage: ["matched", "mismatched", "unavailable", "matched"],
       authenticity: "authenticated",
       portableEntries: ["contracts", "read"],
       materialChange: "modified",
@@ -664,15 +665,18 @@ describe("published V2 package installation", () => {
       join(directory, "portable-consumer.mts"),
       [
         'import { contractSupport, type ScanRequest, type Artifact, type AuthenticationTrust, type MaterialChange, type MaterialInventory, type CompareMaterialInventoriesInput } from "@aihq/scan/contracts";',
-        'import { readArtifact, readReport } from "@aihq/scan/read";',
+        'import { readArtifact, readContentCoverage, readReport, type ContentDescriptor, type ReadContentCoverageResult } from "@aihq/scan/read";',
         "declare const request: ScanRequest;",
+        "declare const descriptors: ContentDescriptor[];",
+        "const coverage: Promise<ReadContentCoverageResult> = readArtifact(new Uint8Array()).then((read) => readContentCoverage({ read, descriptors }));",
+        'const exclusions = coverage.then((value) => (value.status === "matched" ? value.excluded["coverage-incomplete"] + value.observations.length : 0));',
         "declare const artifact: Artifact;",
         "declare const trust: AuthenticationTrust;",
         "declare const materialChange: MaterialChange;",
         "declare const inventory: MaterialInventory;",
         'const comparison: CompareMaterialInventoriesInput = { sourceId: "local:consumer", before: null, after: inventory };',
         'const projection: "aih-material-v1" = materialChange.materialProjection;',
-        "void [contractSupport, request, artifact, trust, materialChange, comparison, projection, readArtifact, readReport];",
+        "void [contractSupport, request, artifact, trust, materialChange, comparison, projection, readArtifact, readReport, exclusions];",
       ].join("\n"),
     );
     writeFileSync(

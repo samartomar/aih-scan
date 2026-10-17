@@ -26,7 +26,7 @@ The new assessment surface has three explicit entry points:
 | Entry | Purpose | Runtime |
 | --- | --- | --- |
 | `@aihq/scan/contracts` | Contract support, public types and schema identities | Portable JavaScript |
-| `@aihq/scan/read` | Read complete reports and portable artifacts; authenticity remains unchecked | Portable JavaScript |
+| `@aihq/scan/read` | Read complete reports and portable artifacts, and report which observations cover an exact set of files; authenticity remains unchecked | Portable JavaScript |
 | `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25` |
 
 `runScan` captures pinned Git or local input and accounts for every requested detector.

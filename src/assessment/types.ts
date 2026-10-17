@@ -1,3 +1,4 @@
+import type { ReadArtifactResult } from "../artifact/types.js";
 export const schemas = Object.freeze({
   request: "urn:aihq:scan:request:1.0.0",
   runResult: "urn:aihq:scan:run-result:1.0.0",
@@ -174,4 +175,70 @@ export type ReadReportResult =
       annexBytes: "not-supplied";
     }
   | { status: "unsupported-report"; scanId: ScanId; reportSchema: string }
+  | { status: "invalid"; diagnostics: Diagnostic[] };
+/** One exact file a consumer expects a report to have assessed. */
+export interface ContentDescriptor {
+  path: string;
+  sha256: Digest;
+  byteLength: number;
+}
+export interface ReadContentCoverageInput {
+  /** A result returned by `readReport` or `readArtifact`. It is revalidated before use. */
+  read: ReadReportResult | ReadArtifactResult;
+  descriptors: ContentDescriptor[];
+}
+export type ContentCoverageExclusionReason =
+  | "detector-not-succeeded"
+  | "input-missing-descriptor"
+  | "coverage-incomplete"
+  | "annex-unresolved";
+export interface ContentCoverageObservation {
+  observationId: Observation["observationId"];
+  origin: Observation["origin"];
+  fromScanId?: ScanId;
+  detector: {
+    detectorId: string;
+    detectorVersion: string;
+    adapterSha256: Digest;
+    platform: ObservationInput["platform"];
+  };
+  input: {
+    rulesSha256: Digest;
+    configurationSha256: Digest;
+    profileId: string;
+    profileSha256: Digest;
+    scopeKind: ObservationInput["scopeKind"];
+    targetPaths: string[];
+  };
+  /** Output coverage of this observation. */
+  coverage: { coveredPaths: string[] };
+  /** Aggregate coverage of the detector result that contains this observation. */
+  detectorCoverage: DetectorResult["coverage"];
+  /** Every finding of the observation, including findings located outside the descriptors. */
+  findings: Finding[];
+  /** Descriptors of the observation annexes and finding supporting evidence, ordered by ID. */
+  annexes: AnnexDescriptor[];
+}
+export type ReadContentCoverageResult =
+  | {
+      status: "matched";
+      scanId: ScanId;
+      authenticity: "unchecked";
+      annexBytes: "checked" | "not-supplied";
+      observations: ContentCoverageObservation[];
+      excluded: Record<ContentCoverageExclusionReason, number>;
+      detectorsWithoutCoverage: string[];
+    }
+  | {
+      status: "mismatched";
+      scanId: ScanId;
+      authenticity: "unchecked";
+      unmatchedPaths: string[];
+    }
+  | {
+      status: "unavailable";
+      reason: "unsupported-report" | "invalid-read";
+      scanId?: ScanId;
+      diagnostics: Diagnostic[];
+    }
   | { status: "invalid"; diagnostics: Diagnostic[] };

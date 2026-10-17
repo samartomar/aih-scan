@@ -5,9 +5,9 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createContext, SourceTextModule } from "node:vm";
+import { createContext, runInContext, SourceTextModule } from "node:vm";
 import { contractSupport } from "@aihq/scan/contracts";
-import { readArtifact, readReport } from "@aihq/scan/read";
+import { maxContentDescriptors, readArtifact, readContentCoverage, readReport } from "@aihq/scan/read";
 import {
   authenticateArtifact,
   compareMaterialInventories,
@@ -89,6 +89,48 @@ assert.equal(prepared.scanId, result.scanId);
 assert.equal(prepared.artifact.attestation, undefined);
 assert.equal((await readArtifact(prepared.bytes)).authenticity, "unchecked");
 assert.equal((await readReport(new Uint8Array(Buffer.from(prepared.artifact.report.bytesBase64, "base64")))).scanId, result.scanId);
+
+// Content coverage over installed read results: exact match, mismatch, partial
+// coverage, a refused sibling detector and unsupported or invalid reads.
+const readmeEntry = result.report.source.capture.entries.find((entry) => entry.path === "README.md");
+const readme = { path: "README.md", sha256: readmeEntry.sha256, byteLength: readmeEntry.byteLength };
+const preparedRead = await readArtifact(prepared.bytes);
+const matchedCoverage = await readContentCoverage({ read: preparedRead, descriptors: [readme] });
+assert.equal(matchedCoverage.status, "matched");
+assert.equal(matchedCoverage.scanId, result.scanId);
+assert.equal(matchedCoverage.authenticity, "unchecked");
+assert.equal(matchedCoverage.annexBytes, "checked");
+assert.equal(matchedCoverage.observations.length, 1);
+assert.equal(matchedCoverage.observations[0].detector.detectorId, "detector.aih-native");
+assert.deepEqual(matchedCoverage.observations[0].coverage.coveredPaths, ["README.md"]);
+assert(matchedCoverage.observations[0].annexes.length > 0);
+assert.deepEqual(matchedCoverage.detectorsWithoutCoverage, ["detector.unavailable"]);
+const mismatchedCoverage = await readContentCoverage({ read: preparedRead, descriptors: [{ ...readme, sha256: "0".repeat(64) }] });
+assert.equal(mismatchedCoverage.status, "mismatched");
+assert.deepEqual(mismatchedCoverage.unmatchedPaths, ["README.md"]);
+const unsupportedCoverage = await readContentCoverage({
+  read: await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:2.0.0"}')),
+  descriptors: [readme],
+});
+assert.equal(unsupportedCoverage.status, "unavailable");
+assert.equal(unsupportedCoverage.reason, "unsupported-report");
+const invalidCoverage = await readContentCoverage({ read: await readReport(new TextEncoder().encode("{}")), descriptors: [readme] });
+assert.equal(invalidCoverage.reason, "invalid-read");
+assert.equal((await readContentCoverage({ read: preparedRead, descriptors: [] })).status, "invalid");
+assert.equal(maxContentDescriptors, 10000);
+const partialSource = resolve("partial-coverage-subject");
+mkdirSync(partialSource);
+writeFileSync(resolve(partialSource, "A.md"), "# A\n");
+writeFileSync(resolve(partialSource, "B.md"), "# B\n");
+const partial = await runScan({ ...request, source: { kind: "local", path: partialSource }, selection: { paths: ["A.md"], excludedPaths: [] } });
+assert.equal(partial.status, "assessment");
+const partialDescriptors = partial.report.source.capture.entries
+  .filter((entry) => entry.kind === "file")
+  .map(({ path, sha256, byteLength }) => ({ path, sha256, byteLength }));
+const partialCoverage = await readContentCoverage({ read: await readReport(canonicalExampleBytes(partial.report)), descriptors: partialDescriptors });
+assert.equal(partialCoverage.status, "matched");
+assert.equal(partialCoverage.observations.length, 0);
+assert.equal(partialCoverage.excluded["coverage-incomplete"], 1);
 
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const spki = publicKey.export({ format: "der", type: "spki" });
@@ -180,12 +222,20 @@ const portableResult = await portableRead.namespace.readArtifact(new Uint8Array(
 assert.equal(portableResult.status, "read");
 assert.equal(portableResult.scanId, result.scanId);
 assert.equal(portableResult.authenticity, "unchecked");
+// Strict JSON inputs are plain objects of the reader's own realm, as a browser
+// consumer would construct them.
+context.descriptorJson = JSON.stringify([readme]);
+const portableDescriptors = runInContext("JSON.parse(descriptorJson)", context);
+const portableCoverage = await portableRead.namespace.readContentCoverage({ read: portableResult, descriptors: portableDescriptors });
+assert.equal(portableCoverage.status, "matched");
+assert.equal(portableCoverage.observations.length, 1);
 
 process.stdout.write(JSON.stringify({
   installedVersion: manifest.version,
   completion: result.report.completion,
   annexes: annexes.length,
   read: portableResult.status,
+  coverage: [matchedCoverage.status, mismatchedCoverage.status, unsupportedCoverage.status, portableCoverage.status],
   authenticity: authenticated.status,
   portableEntries: ["contracts", "read"],
   materialChange: material.materialChange.changes[0].kind,
