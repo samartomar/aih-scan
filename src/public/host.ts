@@ -5,7 +5,22 @@ export {
   prepareArtifact,
   signArtifact,
 } from "../artifact/host.js";
-export type * from "../artifact/types.js";
+// Only types that exported operations accept or return; internal validation records stay private.
+export type {
+  AnnexDescriptor,
+  Artifact,
+  ArtifactAnnex,
+  ArtifactResult,
+  ArtifactStatement,
+  AssociationReason,
+  AssociationResult,
+  AuthenticationTrust,
+  PrepareArtifactInput,
+  PreparedArtifact,
+  SigstoreBundle,
+  VerificationKey,
+  VerificationPublisher,
+} from "../artifact/types.js";
 export type { SuppliedDetectorDefinitionV1 } from "../assessment/detector-definition.js";
 export type { RetainedObservationsV1 } from "../assessment/reuse.js";
 export { createRetainedObservationsV1 } from "../assessment/reuse.js";

@@ -111,7 +111,8 @@ cache, an `--offline` scan stage, and a process group or a Windows Job Object th
 whole analyzer tree on timeout or `signal` abort. SARIF artifact URIs are relative to the
 declared source root, SARIF observations carry a `ScanFindingsV1` projection, and an empty
 source root completes for Semgrep. The profile is unisolated and does not enforce the
-network; it is never a default. The `0.5.0` candidate bundles Cisco `2.1.0+uvlock.1e98c5679994` as one lock
+network; it is never a default (see [Runtime boundaries](#runtime-boundaries) for each
+profile's platforms and evidence limits). The `0.5.0` candidate bundles Cisco `2.1.0+uvlock.1e98c5679994` as one lock
 shared by the host profile, the namespace profile and the Linux OCI candidate image recipe.
 Source state does not prove this candidate is published.
 
@@ -143,16 +144,45 @@ The host entry, retained V2 root library, `aih-scan` binary and scripts under
 `examples/` use Node `>=24.15.0 <25`. They perform explicit filesystem, process
 or cryptographic work. Private `dist` paths are not public exports.
 
-The retained V2 detector profiles have additional platform constraints:
-- The hardened detector execution profiles additionally require Linux `amd64`;
-  see [CONTRACTS.md](CONTRACTS.md). Only the in-process `aih-native` analyzer
-  runs on any other platform, and it is not isolated because it spawns nothing.
-- `detector.semgrep` also offers `host-process-uv-v1`, used only when a caller
-  names it and never as a fallback. It runs uv and Semgrep as ordinary host
-  processes with no isolation and no network enforcement, on Linux `amd64`
-  only: Windows is refused because process-tree containment is unproven there,
-  macOS is refused pending a hosted proof, and a real installed-uv run is not
-  yet proven.
+Each detector execution profile carries its own platform gate in the published
+`DetectorCapabilityV1` record; a host outside the selected profile's
+`supportedPlatforms` is refused `unsupported-platform` before any probe or spawn.
+Host profiles run only when a caller names them by `executionProfileId`; they are
+never a default or a fallback. See [CONTRACTS.md](CONTRACTS.md) for the full records.
+
+| Profile | Detectors | Platforms admitted | Isolation and network |
+| --- | --- | --- | --- |
+| `in-process-native-v1`, `in-process-trust-lint-v1`, `in-process-binding-gate-v1` | `detector.aih-native`, `detector.aih-trust-lint`, `detector.aih-binding-gate` | Linux, macOS and Windows on `amd64` and `arm64` | None; nothing is spawned |
+| `linux-namespace-uv-v1` (default) | `detector.semgrep`, `detector.cisco` | Linux `amd64` | Linux namespaces; network for uv acquisition only |
+| `oci-hardened-cisco-v1` | `detector.cisco` | Linux `amd64` | Container; no network |
+| `docker-hardened-skillspector-v1` (default) | `detector.skillspector` | Linux `amd64` | Container; no network |
+| `host-process-uv-v1` | `detector.semgrep`, `detector.cisco`, `detector.snyk-agent-scan` | Linux `amd64` and `arm64`, macOS `arm64`, Windows `amd64` | None; network unenforced |
+| `host-process-uv-v1` | `detector.cisco-mcp-scanner` | Linux `amd64` and `arm64` | None; network unenforced |
+| `docker-host-local-skillspector-v1` | `detector.skillspector` | Linux `amd64`, macOS `amd64` and `arm64`, Windows `amd64` | Container; no network; never pulls |
+
+What these gates do and do not establish:
+
+- The `host-process-uv-v1` platform sets are where every exact-pinned analyzer
+  dependency publishes a binary wheel (Linux needs glibc 2.34 or later; Cisco on
+  macOS needs macOS 14 or later). macOS `amd64` and Windows `arm64` lack those
+  wheels and Scan never builds analyzer dependencies from source, so they are
+  refused. `detector.cisco-mcp-scanner` is Linux-only because its lock pins a
+  manylinux-only litellm. `detector.snyk-agent-scan` follows the platform set
+  recorded for its pinned version (0.6.4).
+- `host-process-uv-v1` contains each analyzer tree in a POSIX process group or a
+  Windows Job Object and fails a run that leaves processes naming its private
+  directories. It does not contain a hostile analyzer: on Linux and macOS a
+  descendant that leaves the session and also drops every link to the run can
+  outlive it. `linux-namespace-uv-v1` is the containment option on Linux.
+- A platform gate is not a proof run. The installed host-profile proof lane in
+  [`installed-semgrep-parity.yml`](.github/workflows/installed-semgrep-parity.yml)
+  runs Semgrep and Cisco under `host-process-uv-v1` through the installed public
+  API on hosted Linux `amd64`, Windows `amd64` and macOS `arm64` runners.
+  Evidence for a host exists only from a green run of its row; source state does
+  not record one, and no local test substitutes for it. No lane covers Linux
+  `arm64`, `detector.cisco-mcp-scanner` or `detector.snyk-agent-scan`.
+- `docker-host-local-skillspector-v1` runs a `linux/amd64` image; on `arm64`
+  hosts it depends on the Docker engine's `amd64` emulation.
 
 Runnable examples live in [`examples/`](examples). They reach the package
 through its public entry point only:
