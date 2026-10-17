@@ -31,6 +31,7 @@ import {
 } from "../src/observation/observation-evidence-v1.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
+import { contractSupport } from "../src/public/contracts.js";
 import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
 
 const root = resolve(import.meta.dirname, "..");
@@ -105,6 +106,32 @@ const publicV2Exports = [
   "verifyScanAttestationV2",
   "writeScanCaptureBundleV2",
 ].sort();
+// Low-level V2/registration serialization helpers published in 0.4.0: still exported
+// for compatibility, deprecated as internal details with no supported outside use.
+const deprecatedRootHelpers = [
+  "assertCompleteScanAnnexArtifactsV2",
+  "canonicalDetectorRegistrationV1Bytes",
+  "canonicalDssePaeV2",
+  "canonicalScanAttestationEnvelopeBytesV2",
+  "canonicalScanCandidateBytesV2",
+  "canonicalSourceSealsV2Bytes",
+  "ed25519KeyIdV2",
+  "isVerifiedScanAttestationV2",
+];
+// Retired baseline production: still exported for compatibility, deprecated. With the
+// helpers above, these are the only root names whose declarations carry @deprecated.
+const deprecatedRootProducers = [
+  "BASELINE_ANALYZERS_V1",
+  "canonicalBaselineVetAttestationEnvelopeV1Bytes",
+  "canonicalBaselineVetDiscoveryV1Bytes",
+  "canonicalBaselineVetPublicationV1Bytes",
+  "canonicalBaselineVetReceiptV1Bytes",
+  "canonicalBaselineVetRequestV1Bytes",
+  "createBaselineVetDiscoveryV1",
+  "createBaselineVetPublicationV1",
+  "createBaselineVetRequestV1",
+  "signBaselineVetBundleV1",
+];
 const npmDiscoveryMetadata = {
   repository: { type: "git", url: "git+https://github.com/samartomar/aih-scan.git" },
   homepage: "https://github.com/samartomar/aih-scan#readme",
@@ -796,6 +823,7 @@ describe("published V2 package installation", () => {
       join(directory, "consumer.mjs"),
       [
         'import * as scan from "@aihq/scan";',
+        'import { contractSupport } from "@aihq/scan/contracts";',
         'import { createHash } from "node:crypto";',
         'import { mkdirSync, readFileSync, writeFileSync } from "node:fs";',
         'import { resolve } from "node:path";',
@@ -843,6 +871,9 @@ describe("published V2 package installation", () => {
         "const findings = scan.readScanFindingsV1({ verified: { facts: {} } });",
         "process.stdout.write(JSON.stringify({",
         "  exports: Object.keys(scan).sort(),",
+        `  deprecatedHelpers: ${JSON.stringify(deprecatedRootHelpers)}.map((name) => typeof scan[name]),`,
+        `  deprecated: ${JSON.stringify(deprecatedRootProducers)}.map((name) => typeof scan[name]),`,
+        '  legacyRoot: contractSupport.entries.find((entry) => entry.export === "@aihq/scan"),',
         "  denied,",
         "  detectorExecution: {",
         "    detectorIds: capabilities.map((entry) => entry.detectorId),",
@@ -895,11 +926,76 @@ describe("published V2 package installation", () => {
       }),
     ) as {
       exports?: unknown;
+      deprecatedHelpers?: unknown;
+      deprecated?: unknown;
+      legacyRoot?: unknown;
       denied?: readonly { code?: unknown }[];
       detectorExecution?: unknown;
       metadata?: unknown;
     };
     expect(consumer.exports).toEqual(publicV2Exports);
+    // Deprecated producers and serialization helpers are still present for compatibility.
+    expect(consumer.deprecatedHelpers).toEqual(deprecatedRootHelpers.map(() => "function"));
+    expect(consumer.deprecated).toEqual(
+      deprecatedRootProducers.map((name) =>
+        name === "BASELINE_ANALYZERS_V1" ? "object" : "function",
+      ),
+    );
+    // The installed root entry is exactly the source descriptor, which the public
+    // boundary test checks against the README table and the root's runtime exports.
+    expect(consumer.legacyRoot).toEqual(
+      JSON.parse(
+        JSON.stringify(contractSupport.entries.find((entry) => entry.export === "@aihq/scan")),
+      ),
+    );
+    const installedOperations = (
+      consumer.legacyRoot as { operations: { status: string; exports: string[] }[] }
+    ).operations;
+    expect(installedOperations.flatMap((operation) => operation.exports).sort()).toEqual(
+      publicV2Exports,
+    );
+    expect(
+      installedOperations
+        .filter((operation) => operation.status === "deprecated")
+        .flatMap((operation) => operation.exports)
+        .sort(),
+    ).toEqual([...deprecatedRootProducers, ...deprecatedRootHelpers].sort());
+    // The installed declarations mark exactly these names @deprecated, so an editor in
+    // a consumer project flags them and no other root name.
+    const installedDist = join(directory, "node_modules/@aihq/scan/dist");
+    const rootDeclarations = readFileSync(join(installedDist, "index.d.ts"), "utf8");
+    expect(rootDeclarations).not.toContain("@deprecated");
+    for (const [legacyModule, names] of [
+      ["baseline-production-v1", deprecatedRootProducers],
+      ["serialization-helpers-v2", deprecatedRootHelpers],
+    ] as const) {
+      const reExport = rootDeclarations.match(
+        new RegExp(`export {([^}]*)} from "./legacy-root/${legacyModule}.js";`),
+      );
+      expect(
+        reExport?.[1]
+          ?.split(",")
+          .map((name) => name.trim())
+          .filter(Boolean)
+          .sort(),
+        legacyModule,
+      ).toEqual([...names].sort());
+      const declarations = readFileSync(
+        join(installedDist, `legacy-root/${legacyModule}.d.ts`),
+        "utf8",
+      );
+      expect(
+        [
+          ...declarations.matchAll(
+            /\/\*\*\n \* @deprecated[\s\S]*?\*\/\nexport declare const (\w+)/g,
+          ),
+        ]
+          .map((match) => match[1])
+          .sort(),
+        legacyModule,
+      ).toEqual([...names].sort());
+      expect(declarations.match(/export /g), legacyModule).toHaveLength(names.length);
+    }
     // The packed package must be able to run a detector, not merely name one.
     expect(consumer.detectorExecution).toEqual({
       detectorIds: [

@@ -12,6 +12,26 @@
   out-of-bound descriptors are `invalid`. The read result is revalidated; the
   operation performs no host access and does not authenticate the producer
   (samartomar/aih-scan#106).
+- Bound the legacy root (samartomar/aih-scan#107). The README documents the
+  recommended `contracts`, `read` and `host` workflow and classifies every root
+  export as compatibility-only or deprecated. `contractSupport.entries` gives each
+  entry a `status` and adds the `@aihq/scan` root entry, which lists one status per
+  operation group with the names in it.
+  - **Deprecated, still exported:** `BASELINE_ANALYZERS_V1`,
+    `createBaselineVetRequestV1`, `canonicalBaselineVetRequestV1Bytes`,
+    `canonicalBaselineVetReceiptV1Bytes`, `signBaselineVetBundleV1`,
+    `canonicalBaselineVetAttestationEnvelopeV1Bytes`, `createBaselineVetPublicationV1`,
+    `canonicalBaselineVetPublicationV1Bytes`, `createBaselineVetDiscoveryV1` and
+    `canonicalBaselineVetDiscoveryV1Bytes` now carry `@deprecated`. Their behavior
+    is unchanged.
+  - **Deprecated, still exported:** the low-level serialization helpers
+    `assertCompleteScanAnnexArtifactsV2`, `canonicalDssePaeV2`,
+    `canonicalScanAttestationEnvelopeBytesV2`, `canonicalScanCandidateBytesV2`,
+    `canonicalSourceSealsV2Bytes`, `ed25519KeyIdV2`, `isVerifiedScanAttestationV2` and
+    `canonicalDetectorRegistrationV1Bytes` now carry `@deprecated`. They are
+    internal details with no supported use outside Scan, and are scheduled for
+    removal with the legacy root window. Their behavior is unchanged.
+
 - Add a maintainer refresh operation for the seven active sources using frozen
   commits and an exact packed scanner. Record complete source and detector
   accounting, resource measurements, partial results and original annexes.

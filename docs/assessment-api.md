@@ -102,7 +102,8 @@ Legacy candidate-producing profiles cannot produce this portable observation
 format and are explicitly refused. Current profiles also refuse directory-link
 captures when their analyzer snapshot cannot preserve that entry type. Such
 refusals leave the shared source profile intact. Legacy root exports remain
-available under their existing contracts. The new path has no Core commit/schema
+available under their existing contracts; their status is listed in the
+[legacy root table](../README.md#legacy-root-aihqscan). The new path has no Core commit/schema
 lock, success-only publication projection, report TTL, signing or posting side effect.
 
 Repeated calls can retain successful observations in a process-local handle:

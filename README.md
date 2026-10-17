@@ -339,9 +339,10 @@ npm install --save-dev /path/to/aihq-scan-X.Y.Z.tgz
 npx aih-scan --help
 ```
 
-The root `@aihq/scan` entry retains its V2 API during this migration. New assessment
-consumers use the explicit `contracts`, `read` and `host` entries above. Internal
-modules are implementation details and are not package export paths.
+New assessment consumers use the explicit `contracts`, `read` and `host` entries
+above. The root `@aihq/scan` entry is a compatibility surface; see
+[Legacy root](#legacy-root-aihqscan). Internal modules are implementation details
+and are not package export paths.
 
 For an exact candidate, publication custody is proven only when every live
 registry and Release check below succeeds. Until full custody exists, at least
@@ -374,7 +375,66 @@ after npm publication, so its checksum bundle has the historical
 remains the original tag-run build attestation. Do not use that recovery
 identity for a normal release or describe either signature as the other.
 
+## Recommended workflow
+
+New work uses the three current entries. Each step is a separate, explicit call:
+
+1. **Check support.** Read `contractSupport` from `@aihq/scan/contracts` to confirm
+   the installed package version, the schema IDs it accepts or produces and the
+   runtime of each entry.
+2. **Assess.** Call `runScan` from `@aihq/scan/host` (or the `aih-scan scan`
+   command) with a closed request. Every requested detector is accounted for, and a
+   partial assessment keeps the reliable results.
+3. **Package.** Call `prepareArtifact` to build a portable artifact. Sign it with
+   `signArtifact` or attach an external signature with `attachAttestation`.
+4. **Read.** Anywhere, including a browser, read reports and artifacts with
+   `readReport` and `readArtifact` from `@aihq/scan/read`. Their authenticity stays
+   unchecked.
+5. **Authenticate.** On a host, call `authenticateArtifact` with keys or publisher
+   policies the caller selected.
+6. **Compare and deliver** (optional). Call `compareMaterialInventories`, then
+   `deliverMaterialChange` only when you explicitly want to post the change.
+
+This path carries no Core commit or schema lock, no report TTL, no success-only
+projection and no qualification gate. See [assessment usage](docs/assessment-api.md).
+
+## Legacy root (`@aihq/scan`)
+
+The root entry keeps earlier evidence interpretable and existing callers working.
+It is not the recommended way to start new work. Its status is also published as
+the `@aihq/scan` entry of `contractSupport.entries`, with one status per operation
+group:
+
+- **current**: none. Current operations live in `contracts`, `read` and `host`.
+- **compatibility-only**: kept so existing evidence stays readable and existing
+  callers keep working. No new capability is added here.
+- **deprecated**: retired baseline production and low-level serialization helpers.
+  These names carry `@deprecated` in their declarations, so editors and linters
+  flag them. They still work and are not removed until the legacy root's
+  compatibility window is decided.
+
+| Group | Status | Root exports | Use instead for new work |
+| --- | --- | --- | --- |
+| `v2-evidence-readers` | compatibility-only | `parseScanAttestationEnvelopeV2Json`, `verifyScanAttestationV2`, `readScanCaptureBundleV2`, `readScanFindingsV1`, `parseScanResultRecordV1`, `readScanResultRecordV1`, `readScanResultSubjectBindingV1`, `SCAN_RESULT_RECORD_FORMAT_V1`, `SCAN_RESULT_RECORD_VERSION_V1`, `SCAN_RESULT_SUBJECT_NAME_V1`; types `ScanTrustRootV2`, `SignedScanAttestationV2`, `VerifiedScanAttestationV2`, `FindingFieldV1`, `ReadScanFindingsV1Request`, `ScanFindingV1`, `ScanFindingsV1`, `ScanFindingsReadV1` and the `ScanResult*` / `ReadScanResult*` record types | `readReport` and `readArtifact` (`@aihq/scan/read`), then `authenticateArtifact` (`@aihq/scan/host`) |
+| `baseline-evidence-readers` | compatibility-only | `parseBaselineVetRequestV1Json`, `parseBaselineVetReceiptV1Json`, `readBaselineVetBundleV1`, `parseBaselineVetAttestationEnvelopeV1Json`, `verifyBaselineVetAttestationV1`, `parseBaselineVetPublicationV1Json`, `baselineVetPublicationResultV1`, `parseBaselineVetDiscoveryV1Json`, `resolveBaselineVetDiscoveryV1`; types `BaselineAnalyzerV1`, `BaselineVetRequestV1`, `BaselineVetReceiptV1`, `BaselineVetAnnexArtifactV1`, `BaselineVetBatchResultV1`, `BaselineVetTrustRootV1`, `SignedBaselineVetAttestationV1`, `VerifiedBaselineVetAttestationV1`, `BaselineVetPublicationV1`, `BaselineVetDiscoveryV1` | Nothing replaces them: they read historical baseline evidence |
+| `detector-execution` | compatibility-only | `listDetectorCapabilitiesV1`, `resolveDetectorCapabilityV1`, `resolveDetectorExecutionProfileDocumentV1`, `probeDetectorAvailabilityV1`, `runDetectorV1`, `runCiscoShardV1`; types `Detector*V1` capability and profile types, `DetectorOptionsV1`, `CiscoDetectorOptionsV1`, `CiscoMcpScannerDetectorOptionsV1`, `TrustLintDetectorOptionsV1`, `DetectorAvailabilityV1Result`, `DetectorPrerequisiteStateV1`, `RunDetector*V1`, `RunCiscoShard*V1`, `CiscoShardJobV1`, `CiscoShardJobSarifOutputV1`, `ScanCoverageV1`, `BaselineAnalyzerObservationV1`, `SkillspectorImageMatchV1` | `runScan` (`@aihq/scan/host`) |
+| `v2-capture-and-signing` | compatibility-only | `captureCiscoOciCandidateV2`, `captureRegisteredDetectorCandidateV2`, `createDetectorRegistrationV1`, `parseDetectorRegistrationV1Json`, `sealSourceV2`, `createScanCandidateV2`, `parseScanCandidateV2Json`, `signScanCandidateV2`, `writeScanCaptureBundleV2`; types `CiscoCaptureV2`, `DetectorRegistrationV1`, `DetectorRegistrationEntryV1`, `SourceSealV2`, `ScanCandidateV2` | `runScan`, then `prepareArtifact` with `signArtifact` or `attachAttestation` (`@aihq/scan/host`) |
+| `legacy-core-evidence` | compatibility-only | `AI_HARNESS_CORE_CONTRACTS_ACCEPTED`, `AI_HARNESS_STRICT_V2_COMMIT`, `AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED`, `AI_HARNESS_DECISION_V2_SCHEMA_SHA256`, `AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED`, `AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256`, `verifyAiHarnessStrictV2Contract`, `verifyAiHarnessCoreEvidenceContractV1`, `verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1`, `projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1`, `coreOrganizationEvidenceEnvelopeDigestV1`, `canonicalCoreOrganizationEvidenceEnvelopeV1Bytes`; type `CoreOrganizationEvidenceEnvelopeV1` | Nothing replaces them: current assessments carry no Core lock |
+| `baseline-production` | **deprecated** | `BASELINE_ANALYZERS_V1`, `createBaselineVetRequestV1`, `canonicalBaselineVetRequestV1Bytes`, `canonicalBaselineVetReceiptV1Bytes`, `signBaselineVetBundleV1`, `canonicalBaselineVetAttestationEnvelopeV1Bytes`, `createBaselineVetPublicationV1`, `canonicalBaselineVetPublicationV1Bytes`, `createBaselineVetDiscoveryV1`, `canonicalBaselineVetDiscoveryV1Bytes` | `runScan`, `prepareArtifact` and `signArtifact` (`@aihq/scan/host`) |
+| `v2-internal-helpers` | **deprecated** | `assertCompleteScanAnnexArtifactsV2`, `canonicalDssePaeV2`, `canonicalScanAttestationEnvelopeBytesV2`, `canonicalScanCandidateBytesV2`, `canonicalSourceSealsV2Bytes`, `ed25519KeyIdV2`, `isVerifiedScanAttestationV2`, `canonicalDetectorRegistrationV1Bytes` | Nothing: these are internal serialization details with no supported use outside Scan. The readers, verifiers, signers and `aih-scan` CLI apply them for you |
+
+The legacy Core locks exist only to keep evidence produced against those Core
+commits verifiable. They are not part of the recommended workflow, and a current
+report never tracks Core releases.
+
 ## Evidence flow
+
+The sections from here to [What the evidence means](#what-the-evidence-means)
+describe the legacy root and its CLI commands: `aih-scan capture`, `sign`,
+`verify`, `project-core-evidence`, `baseline-vet`, `baseline-sign`,
+`baseline-verify`, `baseline-pack` and `baseline-inspect`. The current command is
+`aih-scan scan`; see [Assess a local directory or Git repository](#assess-a-local-directory-or-git-repository).
+New work follows the [recommended workflow](#recommended-workflow).
 
 Keep capture, signing, verification, and governance as separate phases:
 
