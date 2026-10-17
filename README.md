@@ -381,7 +381,8 @@ New work uses the three current entries. Each step is a separate, explicit call:
 
 1. **Check support.** Read `contractSupport` from `@aihq/scan/contracts` to confirm
    the installed package version, the schema IDs it accepts or produces and the
-   runtime of each entry.
+   runtime of each entry. Read `entrySupport` from the same entry for each entry's
+   status.
 2. **Assess.** Call `runScan` from `@aihq/scan/host` (or the `aih-scan scan`
    command) with a closed request. Every requested detector is accounted for, and a
    partial assessment keeps the reliable results.
@@ -402,8 +403,11 @@ projection and no qualification gate. See [assessment usage](docs/assessment-api
 
 The root entry keeps earlier evidence interpretable and existing callers working.
 It is not the recommended way to start new work. Its status is also published as
-the `@aihq/scan` entry of `contractSupport.entries`, with one status per operation
-group:
+the `@aihq/scan` entry of `entrySupport.entries` from `@aihq/scan/contracts`, with
+one status, replacement and export list per operation group in `groups`.
+`entrySupport` shares its package identity with `contractSupport`, which keeps the
+exact `urn:aihq:package-support:1.0.0` shape and carries no status. The statuses
+are:
 
 - **current**: none. Current operations live in `contracts`, `read` and `host`.
 - **compatibility-only**: kept so existing evidence stays readable and existing

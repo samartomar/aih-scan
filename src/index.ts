@@ -3,7 +3,7 @@
 // here is compatibility-only, except the bindings re-exported from ./legacy-root/
 // (retired baseline production and low-level serialization helpers), which are
 // deprecated.
-// The per-group status is published as the root entry of contractSupport and
+// The per-group status is published as the root entry of entrySupport and
 // described in the README "Legacy root" section.
 export {
   type BaselineVetTrustRootV1,
