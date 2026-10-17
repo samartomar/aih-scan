@@ -6,7 +6,7 @@ import { createRequire, isBuiltin } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext, SourceTextModule } from "node:vm";
-import { contractSupport } from "@aihq/scan/contracts";
+import { contractSupport, entrySupport } from "@aihq/scan/contracts";
 import { maxContentDescriptors, readArtifact, readContentCoverage, readReport } from "@aihq/scan/read";
 import {
   authenticateArtifact,
@@ -22,6 +22,20 @@ const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json",
 assert.deepEqual(contractSupport.package, { name: manifest.name, version: manifest.version });
 assert.equal(contractSupport.schema, "urn:aihq:package-support:1.0.0");
 assert.equal(contractSupport.contracts.length, 7);
+// Exactly the package-support 1.0.0 entry shape; lifecycle status is the sibling entrySupport.
+assert.deepEqual(contractSupport.entries, [
+  { export: "@aihq/scan/contracts", runtime: "portable" },
+  { export: "@aihq/scan/read", runtime: "portable" },
+  { export: "@aihq/scan/host", runtime: "node", nodeRange: ">=24.15.0 <25" },
+  { export: "@aihq/scan", runtime: "node", nodeRange: ">=24.15.0 <25" },
+]);
+assert.equal(entrySupport.package, contractSupport.package);
+assert.deepEqual(entrySupport.entries.map(({ export: name, status }) => [name, status]), [
+  ["@aihq/scan/contracts", "current"],
+  ["@aihq/scan/read", "current"],
+  ["@aihq/scan/host", "current"],
+  ["@aihq/scan", "compatibility-only"],
+]);
 for (const name of ["request", "run-result", "report", "artifact", "evidence-association", "material-change", "detector-definition"]) {
   const schema = JSON.parse(readFileSync(fileURLToPath(import.meta.resolve(`@aihq/scan/schemas/${name}/1.0.0.json`)), "utf8"));
   assert.equal(schema.$id, `urn:aihq:scan:${name}:1.0.0`);

@@ -31,7 +31,7 @@ import {
 } from "../src/observation/observation-evidence-v1.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
-import { contractSupport } from "../src/public/contracts.js";
+import { contractSupport, entrySupport } from "../src/public/contracts.js";
 import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
 
 const root = resolve(import.meta.dirname, "..");
@@ -823,7 +823,7 @@ describe("published V2 package installation", () => {
       join(directory, "consumer.mjs"),
       [
         'import * as scan from "@aihq/scan";',
-        'import { contractSupport } from "@aihq/scan/contracts";',
+        'import { contractSupport, entrySupport } from "@aihq/scan/contracts";',
         'import { createHash } from "node:crypto";',
         'import { mkdirSync, readFileSync, writeFileSync } from "node:fs";',
         'import { resolve } from "node:path";',
@@ -873,7 +873,9 @@ describe("published V2 package installation", () => {
         "  exports: Object.keys(scan).sort(),",
         `  deprecatedHelpers: ${JSON.stringify(deprecatedRootHelpers)}.map((name) => typeof scan[name]),`,
         `  deprecated: ${JSON.stringify(deprecatedRootProducers)}.map((name) => typeof scan[name]),`,
-        '  legacyRoot: contractSupport.entries.find((entry) => entry.export === "@aihq/scan"),',
+        "  contractSupport,",
+        "  entrySupport,",
+        "  samePackageIdentity: entrySupport.package === contractSupport.package,",
         "  denied,",
         "  detectorExecution: {",
         "    detectorIds: capabilities.map((entry) => entry.detectorId),",
@@ -928,7 +930,9 @@ describe("published V2 package installation", () => {
       exports?: unknown;
       deprecatedHelpers?: unknown;
       deprecated?: unknown;
-      legacyRoot?: unknown;
+      contractSupport?: unknown;
+      entrySupport?: unknown;
+      samePackageIdentity?: unknown;
       denied?: readonly { code?: unknown }[];
       detectorExecution?: unknown;
       metadata?: unknown;
@@ -941,16 +945,18 @@ describe("published V2 package installation", () => {
         name === "BASELINE_ANALYZERS_V1" ? "object" : "function",
       ),
     );
-    // The installed root entry is exactly the source descriptor, which the public
-    // boundary test checks against the README table and the root's runtime exports.
-    expect(consumer.legacyRoot).toEqual(
-      JSON.parse(
-        JSON.stringify(contractSupport.entries.find((entry) => entry.export === "@aihq/scan")),
-      ),
-    );
-    const installedOperations = (
-      consumer.legacyRoot as { operations: { status: string; exports: string[] }[] }
-    ).operations;
+    // The installed declarations are exactly the source ones: contractSupport in the
+    // package-support schema shape and entrySupport, which the public boundary test
+    // checks against the README table and the root's runtime exports.
+    expect(consumer.contractSupport).toEqual(JSON.parse(JSON.stringify(contractSupport)));
+    expect(consumer.entrySupport).toEqual(JSON.parse(JSON.stringify(entrySupport)));
+    expect(consumer.samePackageIdentity).toBe(true);
+    const installedOperations =
+      (
+        consumer.entrySupport as {
+          entries: { export: string; groups?: { status: string; exports: string[] }[] }[];
+        }
+      ).entries.find((entry) => entry.export === "@aihq/scan")?.groups ?? [];
     expect(installedOperations.flatMap((operation) => operation.exports).sort()).toEqual(
       publicV2Exports,
     );
