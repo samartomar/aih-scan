@@ -16,7 +16,7 @@
   recommended `contracts`, `read` and `host` workflow and classifies every root
   export as compatibility-only or deprecated. `contractSupport.entries` gives each
   entry a `status` and adds the `@aihq/scan` root entry, which lists one status per
-  operation group.
+  operation group with the names in it.
   - **Deprecated, still exported:** `BASELINE_ANALYZERS_V1`,
     `createBaselineVetRequestV1`, `canonicalBaselineVetRequestV1Bytes`,
     `canonicalBaselineVetReceiptV1Bytes`, `signBaselineVetBundleV1`,
@@ -27,8 +27,7 @@
   - **Deprecated, still exported:** the low-level serialization helpers
     `assertCompleteScanAnnexArtifactsV2`, `canonicalDssePaeV2`,
     `canonicalScanAttestationEnvelopeBytesV2`, `canonicalScanCandidateBytesV2`,
-    `canonicalSourceSealsV2Bytes`, `ed25519KeyIdV2`, `isVerifiedScanAttestationV2`,
-    `canonicalCoreOrganizationEvidenceEnvelopeV1Bytes` and
+    `canonicalSourceSealsV2Bytes`, `ed25519KeyIdV2`, `isVerifiedScanAttestationV2` and
     `canonicalDetectorRegistrationV1Bytes` now carry `@deprecated`. They are
     internal details with no supported use outside Scan, and are scheduled for
     removal with the legacy root window. Their behavior is unchanged.

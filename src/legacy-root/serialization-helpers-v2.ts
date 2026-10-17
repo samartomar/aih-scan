@@ -4,7 +4,6 @@
 // internal serialization details with no supported use outside Scan, and stay on
 // the root only for compatibility. Each binding is the same function the internal
 // implementation uses, so behavior is unchanged.
-import { canonicalCoreOrganizationEvidenceEnvelopeV1Bytes as coreEnvelopeBytes } from "../core/organization-evidence-envelope-v1.js";
 import {
   assertCompleteScanAnnexArtifactsV2 as assertAnnexes,
   canonicalScanAttestationEnvelopeBytesV2 as attestationEnvelopeBytes,
@@ -58,13 +57,6 @@ export const ed25519KeyIdV2: typeof keyId = keyId;
  * scheduled for removal with the legacy root window.
  */
 export const isVerifiedScanAttestationV2: typeof isVerified = isVerified;
-
-/**
- * @deprecated Internal serialization helper; no supported use outside Scan;
- * scheduled for removal with the legacy root window.
- */
-export const canonicalCoreOrganizationEvidenceEnvelopeV1Bytes: typeof coreEnvelopeBytes =
-  coreEnvelopeBytes;
 
 /**
  * @deprecated Internal serialization helper; no supported use outside Scan;

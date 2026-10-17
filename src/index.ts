@@ -56,6 +56,7 @@ export {
 } from "./core/core-contract-lock-v2.js";
 export {
   type CoreOrganizationEvidenceEnvelopeV1,
+  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
   coreOrganizationEvidenceEnvelopeDigestV1,
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "./core/organization-evidence-envelope-v1.js";
@@ -81,7 +82,6 @@ export {
 } from "./legacy-root/baseline-production-v1.js";
 export {
   assertCompleteScanAnnexArtifactsV2,
-  canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
   canonicalDetectorRegistrationV1Bytes,
   canonicalDssePaeV2,
   canonicalScanAttestationEnvelopeBytesV2,

@@ -31,6 +31,7 @@ import {
 } from "../src/observation/observation-evidence-v1.js";
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
+import { contractSupport } from "../src/public/contracts.js";
 import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
 
 const root = resolve(import.meta.dirname, "..");
@@ -109,7 +110,6 @@ const publicV2Exports = [
 // for compatibility, deprecated as internal details with no supported outside use.
 const deprecatedRootHelpers = [
   "assertCompleteScanAnnexArtifactsV2",
-  "canonicalCoreOrganizationEvidenceEnvelopeV1Bytes",
   "canonicalDetectorRegistrationV1Bytes",
   "canonicalDssePaeV2",
   "canonicalScanAttestationEnvelopeBytesV2",
@@ -941,21 +941,25 @@ describe("published V2 package installation", () => {
         name === "BASELINE_ANALYZERS_V1" ? "object" : "function",
       ),
     );
-    expect(consumer.legacyRoot).toEqual({
-      export: "@aihq/scan",
-      runtime: "node",
-      nodeRange: ">=24.15.0 <25",
-      status: "compatibility-only",
-      operations: [
-        { group: "v2-evidence-readers", status: "compatibility-only", use: "@aihq/scan/read" },
-        { group: "baseline-evidence-readers", status: "compatibility-only", use: null },
-        { group: "detector-execution", status: "compatibility-only", use: "@aihq/scan/host" },
-        { group: "v2-capture-and-signing", status: "compatibility-only", use: "@aihq/scan/host" },
-        { group: "legacy-core-evidence", status: "compatibility-only", use: null },
-        { group: "baseline-production", status: "deprecated", use: "@aihq/scan/host" },
-        { group: "v2-internal-helpers", status: "deprecated", use: null },
-      ],
-    });
+    // The installed root entry is exactly the source descriptor, which the public
+    // boundary test checks against the README table and the root's runtime exports.
+    expect(consumer.legacyRoot).toEqual(
+      JSON.parse(
+        JSON.stringify(contractSupport.entries.find((entry) => entry.export === "@aihq/scan")),
+      ),
+    );
+    const installedOperations = (
+      consumer.legacyRoot as { operations: { status: string; exports: string[] }[] }
+    ).operations;
+    expect(installedOperations.flatMap((operation) => operation.exports).sort()).toEqual(
+      publicV2Exports,
+    );
+    expect(
+      installedOperations
+        .filter((operation) => operation.status === "deprecated")
+        .flatMap((operation) => operation.exports)
+        .sort(),
+    ).toEqual([...deprecatedRootProducers, ...deprecatedRootHelpers].sort());
     // The installed declarations mark exactly these names @deprecated, so an editor in
     // a consumer project flags them and no other root name.
     const installedDist = join(directory, "node_modules/@aihq/scan/dist");
