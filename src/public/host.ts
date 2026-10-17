@@ -5,7 +5,8 @@ export {
   prepareArtifact,
   signArtifact,
 } from "../artifact/host.js";
-// Only types that exported operations accept or return; internal validation records stay private.
+// Artifact types that exported operations accept or return (report body types come from ./contracts);
+// internal validation records stay private.
 export type {
   AnnexDescriptor,
   Artifact,
