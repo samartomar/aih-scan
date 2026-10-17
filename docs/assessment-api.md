@@ -206,3 +206,65 @@ construction and authentication.
 
 Representative valid and invalid documents are also shipped at
 `@aihq/scan/schemas/examples/1.0.0.json`.
+
+## Content coverage
+
+`readContentCoverage` answers whether a read report assessed an exact set of files
+and which of its observations cover all of them. It takes a result returned by
+`readReport` or `readArtifact` and the expected files as `{ path, sha256,
+byteLength }` descriptors:
+
+```js
+import { readArtifact, readContentCoverage } from "@aihq/scan/read";
+
+const read = await readArtifact(bytes);
+const coverage = await readContentCoverage({
+  read,
+  descriptors: [{ path: "SKILL.md", sha256: "f818…d77", byteLength: 138 }],
+});
+// {
+//   status: "matched", scanId, authenticity: "unchecked",
+//   observations: [{
+//     observationId, origin: "fresh",
+//     detector: { detectorId, detectorVersion, adapterSha256, platform },
+//     input: { rulesSha256, configurationSha256, profileId, profileSha256, scopeKind, targetPaths },
+//     coverage: { coveredPaths }, detectorCoverage, findings, annexes,
+//   }],
+//   excluded: { "detector-not-succeeded": 0, "input-missing-descriptor": 0,
+//               "coverage-incomplete": 0 },
+//   detectorsWithoutCoverage: [],
+// }
+```
+
+The result `status` is the source association:
+
+| Status | Meaning |
+| --- | --- |
+| `matched` | Every descriptor equals a captured `file` or `file-link` entry by path, SHA-256 and byte length |
+| `mismatched` | At least one descriptor has no equal captured file entry; `unmatchedPaths` lists their paths sorted and no observations are returned |
+| `unavailable` | The read was `unsupported-report` or `invalid`, or the supplied read result failed revalidation (`reason`) |
+| `invalid` | The descriptors or call input are outside the supported bounds |
+
+An observation covers the descriptors only when its detector result succeeded,
+its input entries contain every descriptor exactly, and its output coverage
+includes every descriptor path. Every other observation is
+counted once under the first failing reason in `excluded`; it is never silently
+dropped. `detectorsWithoutCoverage` names requested detectors, including refused
+detectors with no observations, that contributed no covering observation. A
+covering observation returns all of its findings, including findings located at
+other covered paths, and the report descriptors of its annexes ordered by ID.
+The reader already requires every observation annex, including finding supporting
+evidence, to resolve. The result makes no claim about annex bytes; `readArtifact`
+checks them, and `readReport` has none to check.
+
+The read result is revalidated as a closed supported report, and its Scan ID must
+identify that report, so an altered result that no longer reads cannot claim coverage.
+Descriptors are a nonempty array of at most `maxContentDescriptors` (10,000)
+closed own-data objects with unique safe source-relative paths of at most 4,096
+UTF-8 bytes, lowercase 64-hex SHA-256 digests and nonnegative safe integer
+lengths. Inputs are plain objects of the calling realm, as for the readers.
+
+The operation performs no filesystem, process or network access. It does not
+authenticate the producer, and its result is not a review, approval or
+qualification decision. Authenticate the artifact separately with
+`authenticateArtifact` when producer identity matters.

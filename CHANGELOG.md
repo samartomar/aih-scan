@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add `readContentCoverage` to the portable `@aihq/scan/read` entry. Given a
+  `readReport` or `readArtifact` result and exact `{ path, sha256, byteLength }`
+  descriptors, it reports whether the captured source matches them and returns
+  the observations that cover every descriptor, with detector and input identity,
+  coverage, findings and resolved annex descriptors. Excluded observations are
+  counted by reason (unsuccessful detector, input missing a descriptor or
+  incomplete coverage). Unsupported or invalid reads are `unavailable`;
+  out-of-bound descriptors are `invalid`. The read result is revalidated; the
+  operation performs no host access and does not authenticate the producer
+  (samartomar/aih-scan#106).
 - Add a maintainer refresh operation for the seven active sources using frozen
   commits and an exact packed scanner. Record complete source and detector
   accounting, resource measurements, partial results and original annexes.
