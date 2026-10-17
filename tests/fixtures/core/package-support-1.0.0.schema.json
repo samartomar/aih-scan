@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aihq:package-support:1.0.0",
+  "title": "Public package contract support",
+  "description": "Portable installed-distribution declaration. Formats list structural schema resources and direction; this declaration does not execute helpers or negotiate compatibility.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package",
+    "contracts",
+    "entries"
+  ],
+  "properties": {
+    "schema": {
+      "const": "urn:aihq:package-support:1.0.0"
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "role",
+          "schemaExport"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "enum": [
+              "accepts",
+              "produces",
+              "both"
+            ]
+          },
+          "schemaExport": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "export",
+              "runtime"
+            ],
+            "properties": {
+              "export": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runtime": {
+                "const": "portable"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "export",
+              "runtime",
+              "nodeRange"
+            ],
+            "properties": {
+              "export": {
+                "type": "string",
+                "minLength": 1
+              },
+              "runtime": {
+                "const": "node"
+              },
+              "nodeRange": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

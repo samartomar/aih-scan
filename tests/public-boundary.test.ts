@@ -6,7 +6,7 @@ import * as batchV1 from "../src/baseline/batch-v1.js";
 import * as publicationV1 from "../src/baseline/publication-v1.js";
 import * as publicApi from "../src/index.js";
 import * as attestationV2 from "../src/observation/scan-attestation-v2.js";
-import { contractSupport } from "../src/public/contracts.js";
+import { contractSupport, entrySupport } from "../src/public/contracts.js";
 import * as registrationV1 from "../src/registration/detector-registration-v1.js";
 
 const legacyImplementations: Record<string, unknown> = {
@@ -130,13 +130,17 @@ describe("Strict V2 public boundary", () => {
     // Same bindings, not copies: deprecation changes no behavior.
     const rootValues: Record<string, unknown> = { ...publicApi };
     for (const name of deprecated) expect(rootValues[name]).toBe(legacyImplementations[name]);
+    // Status is published beside the schema-shaped declaration, for the same entries.
+    expect(entrySupport.package).toBe(contractSupport.package);
+    expect(entrySupport.entries.map((entry) => entry.export)).toEqual(
+      contractSupport.entries.map((entry) => entry.export),
+    );
     expect(
-      contractSupport.entries.filter((entry) => entry.status === "current").map((e) => e.export),
+      entrySupport.entries.filter((entry) => entry.status === "current").map((e) => e.export),
     ).toEqual(["@aihq/scan/contracts", "@aihq/scan/read", "@aihq/scan/host"]);
-    const rootEntry = contractSupport.entries.find((entry) => entry.export === "@aihq/scan");
+    const rootEntry = entrySupport.entries.find((entry) => entry.export === "@aihq/scan");
     expect(rootEntry?.status).toBe("compatibility-only");
-    const operations =
-      (rootEntry && "operations" in rootEntry ? rootEntry.operations : undefined) ?? [];
+    const operations = (rootEntry && "groups" in rootEntry ? rootEntry.groups : undefined) ?? [];
     const runtimeExports = Object.keys(publicApi).sort();
     // The descriptor classifies every root runtime export exactly once, and its
     // deprecated groups are exactly the names whose declarations are deprecated.

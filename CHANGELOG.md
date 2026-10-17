@@ -14,9 +14,10 @@
   (samartomar/aih-scan#106).
 - Bound the legacy root (samartomar/aih-scan#107). The README documents the
   recommended `contracts`, `read` and `host` workflow and classifies every root
-  export as compatibility-only or deprecated. `contractSupport.entries` gives each
-  entry a `status` and adds the `@aihq/scan` root entry, which lists one status per
-  operation group with the names in it.
+  export as compatibility-only or deprecated. `contractSupport.entries` adds the
+  `@aihq/scan` root entry. The new `entrySupport` export of `@aihq/scan/contracts`
+  gives each entry a `status`; its root entry lists in `groups` one status,
+  replacement and export list per operation group.
   - **Deprecated, still exported:** `BASELINE_ANALYZERS_V1`,
     `createBaselineVetRequestV1`, `canonicalBaselineVetRequestV1Bytes`,
     `canonicalBaselineVetReceiptV1Bytes`, `signBaselineVetBundleV1`,
@@ -31,6 +32,11 @@
     `canonicalDetectorRegistrationV1Bytes` now carry `@deprecated`. They are
     internal details with no supported use outside Scan, and are scheduled for
     removal with the legacy root window. Their behavior is unchanged.
+- Keep `contractSupport` in exactly the `urn:aihq:package-support:1.0.0` shape,
+  which admits no other fields: entries carry only `export`, `runtime` and
+  `nodeRange`, and roles and runtimes are typed as the schema's literals. Entry and
+  group statuses live only in the sibling `entrySupport`, which shares the same
+  package identity object (samartomar/aih-scan#110).
 
 - Add a maintainer refresh operation for the seven active sources using frozen
   commits and an exact packed scanner. Record complete source and detector
