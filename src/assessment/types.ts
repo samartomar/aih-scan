@@ -190,8 +190,7 @@ export interface ReadContentCoverageInput {
 export type ContentCoverageExclusionReason =
   | "detector-not-succeeded"
   | "input-missing-descriptor"
-  | "coverage-incomplete"
-  | "annex-unresolved";
+  | "coverage-incomplete";
 export interface ContentCoverageObservation {
   observationId: Observation["observationId"];
   origin: Observation["origin"];
@@ -216,7 +215,7 @@ export interface ContentCoverageObservation {
   detectorCoverage: DetectorResult["coverage"];
   /** Every finding of the observation, including findings located outside the descriptors. */
   findings: Finding[];
-  /** Descriptors of the observation annexes and finding supporting evidence, ordered by ID. */
+  /** Descriptors of the observation annexes, which include any finding supporting evidence, ordered by ID. */
   annexes: AnnexDescriptor[];
 }
 export type ReadContentCoverageResult =
@@ -224,7 +223,6 @@ export type ReadContentCoverageResult =
       status: "matched";
       scanId: ScanId;
       authenticity: "unchecked";
-      annexBytes: "checked" | "not-supplied";
       observations: ContentCoverageObservation[];
       excluded: Record<ContentCoverageExclusionReason, number>;
       detectorsWithoutCoverage: string[];

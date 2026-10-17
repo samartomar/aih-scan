@@ -7,8 +7,8 @@
   descriptors, it reports whether the captured source matches them and returns
   the observations that cover every descriptor, with detector and input identity,
   coverage, findings and resolved annex descriptors. Excluded observations are
-  counted by reason (unsuccessful detector, input missing a descriptor, incomplete
-  coverage, unresolved annex). Unsupported or invalid reads are `unavailable`;
+  counted by reason (unsuccessful detector, input missing a descriptor or
+  incomplete coverage). Unsupported or invalid reads are `unavailable`;
   out-of-bound descriptors are `invalid`. The read result is revalidated; the
   operation performs no host access and does not authenticate the producer
   (samartomar/aih-scan#106).

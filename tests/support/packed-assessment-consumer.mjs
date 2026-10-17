@@ -99,7 +99,7 @@ const matchedCoverage = await readContentCoverage({ read: preparedRead, descript
 assert.equal(matchedCoverage.status, "matched");
 assert.equal(matchedCoverage.scanId, result.scanId);
 assert.equal(matchedCoverage.authenticity, "unchecked");
-assert.equal(matchedCoverage.annexBytes, "checked");
+assert.equal("annexBytes" in matchedCoverage, false);
 assert.equal(matchedCoverage.observations.length, 1);
 assert.equal(matchedCoverage.observations[0].detector.detectorId, "detector.aih-native");
 assert.deepEqual(matchedCoverage.observations[0].coverage.coveredPaths, ["README.md"]);

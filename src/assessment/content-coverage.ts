@@ -84,7 +84,7 @@ const missing = (entries: readonly CaptureEntry[], descriptors: readonly Content
     .map((descriptor) => descriptor.path);
 };
 
-export type ContentCoverageClassification =
+type ContentCoverageClassification =
   | {
       status: "matched";
       observations: ContentCoverageObservation[];
@@ -94,11 +94,12 @@ export type ContentCoverageClassification =
   | { status: "mismatched"; unmatchedPaths: string[] };
 
 /**
- * Classifies an already validated report against validated descriptors. Each
- * observation that cannot cover every descriptor is counted under the first
- * reason that excludes it.
+ * Classifies a validated report against validated descriptors. Each observation
+ * that cannot cover every descriptor is counted under the first reason that
+ * excludes it. Report validation already guarantees that every observation annex
+ * resolves and that finding supporting evidence names an observation annex.
  */
-export function classifyContentCoverage(
+function classifyContentCoverage(
   report: ReportBody,
   descriptors: readonly ContentDescriptor[],
 ): ContentCoverageClassification {
@@ -109,7 +110,6 @@ export function classifyContentCoverage(
     "detector-not-succeeded": 0,
     "input-missing-descriptor": 0,
     "coverage-incomplete": 0,
-    "annex-unresolved": 0,
   };
   const observations: ContentCoverageObservation[] = [];
   const detectorsWithoutCoverage: string[] = [];
@@ -129,21 +129,6 @@ export function classifyContentCoverage(
       const covered = new Set(body.coverage.coveredPaths);
       if (descriptors.some((descriptor) => !covered.has(descriptor.path))) {
         excluded["coverage-incomplete"]++;
-        continue;
-      }
-      const annexIds = [
-        ...new Set([
-          ...body.annexIds,
-          ...body.findings.flatMap((finding) =>
-            finding.supportingEvidence.state === "present"
-              ? [finding.supportingEvidence.value.annexId]
-              : [],
-          ),
-        ]),
-      ].sort();
-      const resolved = annexIds.map((id) => annexes.get(id));
-      if (resolved.some((annex) => annex === undefined)) {
-        excluded["annex-unresolved"]++;
         continue;
       }
       covering++;
@@ -174,7 +159,7 @@ export function classifyContentCoverage(
         },
         // The report is a private validated snapshot, so its findings are not shared.
         findings: body.findings,
-        annexes: resolved.map((annex) => ({ ...(annex as AnnexDescriptor) })),
+        annexes: body.annexIds.map((id) => ({ ...(annexes.get(id) as AnnexDescriptor) })),
       });
     }
     if (covering === 0) detectorsWithoutCoverage.push(result.detectorId);
@@ -227,8 +212,8 @@ export async function readContentCoverage(
       };
     if (status !== "read") fail(invalidReadDiagnostic.detail);
     exactKeys(read, ["status", "scanId", "report", "authenticity", "annexBytes"], "Read result");
-    const annexBytes = own(read, "annexBytes");
     if (own(read, "authenticity") !== "unchecked") fail(invalidReadDiagnostic.detail);
+    const annexBytes = own(read, "annexBytes");
     if (annexBytes !== "checked" && annexBytes !== "not-supplied")
       fail(invalidReadDiagnostic.detail);
     // Revalidate a snapshot so a hand-built or altered result cannot claim coverage.
@@ -243,7 +228,7 @@ export async function readContentCoverage(
           authenticity: "unchecked",
           unmatchedPaths: classified.unmatchedPaths,
         }
-      : { ...classified, scanId, authenticity: "unchecked", annexBytes };
+      : { ...classified, scanId, authenticity: "unchecked" };
   } catch (error) {
     return {
       status: "unavailable",

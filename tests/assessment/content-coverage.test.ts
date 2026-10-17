@@ -2,8 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { classifyContentCoverage } from "../../src/assessment/content-coverage.js";
-import { canonicalBytes } from "../../src/assessment/json.js";
+import { canonicalBytes, observationIdFor } from "../../src/assessment/json.js";
 import type { ContentDescriptor, ReportBody } from "../../src/assessment/types.js";
 import { runScan } from "../../src/public/host.js";
 import {
@@ -39,12 +38,10 @@ describe("content coverage read", () => {
       status: "matched",
       scanId: read.status === "read" ? read.scanId : "",
       authenticity: "unchecked",
-      annexBytes: "not-supplied",
       excluded: {
         "detector-not-succeeded": 0,
         "input-missing-descriptor": 0,
         "coverage-incomplete": 0,
-        "annex-unresolved": 0,
       },
       detectorsWithoutCoverage: [],
       observations: [
@@ -85,14 +82,16 @@ describe("content coverage read", () => {
     });
   });
 
-  test("keeps checked annex bytes from an artifact read", async () => {
+  test("reads coverage from an artifact read without an annex byte claim", async () => {
     const read = await readArtifact(canonicalBytes(example("artifact")));
     expect(read.status).toBe("read");
     expect(await readContentCoverage({ read, descriptors: [skill] })).toMatchObject({
       status: "matched",
-      annexBytes: "checked",
       observations: [{ detector: { detectorId: "detector.aih-native" } }],
     });
+    expect(await readContentCoverage({ read, descriptors: [skill] })).not.toHaveProperty(
+      "annexBytes",
+    );
   });
 
   test.each([
@@ -266,11 +265,27 @@ describe("content coverage read", () => {
   });
 });
 
-describe("content coverage classification", () => {
-  test("counts observations of an unsuccessful detector", () => {
+// Hand-assembled reports that the supported reader accepts, so each branch is
+// proven reachable through a valid read rather than an unvalidated object.
+async function readAssembled(report: ReportBody) {
+  for (const result of report.results)
+    for (const observation of result.observations)
+      observation.observationId = await observationIdFor(observation.body);
+  const read = await readReport(canonicalBytes(report));
+  expect(read.status).toBe("read");
+  return read;
+}
+
+describe("content coverage over valid assembled reports", () => {
+  test("counts observations kept by a failed detector", async () => {
     const report = exampleReport();
     report.results[0]!.outcome = "failed";
-    expect(classifyContentCoverage(report, [skill])).toMatchObject({
+    report.results[0]!.diagnostics = [
+      { code: "detector-failed", detail: "The fixture detector failed after observing." },
+    ];
+    report.completion = "partial";
+    const read = await readAssembled(report);
+    expect(await readContentCoverage({ read, descriptors: [skill] })).toMatchObject({
       status: "matched",
       observations: [],
       excluded: { "detector-not-succeeded": 1 },
@@ -278,31 +293,13 @@ describe("content coverage classification", () => {
     });
   });
 
-  test("counts observations whose input omits a descriptor", () => {
-    const report = exampleReport();
-    report.results[0]!.observations[0]!.body.input.entries = [];
-    expect(classifyContentCoverage(report, [skill])).toMatchObject({
-      excluded: { "input-missing-descriptor": 1 },
-    });
-  });
-
-  test("counts observations with an unresolved annex", () => {
-    const report = exampleReport();
-    report.annexes = [];
-    expect(classifyContentCoverage(report, [skill])).toMatchObject({
-      observations: [],
-      excluded: { "annex-unresolved": 1 },
-    });
-  });
-
-  test("returns findings and resolves supporting evidence annexes", () => {
+  test("returns findings with their supporting evidence annex", async () => {
     const report = exampleReport();
     const observation = report.results[0]!.observations[0]!;
     const annexId = report.annexes[0]!.id;
-    observation.body.annexIds = [];
     observation.body.findings = [
       {
-        rawOccurrenceFingerprint: "f".repeat(64),
+        rawOccurrenceFingerprint: `raw-occurrence-v1:${"f".repeat(64)}`,
         multiplicity: 1,
         rule: { state: "present", value: { nativeRuleId: "fixture.rule" } },
         severity: { state: "unavailable", reason: "not-declared", detail: "fixture" },
@@ -314,15 +311,50 @@ describe("content coverage classification", () => {
         supportingEvidence: { state: "present", value: { annexId, ordinal: 0 } },
       },
     ];
-    const classified = classifyContentCoverage(report, [skill]);
-    expect(classified).toMatchObject({
+    const read = await readAssembled(report);
+    expect(await readContentCoverage({ read, descriptors: [skill] })).toMatchObject({
       status: "matched",
       observations: [
         {
-          findings: [{ rule: { value: { nativeRuleId: "fixture.rule" } } }],
-          annexes: [{ id: annexId }],
+          findings: [
+            {
+              rule: { value: { nativeRuleId: "fixture.rule" } },
+              supportingEvidence: { value: { annexId } },
+            },
+          ],
+          annexes: [report.annexes[0]],
         },
       ],
+    });
+  });
+
+  test("counts a selected-closure observation whose input omits a descriptor", async () => {
+    const root = mkdtempSync(join(tmpdir(), "aih-content-coverage-"));
+    roots.push(root);
+    writeFileSync(join(root, "A.md"), "# A\n");
+    writeFileSync(join(root, "B.md"), "# B\n");
+    const run = await runScan({
+      schema: "urn:aihq:scan:request:1.0.0",
+      source: { kind: "local", path: root },
+      selection: { paths: ["A.md"], excludedPaths: [] },
+      detectors: [{ detectorId: "detector.aih-binding-gate", configuration: {} }],
+    });
+    expect(run.status).toBe("assessment");
+    if (run.status !== "assessment") return;
+    const observation = run.report.results[0]!.observations[0]!;
+    expect(observation.body.input.scopeKind).toBe("selected-closure");
+    const read = await readReport(canonicalBytes(run.report));
+    const descriptors = run.report.source.capture.entries.flatMap((entry) =>
+      "sha256" in entry
+        ? [{ path: entry.path, sha256: entry.sha256, byteLength: entry.byteLength }]
+        : [],
+    );
+    expect(descriptors.map((descriptor) => descriptor.path)).toEqual(["A.md", "B.md"]);
+    expect(await readContentCoverage({ read, descriptors })).toMatchObject({
+      status: "matched",
+      observations: [],
+      excluded: { "input-missing-descriptor": 1 },
+      detectorsWithoutCoverage: ["detector.aih-binding-gate"],
     });
   });
 });
