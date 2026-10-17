@@ -56,6 +56,11 @@
 - Add Scan-owned assessment contracts and versioned JSON Schema resources, portable
   report/artifact readers, and explicit Node host APIs for scanning, preparation,
   attachment, local signing and offline authentication.
+- `@aihq/scan/host` exports an explicit list of artifact types: those its
+  preparation, attachment, signing and authentication operations accept or
+  return. The internal validated-artifact record is not exported.
+- Correct the README platform guidance to match each execution profile's
+  published platform gate and state the recorded proof limits.
 - Preserve reliable partial outcomes and bind complete report/annex bytes to an
   immutable Scan ID. Producer authentication is separate from detailed reading.
 - Adopt bounded Sigstore v0.3 bundles with independent keyless publisher and

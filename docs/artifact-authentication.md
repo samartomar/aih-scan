@@ -21,6 +21,12 @@ const authenticity = await authenticateArtifact({
 });
 ```
 
+The entry exports the types these operations accept and return: `PrepareArtifactInput`,
+`SignArtifactInput`, `PreparedArtifact`, `ArtifactResult`, `Artifact`, `ArtifactAnnex`,
+`AnnexDescriptor`, `ArtifactStatement`, `SigstoreBundle`, `AuthenticationTrust`,
+`VerificationKey`, `VerificationPublisher`, `AssociationResult` and `AssociationReason`.
+`ReadArtifactResult` belongs to `@aihq/scan/read` and `@aihq/scan/contracts`.
+
 Preparation validates a supported complete report account and exact annexes. A
 partial assessment is signable. It returns canonical unsigned artifact bytes and
 the minimal derived in-toto statement. Attachment checks bounded Sigstore v0.3

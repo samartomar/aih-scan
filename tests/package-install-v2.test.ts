@@ -729,6 +729,54 @@ describe("published V2 package installation", () => {
       [join(root, "node_modules/typescript/bin/tsc"), "-p", "material-host-tsconfig.json"],
       { cwd: directory, encoding: "utf8", stdio: "pipe" },
     );
+    // Every artifact type an exported host operation accepts or returns is importable;
+    // the internal validated-artifact record is not part of the host entry.
+    writeFileSync(
+      join(directory, "artifact-host-consumer.mts"),
+      [
+        'import { attachAttestation, authenticateArtifact, prepareArtifact, signArtifact, type AnnexDescriptor, type Artifact, type ArtifactAnnex, type ArtifactResult, type ArtifactStatement, type AssociationReason, type AssociationResult, type AuthenticationTrust, type PrepareArtifactInput, type PreparedArtifact, type SigstoreBundle, type SignArtifactInput, type VerificationKey, type VerificationPublisher } from "@aihq/scan/host";',
+        "// @ts-expect-error ValidatedArtifact is internal and not exported from the host entry.",
+        'import type { ValidatedArtifact } from "@aihq/scan/host";',
+        "declare const prepareInput: PrepareArtifactInput;",
+        "declare const signInput: SignArtifactInput;",
+        "declare const bundle: SigstoreBundle;",
+        "declare const key: VerificationKey;",
+        "declare const publisher: VerificationPublisher;",
+        "const prepared: PreparedArtifact = await prepareArtifact(prepareInput);",
+        "const statement: ArtifactStatement = prepared.statement;",
+        "const artifact: Artifact = prepared.artifact;",
+        "const annex: ArtifactAnnex | undefined = artifact.annexes[0];",
+        "const descriptor: AnnexDescriptor | undefined = annex;",
+        "const attached: ArtifactResult = await attachAttestation({ bytes: prepared.bytes, bundle });",
+        "const signed: ArtifactResult = await signArtifact(signInput);",
+        "const trust: AuthenticationTrust = { keys: [key], publishers: [publisher] };",
+        "const association: AssociationResult = await authenticateArtifact({ bytes: signed.bytes, expectedScanId: signed.scanId, trust });",
+        "const reason: AssociationReason | undefined = association.reason;",
+        "declare const hidden: ValidatedArtifact;",
+        "void [statement, descriptor, attached, reason, hidden];",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(directory, "artifact-host-tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          target: "ES2022",
+          lib: ["ES2022", "DOM"],
+          types: ["node"],
+          typeRoots: [join(root, "node_modules/@types")],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+        },
+        files: ["artifact-host-consumer.mts"],
+      }),
+    );
+    execFileSync(
+      process.execPath,
+      [join(root, "node_modules/typescript/bin/tsc"), "-p", "artifact-host-tsconfig.json"],
+      { cwd: directory, encoding: "utf8", stdio: "pipe" },
+    );
     const installedReadme = readFileSync(
       join(directory, "node_modules/@aihq/scan/README.md"),
       "utf8",
