@@ -7,7 +7,7 @@ import type { ReportBody } from "../../src/public/contracts.js";
 import { signArtifact } from "../../src/public/host.js";
 import * as readApi from "../../src/public/read.js";
 import { readSummary, selectAssessments } from "../../src/public/read.js";
-import { exerciseSummarySelection } from "../support/summary-selection-cases.mjs";
+import { canonical, exerciseSummarySelection } from "../support/summary-selection-cases.mjs";
 
 test("distinct valid envelopes retain per-artifact facts without report conflicts", async () => {
   const examples = JSON.parse(readFileSync("schemas/examples/1.0.0.json", "utf8")).examples;
@@ -91,20 +91,9 @@ test("reads a compact summary without replacing report identity or authenticatin
   const artifact = examples.find(
     (entry: { format: string }) => entry.format === "urn:aihq:scan:artifact:1.0.0",
   ).valid;
-  const encode = (value: unknown): string =>
-    Array.isArray(value)
-      ? `[${value.map(encode).join(",")}]`
-      : value !== null && typeof value === "object"
-        ? `{${Object.keys(value)
-            .sort()
-            .map(
-              (key) => `${JSON.stringify(key)}:${encode((value as Record<string, unknown>)[key])}`,
-            )
-            .join(",")}}`
-        : JSON.stringify(value);
   const result = await readSummary({
     format: "artifact",
-    bytes: new TextEncoder().encode(encode(artifact)),
+    bytes: new TextEncoder().encode(canonical(artifact)),
     detectorIds: ["detector.aih-native", "detector.other"],
   });
   expect(result).toMatchObject({
@@ -139,18 +128,6 @@ test("selects the newest readable partial report before older complete evidence"
     complete: false,
   };
   newer.results[0].diagnostics = [{ code: "unavailable", detail: "Fixture failure" }];
-  const canonical = (value: unknown): string =>
-    Array.isArray(value)
-      ? `[${value.map(canonical).join(",")}]`
-      : value !== null && typeof value === "object"
-        ? `{${Object.keys(value)
-            .sort()
-            .map(
-              (key) =>
-                `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
-            )
-            .join(",")}}`
-        : JSON.stringify(value);
   const result = await selectAssessments({
     assessments: [report, newer].map((value, i) => ({
       sourceId: "producer",
