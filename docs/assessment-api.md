@@ -1,5 +1,10 @@
 # Portable assessments
 
+For the Unreleased compact `readSummary` and deterministic `selectAssessments`
+operations, see [summary and latest matching evidence](summary-selection.md).
+They derive from these same report/artifact readers without introducing another
+signed format or scanner execution.
+
 `@aihq/scan/contracts` publishes the installed package identity, exact supported
 schema IDs, entry runtimes and JSON-compatible wire types. `@aihq/scan/read`
 provides portable promise-based readers. `@aihq/scan/host` runs source acquisition

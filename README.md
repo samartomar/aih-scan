@@ -26,7 +26,7 @@ The new assessment surface has three explicit entry points:
 | Entry | Purpose | Runtime |
 | --- | --- | --- |
 | `@aihq/scan/contracts` | Contract support, public types and schema identities | Portable JavaScript |
-| `@aihq/scan/read` | Read complete reports and portable artifacts, and report which observations cover an exact set of files; authenticity remains unchecked | Portable JavaScript |
+| `@aihq/scan/read` | Read reports/artifacts, summarize provider facts, match exact content and select latest matching evidence; authenticity remains unchecked | Portable JavaScript |
 | `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25` |
 
 `runScan` captures pinned Git or local input and accounts for every requested detector.
@@ -37,6 +37,7 @@ authenticate against their selected keys or publisher policies. Scanning, signin
 and publication are separate explicit operations.
 
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
+[summary and latest matching selection](docs/summary-selection.md),
 [maintainer refresh](docs/production-refresh.md) and the
 [protected production publisher](docs/production-publisher.md). The
 `aih-scan scan` command runs an assessment against a local directory or an exact

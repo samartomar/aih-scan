@@ -12,6 +12,7 @@ export type {
   SigstoreBundle,
 } from "../artifact/types.js";
 export type { DetectorDefinitionV1 } from "../assessment/detector-definition.js";
+export type * from "../assessment/summary-types.js";
 export * from "../assessment/types.js";
 export type * from "../material-change/types.js";
 // Portable installed-distribution declaration in exactly the
