@@ -671,6 +671,10 @@ describe("published V2 package installation", () => {
       join(directory, "assessment-consumer.mjs"),
       readFileSync(join(root, "tests/support/packed-assessment-consumer.mjs")),
     );
+    writeFileSync(
+      join(directory, "summary-selection-cases.mjs"),
+      readFileSync(join(root, "tests/support/summary-selection-cases.mjs")),
+    );
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
         cwd: directory,
@@ -687,12 +691,20 @@ describe("published V2 package installation", () => {
       portableEntries: ["contracts", "read"],
       materialChange: "modified",
     });
+    expect(assessmentConsumer.summarySelection.cases).toBeGreaterThan(40);
+    expect(assessmentConsumer.summarySelection.summaryBytes).toBeLessThan(
+      assessmentConsumer.summarySelection.reportBytes,
+    );
     expect(assessmentConsumer.annexes).toBeGreaterThan(0);
     writeFileSync(
       join(directory, "portable-consumer.mts"),
       [
         'import { contractSupport, type ScanRequest, type Artifact, type AuthenticationTrust, type MaterialChange, type MaterialInventory, type CompareMaterialInventoriesInput } from "@aihq/scan/contracts";',
         'import { readArtifact, readContentCoverage, readReport, type ContentDescriptor, type ReadContentCoverageResult } from "@aihq/scan/read";',
+        'import { readSummary, selectAssessments, type ReadSummaryInput, type ReadSummaryResult, type SelectAssessmentsInput, type SelectAssessmentsResult, type AssessmentContext, type ScanSummary } from "@aihq/scan/read";',
+        'import type { EvidenceCandidate, EvidenceCheck, ProviderSummary } from "@aihq/scan/contracts";',
+        "declare const summaryInput: ReadSummaryInput; declare const selectionInput: SelectAssessmentsInput; declare const context: AssessmentContext; declare const candidate: EvidenceCandidate; declare const check: EvidenceCheck; declare const provider: ProviderSummary;",
+        'const compact: Promise<ReadSummaryResult> = readSummary(summaryInput); const selected: Promise<SelectAssessmentsResult> = selectAssessments(selectionInput); const summary: Promise<ScanSummary | null> = compact.then(value => value.status === "read" ? value.summary : null); void [selected, summary, context, candidate, check, provider];',
         "declare const request: ScanRequest;",
         "declare const descriptors: ContentDescriptor[];",
         "const coverage: Promise<ReadContentCoverageResult> = readArtifact(new Uint8Array()).then((read) => readContentCoverage({ read, descriptors }));",

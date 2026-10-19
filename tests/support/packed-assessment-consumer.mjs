@@ -7,7 +7,10 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext, SourceTextModule } from "node:vm";
 import { contractSupport, entrySupport } from "@aihq/scan/contracts";
+import * as readApi from "@aihq/scan/read";
 import { maxContentDescriptors, readArtifact, readContentCoverage, readReport } from "@aihq/scan/read";
+import { listDetectorCapabilitiesV1 } from "@aihq/scan";
+import { exerciseSummarySelection } from "./summary-selection-cases.mjs";
 import {
   authenticateArtifact,
   compareMaterialInventories,
@@ -51,6 +54,7 @@ const exampleDocument = JSON.parse(readFileSync(require.resolve("@aihq/scan/sche
 assert.match(exampleDocument.description, /Representative static JSON examples/);
 assert.match(exampleDocument.description, /unsigned and asserts no producer authenticity/);
 const examples = exampleDocument.examples;
+const summarySelection = await exerciseSummarySelection(readApi, examples.find(entry => entry.format === "urn:aihq:scan:report:1.0.0").valid, listDetectorCapabilitiesV1().map(entry => entry.detectorId), JSON.parse(readFileSync("node_modules/@aihq/scan/examples/detector-definitions/definition.json", "utf8")));
 assert.equal(examples.length, 5);
 const canonicalExampleBytes = (value) => {
   const encode = item => Array.isArray(item) ? `[${item.map(encode).join(",")}]`
@@ -109,6 +113,19 @@ assert.equal((await readReport(new Uint8Array(Buffer.from(prepared.artifact.repo
 const readmeEntry = result.report.source.capture.entries.find((entry) => entry.path === "README.md");
 const readme = { path: "README.md", sha256: readmeEntry.sha256, byteLength: readmeEntry.byteLength };
 const preparedRead = await readArtifact(prepared.bytes);
+// Distinct valid envelopes wrap one report identity, with authentication kept
+// per acquisition. Corrupt supplied annex bytes still fail the artifact reader.
+const anotherKey = generateKeyPairSync("ed25519");
+const anotherKeyId = `ed25519:${createHash("sha256").update(anotherKey.publicKey.export({type:"spki",format:"der"})).digest("hex")}`;
+const anotherEnvelope = await signArtifact({ report: result.report, annexes, signer: {keyId:anotherKeyId,privateKey:anotherKey.privateKey} });
+const envelopes = await readApi.selectAssessments({
+  assessments: [prepared.bytes, anotherEnvelope.bytes].map((bytes,index)=>({sourceId:"fixture",location:String(index),format:"artifact",bytes,authentication:index===0?{status:"unverifiable",reason:"unsigned"}:{status:"unverifiable",reason:"untrusted-key"}})),
+  context:{sourceIds:["fixture"],descriptors:[readme],selection:result.report.selection},
+  evaluationTime:result.report.createdAt,checks:[],
+});
+assert.equal(envelopes.status,"selected");assert.equal(envelopes.assessments.length,1);assert.equal(envelopes.assessments[0].acquisitions.length,2);assert.equal(envelopes.conflicts.length,0);
+const corruptAnnex=structuredClone(prepared.artifact);corruptAnnex.annexes[0].bytesBase64="AA==";
+assert.equal((await readApi.readSummary({format:"artifact",bytes:canonicalExampleBytes(corruptAnnex)})).status,"invalid");
 const matchedCoverage = await readContentCoverage({ read: preparedRead, descriptors: [readme] });
 assert.equal(matchedCoverage.status, "matched");
 assert.equal(matchedCoverage.scanId, result.scanId);
@@ -243,6 +260,15 @@ const portableDescriptors = runInContext("JSON.parse(descriptorJson)", context);
 const portableCoverage = await portableRead.namespace.readContentCoverage({ read: portableResult, descriptors: portableDescriptors });
 assert.equal(portableCoverage.status, "matched");
 assert.equal(portableCoverage.observations.length, 1);
+context.evidenceBytes = new Uint8Array(signed.bytes);
+const portableSummary = await runInContext('globalThis.summaryInput = {format:"artifact",bytes:evidenceBytes};', context);
+assert.equal((await portableRead.namespace.readSummary(portableSummary)).status,"read");
+context.reportTime = result.report.createdAt;
+context.selectionJson = JSON.stringify(result.report.selection);
+const portableSelection = runInContext('({assessments:[{sourceId:"fixture",location:"memory",format:"artifact",bytes:evidenceBytes}],context:{sourceIds:["fixture"],descriptors:JSON.parse(descriptorJson),selection:JSON.parse(selectionJson)},evaluationTime:reportTime,checks:[]})',context);
+const portableSelected = await portableRead.namespace.selectAssessments(portableSelection);
+assert.equal(portableSelected.status,"selected");
+assert.equal(portableSelected.selectedScanId,result.scanId);
 
 process.stdout.write(JSON.stringify({
   installedVersion: manifest.version,
@@ -253,4 +279,5 @@ process.stdout.write(JSON.stringify({
   authenticity: authenticated.status,
   portableEntries: ["contracts", "read"],
   materialChange: material.materialChange.changes[0].kind,
+  summarySelection,
 }) + "\n");
