@@ -83,20 +83,15 @@ export async function exerciseSummarySelection(api, example, builtins, suppliedD
     assert.equal(value.assessments[0].coverage.observations.length, 0);
     assert.equal(value.assessments[0].acquisitions[0].authentication.reason, "unsigned");
   }
-  const pinned = bytes({
-    policy: { scanId: id(base) },
-    review: { scanId: id(base) },
-    prepared: { scanId: id(base) },
-  });
-  const saved = new Uint8Array(pinned);
   const firstInput = input([latest, old]);
   const original = firstInput.assessments.map((item) => new Uint8Array(item.bytes));
-  await select(firstInput);
+  const retainedHistory = await select(firstInput);
   assert.deepEqual(
     firstInput.assessments.map((item) => item.bytes),
     original,
   );
-  assert.deepEqual(pinned, saved);
+  assert.deepEqual(retainedHistory.assessments.map((item) => item.summary.scanId), [id(newer), id(base)]);
+  assert.equal(retainedHistory.assessments[1].summary.createdAt, base.createdAt);
   const sameTime = structuredClone(newer);
   sameTime.producer.version = "fixture-other-version";
   const expectedTie = [id(newer), id(sameTime)].sort()[0];
