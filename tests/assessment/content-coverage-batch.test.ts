@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
+import { expect, expectTypeOf, test } from "vitest";
 import { canonicalBytes, observationIdFor, sha256 } from "../../src/assessment/json.js";
 import type {
   ContentDescriptor,
@@ -38,6 +38,10 @@ test("independent coverage rows preserve singleton results and share one observa
   expect(batch.status).toBe("complete");
   if (batch.status !== "complete") throw new Error("batch refused");
   expect(batch.observations).toHaveLength(1);
+  expectTypeOf(batch.observations[0]!.coverage.coveredPaths).toEqualTypeOf<readonly string[]>();
+  const first = batch.results[0]!;
+  if (first.status === "matched")
+    expectTypeOf(first.observationIndexes).toEqualTypeOf<readonly number[]>();
   for (const [index, query] of queries.entries()) {
     const row = batch.results[index]!;
     const expanded =
@@ -86,10 +90,11 @@ test("snapshots all input before yielding and freezes shared output against cros
   expect(batch.results.map((row) => row.status)).toEqual(["matched", "matched"]);
   expect(Object.isFrozen(batch.observations[0]!.detector.platform)).toBe(true);
   expect(() => {
-    batch.observations[0]!.coverage.coveredPaths.push("MUTATED.md");
+    Array.prototype.push.call(batch.observations[0]!.coverage.coveredPaths, "MUTATED.md");
   }).toThrow(TypeError);
   expect(() => {
-    if (batch.results[0]!.status === "matched") batch.results[0]!.observationIndexes[0] = 100;
+    if (batch.results[0]!.status === "matched")
+      Object.defineProperty(batch.results[0]!.observationIndexes, "0", { value: 100 });
   }).toThrow(TypeError);
   expect(batch.results[1]).toMatchObject({ observationIndexes: [0] });
   const future = await readContentCoverageBatch({ read, queries: [{ descriptors: [skill] }] });
@@ -118,9 +123,12 @@ test("unsupported and invalid reads retain per-query descriptor error precedence
 function expand(batch: ReadContentCoverageBatchResult, at: number): ReadContentCoverageResult {
   if (batch.status !== "complete") throw new Error("batch refused");
   const row = batch.results[at]!;
-  if (row.status !== "matched") return row;
+  if (row.status !== "matched") return structuredClone(row) as ReadContentCoverageResult;
   const { observationIndexes, ...rest } = row;
-  return { ...rest, observations: observationIndexes.map((index) => batch.observations[index]!) };
+  return structuredClone({
+    ...rest,
+    observations: observationIndexes.map((index) => batch.observations[index]!),
+  }) as ReadContentCoverageResult;
 }
 
 async function assembled(value: ReportBody) {

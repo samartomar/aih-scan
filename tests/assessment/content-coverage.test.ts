@@ -45,9 +45,13 @@ describe.each(["singleton", "batch"])("%s coverage contract", (reader) => {
     const batch = await readContentCoverageBatch({ ...envelope, queries: [{ descriptors }] });
     if (batch.status === "invalid") return batch;
     const row = batch.results[0]!;
-    if (row.status !== "matched") return row;
+    if (row.status !== "matched")
+      return structuredClone(row) as Awaited<ReturnType<typeof singletonCoverage>>;
     const { observationIndexes, ...rest } = row;
-    return { ...rest, observations: observationIndexes.map((at) => batch.observations[at]!) };
+    return structuredClone({
+      ...rest,
+      observations: observationIndexes.map((at) => batch.observations[at]!),
+    }) as Awaited<ReturnType<typeof singletonCoverage>>;
   };
 
   describe("content coverage read", () => {

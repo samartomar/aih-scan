@@ -312,7 +312,8 @@ in place of `observations`. Indexes refer to the shared `observations` table, wh
 contains each used observation once, in first-use order. Observation ordering
 within each row matches the singleton. All findings, supporting annex descriptors,
 origins, prior Scan IDs and detector coverage remain intact, including findings
-outside the query paths. Every complete response is deeply frozen at runtime;
+outside the query paths. Every complete response is deeply readonly in the public TypeScript types and
+deeply frozen at runtime;
 clone data before editing it. Input mutation, output mutation and later calls
 cannot change another row's answer.
 
