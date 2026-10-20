@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       selection_sha256:
-        description: Reviewed seven-source signing selection SHA-256
+        description: Reviewed frozen batch signing selection SHA-256
         required: true
         type: string
 permissions: {}

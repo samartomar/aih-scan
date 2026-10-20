@@ -2,7 +2,7 @@
 // fill missing draft assets or accept equal bytes; it never replaces any asset.
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { object, parseJson, readRegular, sha256 } from "../refresh/contracts.mjs";
+import { object, parseJson, readRegular, sha256, validateManifest } from "../refresh/contracts.mjs";
 import { ghApi } from "./gh-api.mjs";
 import { measureDirectory } from "./refresh-publication.mjs";
 
@@ -71,9 +71,18 @@ export async function publishRelease({ directory, transport, custodyPath }) {
     inventory.schema !== "urn:aihq:scan:publication-inventory:1.0.0" ||
     inventory.batchId !== receipt.batchId ||
     !Array.isArray(inventory.targets) ||
-    inventory.targets.length !== 7
+    inventory.targets.length < 1 || inventory.targets.length > 7
   )
     throw new Error("Durable release discovery batch differs");
+  const independent = inventory.targets.some(row => row.captureId !== undefined);
+  if (independent || inventory.targets.length === 1) {
+    const manifest = validateManifest(parseJson(readRegular(resolve(directory, "manifest.json"), 2097152), 2097152, true));
+    if (manifest.targets.length !== inventory.targets.length || inventory.batchId !== manifest.batchId ||
+      inventory.targets.some((row,index)=>row.repository !== manifest.targets[index].repository || row.captureId !== manifest.targets[index].captureId || row.commit !== manifest.targets[index].commit))
+      throw new Error("Catalog publication differs from frozen capture");
+  } else if (inventory.targets.length !== 7) {
+    throw new Error("Unkeyed publication roster differs");
+  }
   object(receipt, ["schema", "batchId", "expandedBytes", "assets"]);
   if (
     receipt.schema !== "urn:aihq:scan:publication-assets:1.0.0" ||
@@ -274,7 +283,7 @@ export function githubTransport({ token, reviewedHead, fetch: request = fetch })
         tag_name: tag,
         target_commitish: reviewedHead,
         name: `Scan evidence ${tag.slice("scan-report-batch-".length)}`,
-        body: "Frozen Scan evidence batch. inventory.json accounts for all seven sources; assessment authenticity and detector completion are separate fields.",
+        body: "Frozen Scan evidence batch. inventory.json accounts for every selected source; assessment authenticity and detector completion are separate fields.",
         draft: true,
         prerelease: false,
         make_latest: "false",

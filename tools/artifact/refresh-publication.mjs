@@ -12,13 +12,17 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   canonicalBytes,
+  captureId,
   digest,
+  matchesTargetSource,
   object,
   parseJson,
   readRegular,
   schemas,
   sha256,
   targetDirectory,
+  targetIdentity,
+  targetKey,
   validateManifest,
 } from "../refresh/contracts.mjs";
 import { loadScanner } from "../refresh/scanner.mjs";
@@ -28,6 +32,7 @@ import { checkStatement } from "./check-statement.mjs";
 export const publicationSchemas = Object.freeze({
   custody: "urn:aihq:scan:refresh-custody:1.0.0",
   selection: "urn:aihq:scan:refresh-signing-selection:1.0.0",
+  captureBatchSelection: "urn:aihq:scan:catalog-capture-batch-signing-selection:1.0.0",
   inventory: "urn:aihq:scan:publication-inventory:1.0.0",
 });
 export const expandedCeiling = 2 * 1024 * 1024 * 1024;
@@ -128,7 +133,7 @@ export async function retainCustody({ candidate, scannerTarball, scannerInstall 
 function checkSelection(selection) {
   object(selection, ["schema", "batchId", "manifestSha256", "targets"]);
   assert(
-    selection.schema === publicationSchemas.selection &&
+    [publicationSchemas.selection, publicationSchemas.captureBatchSelection].includes(selection.schema) &&
       /^batch:sha256:[0-9a-f]{64}$/.test(selection.batchId),
     "Invalid signing selection",
   );
@@ -138,15 +143,17 @@ function checkSelection(selection) {
     "Signing target bound exceeded",
   );
   const names = new Set();
+  const independent = selection.schema === publicationSchemas.captureBatchSelection;
   for (const row of selection.targets) {
-    object(row, ["repository", "commit", "scanId", "artifactSha256", "statementSha256"]);
+    object(row, ["repository", "commit", "scanId", "artifactSha256", "statementSha256", ...(independent ? ["captureId"] : [])]);
+    if(independent && (row.repository !== "samartomar/aih-catalog" || !captureId(row.captureId))) throw new Error("Invalid capture signing identity");
     assert(
       typeof row.repository === "string" &&
         /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(row.repository) &&
-        !names.has(row.repository),
+        !names.has(targetKey(row)),
       "Signing repository ambiguity",
     );
-    names.add(row.repository);
+    names.add(targetKey(row));
     assert(
       /^[0-9a-f]{40}$/.test(row.commit) && /^scan:sha256:[0-9a-f]{64}$/.test(row.scanId),
       "Invalid signing identity",
@@ -173,6 +180,7 @@ export async function validateCandidate({
   const manifestBytes = bytesAt(candidate, "manifest.json", 2097152);
   assert(sha256(manifestBytes) === expectedManifestSha256, "Frozen manifest digest differs");
   const manifest = validateManifest(parseJson(manifestBytes, 2097152, true));
+  const independent = manifest.schema === schemas.captureBatchManifest;
   if (readerInstallationSha256 === undefined)
     assert(
       equal(manifest.runtime, {
@@ -224,9 +232,11 @@ export async function validateCandidate({
     "profile",
     "unavailableCoverage",
     "targets",
+    ...(independent ? ["termination","durationMs"] : []),
   ]);
   assert(
-    inventory.schema === schemas.inventory &&
+    inventory.schema === (independent ? schemas.captureBatchInventory : schemas.inventory) &&
+      (!independent || (inventory.termination === "completed" && integer(inventory.durationMs) && inventory.durationMs <= manifest.batchLimits.maxDurationMs)) &&
       inventory.batchId === manifest.batchId &&
       inventory.manifestSha256 === expectedManifestSha256 &&
       instant(inventory.createdAt) &&
@@ -235,7 +245,7 @@ export async function validateCandidate({
       inventory.profile === manifest.profile &&
       equal(inventory.unavailableCoverage, manifest.unavailableCoverage) &&
       Array.isArray(inventory.targets) &&
-      inventory.targets.length === 7,
+      inventory.targets.length === manifest.targets.length,
     "Incomplete or substituted producer inventory",
   );
   const allowed = new Set([
@@ -251,22 +261,22 @@ export async function validateCandidate({
     allowed.add("publication.json");
     const published = jsonAt(candidate, "inventory.json");
     assert(
-      Array.isArray(published.targets) && published.targets.length === 7,
+      Array.isArray(published.targets) && published.targets.length === manifest.targets.length,
       "Incomplete publication inventory",
     );
     for (const row of published.targets)
       if (row.authenticity === "authenticated") {
         assert(
-          row.authenticatedPath === `targets/${targetDirectory(row.repository)}/authenticated.json`,
+          row.authenticatedPath === `targets/${targetDirectory(row)}/authenticated.json`,
           "Invalid authenticated path",
         );
         allowed.add(row.authenticatedPath);
       }
   }
-  for (let index = 0; index < 7; index++) {
+  for (let index = 0; index < manifest.targets.length; index++) {
     const row = inventory.targets[index],
       target = manifest.targets[index],
-      directory = `targets/${targetDirectory(target.repository)}`;
+      directory = `targets/${targetDirectory(target)}`;
     const fields = [
       "repository",
       "commit",
@@ -276,6 +286,7 @@ export async function validateCandidate({
       "diagnostics",
       "detectors",
       "measurements",
+      ...(independent ? ["captureId"] : []),
     ];
     const assessmentFields = [
       "scanId",
@@ -294,6 +305,7 @@ export async function validateCandidate({
     object(row, row.status === "assessment" ? [...fields, ...assessmentFields] : fields);
     assert(
       row.repository === target.repository &&
+        (!independent || row.captureId === target.captureId) &&
         row.commit === target.commit &&
         row.resultPath === `${directory}/result.json`,
       "Source row or result path differs",
@@ -322,12 +334,12 @@ export async function validateCandidate({
   }
   const measurement = measureDirectory(candidate, allowed);
   const selection = {
-    schema: publicationSchemas.selection,
+    schema: independent ? publicationSchemas.captureBatchSelection : publicationSchemas.selection,
     batchId: manifest.batchId,
     manifestSha256: expectedManifestSha256,
     targets: [],
   };
-  for (let index = 0; index < 7; index++) {
+  for (let index = 0; index < manifest.targets.length; index++) {
     const row = inventory.targets[index],
       target = manifest.targets[index];
     const resultBytes = bytesAt(candidate, row.resultPath, jsonLimit),
@@ -397,9 +409,7 @@ export async function validateCandidate({
       read.status === "read" &&
         read.scanId === result.scanId &&
         row.scanId === result.scanId &&
-        read.report.source.kind === "git" &&
-        read.report.source.repository === target.repositoryUrl &&
-        read.report.source.commit === target.commit,
+        matchesTargetSource(read.report.source, target),
       "Assessment source identity differs",
     );
     const report = read.report;
@@ -471,6 +481,7 @@ export async function validateCandidate({
     const metadata = jsonAt(candidate, row.candidatePath, 2097152);
     const signingRow = {
       repository: row.repository,
+      ...targetIdentity(row),
       commit: row.commit,
       scanId: row.scanId,
       artifactSha256: row.artifactSha256,
@@ -542,7 +553,7 @@ export async function validatePublication({
     equal(jsonAt(directory, "selection.json", 2097152), checked.selection),
     "Published signing selection differs",
   );
-  for (let index = 0; index < 7; index++) {
+  for (let index = 0; index < checked.manifest.targets.length; index++) {
     const original = checked.inventory.targets[index],
       row = published.targets[index];
     if (row.authenticity === "authenticated") {
@@ -597,7 +608,7 @@ export function prepareSigning({ candidate, selection, expectedSelectionSha256, 
   const statements = selection.targets.map((row) => {
     const bytes = bytesAt(
       candidate,
-      `targets/${targetDirectory(row.repository)}/statement.json`,
+      `targets/${targetDirectory(row)}/statement.json`,
       131072,
     );
     const { statement } = checkStatement(bytes, row.statementSha256);
@@ -696,7 +707,7 @@ export async function assemblePublication({
     if (!readdirSync(bundles).includes(name)) continue; // Remains explicitly unsigned in durable inventory.
     const unsigned = bytesAt(
       candidate,
-      `targets/${targetDirectory(row.repository)}/artifact.json`,
+      `targets/${targetDirectory(row)}/artifact.json`,
       checked.manifest.limits.maxArtifactBytes,
     );
     const bundle = parseJson(bytesAt(bundles, name, 1024 * 1024), 1024 * 1024);
@@ -707,7 +718,7 @@ export async function assemblePublication({
       trust,
     });
     assert(result.status === "authenticated", "Independent artifact authentication refused");
-    authenticated.set(row.repository, {
+    authenticated.set(targetKey(row), {
       bytes: Buffer.from(attached.bytes),
       authentication: result,
     });
@@ -728,12 +739,12 @@ export async function assemblePublication({
     profile: checked.manifest.profile,
     unavailableCoverage: checked.manifest.unavailableCoverage,
     targets: checked.inventory.targets.map((row) => {
-      const proof = authenticated.get(row.repository);
+      const proof = authenticated.get(targetKey(row));
       return proof
         ? {
             ...row,
             authenticity: "authenticated",
-            authenticatedPath: `targets/${targetDirectory(row.repository)}/authenticated.json`,
+            authenticatedPath: `targets/${targetDirectory(row)}/authenticated.json`,
             authenticatedSha256: sha256(proof.bytes),
             authentication: proof.authentication,
           }
@@ -741,7 +752,7 @@ export async function assemblePublication({
     }),
   };
   for (const target of checked.manifest.targets)
-    mkdirSync(join(output, "targets", targetDirectory(target.repository)), { mode: 0o700 });
+    mkdirSync(join(output, "targets", targetDirectory(target)), { mode: 0o700 });
   for (const path of checked.allowed)
     copyFileSync(
       join(candidate, path),
@@ -750,7 +761,7 @@ export async function assemblePublication({
     );
   writeJson(output, "selection.json", checked.selection);
   for (const row of inventory.targets) {
-    const proof = authenticated.get(row.repository);
+    const proof = authenticated.get(targetKey(row));
     if (proof) write(output, row.authenticatedPath, proof.bytes);
   }
   writeJson(output, "inventory.json", inventory);

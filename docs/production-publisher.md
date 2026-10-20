@@ -1,6 +1,10 @@
 # Restricted Scan report publisher
 
 The reusable frozen seven-source operation is described in [production refresh](production-refresh.md).
+The explicit [Catalog input-capture mode](catalog-capture.md) uses the same publisher
+and independently maintained trust, with one target and no supplied executable input.
+The separate [independent capture batch mode](independent-captures.md) uses up to
+seven keyed captures and the same single protected approval and signing capacity.
 Both manual workflows require the exact reviewed main commit, repository and owner IDs,
 first run attempt and dispatcher `samartomar` (GitHub user 9993940). The triggering actor
 must also be `samartomar`. Active freeze, candidate and final custody require both actors'

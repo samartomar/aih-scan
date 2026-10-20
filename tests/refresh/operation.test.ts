@@ -5,6 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
+const realCaptureProof =
+  process.env.AIH_SCAN_REFRESH_LINUX_PROOF === "1" && process.platform === "linux";
 let temporary: string;
 let consumer: string;
 let tarball: string;
@@ -369,6 +371,92 @@ test("run retains pinned Git bytes and every detector outcome when Semgrep is un
     ).toEqual(retained.annexes);
   }
 }, 120000);
+
+test(
+  "packed Catalog capture matches material and survives candidate, fixture authentication and publication custody",
+  () => {
+    const driver = join(temporary, "catalog-capture-driver.mjs");
+    writeFileSync(
+      driver,
+      `
+import {mkdirSync,writeFileSync,readFileSync,existsSync} from 'node:fs';
+import {join} from 'node:path';
+import {generateKeyPairSync} from 'node:crypto';
+import {freezeBatch,runBatch} from ${JSON.stringify(new URL("../../tools/refresh/refresh.mjs", import.meta.url).href)};
+import {prepareCatalogCapture} from ${JSON.stringify(new URL("../../tools/refresh/catalog-capture.mjs", import.meta.url).href)};
+import {canonicalBytes,sha256,ceilings,batchId,validateManifest} from ${JSON.stringify(new URL("../../tools/refresh/contracts.mjs", import.meta.url).href)};
+import {retainCustody,validateCandidate,prepareSigning,recheckSigning,assemblePublication,validatePublication} from ${JSON.stringify(new URL("../../tools/artifact/refresh-publication.mjs", import.meta.url).href)};
+const [tgz,install,work]=process.argv.slice(2), root=join(work,'staged');mkdirSync(work);mkdirSync(root);mkdirSync(join(root,'recipes'));mkdirSync(join(root,'release'));
+const recipe=Buffer.from('# Exact recipe fixture\\n'), material=Buffer.from('Exact support bytes\\n');
+const describe=(path,bytes)=>({path,sha256:sha256(bytes),byteLength:bytes.length});
+const recipeD=describe('recipes/SKILL.md',recipe),materialD=describe('recipes/support.txt',material);
+const inventoryBytes=Buffer.from(canonicalBytes({schema:'urn:aihq:catalog:content-inventory:1.0.0',projection:'urn:aihq:catalog:release-content:1.0.0',release:{schema:'urn:aihq:catalog:release:1.5.0',package:{name:'@aihq/catalog',version:'0.3.0'},sources:[],items:[{recipe:recipeD,materials:[materialD]}]}}).toString()+'\\n');
+writeFileSync(join(root,recipeD.path),recipe);writeFileSync(join(root,materialD.path),material);writeFileSync(join(root,'release/content-inventory.json'),inventoryBytes);
+const bytes=prepareCatalogCapture({root,inventoryPath:'release/content-inventory.json',inventorySha256:sha256(inventoryBytes)});
+if(!bytes.equals(prepareCatalogCapture({root,inventoryPath:'release/content-inventory.json',inventorySha256:sha256(inventoryBytes)})))throw Error('Nonreproducible input');
+writeFileSync(join(root,materialD.path),'later mutation');
+const selector={releaseId:'11',assetId:'12',sha256:sha256(bytes),byteLength:bytes.length,inventory:describe('release/content-inventory.json',inventoryBytes)},commit='b'.repeat(40);
+let corrupt=false;
+const transport={json:async path=>path==='repos/samartomar/aih-catalog'?{full_name:'samartomar/aih-catalog',private:false,archived:false,owner:{id:9993940}}:path.includes('/git/ref/')?{ref:'refs/tags/catalog-capture-'+selector.sha256,object:{type:'commit',sha:commit}}:path.endsWith('/11')?{id:11,immutable:true,draft:false,tag_name:'catalog-capture-'+selector.sha256,target_commitish:commit}:[{id:12,name:'catalog-capture.json',state:'uploaded',size:bytes.length,digest:'sha256:'+selector.sha256,url:'https://api.github.com/repos/samartomar/aih-catalog/releases/assets/12'}],bytes:async()=>({status:200,bytes:corrupt?Buffer.from('tampered'):bytes})};
+const input={schema:'urn:aihq:scan:catalog-capture-input:1.0.0',scannerSourceCommit:'a'.repeat(40),runtime:{node:process.version,platform:'linux',architecture:'x64'},profile:'independent-linux-v1',limits:{...ceilings,detectorTimeoutMs:${realCaptureProof ? 600000 : 1000}},targets:[{repository:'samartomar/aih-catalog',ref:commit,capture:selector,selection:{paths:'all',excludedPaths:[]},trustLint:{internalScopes:[],mcpConfigPaths:[]}}]};
+const manifest=await freezeBatch({input,scannerTarball:tgz,scannerInstall:install,captureTransport:transport,resolveRepository:async repository=>({repository,repositoryUrl:'https://github.com/'+repository+'.git'})});
+const out=join(work,'candidate');const inventory=await runBatch({manifest,scannerTarball:tgz,scannerInstall:install,output:out,captureTransport:transport});
+await retainCustody({candidate:out,scannerTarball:tgz,scannerInstall:install});
+const manifestSha=sha256(canonicalBytes(manifest));const checked=await validateCandidate({candidate:out,scannerInstall:install,expectedManifestSha256:manifestSha});
+const row=inventory.targets[0],result=JSON.parse(readFileSync(join(out,row.resultPath),'utf8'));const read=await checked.scanner.read.readArtifact(readFileSync(join(out,row.artifactPath)));
+const matched=await checked.scanner.read.readContentCoverage({read,descriptors:[selector.inventory,recipeD,materialD]});
+if(matched.status!=='matched')throw Error('Public content matching failed '+JSON.stringify(matched));
+const selectionSha=sha256(canonicalBytes(checked.selection)),signing=join(work,'signing');prepareSigning({candidate:out,selection:checked.selection,expectedSelectionSha256:selectionSha,output:signing});recheckSigning({directory:signing,expectedSelectionSha256:selectionSha});
+const key=generateKeyPairSync('ed25519'),spki=key.publicKey.export({type:'spki',format:'der'}),keyId='ed25519:'+sha256(spki),trust={keys:[{identity:'fixture-only-catalog-capture',keyId,publicKeySpkiBase64:spki.toString('base64')}],publishers:[]};
+const signed=await checked.scanner.host.signArtifact({report:result.report,annexes:result.annexes.map(a=>({id:a.id,bytes:Buffer.from(a.bytesBase64,'base64')})),signer:{keyId,privateKey:key.privateKey}});
+const bundles=join(work,'bundles');mkdirSync(bundles);writeFileSync(join(bundles,'bundle-0.json'),canonicalBytes(signed.artifact.attestation));const publication=join(work,'publication');
+await assemblePublication({candidate:out,scannerInstall:install,expectedManifestSha256:manifestSha,expectedSelectionSha256:selectionSha,bundles,trust,output:publication});
+const published=await validatePublication({directory:publication,scannerInstall:install,expectedManifestSha256:manifestSha,expectedSelectionSha256:selectionSha,trust});
+const authenticated=await checked.scanner.read.readArtifact(readFileSync(join(publication,published.targets[0].authenticatedPath)));
+if(!canonicalBytes(authenticated.report).equals(canonicalBytes(result.report)))throw Error('Original report/timestamps changed');
+const cancelled=await runBatch({manifest,scannerTarball:tgz,scannerInstall:install,output:join(work,'cancelled'),captureTransport:transport,signal:AbortSignal.abort()});
+if(cancelled.targets[0].status!=='diagnostic'||cancelled.targets[0].detectors.some(d=>d.outcome!=='not-run'))throw Error('Cancelled capture invented work');
+corrupt=true;let refused=false;const bad=join(work,'bad');try{await runBatch({manifest,scannerTarball:tgz,scannerInstall:install,output:bad,captureTransport:transport});}catch{refused=true;}if(!refused||existsSync(bad))throw Error('Tampered input reached assessment');
+const changed=structuredClone(manifest);changed.targets[0].capture.files[0].sha256='0'.repeat(64);changed.batchId=batchId(changed);validateManifest(changed);corrupt=false;refused=false;try{await runBatch({manifest:changed,scannerTarball:tgz,scannerInstall:install,output:bad,captureTransport:transport});}catch{refused=true;}if(!refused||existsSync(bad))throw Error('Manifest substituted source');
+process.stdout.write(JSON.stringify({row,authenticated:published.targets[0].authenticity,matched:matched.status,unavailable:manifest.unavailableCoverage,signingFiles:Object.keys(JSON.parse(readFileSync(join(signing,'selection.json'),'utf8')))}));
+`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        ...(realCaptureProof ? [] : ["--require", join(temporary, "git-boundary.cjs")]),
+        driver,
+        tarball,
+        consumer,
+        join(temporary, "catalog-capture"),
+      ],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: realCaptureProof ? 18 * 60 * 1000 : 90000,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const observed = JSON.parse(result.stdout);
+    expect(observed).toMatchObject({
+      authenticated: "authenticated",
+      matched: "matched",
+      row: {
+        repository: "samartomar/aih-catalog",
+        completion: realCaptureProof ? "complete" : "partial",
+        detectors: [
+          { detectorId: "detector.aih-native", outcome: "succeeded" },
+          { detectorId: "detector.aih-trust-lint", outcome: "succeeded" },
+          { detectorId: "detector.aih-binding-gate", outcome: "succeeded" },
+          { detectorId: "detector.semgrep", outcome: realCaptureProof ? "succeeded" : "refused" },
+        ],
+      },
+    });
+    expect(observed.unavailable).toHaveLength(4);
+  },
+  realCaptureProof ? 20 * 60 * 1000 : 120000,
+);
 
 test("capture resource refusal accounts for every source without any Scan ID", () => {
   const manifest = frozenFixture("bounded");

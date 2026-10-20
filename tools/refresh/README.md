@@ -5,6 +5,12 @@ interfaces. It does not sign or publish reports. Use separate processes for free
 and run, with an immutable scanner installation made from the reviewed tarball and
 retained dependency lock. Changing an installation requires a new process and batch.
 
+The explicitly selected [frozen Catalog capture mode](../../docs/catalog-capture.md)
+uses an immutable data-only input asset and one target through this same pipeline.
+The separately selected [independent capture batch contract](../../docs/independent-captures.md)
+supports one to seven keyed Catalog targets, aggregate budgets and explicit subsets.
+The seven-source contract below remains the original mode.
+
 ```sh
 node tools/refresh/refresh.mjs freeze --input input.json \
   --scanner-tgz /path/to/scan.tgz --scanner-install /path/to/consumer \

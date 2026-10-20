@@ -27,7 +27,8 @@ test("actual cleanup guards admit cancellation without a preceding failure and n
         "failure-evidence": {
           outputs: {
             root: "true",
-            ...Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`target_${i}`, "true"])),
+            ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`target_${i}`, "true"])),
+            ...Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`capture_${i}`, "true"])),
           },
         },
       },
@@ -129,13 +130,37 @@ test("failed production workflow retains exact completed sibling bytes through n
     const uploads = workflow.jobs.upload.steps.filter((step: { with?: { name?: string } }) =>
       step.with?.name?.startsWith("scan-refresh-NONPUBLISHABLE-"),
     );
-    expect(uploads).toHaveLength(8);
+    expect(uploads).toHaveLength(16);
     for (const upload of uploads) {
       expect(upload.if).toContain("failure()");
       expect(upload.with["if-no-files-found"]).toBe("error");
     }
     expect(readFileSync(githubOutput, "utf8")).toContain("target_0=true");
     expect(readFileSync(githubOutput, "utf8")).toContain("target_1=false");
+    expect(readFileSync(githubOutput, "utf8")).toContain("target_7=false");
+    mkdirSync(join(candidate, "targets", "samartomar--aih-catalog"));
+    writeFileSync(
+      join(candidate, "targets", "samartomar--aih-catalog", "result.json"),
+      "exact Catalog diagnostic",
+    );
+    const captureOutput = join(directory, "capture-failure");
+    const capture = spawnSync(
+      process.execPath,
+      ["tools/artifact/retain-failure-evidence.mjs", candidate, frozen, captureOutput],
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        env: { ...process.env, GITHUB_OUTPUT: githubOutput },
+      },
+    );
+    expect(capture.status, capture.stderr).toBe(0);
+    expect(
+      readFileSync(
+        join(captureOutput, "targets", "samartomar--aih-catalog", "result.json"),
+        "utf8",
+      ),
+    ).toBe("exact Catalog diagnostic");
+    expect(readFileSync(githubOutput, "utf8")).toContain("target_7=true");
     // A sparse oversized original refuses explicitly without losing valid siblings.
     truncateSync(
       join(candidate, "targets", "mattpocock--skills", "result.json"),

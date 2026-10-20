@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add an explicit maintained producer input for immutable frozen Catalog captures,
+  binding the inventory and all declared recipe/material bytes in their original
+  relative namespace. The maintainer tooling reuses the four-detector Linux profile,
+  candidate/artifact checks and protected signing path, retaining actual failures
+  and coverage gaps. Existing seven-source input and package APIs remain unchanged;
+  input publication, production execution/signing and npm publication are separate
+  operations (samartomar/aih-scan#114).
+
 - Add `readContentCoverage` to the portable `@aihq/scan/read` entry. Given a
   `readReport` or `readArtifact` result and exact `{ path, sha256, byteLength }`
   descriptors, it reports whether the captured source matches them and returns
