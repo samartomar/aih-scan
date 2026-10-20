@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Actions signals the step entry PID. Keep this shell alive while the CLI writes
-# its seven-row cancellation inventory, and never admit that output as a candidate.
+# its complete cancellation inventory, and never admit that output as a candidate.
 set -euo pipefail
 if [ "$#" -ne 6 ]; then exit 2; fi
 manifest="$1"

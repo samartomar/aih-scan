@@ -63,6 +63,7 @@ jobs:
         env:
           INPUT_JSON: ${{ inputs.input_json }}
           INPUT_SHA: ${{ vars.SCAN_REFRESH_INPUT_SHA256 }}
+          GH_TOKEN: ${{ github.token }}
         run: |-
           set -euo pipefail
           mkdir "$RUNNER_TEMP/frozen"
@@ -130,6 +131,7 @@ jobs:
         if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
         env:
           MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
+          GH_TOKEN: ${{ github.token }}
         run: exec bash tools/refresh/run-workflow.sh frozen/manifest.json frozen/scanner.tgz "$RUNNER_TEMP/scanner-work/consumer" "$RUNNER_TEMP/candidate" "$MANIFEST_SHA" "$RUNNER_TEMP/selection.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -212,6 +214,15 @@ jobs:
         with:
           name: scan-refresh-NONPUBLISHABLE-samartomar--aih-extensions
           path: ${{ runner.temp }}/failure-evidence/targets/samartomar--aih-extensions/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE failure samartomar--aih-catalog
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_7 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-samartomar--aih-catalog
+          path: ${{ runner.temp }}/failure-evidence/targets/samartomar--aih-catalog/
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
