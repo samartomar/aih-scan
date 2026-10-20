@@ -280,7 +280,7 @@ export function githubTransport({ token, reviewedHead, fetch: request = fetch })
         tag_name: tag,
         target_commitish: reviewedHead,
         name: `Scan evidence ${tag.slice("scan-report-batch-".length)}`,
-        body: "Frozen Scan evidence batch. inventory.json accounts for all seven sources; assessment authenticity and detector completion are separate fields.",
+        body: "Frozen Scan evidence batch. inventory.json accounts for every selected source; assessment authenticity and detector completion are separate fields.",
         draft: true,
         prerelease: false,
         make_latest: "false",

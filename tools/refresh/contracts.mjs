@@ -465,6 +465,8 @@ export function validateFrozenCapture(value, limits) {
   let total = 0, previous = "";
   for (const file of value.files) {
     descriptor(file);
+    total += file.byteLength;
+    if (total > limits.maxSourceBytes) throw new Error("Capture source byte bound exceeded");
     if (file.path <= previous || seen.has(file.path.toLowerCase())) throw new Error("Ambiguous capture files");
     previous = file.path;
     seen.add(file.path.toLowerCase());
@@ -472,12 +474,13 @@ export function validateFrozenCapture(value, limits) {
     for (let i = 1; i <= components.length; i++) {
       const path = components.slice(0, i).join("/"), key = path.toLowerCase();
       if (spellings.has(key) && spellings.get(key) !== path) throw new Error("Case-ambiguous capture namespace");
+      if (!spellings.has(key) && spellings.size >= limits.maxSourceEntries)
+        throw new Error("Capture entry bound exceeded");
       spellings.set(key, path);
     }
     const pieces = file.path.split("/");
     pieces.pop();
     while (pieces.length) { directories.add(pieces.join("/").toLowerCase()); pieces.pop(); }
-    total += file.byteLength;
   }
   if ([...directories].some(path => seen.has(path)) || directories.size + seen.size > limits.maxSourceEntries ||
     total > limits.maxSourceBytes || !value.files.some(file => canonicalBytes(file).equals(canonicalBytes(value.inventory))))

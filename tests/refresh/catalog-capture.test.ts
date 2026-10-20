@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -272,4 +273,35 @@ test("frozen capture rejects namespace aliases, links, duplicate/extra fields an
     expect(() => validateFrozenCapture({ ...frozen, files }, ceilings)).toThrow();
   expect(() => validateFrozenCapture(frozen, { ...ceilings, maxSourceEntries: 1 })).toThrow();
   expect(() => validateFrozenCapture(frozen, { ...ceilings, maxSourceBytes: 0 })).toThrow();
+});
+
+test("deep immutable input refuses at its source entry budget within a bounded heap", () => {
+  const directory = mkdtempSync(join(tmpdir(), "scan-capture-entry-bound-"));
+  try {
+    const driver = join(directory, "input.mjs");
+    writeFileSync(
+      driver,
+      `
+import {acquireCatalogCapture} from ${JSON.stringify(new URL("../../tools/refresh/catalog-capture.mjs", import.meta.url).href)};
+import {canonicalBytes,sha256,ceilings} from ${JSON.stringify(new URL("../../tools/refresh/contracts.mjs", import.meta.url).href)};
+const inventory={path:'inventory.json',sha256:sha256(Buffer.from('{}')),byteLength:2};
+const files=Array.from({length:500},(_,i)=>({path:'a'+String(i).padStart(3,'0')+'/'+Array(400).fill('abcd').join('/'),sha256:sha256(Buffer.alloc(0)),byteLength:0,bytesBase64:''}));
+files.push({...inventory,bytesBase64:'e30='});
+const bytes=canonicalBytes({schema:'urn:aihq:scan:catalog-capture:1.0.0',inventory,files}),hash=sha256(bytes),commit='a'.repeat(40);
+const target={commit,capture:{releaseId:'1',assetId:'2',sha256:hash,byteLength:bytes.length,inventory}};
+const api={json:path=>path==='repos/samartomar/aih-catalog'?{full_name:'samartomar/aih-catalog',private:false,archived:false,owner:{id:9993940}}:path.includes('/git/ref/')?{ref:'refs/tags/catalog-capture-'+hash,object:{type:'commit',sha:commit}}:path.endsWith('/1')?{id:1,immutable:true,draft:false,tag_name:'catalog-capture-'+hash,target_commitish:commit}:[{id:2,name:'catalog-capture.json',state:'uploaded',size:bytes.length,digest:'sha256:'+hash,url:'https://api.github.com/repos/samartomar/aih-catalog/releases/assets/2'}],bytes:()=>({status:200,bytes})};
+try{await acquireCatalogCapture(target,{...ceilings,maxSourceEntries:1000},api);process.exitCode=1;}catch(error){if(!/Capture entry bound exceeded/.test(error.message))throw error;process.stdout.write('bounded-input-refusal');}
+`,
+    );
+    const result = spawnSync(process.execPath, ["--max-old-space-size=64", driver], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 15000,
+      maxBuffer: 1024 * 1024,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("bounded-input-refusal");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
