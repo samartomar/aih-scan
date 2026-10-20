@@ -136,8 +136,11 @@ NONPUBLISHABLE Catalog originals use the existing separate failure-evidence path
 The same maintained workflow, reviewed-main admission, independent trust bytes,
 signer identity and protected human approval apply. The signer receives only
 detached statements and reviewed selection, not the capture or scanner code.
-Exactly one target is signed in capture mode; the seven-source mode retains its
-seven targets. Authentication still uses independently selected trust.
+Exactly one target is signed in singleton capture mode; the seven-source mode
+retains its seven targets. The separately selected
+[independent capture batch mode](independent-captures.md) supports one to seven
+keyed Catalog inventories through the same stages. Authentication still uses
+independently selected trust.
 
 ## Delivery and runtime proof boundaries
 

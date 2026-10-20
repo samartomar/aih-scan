@@ -71,14 +71,17 @@ export async function publishRelease({ directory, transport, custodyPath }) {
     inventory.schema !== "urn:aihq:scan:publication-inventory:1.0.0" ||
     inventory.batchId !== receipt.batchId ||
     !Array.isArray(inventory.targets) ||
-    ![1, 7].includes(inventory.targets.length)
+    inventory.targets.length < 1 || inventory.targets.length > 7
   )
     throw new Error("Durable release discovery batch differs");
-  if (inventory.targets.length === 1) {
+  const independent = inventory.targets.some(row => row.captureId !== undefined);
+  if (independent || inventory.targets.length === 1) {
     const manifest = validateManifest(parseJson(readRegular(resolve(directory, "manifest.json"), 2097152), 2097152, true));
-    if (manifest.targets.length !== 1 || inventory.batchId !== manifest.batchId ||
-      inventory.targets[0].repository !== manifest.targets[0].repository)
+    if (manifest.targets.length !== inventory.targets.length || inventory.batchId !== manifest.batchId ||
+      inventory.targets.some((row,index)=>row.repository !== manifest.targets[index].repository || row.captureId !== manifest.targets[index].captureId || row.commit !== manifest.targets[index].commit))
       throw new Error("Catalog publication differs from frozen capture");
+  } else if (inventory.targets.length !== 7) {
+    throw new Error("Unkeyed publication roster differs");
   }
   object(receipt, ["schema", "batchId", "expandedBytes", "assets"]);
   if (

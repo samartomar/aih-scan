@@ -1,7 +1,7 @@
 // Best-effort custody of original failure bytes, never a publication candidate.
 // Splitting by source preserves valid siblings even when aggregate transport
 // admission refuses. Every absent/refused original is explicit in the root index.
-import { appendFileSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -11,6 +11,7 @@ import {
   roster,
   sha256,
   targetDirectory,
+  targetIdentity,
   validateManifest,
 } from "../refresh/contracts.mjs";
 
@@ -57,6 +58,7 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
     root: [],
     targets: [],
   };
+  let retainedBytes = 0;
   function retain(roots, path, destination, limit) {
     let present = false;
     for (const root of roots) {
@@ -64,7 +66,9 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
       present = true;
       try {
         const bytes = boundedOriginal(root, path, limit);
+        if (retainedBytes + bytes.length > 2 * 1024 * MiB) throw new Error("Aggregate failure evidence bound exceeded");
         writeFileSync(destination, bytes, { flag: "wx", mode: 0o600 });
+        retainedBytes += bytes.length;
         return { path, status: "retained", byteLength: bytes.length, sha256: sha256(bytes) };
       } catch {
         return { path, status: "refused", reason: "unsafe-original-or-file-bound-exceeded" };
@@ -74,17 +78,22 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
   }
   for (const [name, limit] of Object.entries(rootLimits))
     index.root.push(retain([candidate, frozen], name, join(output, "root", name), limit));
-  let selected = roster;
+  let selected = roster.map(repository => ({repository})), frozenSelection = false;
   for (const root of [candidate, frozen]) {
     try {
-      selected = validateManifest(parseJson(boundedOriginal(root, "manifest.json", 2 * MiB), 2 * MiB, true)).targets.map(target => target.repository);
+      selected = validateManifest(parseJson(boundedOriginal(root, "manifest.json", 2 * MiB), 2 * MiB, true)).targets;
+      frozenSelection = true;
       break;
     } catch { /* Retain known fixed source slots even if root custody is damaged. */ }
   }
-  if (selected === roster && existsSync(join(candidate, "targets", "samartomar--aih-catalog")))
-    selected = [...roster, "samartomar/aih-catalog"];
-  for (const repository of selected) {
-    const directory = targetDirectory(repository);
+  if (!frozenSelection) {
+    if (existsSync(join(candidate, "targets", "samartomar--aih-catalog"))) selected.push({repository:"samartomar/aih-catalog"});
+    const names=existsSync(join(candidate,"targets")) ? readdirSync(join(candidate,"targets")).filter(name=>/^catalog--[a-z0-9][a-z0-9-]{0,47}$/.test(name)).sort() : [];
+    if(names.length>7) throw new Error("Failure capture slot bound exceeded");
+    selected.push(...names.map(name=>({repository:"samartomar/aih-catalog",captureId:name.slice("catalog--".length)})));
+  }
+  for (const target of selected) {
+    const directory = targetDirectory(target);
     mkdirSync(join(output, "targets", directory), { mode: 0o700 });
     const files = Object.entries(targetLimits).map(([name, limit]) =>
       retain(
@@ -94,7 +103,7 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
         limit,
       ),
     );
-    index.targets.push({ repository, files });
+    index.targets.push({ repository:target.repository, ...targetIdentity(target), files });
   }
   writeFileSync(join(output, "root", "failure.json"), canonicalBytes(index), {
     flag: "wx",
@@ -111,7 +120,7 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(
       process.env.GITHUB_OUTPUT,
-      `root=true\n${[...roster, "samartomar/aih-catalog"].map((repository, i) => `target_${i}=${index.targets.some(row => row.repository === repository && row.files.some(file => file.status === "retained"))}`).join("\n")}\n`,
+      `root=true\n${[...roster, "samartomar/aih-catalog"].map((repository, i) => `target_${i}=${index.targets.some(row => !row.captureId && row.repository === repository && row.files.some(file => file.status === "retained"))}`).join("\n")}\n${index.targets.filter(row=>row.captureId).map((row,i)=>`capture_${i}=${row.files.some(file=>file.status==="retained")}\ncapture_${i}_directory=${targetDirectory(row)}`).join("\n")}\n`,
     );
   return index;
 }

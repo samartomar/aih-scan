@@ -14,7 +14,11 @@ The separate [Catalog input-capture mode](catalog-capture.md) uses one immutable
 frozen inventory/material input through these same reviewed-head, candidate and
 protected signing stages. Its input Release precedes assessment and is not a
 qualified content candidate. Statements about seven sources below describe the
-original Git mode; capture mode retains one Catalog row and at most one signature.
+original Git mode; singleton capture mode retains one Catalog row and at most one
+signature. [Independent capture batches](independent-captures.md) retain one to
+seven keyed Catalog rows and separate signatures in one ready batch. Each ready
+batch uses three successful dispatches and one protected approval; dependency
+waves and per-capture immutable input publication remain separate operations.
 
 ## Freeze and execute
 
