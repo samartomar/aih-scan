@@ -28,6 +28,7 @@ test("actual cleanup guards admit cancellation without a preceding failure and n
           outputs: {
             root: "true",
             ...Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`target_${i}`, "true"])),
+            ...Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`capture_${i}`, "true"])),
           },
         },
       },
@@ -129,7 +130,7 @@ test("failed production workflow retains exact completed sibling bytes through n
     const uploads = workflow.jobs.upload.steps.filter((step: { with?: { name?: string } }) =>
       step.with?.name?.startsWith("scan-refresh-NONPUBLISHABLE-"),
     );
-    expect(uploads).toHaveLength(9);
+    expect(uploads).toHaveLength(16);
     for (const upload of uploads) {
       expect(upload.if).toContain("failure()");
       expect(upload.with["if-no-files-found"]).toBe("error");

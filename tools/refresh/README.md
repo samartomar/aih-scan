@@ -7,6 +7,8 @@ retained dependency lock. Changing an installation requires a new process and ba
 
 The explicitly selected [frozen Catalog capture mode](../../docs/catalog-capture.md)
 uses an immutable data-only input asset and one target through this same pipeline.
+The separately selected [independent capture batch contract](../../docs/independent-captures.md)
+supports one to seven keyed Catalog targets, aggregate budgets and explicit subsets.
 The seven-source contract below remains the original mode.
 
 ```sh

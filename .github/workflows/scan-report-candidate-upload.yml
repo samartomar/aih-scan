@@ -226,3 +226,66 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 0
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_0 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-0
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_0_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 1
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_1 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-1
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_1_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 2
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_2 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-2
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_2_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 3
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_3 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-3
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_3_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 4
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_4 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-4
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_4_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 5
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_5 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-5
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_5_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload NONPUBLISHABLE independent capture 6
+        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_6 == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: scan-refresh-NONPUBLISHABLE-capture-6
+          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_6_directory }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

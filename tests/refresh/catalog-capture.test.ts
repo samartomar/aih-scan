@@ -5,6 +5,62 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
+test("independent Catalog batches admit bounded keyed subsets without inventing repositories", async () => {
+  const { validateInput, ceilings } = await import(
+    new URL("../../tools/refresh/contracts.mjs", import.meta.url).href
+  );
+  const target = {
+    repository: "samartomar/aih-catalog",
+    ref: "a".repeat(40),
+    selection: { paths: "all", excludedPaths: [] },
+    trustLint: { internalScopes: [], mcpConfigPaths: [] },
+    capture: {
+      releaseId: "1",
+      assetId: "2",
+      sha256: "b".repeat(64),
+      byteLength: 1000,
+      inventory: { path: "inventory.json", sha256: "c".repeat(64), byteLength: 100 },
+    },
+  };
+  const input = {
+    schema: "urn:aihq:scan:catalog-capture-batch-input:1.0.0",
+    scannerSourceCommit: "d".repeat(40),
+    runtime: { node: process.version, platform: "linux", architecture: "x64" },
+    profile: "independent-linux-v1",
+    limits: ceilings,
+    batchLimits: {
+      maxInputBytes: 2000,
+      maxSourceBytes: 2000,
+      maxSourceEntries: 100,
+      maxDurationMs: 60000,
+    },
+    targets: [
+      { ...target, captureId: "default" },
+      {
+        ...target,
+        captureId: "ecc",
+        capture: { ...target.capture, assetId: "3", releaseId: "4", sha256: "e".repeat(64) },
+      },
+    ],
+  };
+  expect(validateInput(input)).toEqual(input);
+  expect(validateInput({ ...input, targets: [input.targets[1]] }).targets).toHaveLength(1);
+  for (const targets of [
+    [],
+    Array(8).fill(input.targets[0]),
+    [input.targets[0], input.targets[0]],
+    [{ ...input.targets[0], captureId: "../escape" }],
+    [{ ...input.targets[0], repository: "invented/catalog-ecc" }],
+    [input.targets[0], { ...input.targets[1], capture: target.capture }],
+  ])
+    expect(() => validateInput({ ...input, targets })).toThrow();
+  for (const batchLimits of [
+    { ...input.batchLimits, maxInputBytes: 1999 },
+    { ...input.batchLimits, maxDurationMs: 5400001 },
+  ])
+    expect(() => validateInput({ ...input, batchLimits })).toThrow();
+});
+
 test("immutable Catalog acquisition binds actual material closure before assessment", async () => {
   const { acquireCatalogCapture } = await import(
     new URL("../../tools/refresh/catalog-capture.mjs", import.meta.url).href
