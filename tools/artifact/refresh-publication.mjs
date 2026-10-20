@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import {
   canonicalBytes,
   digest,
+  matchesTargetSource,
   object,
   parseJson,
   readRegular,
@@ -235,7 +236,7 @@ export async function validateCandidate({
       inventory.profile === manifest.profile &&
       equal(inventory.unavailableCoverage, manifest.unavailableCoverage) &&
       Array.isArray(inventory.targets) &&
-      inventory.targets.length === 7,
+      inventory.targets.length === manifest.targets.length,
     "Incomplete or substituted producer inventory",
   );
   const allowed = new Set([
@@ -251,7 +252,7 @@ export async function validateCandidate({
     allowed.add("publication.json");
     const published = jsonAt(candidate, "inventory.json");
     assert(
-      Array.isArray(published.targets) && published.targets.length === 7,
+      Array.isArray(published.targets) && published.targets.length === manifest.targets.length,
       "Incomplete publication inventory",
     );
     for (const row of published.targets)
@@ -263,7 +264,7 @@ export async function validateCandidate({
         allowed.add(row.authenticatedPath);
       }
   }
-  for (let index = 0; index < 7; index++) {
+  for (let index = 0; index < manifest.targets.length; index++) {
     const row = inventory.targets[index],
       target = manifest.targets[index],
       directory = `targets/${targetDirectory(target.repository)}`;
@@ -327,7 +328,7 @@ export async function validateCandidate({
     manifestSha256: expectedManifestSha256,
     targets: [],
   };
-  for (let index = 0; index < 7; index++) {
+  for (let index = 0; index < manifest.targets.length; index++) {
     const row = inventory.targets[index],
       target = manifest.targets[index];
     const resultBytes = bytesAt(candidate, row.resultPath, jsonLimit),
@@ -397,9 +398,7 @@ export async function validateCandidate({
       read.status === "read" &&
         read.scanId === result.scanId &&
         row.scanId === result.scanId &&
-        read.report.source.kind === "git" &&
-        read.report.source.repository === target.repositoryUrl &&
-        read.report.source.commit === target.commit,
+        matchesTargetSource(read.report.source, target),
       "Assessment source identity differs",
     );
     const report = read.report;
@@ -542,7 +541,7 @@ export async function validatePublication({
     equal(jsonAt(directory, "selection.json", 2097152), checked.selection),
     "Published signing selection differs",
   );
-  for (let index = 0; index < 7; index++) {
+  for (let index = 0; index < checked.manifest.targets.length; index++) {
     const original = checked.inventory.targets[index],
       row = published.targets[index];
     if (row.authenticity === "authenticated") {

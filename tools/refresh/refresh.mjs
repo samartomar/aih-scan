@@ -7,6 +7,7 @@ import {
   canonicalBytes,
   commit,
   detectorsFor,
+  matchesTargetSource,
   parseJson,
   profile,
   readRegular,
@@ -17,6 +18,7 @@ import {
   validateInput,
   validateManifest,
 } from "./contracts.mjs";
+import { acquireCatalogCapture, materializeCatalogCapture } from "./catalog-capture.mjs";
 import { loadScanner } from "./scanner.mjs";
 
 const runtime = () => ({
@@ -62,6 +64,7 @@ export async function freezeBatch({
   scannerInstall,
   resolveRepository = repositoryIdentity,
   resolveRef: resolveTargetRef = resolveRef,
+  captureTransport,
 }) {
   const snapshot = validateInput(parseJson(canonicalBytes(input)));
   const scanner = await loadScanner(scannerTarball, scannerInstall, snapshot.scannerSourceCommit);
@@ -83,11 +86,12 @@ export async function freezeBatch({
       commit: oid,
       selection: target.selection,
       detectors: detectorsFor(target.trustLint),
+      ...(target.capture ? { capture: await acquireCatalogCapture({commit: oid, capture: target.capture}, snapshot.limits, captureTransport) } : {}),
     });
   }
   scanner.verifyUnchanged();
   const manifest = {
-    schema: schemas.manifest,
+    schema: snapshot.schema === schemas.captureInput ? schemas.captureManifest : schemas.manifest,
     createdAt: new Date().toISOString(),
     scanner: scanner.identity,
     runtime: snapshot.runtime,
@@ -112,13 +116,18 @@ function noOutputInsideSource(output) {
   if (output === root || output.startsWith(`${root}/`) || output.startsWith(`${root}\\`))
     throw new Error("Producer outputs must be outside scanner source checkout");
 }
-export async function runBatch({ manifest, scannerTarball, scannerInstall, output, signal }) {
+export async function runBatch({ manifest, scannerTarball, scannerInstall, output, signal, captureTransport }) {
   const frozen = validateManifest(parseJson(canonicalBytes(manifest)));
   if (!canonicalBytes(runtime()).equals(canonicalBytes(frozen.runtime)))
     throw new Error("Execution runtime differs from frozen runtime");
   const scanner = await loadScanner(scannerTarball, scannerInstall, frozen.scanner.sourceCommit);
   if (!canonicalBytes(scanner.identity).equals(canonicalBytes(frozen.scanner)))
     throw new Error("Installed scanner differs from frozen identity");
+  // Refuse missing/tampered capture input before any detector or candidate output.
+  const captureTarget = frozen.targets.find(target => target.capture);
+  const acquired = captureTarget && !signal?.aborted
+    ? await materializeCatalogCapture(captureTarget, frozen.limits, captureTransport) : undefined;
+  try {
   const destination = resolve(output);
   noOutputInsideSource(destination);
   createExclusiveDirectory(destination);
@@ -160,7 +169,7 @@ export async function runBatch({ manifest, scannerTarball, scannerInstall, outpu
         result = await scanner.host.runScan(
           {
             schema: "urn:aihq:scan:request:1.0.0",
-            source: { kind: "git", repository: target.repositoryUrl, commit: target.commit },
+            source: target.capture ? {kind: "local", path: acquired.root} : { kind: "git", repository: target.repositoryUrl, commit: target.commit },
             selection: target.selection,
             detectors: target.detectors,
             limits: frozen.limits,
@@ -219,9 +228,7 @@ export async function runBatch({ manifest, scannerTarball, scannerInstall, outpu
         if (
           read.status !== "read" ||
           read.scanId !== result.scanId ||
-          read.report.source.kind !== "git" ||
-          read.report.source.repository !== target.repositoryUrl ||
-          read.report.source.commit !== target.commit
+          !matchesTargetSource(read.report.source, target)
         )
           throw new Error("Prepared assessment source mismatch");
         const report = read.report;
@@ -314,6 +321,7 @@ export async function runBatch({ manifest, scannerTarball, scannerInstall, outpu
   }
   writeJson(join(destination, "inventory.json"), inventory);
   return inventory;
+  } finally { acquired?.cleanup(); }
 }
 let boundaryPhase = "arguments";
 const actionRunId = () =>

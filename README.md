@@ -68,6 +68,12 @@ SkillSpector coverage is unavailable in this profile; Snyk is outside it.
 This operation runs full assessments of the pinned sources; it does not load prior
 reports for unchanged-observation reuse.
 
+The explicit [frozen Catalog capture mode](docs/catalog-capture.md) accepts one
+immutable input data asset containing the inventory and all declared recipe/material
+bytes. It uses the same four-detector profile, candidate checks and protected
+publisher. Its input publication and actual execution/signing require their own
+authorization; fixture authentication does not establish a production baseline.
+
 Read-only production, protected detached signing and independent final assembly
 have separate permissions. The sole maintainer `samartomar` initiates the manual
 workflows and approves protected signing, including their own initiated run;

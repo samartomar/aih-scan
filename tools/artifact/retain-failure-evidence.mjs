@@ -6,10 +6,12 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   canonicalBytes,
+  parseJson,
   readRegular,
   roster,
   sha256,
   targetDirectory,
+  validateManifest,
 } from "../refresh/contracts.mjs";
 
 const MiB = 1024 * 1024;
@@ -72,7 +74,16 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
   }
   for (const [name, limit] of Object.entries(rootLimits))
     index.root.push(retain([candidate, frozen], name, join(output, "root", name), limit));
-  for (const repository of roster) {
+  let selected = roster;
+  for (const root of [candidate, frozen]) {
+    try {
+      selected = validateManifest(parseJson(boundedOriginal(root, "manifest.json", 2 * MiB), 2 * MiB, true)).targets.map(target => target.repository);
+      break;
+    } catch { /* Retain known fixed source slots even if root custody is damaged. */ }
+  }
+  if (selected === roster && existsSync(join(candidate, "targets", "samartomar--aih-catalog")))
+    selected = [...roster, "samartomar/aih-catalog"];
+  for (const repository of selected) {
     const directory = targetDirectory(repository);
     mkdirSync(join(output, "targets", directory), { mode: 0o700 });
     const files = Object.entries(targetLimits).map(([name, limit]) =>
@@ -100,7 +111,7 @@ export function retainFailureEvidence({ candidate, frozen, output, runId = null 
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(
       process.env.GITHUB_OUTPUT,
-      `root=true\n${index.targets.map((row, i) => `target_${i}=${row.files.some((file) => file.status === "retained")}`).join("\n")}\n`,
+      `root=true\n${[...roster, "samartomar/aih-catalog"].map((repository, i) => `target_${i}=${index.targets.some(row => row.repository === repository && row.files.some(file => file.status === "retained"))}`).join("\n")}\n`,
     );
   return index;
 }

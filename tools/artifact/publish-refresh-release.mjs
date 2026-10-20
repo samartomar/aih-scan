@@ -2,7 +2,7 @@
 // fill missing draft assets or accept equal bytes; it never replaces any asset.
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { object, parseJson, readRegular, sha256 } from "../refresh/contracts.mjs";
+import { object, parseJson, readRegular, sha256, validateManifest } from "../refresh/contracts.mjs";
 import { ghApi } from "./gh-api.mjs";
 import { measureDirectory } from "./refresh-publication.mjs";
 
@@ -71,9 +71,15 @@ export async function publishRelease({ directory, transport, custodyPath }) {
     inventory.schema !== "urn:aihq:scan:publication-inventory:1.0.0" ||
     inventory.batchId !== receipt.batchId ||
     !Array.isArray(inventory.targets) ||
-    inventory.targets.length !== 7
+    ![1, 7].includes(inventory.targets.length)
   )
     throw new Error("Durable release discovery batch differs");
+  if (inventory.targets.length === 1) {
+    const manifest = validateManifest(parseJson(readRegular(resolve(directory, "manifest.json"), 2097152), 2097152, true));
+    if (manifest.targets.length !== 1 || inventory.batchId !== manifest.batchId ||
+      inventory.targets[0].repository !== manifest.targets[0].repository)
+      throw new Error("Catalog publication differs from frozen capture");
+  }
   object(receipt, ["schema", "batchId", "expandedBytes", "assets"]);
   if (
     receipt.schema !== "urn:aihq:scan:publication-assets:1.0.0" ||

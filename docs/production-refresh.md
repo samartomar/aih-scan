@@ -10,6 +10,12 @@ approve their own initiated run. This does not establish independent human revie
 Each new invocation needs its own authorization and bounded budget.
 This operation does not allocate or publish an npm version.
 
+The separate [Catalog input-capture mode](catalog-capture.md) uses one immutable
+frozen inventory/material input through these same reviewed-head, candidate and
+protected signing stages. Its input Release precedes assessment and is not a
+qualified content candidate. Statements about seven sources below describe the
+original Git mode; capture mode retains one Catalog row and at most one signature.
+
 ## Freeze and execute
 
 Prepare the closed input described in [the producer contract](../tools/refresh/README.md).

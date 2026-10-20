@@ -3,7 +3,9 @@ import { closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs
 
 export const schemas = Object.freeze({
   input: "urn:aihq:scan:refresh-input:1.0.0",
+  captureInput: "urn:aihq:scan:catalog-capture-input:1.0.0",
   manifest: "urn:aihq:scan:refresh-manifest:1.0.0",
+  captureManifest: "urn:aihq:scan:catalog-capture-manifest:1.0.0",
   inventory: "urn:aihq:scan:refresh-inventory:1.0.0",
   candidate: "urn:aihq:scan:refresh-candidate:1.0.0",
 });
@@ -217,7 +219,7 @@ export function commit(value) {
   if (typeof value !== "string" || !/^[0-9a-f]{40}$/.test(value)) throw new Error("Invalid commit");
   return value;
 }
-function paths(value) {
+export function paths(value) {
   if (!Array.isArray(value) || value.length > 100000 || new Set(value).size !== value.length)
     throw new Error("Invalid paths");
   for (const path of value)
@@ -299,16 +301,23 @@ function limits(value) {
 }
 export function validateInput(value) {
   object(value, ["schema", "scannerSourceCommit", "runtime", "profile", "limits", "targets"]);
-  if (value.schema !== schemas.input || value.profile !== profile)
+  const capture = value.schema === schemas.captureInput;
+  if ((!capture && value.schema !== schemas.input) || value.profile !== profile)
     throw new Error("Unsupported input/profile");
   commit(value.scannerSourceCommit);
   validateRuntime(value.runtime);
   limits(value.limits);
-  if (!Array.isArray(value.targets) || value.targets.length !== roster.length)
+  const expectedRoster = capture ? ["samartomar/aih-catalog"] : roster;
+  if (!Array.isArray(value.targets) || value.targets.length !== expectedRoster.length)
     throw new Error("Exact roster required");
   value.targets.forEach((target, index) => {
-    object(target, ["repository", "ref", "selection", "trustLint"]);
-    if (target.repository !== roster[index]) throw new Error("Exact ordered roster required");
+    object(target, ["repository", "ref", "selection", "trustLint", ...(capture ? ["capture"] : [])]);
+    if (target.repository !== expectedRoster[index]) throw new Error("Exact ordered roster required");
+    if (capture) {
+      commit(target.ref);
+      validateCaptureSelector(target.capture);
+      if (target.selection.excludedPaths.length !== 0) throw new Error("Capture exclusions refused");
+    }
     if (
       typeof target.ref !== "string" ||
       (!/^[0-9a-f]{40}$/.test(target.ref) &&
@@ -340,8 +349,11 @@ export function validateManifest(value) {
     "unavailableCoverage",
     "targets",
   ]);
+  const capture = value.schema === schemas.captureManifest;
+  if (capture && canonicalBytes(value).length > 2097152) throw new Error("Frozen capture manifest exceeds bound");
+  const expectedRoster = capture ? ["samartomar/aih-catalog"] : roster;
   if (
-    value.schema !== schemas.manifest ||
+    (!capture && value.schema !== schemas.manifest) ||
     value.profile !== profile ||
     value.batchId !== batchId(value)
   )
@@ -366,7 +378,7 @@ export function validateManifest(value) {
   if (
     JSON.stringify(value.unavailableCoverage) !== JSON.stringify(unavailableCoverage) ||
     !Array.isArray(value.targets) ||
-    value.targets.length !== roster.length
+    value.targets.length !== expectedRoster.length
   )
     throw new Error("Manifest roster/coverage mismatch");
   value.targets.forEach((target, index) => {
@@ -377,13 +389,15 @@ export function validateManifest(value) {
       "commit",
       "selection",
       "detectors",
+      ...(capture ? ["capture"] : []),
     ]);
     if (
-      target.repository !== roster[index] ||
-      target.repositoryUrl !== `https://github.com/${roster[index]}.git`
+      target.repository !== expectedRoster[index] ||
+      target.repositoryUrl !== `https://github.com/${expectedRoster[index]}.git`
     )
       throw new Error("Manifest repository mismatch");
     commit(target.commit);
+    if (capture) validateFrozenCapture(target.capture, value.limits);
     if (/^[0-9a-f]{40}$/.test(target.reviewedRef) && target.reviewedRef !== target.commit)
       throw new Error("Pinned reviewed commit changed");
     selection(target.selection);
@@ -393,7 +407,7 @@ export function validateManifest(value) {
     if (!canonicalBytes(target.detectors).equals(canonicalBytes(expected)))
       throw new Error("Detector profile mismatch");
     const synthetic = {
-      schema: schemas.input,
+      schema: capture ? schemas.captureInput : schemas.input,
       scannerSourceCommit: value.scanner.sourceCommit,
       runtime: value.runtime,
       profile: value.profile,
@@ -403,6 +417,7 @@ export function validateManifest(value) {
         ref: t.reviewedRef,
         selection: t.selection,
         trustLint: t.detectors[1].configuration,
+        ...(capture ? { capture: captureSelector(t.capture) } : {}),
       })),
     };
     validateInput(synthetic);
@@ -410,3 +425,75 @@ export function validateManifest(value) {
   return value;
 }
 export const targetDirectory = (repository) => repository.replace("/", "--");
+
+export const captureCeiling = 64 * 1024 * 1024;
+export function descriptor(value) {
+  object(value, ["path", "sha256", "byteLength"]);
+  paths([value.path]);
+  // The data transport supports portable regular files only, including on Windows.
+  if (value.path.split("/").some(part => part.toLowerCase() === ".git" ||
+    /[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part)))
+    throw new Error("Nonportable capture path");
+  digest(value.sha256);
+  if (!Number.isSafeInteger(value.byteLength) || value.byteLength < 0 || value.byteLength > captureCeiling)
+    throw new Error("Invalid capture file length");
+  return value;
+}
+export function validateCaptureSelector(value) {
+  object(value, ["releaseId", "assetId", "sha256", "byteLength", "inventory"]);
+  for (const key of ["releaseId", "assetId"])
+    if (typeof value[key] !== "string" || !/^[1-9][0-9]{0,15}$/.test(value[key]) ||
+      !Number.isSafeInteger(Number(value[key]))) throw new Error("Invalid capture immutable ID");
+  digest(value.sha256);
+  if (!Number.isSafeInteger(value.byteLength) || value.byteLength < 1 || value.byteLength > captureCeiling)
+    throw new Error("Capture transport bound exceeded");
+  descriptor(value.inventory);
+  if (value.inventory.byteLength < 1 || value.inventory.byteLength > 16 * 1024 * 1024)
+    throw new Error("Inventory length bound exceeded");
+  return value;
+}
+export function captureSelector(value) {
+  const { files: _files, ...selector } = value;
+  return validateCaptureSelector(selector);
+}
+export function validateFrozenCapture(value, limits) {
+  object(value, ["releaseId", "assetId", "sha256", "byteLength", "inventory", "files"]);
+  captureSelector(value);
+  if (!Array.isArray(value.files) || value.files.length < 1 || value.files.length > limits.maxSourceEntries)
+    throw new Error("Capture file bound exceeded");
+  const seen = new Set(), directories = new Set(), spellings = new Map();
+  let total = 0, previous = "";
+  for (const file of value.files) {
+    descriptor(file);
+    if (file.path <= previous || seen.has(file.path.toLowerCase())) throw new Error("Ambiguous capture files");
+    previous = file.path;
+    seen.add(file.path.toLowerCase());
+    const components = file.path.split("/");
+    for (let i = 1; i <= components.length; i++) {
+      const path = components.slice(0, i).join("/"), key = path.toLowerCase();
+      if (spellings.has(key) && spellings.get(key) !== path) throw new Error("Case-ambiguous capture namespace");
+      spellings.set(key, path);
+    }
+    const pieces = file.path.split("/");
+    pieces.pop();
+    while (pieces.length) { directories.add(pieces.join("/").toLowerCase()); pieces.pop(); }
+    total += file.byteLength;
+  }
+  if ([...directories].some(path => seen.has(path)) || directories.size + seen.size > limits.maxSourceEntries ||
+    total > limits.maxSourceBytes || !value.files.some(file => canonicalBytes(file).equals(canonicalBytes(value.inventory))))
+    throw new Error("Capture closure or resource bound mismatch");
+  return value;
+}
+export function matchesTargetSource(source, target) {
+  if (!target.capture) return source.kind === "git" && source.repository === target.repositoryUrl && source.commit === target.commit;
+  if (source.kind !== "local") return false;
+  const expected = [...target.capture.files.map(file => ({kind: "file", ...file}))];
+  const directories = new Set();
+  for (const file of target.capture.files) {
+    const pieces = file.path.split("/"); pieces.pop();
+    while (pieces.length) { directories.add(pieces.join("/")); pieces.pop(); }
+  }
+  for (const path of directories) expected.push({kind: "directory", path});
+  expected.sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  return canonicalBytes(expected).equals(canonicalBytes(source.capture.entries));
+}
