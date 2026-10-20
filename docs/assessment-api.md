@@ -274,3 +274,86 @@ The operation performs no filesystem, process or network access. It does not
 authenticate the producer, and its result is not a review, approval or
 qualification decision. Authenticate the artifact separately with
 `authenticateArtifact` when producer identity matters.
+
+
+### Independent coverage queries
+
+`readContentCoverageBatch` is the finite alternative when a consumer needs many
+independent descriptor groups over one report. Each group's descriptors remain a
+conjunction. The function snapshots the query data and all read metadata/report
+before its first asynchronous yield, validates the owned report and its Scan ID
+once, then shares capture, observation-input and covered-path indexes within that
+call. It keeps no persistent handle or global cache. `readContentCoverage` retains
+its signature, result shape and fresh validation on every call.
+
+```js
+import { readContentCoverageBatch } from "@aihq/scan/read";
+
+const batch = await readContentCoverageBatch({
+  read,
+  queries: [{ descriptors: memberA }, { descriptors: memberB }],
+});
+if (batch.status === "complete") {
+  const first = batch.results[0];
+  if (first.status === "matched") {
+    const { observationIndexes, ...rest } = first;
+    const singletonEquivalent = {
+      ...rest,
+      observations: observationIndexes.map(index => batch.observations[index]),
+    };
+  }
+}
+```
+
+The closed envelope has exactly `read` and `queries`; each closed query has exactly
+`descriptors`. `results[i]` corresponds to `queries[i]`, including duplicate queries
+and invalid rows. Matched rows have the singleton fields with `observationIndexes`
+in place of `observations`. Indexes refer to the shared `observations` table, which
+contains each used observation once, in first-use order. Observation ordering
+within each row matches the singleton. All findings, supporting annex descriptors,
+origins, prior Scan IDs and detector coverage remain intact, including findings
+outside the query paths. Every complete response is deeply frozen at runtime;
+clone data before editing it. Input mutation, output mutation and later calls
+cannot change another row's answer.
+
+Malformed envelopes, non-JSON/accessor/sparse/cyclic query data, and aggregate
+resource overruns return `{ status: "invalid", diagnostics }` for the whole call.
+No partial results or truncated success are returned. Ordinary invalid query shapes
+or descriptors instead produce per-query `invalid` rows. Other valid rows still
+run. Descriptor errors take precedence over read unavailability, as in the
+singleton. A valid query over an invalid or unsupported read produces the same
+`unavailable` reason/diagnostics as the singleton. Unsupported versions remain
+unavailable. Supported read results are closed and revalidated, including semantic
+identities and annex references; claimed authenticity and substituted Scan IDs
+grant nothing. No caller `trusted` flag or frozen object bypasses admission.
+
+The exported frozen `coverageBatchLimits` defines these whole-call bounds:
+
+| Property | Limit |
+| --- | ---: |
+| `maxQueries` | 4,096 nonempty ordered queries |
+| `maxDescriptorReferences` | 50,000 cumulative descriptor array entries, including duplicates/invalid queries |
+| `maxRequestBytes` | 16 MiB of JSON-encoded `queries` UTF-8 bytes |
+| `maxRequestDepth` | 8 nested edges from the `queries` array |
+| `maxRequestNodes` | 300,000 visited values, counting repeated references separately |
+| `maxClassificationWork` | 10,000,000 conservative units: (descriptor references + query count) × (detector results + observations) |
+| `maxObservationAssociations` | 100,000 total matched-row observation indexes |
+| `maxResponseBytes` | 32 MiB of JSON-encoded complete response UTF-8 bytes |
+
+Every query still accepts up to `maxContentDescriptors` (10,000). Query shape,
+aggregate reference/byte/depth/node bounds are checked before asynchronous report
+admission. The work bound is checked after admission/indexing, before classification;
+association/output bounds are checked incrementally before retaining each row or
+shared table entry. Diagnostics use `resource-limit` for bounds and `invalid-input`
+for malformed input. The report retains its existing independent report bounds.
+Shared tables prevent full observation payload amplification; the association,
+work and response bounds also cover adversarial repeated-path and detector-gap
+amplification. These limits establish finite work, not a particular machine's
+qualification duration. Real consumer capacity requires measured installed tests.
+
+Batch coverage has the same exact file/file-link matching, first-failing-reason
+counts and detector gaps as the singleton. Directories never match file content.
+It performs no host access, authentication or qualification. Results remain
+`authenticity: "unchecked"`; authenticate artifacts and apply inventory/scope and
+qualification checks independently. Report/artifact/signature/Scan ID formats do
+not change.

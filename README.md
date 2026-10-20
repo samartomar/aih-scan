@@ -36,6 +36,10 @@ unchanged report bytes. `attachAttestation` checks bindings; callers separately
 authenticate against their selected keys or publisher policies. Scanning, signing
 and publication are separate explicit operations.
 
+For many independent content queries, `readContentCoverageBatch` validates one
+report snapshot and returns bounded rows with a shared observation table; see
+[independent coverage queries](docs/assessment-api.md#independent-coverage-queries).
+
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
 [summary and latest matching selection](docs/summary-selection.md),
 [maintainer refresh](docs/production-refresh.md) and the
