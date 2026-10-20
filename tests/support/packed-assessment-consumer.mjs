@@ -275,7 +275,9 @@ assert.equal(portableResult.authenticity, "unchecked");
 context.descriptorJson = JSON.stringify([readme]);
 const portableDescriptors = runInContext("JSON.parse(descriptorJson)", context);
 const portableCoverage = await portableRead.namespace.readContentCoverage({ read: portableResult, descriptors: portableDescriptors });
-const portableBatchCoverage = await portableRead.namespace.readContentCoverageBatch({ read: portableResult, queries: [{ descriptors: portableDescriptors }] });
+context.portableReadResult = portableResult;
+const portableBatchInput = runInContext("({ read: portableReadResult, queries: [{ descriptors: JSON.parse(descriptorJson) }] })", context);
+const portableBatchCoverage = await portableRead.namespace.readContentCoverageBatch(portableBatchInput);
 assert.equal(portableBatchCoverage.status, "complete");
 assert.equal(portableBatchCoverage.results[0].status, "matched");
 
