@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createContext, runInContext, SourceTextModule } from "node:vm";
 import { contractSupport, entrySupport } from "@aihq/scan/contracts";
 import * as readApi from "@aihq/scan/read";
-import { maxContentDescriptors, readArtifact, readContentCoverage, readReport } from "@aihq/scan/read";
+import { coverageBatchLimits, maxContentDescriptors, readArtifact, readContentCoverage, readContentCoverageBatch, readReport } from "@aihq/scan/read";
 import { listDetectorCapabilitiesV1 } from "@aihq/scan";
 import { exerciseSummarySelection } from "./summary-selection-cases.mjs";
 import {
@@ -136,6 +136,23 @@ assert.equal(matchedCoverage.observations[0].detector.detectorId, "detector.aih-
 assert.deepEqual(matchedCoverage.observations[0].coverage.coveredPaths, ["README.md"]);
 assert(matchedCoverage.observations[0].annexes.length > 0);
 assert.deepEqual(matchedCoverage.detectorsWithoutCoverage, ["detector.unavailable"]);
+// The installed public seam answers independent queries without repeating payloads.
+const batchCoverage = await readContentCoverageBatch({ read: preparedRead, queries: [
+  { descriptors: [readme] },
+  { descriptors: [{ ...readme, sha256: "0".repeat(64) }] },
+  { descriptors: [readme] },
+  { descriptors: [] },
+] });
+assert.equal(batchCoverage.status, "complete");
+assert.deepEqual(batchCoverage.results.map(row => row.status), ["matched", "mismatched", "matched", "invalid"]);
+assert.equal(batchCoverage.observations.length, matchedCoverage.observations.length);
+for (const at of [0, 2]) {
+  const { observationIndexes, ...row } = batchCoverage.results[at];
+  assert.deepEqual({ ...row, observations: observationIndexes.map(index => batchCoverage.observations[index]) }, matchedCoverage);
+}
+assert(Object.isFrozen(batchCoverage.observations[0].input.targetPaths));
+assert.equal(coverageBatchLimits.maxQueries, 4096);
+assert.equal((await readContentCoverageBatch({ read: preparedRead, queries: [], trusted: true })).status, "invalid");
 const mismatchedCoverage = await readContentCoverage({ read: preparedRead, descriptors: [{ ...readme, sha256: "0".repeat(64) }] });
 assert.equal(mismatchedCoverage.status, "mismatched");
 assert.deepEqual(mismatchedCoverage.unmatchedPaths, ["README.md"]);
@@ -258,6 +275,12 @@ assert.equal(portableResult.authenticity, "unchecked");
 context.descriptorJson = JSON.stringify([readme]);
 const portableDescriptors = runInContext("JSON.parse(descriptorJson)", context);
 const portableCoverage = await portableRead.namespace.readContentCoverage({ read: portableResult, descriptors: portableDescriptors });
+context.portableReadResult = portableResult;
+const portableBatchInput = runInContext("({ read: portableReadResult, queries: [{ descriptors: JSON.parse(descriptorJson) }] })", context);
+const portableBatchCoverage = await portableRead.namespace.readContentCoverageBatch(portableBatchInput);
+assert.equal(portableBatchCoverage.status, "complete");
+assert.equal(portableBatchCoverage.results[0].status, "matched");
+
 assert.equal(portableCoverage.status, "matched");
 assert.equal(portableCoverage.observations.length, 1);
 context.evidenceBytes = new Uint8Array(signed.bytes);

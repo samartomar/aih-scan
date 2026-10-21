@@ -240,3 +240,26 @@ export type ReadContentCoverageResult =
       diagnostics: Diagnostic[];
     }
   | { status: "invalid"; diagnostics: Diagnostic[] };
+
+/** A finite collection of independent conjunctive descriptor queries. */
+export interface ReadContentCoverageBatchInput {
+  read: ReadReportResult | ReadArtifactResult;
+  queries: { descriptors: ContentDescriptor[] }[];
+}
+type ImmutableCoverageValue<T> = T extends object
+  ? { readonly [Key in keyof T]: ImmutableCoverageValue<T[Key]> }
+  : T;
+export type ContentCoverageBatchRow = ImmutableCoverageValue<
+  | (Omit<Extract<ReadContentCoverageResult, { status: "matched" }>, "observations"> & {
+      observationIndexes: number[];
+    })
+  | Exclude<ReadContentCoverageResult, { status: "matched" }>
+>;
+/** Complete results are deeply frozen at runtime, including the shared table. */
+export type ReadContentCoverageBatchResult =
+  | ImmutableCoverageValue<{
+      status: "complete";
+      observations: ContentCoverageObservation[];
+      results: ContentCoverageBatchRow[];
+    }>
+  | { status: "invalid"; diagnostics: Diagnostic[] };
