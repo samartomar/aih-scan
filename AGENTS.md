@@ -48,3 +48,19 @@ private maintainer instructions travel through an explicit private handoff.
 
 Local work does not authorize pushes, tracker writes, PRs, merges, signing, or
 publication. Carry any explicit authorization through its agreed scope.
+
+## Agent skills
+
+Use the installed Matt Pocock engineering skills and aih-extensions within this repository's existing rules. Keep the skills in their managed user installation.
+
+### Issue tracker
+
+GitHub Issues on `samartomar/aih-scan`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Preserve accepted label mappings and existing categories. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+One product vocabulary with the existing decision authority. See `docs/agents/domain.md`.
