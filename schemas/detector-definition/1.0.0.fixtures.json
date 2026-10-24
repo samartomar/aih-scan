@@ -1,0 +1,45 @@
+{
+  "contractId": "urn:aihq:scan:detector-definition:1.0.0",
+  "contractVersion": "1.0.0",
+  "provenance": {
+    "name": "Scan supplied Semgrep definition and exact example rules",
+    "repository": "https://github.com/samartomar/aih-scan",
+    "revision": "b8d668fb76c95755d73c2a8245b56852189dee45",
+    "sourcePath": "examples/detector-definitions/definition.json"
+  },
+  "cases": [
+    {
+      "name": "disallow-eval",
+      "expectation": "accept",
+      "code": null,
+      "value": {
+        "schema": "urn:aihq:scan:detector-definition:1.0.0",
+        "detectorId": "organization.disallow-eval",
+        "version": "1",
+        "adapter": "semgrep-sarif-v1",
+        "profileId": "host-process-uv-v1",
+        "rules": {
+          "sha256": "8b280803a27704804257d182d9d8d3194d068c95af916c42831a584614a15bf5",
+          "byteLength": 171
+        }
+      }
+    },
+    {
+      "name": "disallow-eval-invalid",
+      "expectation": "refuse",
+      "code": "invalid-input",
+      "value": {
+        "schema": "urn:aihq:scan:detector-definition:1.0.0",
+        "detectorId": "organization.disallow-eval",
+        "version": "1",
+        "adapter": "arbitrary-command",
+        "profileId": "host-process-uv-v1",
+        "rules": {
+          "sha256": "8b280803a27704804257d182d9d8d3194d068c95af916c42831a584614a15bf5",
+          "byteLength": 171
+        }
+      }
+    }
+  ],
+  "rulesBase64": "cnVsZXM6CiAgLSBpZDogb3JnYW5pemF0aW9uLmRpc2FsbG93LWV2YWwKICAgIGxhbmd1YWdlczogW2phdmFzY3JpcHQsIHR5cGVzY3JpcHRdCiAgICBtZXNzYWdlOiBSZXZpZXcgZHluYW1pYyBjb2RlIGV4ZWN1dGlvbi4KICAgIHNldmVyaXR5OiBXQVJOSU5HCiAgICBwYXR0ZXJuOiBldmFsKC4uLikK"
+}

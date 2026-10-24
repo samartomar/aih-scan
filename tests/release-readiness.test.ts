@@ -1014,6 +1014,7 @@ describe("@aihq/scan release boundary (#12)", () => {
         "dist",
         "schemas",
         "docs/DETECTOR-DEFINITIONS.md",
+        "docs/contract-fixtures.md",
         "examples/detector-definitions",
         "tools/baseline-analyzers",
         "tools/verify-core-contract-lock-v2.mjs",

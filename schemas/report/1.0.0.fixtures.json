@@ -1,0 +1,624 @@
+{
+  "contractId": "urn:aihq:scan:report:1.0.0",
+  "contractVersion": "1.0.0",
+  "provenance": {
+    "name": "grill-me stress bundle, original and changed-bytes variant",
+    "repository": "https://github.com/mattpocock/skills",
+    "revision": "d81f3a183412e71a5b1e84ca21bc1a35eea03a60",
+    "capturedAt": "2026-10-23T08:24:21.190Z",
+    "materials": [
+      {
+        "path": "SKILL.md",
+        "sourcePath": "skills/productivity/grill-me/SKILL.md",
+        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637",
+        "byteLength": 157
+      },
+      {
+        "path": "agents/openai.yaml",
+        "sourcePath": "skills/productivity/grill-me/agents/openai.yaml",
+        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b",
+        "byteLength": 137
+      },
+      {
+        "path": "LICENSE",
+        "sourcePath": "LICENSE",
+        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5",
+        "byteLength": 1068
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "grill-me-report",
+      "expectation": "accept",
+      "code": null,
+      "value": {
+        "annexes": [
+          {
+            "byteLength": 974,
+            "id": "annex.2bca2b4ce23cf929d727e5f6feb18baad3ceb8fbd2b91cecbb27923be4084205",
+            "mediaType": "application/sarif+json",
+            "sha256": "e891c871ee22db5f39906a581725c0ff62174ade9466d6e3e7717be20f0c0559"
+          },
+          {
+            "byteLength": 472,
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "mediaType": "application/vnd.aih.baseline-native+json",
+            "sha256": "215021a8665db1cbcc63c5390bd14fd0e0d215f5ae2b855078468d29c04e897e"
+          }
+        ],
+        "completion": "complete",
+        "createdAt": "2026-10-23T08:24:21.190Z",
+        "diagnostics": [],
+        "effectiveLimits": {
+          "detectorTimeoutMs": 600000,
+          "maxAnnexBytes": 16777216,
+          "maxArtifactBytes": 100663296,
+          "maxDecodedArtifactBytes": 67108864,
+          "maxReportBytes": 16777216,
+          "maxRequestBytes": 2097152,
+          "maxSourceBytes": 268435456,
+          "maxSourceEntries": 100000,
+          "maxStatementBytes": 131072
+        },
+        "producer": {
+          "name": "@aihq/scan",
+          "version": "0.5.0"
+        },
+        "requestedDetectors": [
+          {
+            "configuration": {},
+            "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "detectorId": "detector.aih-native",
+            "profileId": "in-process-native-v1"
+          },
+          {
+            "configuration": {
+              "internalScopes": [],
+              "mcpConfigPaths": []
+            },
+            "configurationSha256": "3196959232854b125e6fb29e14897fb53617858cb176f532f69a4c284122d2cf",
+            "detectorId": "detector.aih-trust-lint",
+            "profileId": "in-process-trust-lint-v1"
+          }
+        ],
+        "results": [
+          {
+            "coverage": {
+              "complete": true,
+              "coveredPaths": [
+                "LICENSE",
+                "SKILL.md",
+                "agents/openai.yaml"
+              ],
+              "excludedPaths": [],
+              "uncoveredPaths": []
+            },
+            "detectorId": "detector.aih-native",
+            "diagnostics": [],
+            "observations": [
+              {
+                "body": {
+                  "annexIds": [
+                    "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb"
+                  ],
+                  "completedAt": "2026-10-23T08:24:21.037Z",
+                  "coverage": {
+                    "coveredPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "findings": [],
+                  "format": "aih-observation-v1",
+                  "gaps": [
+                    {
+                      "detail": "The aih-native output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.",
+                      "reason": "sarif-not-interpreted"
+                    },
+                    {
+                      "detail": "This run's annex bytes are the analyzer's own output. Scan binds them by digest and does not parse them, so no message or location is reported and the empty list is not a claim that nothing was found.",
+                      "reason": "finding-message-and-location-not-read-from-annex"
+                    },
+                    {
+                      "detail": "A single-analyzer observation declares no occurrence facts, so it declares no severity either. Absent severity is reported as absent, never defaulted.",
+                      "reason": "severity-not-declared-by-attestation"
+                    },
+                    {
+                      "detail": "These findings are evidence only. They grant no qualification, approval, installation, observation or effect authority.",
+                      "reason": "no-effect-or-qualification-authority"
+                    }
+                  ],
+                  "input": {
+                    "adapterSha256": "90bb43dff2f77dd74a34fda79a1d80864dfeeb6d566c441f313235a46b8a7b03",
+                    "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "detectorId": "detector.aih-native",
+                    "detectorVersion": "native.014fbd614a5a",
+                    "entries": [
+                      {
+                        "byteLength": 1068,
+                        "kind": "file",
+                        "path": "LICENSE",
+                        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+                      },
+                      {
+                        "byteLength": 157,
+                        "kind": "file",
+                        "path": "SKILL.md",
+                        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+                      },
+                      {
+                        "kind": "directory",
+                        "path": "agents"
+                      },
+                      {
+                        "byteLength": 137,
+                        "kind": "file",
+                        "path": "agents/openai.yaml",
+                        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+                      }
+                    ],
+                    "platform": {
+                      "architecture": "x64",
+                      "os": "win32",
+                      "relevantFactsSha256": "bfab9a27d4d2c9fb20e2439e9b53958776a583b8cabf87c703a7ece882039ed3"
+                    },
+                    "profileId": "in-process-native-v1",
+                    "profileSha256": "dafe959975fb633398ba013a669d118b7de692b147cc4257cb40ec13b1029b2e",
+                    "rulesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                    "scopeKind": "source-tree",
+                    "targetPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "producer": {
+                    "name": "@aihq/scan",
+                    "version": "0.5.0"
+                  },
+                  "startedAt": "2026-10-23T08:24:21.023Z"
+                },
+                "observationId": "observation:sha256:e02bcae7f70f3437135ba9f72a485684bdd37515fc9853ae7733d786b046fbaa",
+                "origin": "fresh"
+              }
+            ],
+            "outcome": "succeeded"
+          },
+          {
+            "coverage": {
+              "complete": true,
+              "coveredPaths": [
+                "LICENSE",
+                "SKILL.md",
+                "agents/openai.yaml"
+              ],
+              "excludedPaths": [],
+              "uncoveredPaths": []
+            },
+            "detectorId": "detector.aih-trust-lint",
+            "diagnostics": [],
+            "observations": [
+              {
+                "body": {
+                  "annexIds": [
+                    "annex.2bca2b4ce23cf929d727e5f6feb18baad3ceb8fbd2b91cecbb27923be4084205"
+                  ],
+                  "completedAt": "2026-10-23T08:24:21.170Z",
+                  "coverage": {
+                    "coveredPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "findings": [],
+                  "format": "aih-observation-v1",
+                  "gaps": [
+                    {
+                      "detail": "Only the SARIF rule id, level, message and first location are read. Vendor severities, categories and rule metadata stay in the digest-bound SARIF annex.",
+                      "reason": "vendor-severity-not-projected"
+                    },
+                    {
+                      "detail": "The analyzer's SARIF declared no results for this snapshot. That is the analyzer's own report under its own rules, not a statement that the subject is safe, and it grants no qualification, approval, installation, observation or effect authority.",
+                      "reason": "no-effect-or-qualification-authority"
+                    }
+                  ],
+                  "input": {
+                    "adapterSha256": "cd06bd1edfd26c44ba41d969f1178c8d80fc20745cf89a0b7d09d1b1b958b0e2",
+                    "configurationSha256": "3196959232854b125e6fb29e14897fb53617858cb176f532f69a4c284122d2cf",
+                    "detectorId": "detector.aih-trust-lint",
+                    "detectorVersion": "1.0.0",
+                    "entries": [
+                      {
+                        "byteLength": 1068,
+                        "kind": "file",
+                        "path": "LICENSE",
+                        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+                      },
+                      {
+                        "byteLength": 157,
+                        "kind": "file",
+                        "path": "SKILL.md",
+                        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+                      },
+                      {
+                        "kind": "directory",
+                        "path": "agents"
+                      },
+                      {
+                        "byteLength": 137,
+                        "kind": "file",
+                        "path": "agents/openai.yaml",
+                        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+                      }
+                    ],
+                    "platform": {
+                      "architecture": "x64",
+                      "os": "win32",
+                      "relevantFactsSha256": "bfab9a27d4d2c9fb20e2439e9b53958776a583b8cabf87c703a7ece882039ed3"
+                    },
+                    "profileId": "in-process-trust-lint-v1",
+                    "profileSha256": "18fa8a51fe40736c1b88c7d7d78698947f01fb13fac372a8f8bf0c0c0b737bee",
+                    "rulesSha256": "dfe786ea5f6978acf51e2689f2f65f67c9a6691849fda67691a6886921845eba",
+                    "scopeKind": "source-tree",
+                    "targetPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "producer": {
+                    "name": "@aihq/scan",
+                    "version": "0.5.0"
+                  },
+                  "startedAt": "2026-10-23T08:24:21.139Z"
+                },
+                "observationId": "observation:sha256:fff6abbea86b15c43f97cbd8b7152e8fc373943b80cf671fc315fb34707fc2a2",
+                "origin": "fresh"
+              }
+            ],
+            "outcome": "succeeded"
+          }
+        ],
+        "schema": "urn:aihq:scan:report:1.0.0",
+        "selection": {
+          "excludedPaths": [],
+          "paths": [
+            "LICENSE",
+            "SKILL.md",
+            "agents/openai.yaml"
+          ]
+        },
+        "source": {
+          "capture": {
+            "captureSha256": "c596e16999afe81fa603b9ab0b66574d6fa12de1ee1dcf1be026d96faf0b61a6",
+            "entries": [
+              {
+                "byteLength": 1068,
+                "kind": "file",
+                "path": "LICENSE",
+                "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+              },
+              {
+                "byteLength": 157,
+                "kind": "file",
+                "path": "SKILL.md",
+                "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+              },
+              {
+                "kind": "directory",
+                "path": "agents"
+              },
+              {
+                "byteLength": 137,
+                "kind": "file",
+                "path": "agents/openai.yaml",
+                "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+              }
+            ],
+            "profile": "aih-source-capture-1"
+          },
+          "kind": "local"
+        }
+      }
+    },
+    {
+      "name": "grill-me-report-invalid",
+      "expectation": "refuse",
+      "code": "invalid-input",
+      "value": {
+        "annexes": [
+          {
+            "byteLength": 974,
+            "id": "annex.2bca2b4ce23cf929d727e5f6feb18baad3ceb8fbd2b91cecbb27923be4084205",
+            "mediaType": "application/sarif+json",
+            "sha256": "e891c871ee22db5f39906a581725c0ff62174ade9466d6e3e7717be20f0c0559"
+          },
+          {
+            "byteLength": 472,
+            "id": "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb",
+            "mediaType": "application/vnd.aih.baseline-native+json",
+            "sha256": "215021a8665db1cbcc63c5390bd14fd0e0d215f5ae2b855078468d29c04e897e"
+          }
+        ],
+        "completion": "approved",
+        "createdAt": "2026-10-23T08:24:21.190Z",
+        "diagnostics": [],
+        "effectiveLimits": {
+          "detectorTimeoutMs": 600000,
+          "maxAnnexBytes": 16777216,
+          "maxArtifactBytes": 100663296,
+          "maxDecodedArtifactBytes": 67108864,
+          "maxReportBytes": 16777216,
+          "maxRequestBytes": 2097152,
+          "maxSourceBytes": 268435456,
+          "maxSourceEntries": 100000,
+          "maxStatementBytes": 131072
+        },
+        "producer": {
+          "name": "@aihq/scan",
+          "version": "0.5.0"
+        },
+        "requestedDetectors": [
+          {
+            "configuration": {},
+            "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "detectorId": "detector.aih-native",
+            "profileId": "in-process-native-v1"
+          },
+          {
+            "configuration": {
+              "internalScopes": [],
+              "mcpConfigPaths": []
+            },
+            "configurationSha256": "3196959232854b125e6fb29e14897fb53617858cb176f532f69a4c284122d2cf",
+            "detectorId": "detector.aih-trust-lint",
+            "profileId": "in-process-trust-lint-v1"
+          }
+        ],
+        "results": [
+          {
+            "coverage": {
+              "complete": true,
+              "coveredPaths": [
+                "LICENSE",
+                "SKILL.md",
+                "agents/openai.yaml"
+              ],
+              "excludedPaths": [],
+              "uncoveredPaths": []
+            },
+            "detectorId": "detector.aih-native",
+            "diagnostics": [],
+            "observations": [
+              {
+                "body": {
+                  "annexIds": [
+                    "annex.549d59b3d5f5a1d7ec7b2f23c3d9b9b57c27da72358ed94c7a57ad0bf342a6bb"
+                  ],
+                  "completedAt": "2026-10-23T08:24:21.037Z",
+                  "coverage": {
+                    "coveredPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "findings": [],
+                  "format": "aih-observation-v1",
+                  "gaps": [
+                    {
+                      "detail": "The aih-native output is a source identity observation, not a findings report, so no rule, severity, message or location is derived from it.",
+                      "reason": "sarif-not-interpreted"
+                    },
+                    {
+                      "detail": "This run's annex bytes are the analyzer's own output. Scan binds them by digest and does not parse them, so no message or location is reported and the empty list is not a claim that nothing was found.",
+                      "reason": "finding-message-and-location-not-read-from-annex"
+                    },
+                    {
+                      "detail": "A single-analyzer observation declares no occurrence facts, so it declares no severity either. Absent severity is reported as absent, never defaulted.",
+                      "reason": "severity-not-declared-by-attestation"
+                    },
+                    {
+                      "detail": "These findings are evidence only. They grant no qualification, approval, installation, observation or effect authority.",
+                      "reason": "no-effect-or-qualification-authority"
+                    }
+                  ],
+                  "input": {
+                    "adapterSha256": "90bb43dff2f77dd74a34fda79a1d80864dfeeb6d566c441f313235a46b8a7b03",
+                    "configurationSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "detectorId": "detector.aih-native",
+                    "detectorVersion": "native.014fbd614a5a",
+                    "entries": [
+                      {
+                        "byteLength": 1068,
+                        "kind": "file",
+                        "path": "LICENSE",
+                        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+                      },
+                      {
+                        "byteLength": 157,
+                        "kind": "file",
+                        "path": "SKILL.md",
+                        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+                      },
+                      {
+                        "kind": "directory",
+                        "path": "agents"
+                      },
+                      {
+                        "byteLength": 137,
+                        "kind": "file",
+                        "path": "agents/openai.yaml",
+                        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+                      }
+                    ],
+                    "platform": {
+                      "architecture": "x64",
+                      "os": "win32",
+                      "relevantFactsSha256": "bfab9a27d4d2c9fb20e2439e9b53958776a583b8cabf87c703a7ece882039ed3"
+                    },
+                    "profileId": "in-process-native-v1",
+                    "profileSha256": "dafe959975fb633398ba013a669d118b7de692b147cc4257cb40ec13b1029b2e",
+                    "rulesSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                    "scopeKind": "source-tree",
+                    "targetPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "producer": {
+                    "name": "@aihq/scan",
+                    "version": "0.5.0"
+                  },
+                  "startedAt": "2026-10-23T08:24:21.023Z"
+                },
+                "observationId": "observation:sha256:e02bcae7f70f3437135ba9f72a485684bdd37515fc9853ae7733d786b046fbaa",
+                "origin": "fresh"
+              }
+            ],
+            "outcome": "succeeded"
+          },
+          {
+            "coverage": {
+              "complete": true,
+              "coveredPaths": [
+                "LICENSE",
+                "SKILL.md",
+                "agents/openai.yaml"
+              ],
+              "excludedPaths": [],
+              "uncoveredPaths": []
+            },
+            "detectorId": "detector.aih-trust-lint",
+            "diagnostics": [],
+            "observations": [
+              {
+                "body": {
+                  "annexIds": [
+                    "annex.2bca2b4ce23cf929d727e5f6feb18baad3ceb8fbd2b91cecbb27923be4084205"
+                  ],
+                  "completedAt": "2026-10-23T08:24:21.170Z",
+                  "coverage": {
+                    "coveredPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "findings": [],
+                  "format": "aih-observation-v1",
+                  "gaps": [
+                    {
+                      "detail": "Only the SARIF rule id, level, message and first location are read. Vendor severities, categories and rule metadata stay in the digest-bound SARIF annex.",
+                      "reason": "vendor-severity-not-projected"
+                    },
+                    {
+                      "detail": "The analyzer's SARIF declared no results for this snapshot. That is the analyzer's own report under its own rules, not a statement that the subject is safe, and it grants no qualification, approval, installation, observation or effect authority.",
+                      "reason": "no-effect-or-qualification-authority"
+                    }
+                  ],
+                  "input": {
+                    "adapterSha256": "cd06bd1edfd26c44ba41d969f1178c8d80fc20745cf89a0b7d09d1b1b958b0e2",
+                    "configurationSha256": "3196959232854b125e6fb29e14897fb53617858cb176f532f69a4c284122d2cf",
+                    "detectorId": "detector.aih-trust-lint",
+                    "detectorVersion": "1.0.0",
+                    "entries": [
+                      {
+                        "byteLength": 1068,
+                        "kind": "file",
+                        "path": "LICENSE",
+                        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+                      },
+                      {
+                        "byteLength": 157,
+                        "kind": "file",
+                        "path": "SKILL.md",
+                        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+                      },
+                      {
+                        "kind": "directory",
+                        "path": "agents"
+                      },
+                      {
+                        "byteLength": 137,
+                        "kind": "file",
+                        "path": "agents/openai.yaml",
+                        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+                      }
+                    ],
+                    "platform": {
+                      "architecture": "x64",
+                      "os": "win32",
+                      "relevantFactsSha256": "bfab9a27d4d2c9fb20e2439e9b53958776a583b8cabf87c703a7ece882039ed3"
+                    },
+                    "profileId": "in-process-trust-lint-v1",
+                    "profileSha256": "18fa8a51fe40736c1b88c7d7d78698947f01fb13fac372a8f8bf0c0c0b737bee",
+                    "rulesSha256": "dfe786ea5f6978acf51e2689f2f65f67c9a6691849fda67691a6886921845eba",
+                    "scopeKind": "source-tree",
+                    "targetPaths": [
+                      "LICENSE",
+                      "SKILL.md",
+                      "agents/openai.yaml"
+                    ]
+                  },
+                  "producer": {
+                    "name": "@aihq/scan",
+                    "version": "0.5.0"
+                  },
+                  "startedAt": "2026-10-23T08:24:21.139Z"
+                },
+                "observationId": "observation:sha256:fff6abbea86b15c43f97cbd8b7152e8fc373943b80cf671fc315fb34707fc2a2",
+                "origin": "fresh"
+              }
+            ],
+            "outcome": "succeeded"
+          }
+        ],
+        "schema": "urn:aihq:scan:report:1.0.0",
+        "selection": {
+          "excludedPaths": [],
+          "paths": [
+            "LICENSE",
+            "SKILL.md",
+            "agents/openai.yaml"
+          ]
+        },
+        "source": {
+          "capture": {
+            "captureSha256": "c596e16999afe81fa603b9ab0b66574d6fa12de1ee1dcf1be026d96faf0b61a6",
+            "entries": [
+              {
+                "byteLength": 1068,
+                "kind": "file",
+                "path": "LICENSE",
+                "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+              },
+              {
+                "byteLength": 157,
+                "kind": "file",
+                "path": "SKILL.md",
+                "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+              },
+              {
+                "kind": "directory",
+                "path": "agents"
+              },
+              {
+                "byteLength": 137,
+                "kind": "file",
+                "path": "agents/openai.yaml",
+                "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+              }
+            ],
+            "profile": "aih-source-capture-1"
+          },
+          "kind": "local"
+        }
+      }
+    }
+  ]
+}

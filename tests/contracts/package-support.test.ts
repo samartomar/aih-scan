@@ -75,6 +75,34 @@ function validate(node: Schema, value: unknown, path = "$"): string[] {
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 
 describe("contractSupport", () => {
+  it("publishes schema-adjacent golden fixtures for exactly the supported contracts", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    );
+    const fixtureExports = contractSupport.contracts.map(({ schemaExport }) =>
+      schemaExport.replace("@aihq/scan/", "./").replace("/1.0.0.json", "/1.0.0.fixtures.json"),
+    );
+    expect(
+      Object.keys(manifest.exports)
+        .filter((key) => key.endsWith(".fixtures.json"))
+        .sort(),
+    ).toEqual(fixtureExports.sort());
+    for (const specifier of fixtureExports) {
+      expect(manifest.exports[specifier]).toBe(specifier);
+      const fixture = JSON.parse(
+        readFileSync(new URL(`../../${specifier}`, import.meta.url), "utf8"),
+      );
+      expect(fixture.contractVersion).toBe("1.0.0");
+      expect(contractSupport.contracts.some(({ id }) => id === fixture.contractId)).toBe(true);
+      expect(
+        fixture.cases.some((entry: { expectation: string }) => entry.expectation === "accept"),
+      ).toBe(true);
+      expect(
+        fixture.cases.some((entry: { expectation: string }) => entry.expectation === "refuse"),
+      ).toBe(true);
+    }
+  });
+
   it("is valid against the package-support 1.0.0 schema", () => {
     expect(schema.$id).toBe(contractSupport.schema);
     expect(validate(schema, plain(contractSupport))).toEqual([]);

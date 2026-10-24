@@ -611,6 +611,7 @@ describe("published V2 package installation", () => {
     temporaryDirectories.push(directory);
     const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
       scripts?: { prepack?: unknown };
+      devDependencies: { ajv: string };
     };
     expect(manifest.scripts?.prepack).toBe("npm run build");
     const { tarball, paths } = packagePaths(directory);
@@ -623,6 +624,7 @@ describe("published V2 package installation", () => {
     expect(paths).toContain("README.md");
     expect(paths).toContain("schemas/detector-definition/1.0.0.json");
     expect(paths).toContain("docs/DETECTOR-DEFINITIONS.md");
+    expect(paths).toContain("docs/contract-fixtures.md");
     expect(paths).toContain("examples/detector-definitions/definition.json");
     expect(paths).not.toContain("src/index.ts");
     expect(
@@ -661,6 +663,7 @@ describe("published V2 package installation", () => {
         "--userconfig",
         emptyUserconfig,
         tarball,
+        `ajv@${manifest.devDependencies.ajv}`,
       ],
       directory,
       isolatedNpmInstallEnvironment(emptyUserconfig, inheritedEnvironment),
@@ -674,6 +677,10 @@ describe("published V2 package installation", () => {
     writeFileSync(
       join(directory, "summary-selection-cases.mjs"),
       readFileSync(join(root, "tests/support/summary-selection-cases.mjs")),
+    );
+    writeFileSync(
+      join(directory, "golden-fixture-cases.mjs"),
+      readFileSync(join(root, "tests/support/golden-fixture-cases.mjs")),
     );
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
@@ -692,6 +699,17 @@ describe("published V2 package installation", () => {
       materialChange: "modified",
     });
     expect(assessmentConsumer.summarySelection.cases).toBeGreaterThan(40);
+    expect(assessmentConsumer.goldenFixtures).toHaveLength(14);
+    expect(
+      assessmentConsumer.goldenFixtures.filter(
+        (entry: { expectation: string }) => entry.expectation === "accept",
+      ),
+    ).toHaveLength(7);
+    expect(
+      assessmentConsumer.goldenFixtures.filter(
+        (entry: { expectation: string }) => entry.expectation === "refuse",
+      ),
+    ).toHaveLength(7);
     expect(assessmentConsumer.summarySelection.summaryBytes).toBeLessThan(
       assessmentConsumer.summarySelection.reportBytes,
     );
