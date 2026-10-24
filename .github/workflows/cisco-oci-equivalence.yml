@@ -13,7 +13,10 @@ jobs:
       candidate_digest: ${{ steps.capture.outputs.candidate_digest }}
       scanner_commit: ${{ steps.capture.outputs.scanner_commit }}
       scanner_repository: ${{ steps.capture.outputs.scanner_repository }}
-    runs-on: ubuntu-latest
+    # ubuntu-latest (Ubuntu 26.04, Docker 29 with the containerd image store) reports a loaded
+    # image Id that is neither the config nor the manifest digest, so the identity check cannot hold.
+    # Keep the classic image store, where Id is the config digest, until the check is rederived.
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out aih-scan
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

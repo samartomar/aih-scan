@@ -67,7 +67,9 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
+          # AppArmor 5 (Ubuntu 26.04) ships this profile in /etc/apparmor.d instead of extra-profiles.
           apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          test -r "$apparmor_profile" || apparmor_profile=/etc/apparmor.d/bwrap-userns-restrict
           test -r "$apparmor_profile"
           sudo apparmor_parser --replace "$apparmor_profile"
           python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
