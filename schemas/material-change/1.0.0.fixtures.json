@@ -1,0 +1,141 @@
+{
+  "contractId": "urn:aihq:scan:material-change:1.0.0",
+  "contractVersion": "1.0.0",
+  "provenance": {
+    "name": "grill-me stress bundle, original and changed-bytes variant",
+    "repository": "https://github.com/mattpocock/skills",
+    "revision": "d81f3a183412e71a5b1e84ca21bc1a35eea03a60",
+    "capturedAt": "2026-10-23T08:24:21.190Z",
+    "materials": [
+      {
+        "path": "SKILL.md",
+        "sourcePath": "skills/productivity/grill-me/SKILL.md",
+        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637",
+        "byteLength": 157
+      },
+      {
+        "path": "agents/openai.yaml",
+        "sourcePath": "skills/productivity/grill-me/agents/openai.yaml",
+        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b",
+        "byteLength": 137
+      },
+      {
+        "path": "LICENSE",
+        "sourcePath": "LICENSE",
+        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5",
+        "byteLength": 1068
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "grill-me-changed-bytes",
+      "expectation": "accept",
+      "code": null,
+      "value": {
+        "afterScanId": "scan:sha256:90423a073e41bc5b1aab6fc2778e04afe89bc1078c114130825e4e6c72300c1a",
+        "beforeScanId": "scan:sha256:064ffaa8fb7cf63708baf30c702c7f15f3defe9500f6c96ca42a5b7c1cb0c744",
+        "changes": [
+          {
+            "afterSha256": "810d63987b90ce4cacc8195edc931dbd25614ce0c39d6270f0ce4b038300edc6",
+            "beforeSha256": "f47b6bafc235bfe9a563c7b82acc3cddaec8df8e82d8b724043db5a820072b10",
+            "itemId": "grill-me",
+            "kind": "modified"
+          }
+        ],
+        "diagnostics": [],
+        "inventory": {
+          "afterComplete": true,
+          "beforeComplete": true,
+          "uncomparedItemIds": []
+        },
+        "materialProjection": "aih-material-v1",
+        "schema": "urn:aihq:scan:material-change:1.0.0",
+        "sourceId": "local:grill-me-stress"
+      }
+    },
+    {
+      "name": "grill-me-changed-bytes-invalid",
+      "expectation": "refuse",
+      "code": "invalid-input",
+      "value": {
+        "afterScanId": "scan:sha256:90423a073e41bc5b1aab6fc2778e04afe89bc1078c114130825e4e6c72300c1a",
+        "beforeScanId": "scan:sha256:064ffaa8fb7cf63708baf30c702c7f15f3defe9500f6c96ca42a5b7c1cb0c744",
+        "changes": [
+          {
+            "afterSha256": "810d63987b90ce4cacc8195edc931dbd25614ce0c39d6270f0ce4b038300edc6",
+            "beforeSha256": "f47b6bafc235bfe9a563c7b82acc3cddaec8df8e82d8b724043db5a820072b10",
+            "itemId": "grill-me",
+            "kind": "approved"
+          }
+        ],
+        "diagnostics": [],
+        "inventory": {
+          "afterComplete": true,
+          "beforeComplete": true,
+          "uncomparedItemIds": []
+        },
+        "materialProjection": "aih-material-v1",
+        "schema": "urn:aihq:scan:material-change:1.0.0",
+        "sourceId": "local:grill-me-stress"
+      }
+    }
+  ],
+  "comparison": {
+    "sourceId": "local:grill-me-stress",
+    "before": {
+      "scanId": "scan:sha256:064ffaa8fb7cf63708baf30c702c7f15f3defe9500f6c96ca42a5b7c1cb0c744",
+      "projection": "aih-material-v1",
+      "complete": true,
+      "items": [
+        {
+          "itemId": "grill-me",
+          "paths": [
+            {
+              "path": "LICENSE",
+              "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+            },
+            {
+              "path": "SKILL.md",
+              "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637"
+            },
+            {
+              "path": "agents/openai.yaml",
+              "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+            }
+          ],
+          "metadata": {
+            "kind": "skill"
+          }
+        }
+      ]
+    },
+    "after": {
+      "scanId": "scan:sha256:90423a073e41bc5b1aab6fc2778e04afe89bc1078c114130825e4e6c72300c1a",
+      "projection": "aih-material-v1",
+      "complete": true,
+      "items": [
+        {
+          "itemId": "grill-me",
+          "paths": [
+            {
+              "path": "LICENSE",
+              "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+            },
+            {
+              "path": "SKILL.md",
+              "sha256": "71add4fc4e834080c11ca54839d7f4530a57afe4138ac62151714481afedff18"
+            },
+            {
+              "path": "agents/openai.yaml",
+              "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+            }
+          ],
+          "metadata": {
+            "kind": "skill"
+          }
+        }
+      ]
+    }
+  }
+}

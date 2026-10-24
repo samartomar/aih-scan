@@ -204,6 +204,16 @@ describe("Strict V2 public boundary", () => {
       "./schemas/material-change/1.0.0.json": "./schemas/material-change/1.0.0.json",
       "./schemas/detector-definition/1.0.0.json": "./schemas/detector-definition/1.0.0.json",
       "./schemas/examples/1.0.0.json": "./schemas/examples/1.0.0.json",
+      "./schemas/request/1.0.0.fixtures.json": "./schemas/request/1.0.0.fixtures.json",
+      "./schemas/run-result/1.0.0.fixtures.json": "./schemas/run-result/1.0.0.fixtures.json",
+      "./schemas/report/1.0.0.fixtures.json": "./schemas/report/1.0.0.fixtures.json",
+      "./schemas/artifact/1.0.0.fixtures.json": "./schemas/artifact/1.0.0.fixtures.json",
+      "./schemas/evidence-association/1.0.0.fixtures.json":
+        "./schemas/evidence-association/1.0.0.fixtures.json",
+      "./schemas/material-change/1.0.0.fixtures.json":
+        "./schemas/material-change/1.0.0.fixtures.json",
+      "./schemas/detector-definition/1.0.0.fixtures.json":
+        "./schemas/detector-definition/1.0.0.fixtures.json",
       // Additive and idiomatic: a consumer can locate the package root without deep
       // importing anything. No dist subpath becomes reachable.
       "./package.json": "./package.json",

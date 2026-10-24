@@ -43,7 +43,14 @@
     "./schemas/evidence-association/1.0.0.json": "./schemas/evidence-association/1.0.0.json",
     "./schemas/material-change/1.0.0.json": "./schemas/material-change/1.0.0.json",
     "./schemas/examples/1.0.0.json": "./schemas/examples/1.0.0.json",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./schemas/request/1.0.0.fixtures.json": "./schemas/request/1.0.0.fixtures.json",
+    "./schemas/run-result/1.0.0.fixtures.json": "./schemas/run-result/1.0.0.fixtures.json",
+    "./schemas/report/1.0.0.fixtures.json": "./schemas/report/1.0.0.fixtures.json",
+    "./schemas/artifact/1.0.0.fixtures.json": "./schemas/artifact/1.0.0.fixtures.json",
+    "./schemas/evidence-association/1.0.0.fixtures.json": "./schemas/evidence-association/1.0.0.fixtures.json",
+    "./schemas/material-change/1.0.0.fixtures.json": "./schemas/material-change/1.0.0.fixtures.json",
+    "./schemas/detector-definition/1.0.0.fixtures.json": "./schemas/detector-definition/1.0.0.fixtures.json"
   },
   "bin": {
     "aih-scan": "./dist/cli.js"
@@ -52,6 +59,7 @@
     "dist",
     "schemas",
     "docs/DETECTOR-DEFINITIONS.md",
+    "docs/contract-fixtures.md",
     "examples/detector-definitions",
     "tools/baseline-analyzers",
     "tools/verify-core-contract-lock-v2.mjs"
@@ -74,6 +82,7 @@
     "@biomejs/biome": "2.5.1",
     "@types/node": "26.1.1",
     "@vitest/coverage-v8": "4.1.11",
+    "ajv": "8.20.0",
     "happy-dom": "20.11.2",
     "typescript": "7.0.2",
     "vitest": "4.1.11"

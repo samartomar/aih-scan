@@ -1,0 +1,58 @@
+{
+  "contractId": "urn:aihq:scan:evidence-association:1.0.0",
+  "contractVersion": "1.0.0",
+  "provenance": {
+    "name": "grill-me stress bundle, original and changed-bytes variant",
+    "repository": "https://github.com/mattpocock/skills",
+    "revision": "d81f3a183412e71a5b1e84ca21bc1a35eea03a60",
+    "capturedAt": "2026-10-23T08:24:21.190Z",
+    "materials": [
+      {
+        "path": "SKILL.md",
+        "sourcePath": "skills/productivity/grill-me/SKILL.md",
+        "sha256": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637",
+        "byteLength": 157
+      },
+      {
+        "path": "agents/openai.yaml",
+        "sourcePath": "skills/productivity/grill-me/agents/openai.yaml",
+        "sha256": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b",
+        "byteLength": 137
+      },
+      {
+        "path": "LICENSE",
+        "sourcePath": "LICENSE",
+        "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5",
+        "byteLength": 1068
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "grill-me",
+      "expectation": "accept",
+      "code": null,
+      "value": {
+        "schema": "urn:aihq:scan:evidence-association:1.0.0",
+        "scanId": "scan:sha256:064ffaa8fb7cf63708baf30c702c7f15f3defe9500f6c96ca42a5b7c1cb0c744",
+        "location": {
+          "kind": "https",
+          "url": "https://example.com/grill-me.scan.json"
+        }
+      }
+    },
+    {
+      "name": "grill-me-invalid",
+      "expectation": "refuse",
+      "code": "schema-invalid",
+      "value": {
+        "schema": "urn:aihq:scan:evidence-association:1.0.0",
+        "scanId": "unknown",
+        "location": {
+          "kind": "https",
+          "url": "https://example.com/grill-me.scan.json"
+        }
+      }
+    }
+  ]
+}

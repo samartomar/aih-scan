@@ -11,6 +11,7 @@ import * as readApi from "@aihq/scan/read";
 import { coverageBatchLimits, maxContentDescriptors, readArtifact, readContentCoverage, readContentCoverageBatch, readReport } from "@aihq/scan/read";
 import { listDetectorCapabilitiesV1 } from "@aihq/scan";
 import { exerciseSummarySelection } from "./summary-selection-cases.mjs";
+import { exerciseGoldenFixtures } from "./golden-fixture-cases.mjs";
 import {
   authenticateArtifact,
   compareMaterialInventories,
@@ -22,6 +23,7 @@ import {
 } from "@aihq/scan/host";
 
 const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json", "utf8"));
+const goldenFixtures = await exerciseGoldenFixtures();
 assert.deepEqual(contractSupport.package, { name: manifest.name, version: manifest.version });
 assert.equal(contractSupport.schema, "urn:aihq:package-support:1.0.0");
 assert.equal(contractSupport.contracts.length, 7);
@@ -303,4 +305,5 @@ process.stdout.write(JSON.stringify({
   portableEntries: ["contracts", "read"],
   materialChange: material.materialChange.changes[0].kind,
   summarySelection,
+  goldenFixtures,
 }) + "\n");

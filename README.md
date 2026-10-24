@@ -57,6 +57,12 @@ Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
 The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
 byte bindings and cross-field semantics require the corresponding reader.
 
+Golden contract fixtures are exported beside all seven supported schemas as
+`@aihq/scan/schemas/<name>/1.0.0.fixtures.json`, including `detector-definition`.
+See [the fixture manifest and replay guide](docs/contract-fixtures.md). Public CI
+replays these exports from an exact packed archive installed in a temporary
+consumer outside the source workspace. Package-support 1.0.0 stays unchanged.
+
 These changes are unreleased. Manual report workflows refuse admission without
 the exact reviewed main commit and independently selected upload custody. Protected
 publisher settings and an authorized production signing/conformance run remain
