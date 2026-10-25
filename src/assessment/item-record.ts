@@ -461,17 +461,24 @@ export async function verifyItemRecord(
   assessment: ItemAssessment,
   item: ItemDescriptor,
 ): Promise<"same" | "differs" | "not-covered"> {
+  let snapshot: ItemRecord | undefined;
+  try {
+    snapshot = snapshotQueries([record], {
+      ...coverageBatchLimits,
+      maxRequestBytes: coverageBatchLimits.maxResponseBytes,
+      maxRequestNodes: coverageBatchLimits.maxResponseBytes,
+    })[0] as ItemRecord;
+  } catch {
+    // A malformed cache is refused after resolving capture's not-covered precedence.
+    snapshot = undefined;
+  }
   const derived = await recordItem(assessment, item);
   if (!("subject" in derived))
     return derived.coverage === "unavailable" ? "not-covered" : "differs";
   if (derived.materials.some((m) => !m.captured || !m.digestMatch || !m.lengthMatch))
     return "not-covered";
+  if (!snapshot) return "differs";
   try {
-    const snapshot = snapshotQueries([record], {
-      ...coverageBatchLimits,
-      maxRequestBytes: coverageBatchLimits.maxResponseBytes,
-      maxRequestNodes: coverageBatchLimits.maxResponseBytes,
-    })[0] as ItemRecord;
     if (!equalBytes(canonicalBytes(snapshot.subject), canonicalBytes(derived.subject)))
       return "not-covered";
     return equalBytes(canonicalBytes(snapshot), canonicalBytes(derived)) ? "same" : "differs";

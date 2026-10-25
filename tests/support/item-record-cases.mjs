@@ -27,6 +27,28 @@ export async function exerciseItemRecords() {
   Object.defineProperty(hostile, 'subject', { enumerable: true, get() { reads++; return record.subject; } });
   assert.equal(await api.verifyItemRecord(hostile, assessment, item), 'differs');
   assert.equal(reads, 0, 'cache accessors must never execute');
+  // Verification observes the cache supplied at invocation, before its first await.
+  const repaired = structuredClone(record);
+  repaired.evidenceKey = '0'.repeat(64);
+  const repairPending = api.verifyItemRecord(repaired, assessment, item);
+  repaired.evidenceKey = record.evidenceKey;
+  assert.equal(await repairPending, 'differs', 'repairing a corrupt cache after invocation cannot make it equal');
+  const changedAfterInvocation = structuredClone(record);
+  const originalPending = api.verifyItemRecord(changedAfterInvocation, assessment, item);
+  changedAfterInvocation.evidenceKey = '0'.repeat(64);
+  assert.equal(await originalPending, 'same', 'later cache mutation cannot alter the original snapshot');
+  const itemAfterInvocation = structuredClone(item);
+  const itemPending = api.verifyItemRecord(record, assessment, itemAfterInvocation);
+  itemAfterInvocation.itemId = 'changed-after-invocation';
+  assert.equal(await itemPending, 'same', 'item snapshot remains captured at invocation');
+  const assessmentAfterInvocation = structuredClone(assessment);
+  const assessmentPending = api.verifyItemRecord(record, assessmentAfterInvocation, item);
+  assessmentAfterInvocation.report.createdAt = '2099-01-01T00:00:00.000Z';
+  assert.equal(await assessmentPending, 'same', 'assessment snapshot remains captured at invocation');
+  const missing = { ...item, materials: item.materials.map(m => ({ ...m, path: `missing/${m.path}` })) };
+  assert.equal(await api.verifyItemRecord(hostile, assessment, missing), 'not-covered', 'missing capture takes precedence over malformed cache');
+  assert.equal(reads, 0, 'malformed cache remains getter-safe when capture is missing');
+  assert.equal(await api.verifyItemRecord(null, assessment, item), 'differs', 'malformed cache is refused when capture is available');
   await exerciseContracts();
   await exerciseAttribution();
   return { status: 'tested' };
