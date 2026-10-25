@@ -658,6 +658,7 @@ describe("published V2 package installation", () => {
       [
         "install",
         "--ignore-scripts",
+        "--offline",
         "--no-audit",
         "--no-fund",
         "--userconfig",
@@ -686,6 +687,10 @@ describe("published V2 package installation", () => {
       join(directory, "capture-v2-cases.mjs"),
       readFileSync(join(root, "tests/support/capture-v2-cases.mjs")),
     );
+    writeFileSync(
+      join(directory, "item-record-cases.mjs"),
+      readFileSync(join(root, "tests/support/item-record-cases.mjs")),
+    );
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
         cwd: directory,
@@ -703,17 +708,17 @@ describe("published V2 package installation", () => {
       materialChange: "modified",
     });
     expect(assessmentConsumer.summarySelection.cases).toBeGreaterThan(40);
-    expect(assessmentConsumer.goldenFixtures).toHaveLength(14);
+    expect(assessmentConsumer.goldenFixtures).toHaveLength(18);
     expect(
       assessmentConsumer.goldenFixtures.filter(
         (entry: { expectation: string }) => entry.expectation === "accept",
       ),
-    ).toHaveLength(7);
+    ).toHaveLength(10);
     expect(
       assessmentConsumer.goldenFixtures.filter(
         (entry: { expectation: string }) => entry.expectation === "refuse",
       ),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
     expect(assessmentConsumer.summarySelection.summaryBytes).toBeLessThan(
       assessmentConsumer.summarySelection.reportBytes,
     );

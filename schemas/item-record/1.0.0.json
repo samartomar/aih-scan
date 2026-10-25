@@ -1,0 +1,634 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "urn:aihq:scan:item-record:1.0.0"
+        },
+        "scanId": {
+          "type": "string",
+          "pattern": "^scan:sha256:[0-9a-f]{64}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "subject": {
+          "type": "object",
+          "properties": {
+            "frameworkId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "contentSha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "behaviourSha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "frameworkId",
+            "itemId",
+            "contentSha256",
+            "behaviourSha256"
+          ],
+          "additionalProperties": false
+        },
+        "materials": {
+          "minItems": 1,
+          "maxItems": 10000,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "byteLength": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "executable": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "const": "unknown"
+                  }
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "behaviour"
+                ]
+              },
+              "captured": {
+                "type": "boolean"
+              },
+              "digestMatch": {
+                "type": "boolean"
+              },
+              "lengthMatch": {
+                "type": "boolean"
+              },
+              "executableComparison": {
+                "type": "string",
+                "enum": [
+                  "equal",
+                  "differs",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "byteLength",
+              "executable",
+              "role",
+              "captured",
+              "digestMatch",
+              "lengthMatch",
+              "executableComparison"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "coverage": {
+          "type": "string",
+          "enum": [
+            "matched",
+            "mismatched"
+          ]
+        },
+        "detectors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "detectorId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "succeeded",
+                  "failed",
+                  "refused",
+                  "cancelled"
+                ]
+              },
+              "requestedProfileId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "effectiveProfileId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "itemCoverage": {
+                "type": "string",
+                "enum": [
+                  "covered",
+                  "partial",
+                  "uncovered"
+                ]
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "rawOccurrenceFingerprint": {
+                      "type": "string",
+                      "pattern": "^raw-occurrence-v1:[0-9a-f]{64}$"
+                    },
+                    "multiplicity": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "rule": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "present"
+                            },
+                            "value": {
+                              "type": "object",
+                              "properties": {
+                                "nativeRuleId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                }
+                              },
+                              "required": [
+                                "nativeRuleId"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "unavailable"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "detail": {
+                              "type": "string",
+                              "minLength": 0,
+                              "maxLength": 4096
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "reason",
+                            "detail"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "severity": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "present"
+                            },
+                            "value": {
+                              "type": "object",
+                              "properties": {
+                                "level": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                },
+                                "vendorSeverity": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 256,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                                }
+                              },
+                              "required": [
+                                "level"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "unavailable"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "detail": {
+                              "type": "string",
+                              "minLength": 0,
+                              "maxLength": 4096
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "reason",
+                            "detail"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "message": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "present"
+                            },
+                            "value": {
+                              "type": "string",
+                              "minLength": 0,
+                              "maxLength": 16384
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "unavailable"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "detail": {
+                              "type": "string",
+                              "minLength": 0,
+                              "maxLength": 4096
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "reason",
+                            "detail"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "location": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "present"
+                            },
+                            "value": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 4096,
+                                  "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
+                                },
+                                "fileSha256": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "path",
+                                "fileSha256"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "unavailable"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "detail": {
+                              "type": "string",
+                              "minLength": 0,
+                              "maxLength": 4096
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "reason",
+                            "detail"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "supportingEvidence": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "present"
+                            },
+                            "value": {
+                              "type": "object",
+                              "properties": {
+                                "annexId": {
+                                  "type": "string",
+                                  "pattern": "^annex\\.[a-z0-9][a-z0-9._-]{0,249}$"
+                                },
+                                "ordinal": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "annexId",
+                                "ordinal"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "value"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "state": {
+                              "type": "string",
+                              "const": "unavailable"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 256,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                            },
+                            "detail": {
+                              "type": "string",
+                              "minLength": 0,
+                              "maxLength": 4096
+                            }
+                          },
+                          "required": [
+                            "state",
+                            "reason",
+                            "detail"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "rawOccurrenceFingerprint",
+                    "multiplicity",
+                    "rule",
+                    "severity",
+                    "message",
+                    "location",
+                    "supportingEvidence"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "inputSha256s": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "required": [
+              "detectorId",
+              "outcome",
+              "requestedProfileId",
+              "effectiveProfileId",
+              "itemCoverage",
+              "findings",
+              "inputSha256s"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "completion": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "evidenceKey": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authenticity": {
+          "type": "string",
+          "const": "unchecked"
+        }
+      },
+      "required": [
+        "schema",
+        "scanId",
+        "createdAt",
+        "subject",
+        "materials",
+        "coverage",
+        "detectors",
+        "completion",
+        "evidenceKey",
+        "authenticity"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "coverage": {
+          "type": "string",
+          "enum": [
+            "invalid",
+            "unavailable"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "detail": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 4096
+              },
+              "detectorId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "encountered": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "supported": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 256
+                }
+              }
+            },
+            "required": [
+              "code",
+              "detail"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "coverage",
+        "diagnostics"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$id": "urn:aihq:scan:item-record:1.0.0"
+}

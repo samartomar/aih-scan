@@ -23,6 +23,11 @@ export const contractSupport = Object.freeze({
   package: packageIdentity,
   contracts: Object.freeze([
     Object.freeze({
+      id: "urn:aihq:scan:item-record:1.0.0",
+      role: "both",
+      schemaExport: "@aihq/scan/schemas/item-record/1.0.0.json",
+    }),
+    Object.freeze({
       id: schemasV2.request,
       role: "accepts",
       schemaExport: "@aihq/scan/schemas/request/2.0.0.json",
@@ -232,3 +237,13 @@ type CheckedEntries<
   }[],
 > = T;
 export type EntrySupportEntry = CheckedEntries<typeof entrySupport.entries>[number];
+
+export type {
+  ItemAssessment,
+  ItemDescriptor,
+  ItemMaterial,
+  ItemRecord,
+  ItemRecordBatchResult,
+  ItemRecordResult,
+  ItemSubject,
+} from "../assessment/item-record.js";

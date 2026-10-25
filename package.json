@@ -56,7 +56,9 @@
     "./schemas/run-result/2.0.0.json": "./schemas/run-result/2.0.0.json",
     "./schemas/run-result/2.0.0.fixtures.json": "./schemas/run-result/2.0.0.fixtures.json",
     "./schemas/report/2.0.0.json": "./schemas/report/2.0.0.json",
-    "./schemas/report/2.0.0.fixtures.json": "./schemas/report/2.0.0.fixtures.json"
+    "./schemas/report/2.0.0.fixtures.json": "./schemas/report/2.0.0.fixtures.json",
+    "./schemas/item-record/1.0.0.json": "./schemas/item-record/1.0.0.json",
+    "./schemas/item-record/1.0.0.fixtures.json": "./schemas/item-record/1.0.0.fixtures.json"
   },
   "bin": {
     "aih-scan": "./dist/cli.js"
@@ -68,7 +70,8 @@
     "docs/contract-fixtures.md",
     "examples/detector-definitions",
     "tools/baseline-analyzers",
-    "tools/verify-core-contract-lock-v2.mjs"
+    "tools/verify-core-contract-lock-v2.mjs",
+    "docs/item-records.md"
   ],
   "scripts": {
     "generate:identity": "node tools/generate-package-identity.mjs",

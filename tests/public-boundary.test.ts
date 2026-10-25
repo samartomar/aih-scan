@@ -196,6 +196,8 @@ describe("Strict V2 public boundary", () => {
       },
       "./read": { types: "./dist/public/read.d.ts", import: "./dist/public/read.js" },
       "./host": { types: "./dist/public/host.d.ts", import: "./dist/public/host.js" },
+      "./schemas/item-record/1.0.0.json": "./schemas/item-record/1.0.0.json",
+      "./schemas/item-record/1.0.0.fixtures.json": "./schemas/item-record/1.0.0.fixtures.json",
       "./schemas/request/2.0.0.json": "./schemas/request/2.0.0.json",
       "./schemas/request/2.0.0.fixtures.json": "./schemas/request/2.0.0.fixtures.json",
       "./schemas/run-result/2.0.0.json": "./schemas/run-result/2.0.0.json",

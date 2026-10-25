@@ -40,6 +40,10 @@ For many independent content queries, `readContentCoverageBatch` validates one
 report snapshot and returns bounded rows with a shared observation table; see
 [independent coverage queries](docs/assessment-api.md#independent-coverage-queries).
 
+For exact per-item evidence, use the policy-independent `recordItem`,
+`recordItemBatch` and `verifyItemRecord` from `@aihq/scan/read`; see
+[item records and behaviour coverage](docs/item-records.md).
+
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
 [summary and latest matching selection](docs/summary-selection.md),
 [maintainer refresh](docs/production-refresh.md) and the
@@ -53,11 +57,12 @@ and [explicit GitHub handoff](docs/material-change-handoff.md). These Unreleased
 software APIs keep findings, report publication and issue delivery independent.
 
 Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
-`run-result`, `report`, `artifact`, `evidence-association` and `material-change`.
+`run-result`, `report`, `artifact`, `evidence-association`, `material-change`,
+`detector-definition` and `item-record`.
 The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
 byte bindings and cross-field semantics require the corresponding reader.
 
-Golden contract fixtures are exported beside all seven supported schemas as
+Golden contract fixtures are exported beside all supported schemas as
 `@aihq/scan/schemas/<name>/1.0.0.fixtures.json`, including `detector-definition`.
 See [the fixture manifest and replay guide](docs/contract-fixtures.md). Public CI
 replays these exports from an exact packed archive installed in a temporary
