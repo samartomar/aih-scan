@@ -26,12 +26,12 @@ import {
 export async function validateArtifact(bytes: Uint8Array): Promise<ValidatedArtifact> {
   if (!(bytes instanceof Uint8Array)) invalid();
   if (bytes.length > artifactLimits.artifact) limited();
-  const raw = object(
-    strictParse(bytes, "artifact", artifactLimits.artifact),
-    ["schema", "scanId", "report", "annexes"],
-    ["attestation"],
-  );
-  requireFormat(raw.schema, "$.schema", ["urn:aihq:scan:artifact:1.0.0"]);
+  const parsed = strictParse(bytes, "artifact", artifactLimits.artifact);
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed))
+    requireFormat("schema" in parsed ? parsed.schema : undefined, "$.schema", [
+      "urn:aihq:scan:artifact:1.0.0",
+    ]);
+  const raw = object(parsed, ["schema", "scanId", "report", "annexes"], ["attestation"]);
   if (raw.schema !== "urn:aihq:scan:artifact:1.0.0") invalid();
   validScanId(raw.scanId);
   const report = object(raw.report, ["schema", "mediaType", "sha256", "byteLength", "bytesBase64"]);

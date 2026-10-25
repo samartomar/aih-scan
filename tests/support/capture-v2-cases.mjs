@@ -63,7 +63,15 @@ export async function exerciseCaptureV2() {
   const signed = await signArtifact({ report: first.report, annexes: first.annexes.map(a => ({ id: a.id, bytes: Buffer.from(a.bytesBase64, 'base64') })), signer: { keyId, privateKey: keys.privateKey } });
   assert.equal((await readArtifact(signed.bytes)).status, 'read');
   const unknownContainer = { ...packed.artifact, schema: 'urn:aihq:scan:artifact:99.0.0' };
-  assert.equal((await readArtifact(bytes(unknownContainer))).diagnostics[0].code, 'unsupported-format');
+  for (const unknown of [unknownContainer, { ...unknownContainer, newGenerationField: true }, { schema: unknownContainer.schema }]) {
+    const refused = await readArtifact(bytes(unknown));
+    assert.equal(refused.status, 'invalid');
+    assert.deepEqual(refused.diagnostics[0], { code: 'unsupported-format', path: '$.schema', encountered: unknownContainer.schema,
+      supported: ['urn:aihq:scan:artifact:1.0.0'], detail: 'Unsupported format at $.schema' });
+  }
+  const knownWithExtra = await readArtifact(bytes({ ...packed.artifact, newGenerationField: true }));
+  assert.equal(knownWithExtra.status, 'invalid');
+  assert.equal(knownWithExtra.diagnostics[0].code, 'invalid-artifact');
   assert.equal((await runScan({ ...request, schema: 'urn:aihq:scan:request:99.0.0' })).diagnostics[0].code, 'unsupported-format');
   const retainedLegacy = createRetainedObservationsV1();
   const legacy = await runScan({ ...request, schema: 'urn:aihq:scan:request:1.0.0' }, { retained: retainedLegacy });
