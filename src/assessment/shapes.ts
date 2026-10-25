@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { hasControl } from "./json.js";
 import { assertSafeRelativePosixPathV1 } from "./strict-json.js";
-import { type defaultLimits, limitCeilings, schemas } from "./types.js";
+import { type defaultLimits, limitCeilings, schemas, schemasV2 } from "./types.js";
 
 const utf8 = (limit: number, min = 1) =>
   z
@@ -40,7 +40,7 @@ export const timestampShape = z
   );
 export const integerShape = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 export const detailShape = utf8(4096, 0);
-export const diagnosticShape = z
+export const diagnosticV1Shape = z
   .object({
     code: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
     detail: detailShape,
@@ -48,6 +48,11 @@ export const diagnosticShape = z
     path: pathShape.optional(),
   })
   .strict();
+export const diagnosticShape = diagnosticV1Shape.extend({
+  path: z.string().max(4096).optional(),
+  encountered: z.string().max(256).optional(),
+  supported: z.array(z.string().max(256)).optional(),
+});
 export const producerShape = z
   .object({ name: z.literal("@aihq/scan"), version: labelShape })
   .strict();
@@ -97,7 +102,7 @@ export const locationShape = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export const entryShape = z.discriminatedUnion("kind", [
+export const entryV1Shape = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("file"),
@@ -118,6 +123,42 @@ export const entryShape = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("directory-link"), path: pathShape, target: pathShape }).strict(),
 ]);
+export const executableShape = z.union([z.boolean(), z.literal("unknown")]);
+export const entryV2Shape = z.discriminatedUnion("kind", [
+  entryV1Shape.options[0].extend({ executable: executableShape }),
+  entryV1Shape.options[1],
+  entryV1Shape.options[2].extend({ executable: executableShape }),
+  entryV1Shape.options[3],
+]);
+export const entryShape = z.union([entryV1Shape, entryV2Shape]);
+const archiveShape = z
+  .object({
+    url: repositoryShape,
+    integrity: z.string().regex(/^sha512-[A-Za-z0-9+/]{86}==$/),
+  })
+  .strict();
+const npmPackageShape = z
+  .string()
+  .max(214)
+  .regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/);
+const npmVersionShape = z
+  .string()
+  .max(256)
+  .regex(
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  );
+export const npmSourceShapes = [
+  z
+    .object({
+      kind: z.literal("npm"),
+      package: npmPackageShape,
+      version: npmVersionShape,
+      archive: archiveShape.optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal("npm"), archive: archiveShape }).strict(),
+] as const;
+export const reachabilityShape = z.enum(["reachable", "unchecked"]).nullable();
 export const limitsShape = z
   .object(
     Object.fromEntries(
@@ -183,10 +224,10 @@ export const observationInputShape = z
     entries: z.array(entryShape),
   })
   .strict();
-export const observationBodyShape = z
+export const observationBodyV1Shape = z
   .object({
     format: z.literal("aih-observation-v1"),
-    input: observationInputShape,
+    input: observationInputShape.extend({ entries: z.array(entryV1Shape) }),
     startedAt: timestampShape,
     completedAt: timestampShape,
     producer: producerShape,
@@ -196,6 +237,14 @@ export const observationBodyShape = z
     annexIds: z.array(annexDescriptorShape.shape.id),
   })
   .strict();
+export const observationBodyV2Shape = observationBodyV1Shape.extend({
+  format: z.literal("aih-observation-v2"),
+  input: observationInputShape.extend({ entries: z.array(entryV2Shape) }),
+});
+export const observationBodyShape = z.discriminatedUnion("format", [
+  observationBodyV1Shape,
+  observationBodyV2Shape,
+]);
 export const observationShape = z
   .object({
     observationId: z.string().regex(/^observation:sha256:[0-9a-f]{64}$/),
@@ -220,7 +269,12 @@ export const detectorResultShape = z
     diagnostics: z.array(diagnosticShape),
   })
   .strict();
-export const requestShape = z
+export const observationV1Shape = observationShape.extend({ body: observationBodyV1Shape });
+export const detectorResultV1Shape = detectorResultShape.extend({
+  observations: z.array(observationV1Shape),
+  diagnostics: z.array(diagnosticV1Shape),
+});
+export const requestV1Shape = z
   .object({
     schema: z.literal(schemas.request),
     source: z.discriminatedUnion("kind", [
@@ -256,26 +310,26 @@ export const requestShape = z
     limits: limitsShape.partial().optional(),
   })
   .strict();
-export const captureShape = z
+export const captureV1Shape = z
   .object({
     profile: z.literal("aih-source-capture-1"),
-    entries: z.array(entryShape),
+    entries: z.array(entryV1Shape),
     captureSha256: digestShape,
   })
   .strict();
-export const reportShape = z
+export const reportV1Shape = z
   .object({
     schema: z.literal(schemas.report),
     producer: producerShape,
     createdAt: timestampShape,
     source: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("local"), capture: captureShape }).strict(),
+      z.object({ kind: z.literal("local"), capture: captureV1Shape }).strict(),
       z
         .object({
           kind: z.literal("git"),
           repository: repositoryShape,
           commit: z.string().regex(/^[0-9a-f]{40}$/),
-          capture: captureShape,
+          capture: captureV1Shape,
         })
         .strict(),
     ]),
@@ -292,24 +346,47 @@ export const reportShape = z
           .strict(),
       )
       .min(1),
-    results: z.array(detectorResultShape).min(1),
+    results: z.array(detectorResultV1Shape).min(1),
     completion: z.enum(["complete", "partial"]),
     annexes: z.array(annexDescriptorShape),
     effectiveLimits: limitsShape,
-    diagnostics: z.array(diagnosticShape),
+    diagnostics: z.array(diagnosticV1Shape),
   })
   .strict();
-export const runResultShape = z.discriminatedUnion("status", [
+export const requestV2Shape = requestV1Shape.extend({
+  schema: z.literal(schemasV2.request),
+  source: z.union([...requestV1Shape.shape.source.options, ...npmSourceShapes]),
+});
+export const requestShape = z.discriminatedUnion("schema", [requestV1Shape, requestV2Shape]);
+export const captureV2Shape = captureV1Shape.extend({
+  profile: z.literal("aih-source-capture-2"),
+  entries: z.array(entryV2Shape),
+});
+export const captureShape = z.discriminatedUnion("profile", [captureV1Shape, captureV2Shape]);
+export const reportV2Shape = reportV1Shape.extend({
+  results: z.array(detectorResultShape).min(1),
+  diagnostics: z.array(diagnosticShape),
+  schema: z.literal(schemasV2.report),
+  reachability: reachabilityShape,
+  source: z.union([
+    ...reportV1Shape.shape.source.options.map((option) =>
+      option.extend({ capture: captureV2Shape }),
+    ),
+    ...npmSourceShapes.map((option) => option.extend({ capture: captureV2Shape })),
+  ]),
+});
+export const reportShape = z.discriminatedUnion("schema", [reportV1Shape, reportV2Shape]);
+export const runResultV1Shape = z.discriminatedUnion("status", [
   z
     .object({
       schema: z.literal(schemas.runResult),
       status: z.literal("assessment"),
       scanId: scanIdShape,
-      report: reportShape,
+      report: reportV1Shape,
       annexes: z.array(
         z.object({ id: annexDescriptorShape.shape.id, bytesBase64: z.string() }).strict(),
       ),
-      diagnostics: z.array(diagnosticShape),
+      diagnostics: z.array(diagnosticV1Shape),
     })
     .strict(),
   z
@@ -317,10 +394,24 @@ export const runResultShape = z.discriminatedUnion("status", [
       schema: z.literal(schemas.runResult),
       status: z.literal("diagnostic"),
       phase: z.enum(["request", "capture", "assembly"]),
-      diagnostics: z.array(diagnosticShape),
+      diagnostics: z.array(diagnosticV1Shape),
     })
     .strict(),
 ]);
+export const runResultV2Shape = z.discriminatedUnion("status", [
+  runResultV1Shape.options[0].extend({
+    schema: z.literal(schemasV2.runResult),
+    diagnostics: z.array(diagnosticShape),
+    report: reportV2Shape,
+    reachability: reachabilityShape,
+  }),
+  runResultV1Shape.options[1].extend({
+    schema: z.literal(schemasV2.runResult),
+    diagnostics: z.array(diagnosticShape),
+    reachability: z.union([reachabilityShape, z.literal("unreachable")]).optional(),
+  }),
+]);
+export const runResultShape = z.union([runResultV1Shape, runResultV2Shape]);
 export const evidenceAssociationShape = z
   .object({
     schema: z.literal(schemas.evidenceAssociation),

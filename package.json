@@ -50,7 +50,13 @@
     "./schemas/artifact/1.0.0.fixtures.json": "./schemas/artifact/1.0.0.fixtures.json",
     "./schemas/evidence-association/1.0.0.fixtures.json": "./schemas/evidence-association/1.0.0.fixtures.json",
     "./schemas/material-change/1.0.0.fixtures.json": "./schemas/material-change/1.0.0.fixtures.json",
-    "./schemas/detector-definition/1.0.0.fixtures.json": "./schemas/detector-definition/1.0.0.fixtures.json"
+    "./schemas/detector-definition/1.0.0.fixtures.json": "./schemas/detector-definition/1.0.0.fixtures.json",
+    "./schemas/request/2.0.0.json": "./schemas/request/2.0.0.json",
+    "./schemas/request/2.0.0.fixtures.json": "./schemas/request/2.0.0.fixtures.json",
+    "./schemas/run-result/2.0.0.json": "./schemas/run-result/2.0.0.json",
+    "./schemas/run-result/2.0.0.fixtures.json": "./schemas/run-result/2.0.0.fixtures.json",
+    "./schemas/report/2.0.0.json": "./schemas/report/2.0.0.json",
+    "./schemas/report/2.0.0.fixtures.json": "./schemas/report/2.0.0.fixtures.json"
   },
   "bin": {
     "aih-scan": "./dist/cli.js"

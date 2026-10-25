@@ -107,7 +107,7 @@ test("snapshots all input before yielding and freezes shared output against cros
 test("unsupported and invalid reads retain per-query descriptor error precedence", async () => {
   for (const read of [
     await readReport(new TextEncoder().encode("{}")),
-    await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:2.0.0"}')),
+    await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:99.0.0"}')),
   ]) {
     const batch = await readContentCoverageBatch({
       read,

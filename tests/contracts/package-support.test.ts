@@ -80,7 +80,7 @@ describe("contractSupport", () => {
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
     );
     const fixtureExports = contractSupport.contracts.map(({ schemaExport }) =>
-      schemaExport.replace("@aihq/scan/", "./").replace("/1.0.0.json", "/1.0.0.fixtures.json"),
+      schemaExport.replace("@aihq/scan/", "./").replace(/\.json$/, ".fixtures.json"),
     );
     expect(
       Object.keys(manifest.exports)
@@ -92,7 +92,7 @@ describe("contractSupport", () => {
       const fixture = JSON.parse(
         readFileSync(new URL(`../../${specifier}`, import.meta.url), "utf8"),
       );
-      expect(fixture.contractVersion).toBe("1.0.0");
+      expect(["1.0.0", "2.0.0"]).toContain(fixture.contractVersion);
       expect(contractSupport.contracts.some(({ id }) => id === fixture.contractId)).toBe(true);
       expect(
         fixture.cases.some((entry: { expectation: string }) => entry.expectation === "accept"),

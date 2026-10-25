@@ -32,3 +32,26 @@ export function observationScope(
     entries: entries.filter((entry) => relevant.has(entry.path)),
   };
 }
+
+/** Legacy observations have no mode facts; they can match only explicitly unknown current modes. */
+export function compatibleObservationInput(
+  body: import("./types.js").ObservationBody,
+  input: ObservationInput,
+): ObservationInput | undefined {
+  if (body.format !== "aih-observation-v1") return input;
+  if (
+    input.entries.some(
+      (entry) =>
+        "sha256" in entry && entry.executable !== undefined && entry.executable !== "unknown",
+    )
+  )
+    return undefined;
+  return {
+    ...input,
+    entries: input.entries.map((entry) => {
+      if (!("sha256" in entry)) return entry;
+      const { executable: _mode, ...legacy } = entry;
+      return legacy;
+    }),
+  };
+}

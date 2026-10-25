@@ -21,7 +21,7 @@ export async function exerciseGoldenFixtures() {
   const ajv = new Ajv2020({ strict: false, allErrors: true });
   const manifest = [];
   const fixtures = new Map();
-  for (const { id, schemaExport } of contractSupport.contracts) {
+  for (const { id, schemaExport } of contractSupport.contracts.filter(entry => entry.id.endsWith(":1.0.0"))) {
     const specifier = schemaExport.replace(/\.json$/, ".fixtures.json");
     const fixture = json(specifier);
     assert.equal(fixture.contractId, id);

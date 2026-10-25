@@ -229,6 +229,15 @@ describe("local independent organization authentication", () => {
       status: "unsupported-report",
       scanId: attached.scanId,
       reportSchema: "urn:example:report:2.0.0",
+      diagnostics: [
+        {
+          code: "unsupported-format",
+          path: "$.schema",
+          encountered: "urn:example:report:2.0.0",
+          supported: ["urn:aihq:scan:report:1.0.0", "urn:aihq:scan:report:2.0.0"],
+          detail: "Unsupported format at $.schema",
+        },
+      ],
     });
   });
   test("a signature made without the DSSE PAE is refused under an independently trusted key", async () => {

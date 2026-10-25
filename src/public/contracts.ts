@@ -1,4 +1,4 @@
-import { schemas } from "../assessment/types.js";
+import { schemas, schemasV2 } from "../assessment/types.js";
 import { packageIdentity } from "./package-identity.js";
 
 export type {
@@ -22,6 +22,21 @@ export const contractSupport = Object.freeze({
   schema: "urn:aihq:package-support:1.0.0",
   package: packageIdentity,
   contracts: Object.freeze([
+    Object.freeze({
+      id: schemasV2.request,
+      role: "accepts",
+      schemaExport: "@aihq/scan/schemas/request/2.0.0.json",
+    }),
+    Object.freeze({
+      id: schemasV2.runResult,
+      role: "produces",
+      schemaExport: "@aihq/scan/schemas/run-result/2.0.0.json",
+    }),
+    Object.freeze({
+      id: schemasV2.report,
+      role: "both",
+      schemaExport: "@aihq/scan/schemas/report/2.0.0.json",
+    }),
     Object.freeze({
       id: "urn:aihq:scan:detector-definition:1.0.0",
       role: "accepts",

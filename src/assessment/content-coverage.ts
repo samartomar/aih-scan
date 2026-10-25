@@ -249,7 +249,10 @@ async function admitCoverageRead(
         ],
       };
     if (status !== "read") fail(invalidReadDiagnostic.detail);
-    exactKeys(read, ["status", "scanId", "report", "authenticity", "annexBytes"], "Read result");
+    const keys = ["status", "scanId", "report", "authenticity", "annexBytes"];
+    if (typeof read === "object" && read !== null && Object.hasOwn(read, "capture"))
+      keys.push("capture");
+    exactKeys(read, keys, "Read result");
     if (own(read, "authenticity") !== "unchecked") fail(invalidReadDiagnostic.detail);
     const annexBytes = own(read, "annexBytes");
     if (annexBytes !== "checked" && annexBytes !== "not-supplied")

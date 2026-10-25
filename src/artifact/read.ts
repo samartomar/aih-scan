@@ -1,5 +1,13 @@
-import { canonicalBytes, scanIdFor, sha256, strictParse } from "../assessment/json.js";
-import { readReport } from "../assessment/report.js";
+import {
+  canonicalBytes,
+  errorDiagnostic,
+  requireFormat,
+  scanIdFor,
+  sha256,
+  strictParse,
+  UnsupportedFormatError,
+} from "../assessment/json.js";
+import { captureReadView, readReport } from "../assessment/report.js";
 import { validateBundle, validateStatement } from "./bundle.js";
 import type { AnnexDescriptor, Artifact, ReadArtifactResult, ValidatedArtifact } from "./types.js";
 import {
@@ -12,19 +20,19 @@ import {
   limited,
   object,
   text,
-  unsupported,
   validScanId,
 } from "./validation.js";
 
 export async function validateArtifact(bytes: Uint8Array): Promise<ValidatedArtifact> {
   if (!(bytes instanceof Uint8Array)) invalid();
   if (bytes.length > artifactLimits.artifact) limited();
-  const raw = object(
-    strictParse(bytes, "artifact", artifactLimits.artifact),
-    ["schema", "scanId", "report", "annexes"],
-    ["attestation"],
-  );
-  if (raw.schema !== "urn:aihq:scan:artifact:1.0.0") unsupported();
+  const parsed = strictParse(bytes, "artifact", artifactLimits.artifact);
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed))
+    requireFormat("schema" in parsed ? parsed.schema : undefined, "$.schema", [
+      "urn:aihq:scan:artifact:1.0.0",
+    ]);
+  const raw = object(parsed, ["schema", "scanId", "report", "annexes"], ["attestation"]);
+  if (raw.schema !== "urn:aihq:scan:artifact:1.0.0") invalid();
   validScanId(raw.scanId);
   const report = object(raw.report, ["schema", "mediaType", "sha256", "byteLength", "bytesBase64"]);
   text(report.schema);
@@ -81,6 +89,7 @@ export async function readArtifact(bytes: Uint8Array): Promise<ReadArtifactResul
         status: "unsupported-report",
         scanId: artifact.scanId,
         reportSchema: artifact.report.schema,
+        diagnostics: result.diagnostics,
       };
     }
     if (result.report.schema !== artifact.report.schema) invalid("byte-mismatch");
@@ -91,10 +100,13 @@ export async function readArtifact(bytes: Uint8Array): Promise<ReadArtifactResul
       status: "read",
       scanId: artifact.scanId,
       report: result.report,
+      capture: captureReadView(result.report),
       authenticity: "unchecked",
       annexBytes: "checked",
     };
   } catch (error) {
+    if (error instanceof UnsupportedFormatError)
+      return { status: "invalid", diagnostics: [errorDiagnostic(error)] };
     const code =
       error instanceof Error && "code" in error && error.code === "resource-limit"
         ? "resource-limit"

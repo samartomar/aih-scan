@@ -1063,3 +1063,53 @@ this differs from hashing the serialized file. The helper preserves projection
 custody: a parsed or copied envelope is rejected. To import a saved envelope, use
 Core's public canonical-byte parser and digest helper, then run the normal Core
 evidence and authority checks. Neither digest establishes approval or authority.
+
+### Executable capture and format 2.0.0
+
+Use `schema: "urn:aihq:scan:request:2.0.0"` with `runScan` for capture profile
+`aih-source-capture-2`. The CLI uses this request generation. File and file-link
+entries include `executable: true | false | "unknown"`. Git uses the pinned tree
+modes (`100755`/`100644`), local capture uses execute bits on platforms that expose
+them, and local Windows capture records `unknown`. A file link takes its target's
+state. Containment and source resource limits apply as before.
+
+The profile participates in the capture digest. Fresh observations use
+`aih-observation-v2`; their input and identity include executable state. An
+executable-only change invalidates the affected observation inputs. A selected
+closure can still reuse work when only an unrelated file's mode changed.
+
+Request `1.0.0` remains accepted and produces its original report generation;
+old reports and observation bodies retain their bytes and identities. Request
+1.0.0 retains its original mode-normalized detector snapshot; use profile 2 when
+analysis must observe executable state. A legacy
+observation can be reused in profile 2 only when every relevant file's current
+executable state is `unknown`. It remains an `aih-observation-v1` body.
+`readReport` and `readArtifact` return the original wire report plus a separate
+`capture` read view whose file entries expose absent legacy modes as `unknown`.
+That view is informational: serialize the original `report` for identity and
+artifact construction, rather than rehashing the projected entries.
+
+The new closed identifiers are `urn:aihq:scan:request:2.0.0`,
+`urn:aihq:scan:run-result:2.0.0` and `urn:aihq:scan:report:2.0.0`.
+The artifact container and signed statement are unchanged: they bind the declared
+report schema and exact report bytes. Unsupported schemas, capture profiles and
+observation formats carry a diagnostic with `code: "unsupported-format"`, `path`,
+`encountered` and `supported`; unknown reports retain status `unsupported-report`.
+
+The new request source forms reserve npm acquisition:
+
+```json
+{ "kind": "npm", "package": "@example/server", "version": "1.2.3" }
+```
+
+or `{ "kind": "npm", "archive": { "url": "https://example.invalid/server.tgz",
+"integrity": "sha512-<base64 digest>" } }`. Exact package coordinates may also
+include `archive`. Mutable versions are refused by the request contract. These
+forms currently return capture diagnostic `source-kind-unavailable`; acquisition
+belongs to [samartomar/aih-scan#120](https://github.com/samartomar/aih-scan/issues/120).
+
+Report and assessment run-result `2.0.0` require `reachability`, with `null` for
+non-Git sources and `"reachable" | "unchecked"` for Git. Until
+[samartomar/aih-scan#122](https://github.com/samartomar/aih-scan/issues/122) adds
+execution, Git capture records `unchecked`. Diagnostic run results may additionally
+record `unreachable` when that future check refuses a source. No outcome is guessed.

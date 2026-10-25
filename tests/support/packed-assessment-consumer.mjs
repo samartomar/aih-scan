@@ -22,11 +22,14 @@ import {
   signArtifact,
 } from "@aihq/scan/host";
 
+import { exerciseCaptureV2 } from "./capture-v2-cases.mjs";
+await exerciseCaptureV2();
+
 const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json", "utf8"));
 const goldenFixtures = await exerciseGoldenFixtures();
 assert.deepEqual(contractSupport.package, { name: manifest.name, version: manifest.version });
 assert.equal(contractSupport.schema, "urn:aihq:package-support:1.0.0");
-assert.equal(contractSupport.contracts.length, 7);
+assert.equal(contractSupport.contracts.length, 10);
 // Exactly the package-support 1.0.0 entry shape; lifecycle status is the sibling entrySupport.
 assert.deepEqual(contractSupport.entries, [
   { export: "@aihq/scan/contracts", runtime: "portable" },
@@ -159,7 +162,7 @@ const mismatchedCoverage = await readContentCoverage({ read: preparedRead, descr
 assert.equal(mismatchedCoverage.status, "mismatched");
 assert.deepEqual(mismatchedCoverage.unmatchedPaths, ["README.md"]);
 const unsupportedCoverage = await readContentCoverage({
-  read: await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:2.0.0"}')),
+  read: await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:99.0.0"}')),
   descriptors: [readme],
 });
 assert.equal(unsupportedCoverage.status, "unavailable");

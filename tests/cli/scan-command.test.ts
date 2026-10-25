@@ -82,7 +82,7 @@ test("sends the documented request for the real path of a target relative to io.
   expect(await runScanCommand(["child"], run.io)).toBe(0);
   expect(requests).toEqual([
     {
-      schema: "urn:aihq:scan:request:1.0.0",
+      schema: "urn:aihq:scan:request:2.0.0",
       source: { kind: "local", path: join(parent, "real", "child") },
       selection: { paths: "all", excludedPaths: [] },
       detectors: [
@@ -345,12 +345,14 @@ test("--json writes exactly the complete canonical run result and a newline to s
   expect(Object.keys(written).sort()).toEqual([
     "annexes",
     "diagnostics",
+    "reachability",
     "report",
     "scanId",
     "schema",
     "status",
   ]);
-  expect(written.schema).toBe("urn:aihq:scan:run-result:1.0.0");
+  expect(written.schema).toBe("urn:aihq:scan:run-result:2.0.0");
+  expect(written.reachability).toBeNull();
   expect(written.annexes).toHaveLength(2);
 });
 

@@ -69,8 +69,8 @@ describe("portable report reader", () => {
   });
   test("identifies an unsupported detailed report without pretending to read it", async () => {
     expect(
-      await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:2.0.0"}')),
-    ).toMatchObject({ status: "unsupported-report", reportSchema: "urn:aihq:scan:report:2.0.0" });
+      await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:99.0.0"}')),
+    ).toMatchObject({ status: "unsupported-report", reportSchema: "urn:aihq:scan:report:99.0.0" });
   });
   test("rejects noncanonical supported report bytes", async () => {
     expect(

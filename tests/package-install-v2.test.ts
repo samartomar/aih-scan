@@ -682,6 +682,10 @@ describe("published V2 package installation", () => {
       join(directory, "golden-fixture-cases.mjs"),
       readFileSync(join(root, "tests/support/golden-fixture-cases.mjs")),
     );
+    writeFileSync(
+      join(directory, "capture-v2-cases.mjs"),
+      readFileSync(join(root, "tests/support/capture-v2-cases.mjs")),
+    );
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
         cwd: directory,
