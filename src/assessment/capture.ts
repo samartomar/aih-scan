@@ -98,8 +98,13 @@ function captureTree(
     if (snapshotRoot) {
       const output = join(snapshotRoot, outputPath);
       mkdirSync(dirname(output), { recursive: true });
-      writeFileSync(output, bytes, { flag: "wx", mode: stat.mode & 0o777 });
-      chmodSync(output, stat.mode & 0o777);
+      if (profile === "aih-source-capture-2") {
+        writeFileSync(output, bytes, { flag: "wx", mode: stat.mode & 0o777 });
+        chmodSync(output, stat.mode & 0o777);
+      } else {
+        // Legacy observation inputs omit modes: preserve their original normalized snapshot.
+        writeFileSync(output, bytes, { flag: "wx" });
+      }
     }
     return { sha256: hash(bytes), byteLength: bytes.length, ...state(outputPath, stat) };
   };

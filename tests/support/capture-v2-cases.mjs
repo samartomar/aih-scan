@@ -142,6 +142,7 @@ export async function exerciseCaptureV2() {
   unknown.source.capture.captureSha256 = createHash('sha256').update(bytes({ domain: 'aih.scan.capture.v2', profile: unknown.source.capture.profile, entries: unknown.source.capture.entries })).digest('hex');
   assert.equal((await readReport(bytes(unknown))).status, 'invalid');
   await exerciseGitModesV2(request);
+  await exerciseLegacyModeNormalization(request);
   const limited = await runScan({ ...scopedRequest, limits: { maxSourceEntries: 1 } });
   assert.equal(limited.phase, 'capture'); assert.equal(limited.diagnostics[0].code, 'resource-limit');
   const firstRead = await readReport(bytes(first.report));
@@ -181,4 +182,38 @@ async function exerciseGitModesV2(request) {
     assert.equal(run.reachability, 'unchecked'); assert.equal(run.report.reachability, 'unchecked');
     assert.deepEqual(run.report.source.capture.entries.map(e => [e.path,e.executable]), [['executable',true],['regular',false]]);
   } finally { process.env.PATH = oldPath; }
+}
+
+async function exerciseLegacyModeNormalization(request) {
+  if (process.platform === 'win32') return;
+  const root = resolve('capture-v2-legacy-mode'); mkdirSync(root);
+  const license = resolve(root, 'LICENSE');
+  writeFileSync(license, 'MIT License\n', { mode: 0o644 });
+  const detectors = [{ detectorId: 'detector.aih-trust-lint', configuration: { internalScopes: [], mcpConfigPaths: [] } }];
+  const legalText = result => {
+    assert.equal(result.status, 'assessment', JSON.stringify(result));
+    assert.equal(result.report.completion, 'complete');
+    return JSON.parse(Buffer.from(result.annexes[0].bytesBase64, 'base64')).runs[0].artifacts[0].properties['aih-trust/v1'].legalText;
+  };
+  for (const version of ['1.0.0', '2.0.0']) {
+    const scoped = { ...request, schema: `urn:aihq:scan:request:${version}`, source: { kind: 'local', path: root }, detectors };
+    const retained = createRetainedObservationsV1();
+    chmodSync(license, 0o644);
+    const first = await runScan(scoped, { retained });
+    assert.equal(legalText(first), true);
+    chmodSync(license, 0o755);
+    const fresh = await runScan(scoped);
+    const next = await runScan(scoped, { retained });
+    assert.equal(legalText(fresh), version === '1.0.0', 'legacy input must remain mode-normalized; profile 2 observes executable state');
+    assert.equal(legalText(next), legalText(fresh), 'retained facts must equal fresh execution');
+    if (version === '1.0.0') {
+      assert.equal(next.report.source.capture.captureSha256, first.report.source.capture.captureSha256);
+      assert.equal(next.report.results[0].observations[0].origin, 'reused');
+      assert.deepEqual(next.report.results[0].observations[0].body, first.report.results[0].observations[0].body);
+      assert.equal(next.report.results[0].observations[0].observationId, first.report.results[0].observations[0].observationId);
+    } else {
+      assert.notEqual(next.report.source.capture.captureSha256, first.report.source.capture.captureSha256);
+      assert.equal(next.report.results[0].observations[0].origin, 'fresh');
+    }
+  }
 }

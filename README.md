@@ -1079,7 +1079,9 @@ executable-only change invalidates the affected observation inputs. A selected
 closure can still reuse work when only an unrelated file's mode changed.
 
 Request `1.0.0` remains accepted and produces its original report generation;
-old reports and observation bodies retain their bytes and identities. A legacy
+old reports and observation bodies retain their bytes and identities. Request
+1.0.0 retains its original mode-normalized detector snapshot; use profile 2 when
+analysis must observe executable state. A legacy
 observation can be reused in profile 2 only when every relevant file's current
 executable state is `unknown`. It remains an `aih-observation-v1` body.
 `readReport` and `readArtifact` return the original wire report plus a separate
