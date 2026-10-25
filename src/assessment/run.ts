@@ -40,9 +40,11 @@ import {
   errorDiagnostic,
   fail,
   observationIdFor,
+  requireFormat,
   scanIdFor,
   sha256,
   strictParse,
+  UnsupportedFormatError,
 } from "./json.js";
 import { nativeImplementationV1 } from "./native-implementation.js";
 import { type PriorArtifactCandidate, readPriorArtifacts } from "./prior-artifacts.js";
@@ -74,6 +76,7 @@ import {
   type ScanRequest,
   type ScanRunResult,
   schemas,
+  schemasV2,
 } from "./types.js";
 
 export interface RunScanOptions extends CaptureOptions {
@@ -178,9 +181,10 @@ function requestSnapshot(raw: unknown): ScanRequest {
     "request bytes",
     limitCeilings.maxRequestBytes,
   );
-  const parsed = requestShape.safeParse(
-    strictParse(bytes, "request", limitCeilings.maxRequestBytes),
-  );
+  const snapshot = strictParse(bytes, "request", limitCeilings.maxRequestBytes);
+  if (snapshot && typeof snapshot === "object" && "schema" in snapshot)
+    requireFormat(snapshot.schema, "$.schema", [schemas.request, schemasV2.request]);
+  const parsed = requestShape.safeParse(snapshot);
   if (!parsed.success) fail("Request does not match the closed supported schema");
   const request = parsed.data as ScanRequest;
   if (new Set(request.detectors.map((d) => d.detectorId)).size !== request.detectors.length)
@@ -378,13 +382,14 @@ function unsignedArtifact(
   reportDigest: string,
   annexes: AnnexDescriptor[],
   payloads: { id: string; bytesBase64: string }[],
+  reportSchema: ReportBody["schema"],
 ) {
   const byId = new Map(payloads.map((payload) => [payload.id, payload.bytesBase64]));
   return {
     schema: schemas.artifact,
     scanId,
     report: {
-      schema: schemas.report,
+      schema: reportSchema,
       mediaType: "application/json",
       sha256: reportDigest,
       byteLength: reportBytes.length,
@@ -413,11 +418,15 @@ export async function runScanPrepared(
   options: RunScanOptions = {},
   prepare?: PrepareDetectorConfigurations,
 ): Promise<ScanRunResult> {
+  const v2 =
+    typeof raw === "object" &&
+    raw !== null &&
+    Object.getOwnPropertyDescriptor(raw, "schema")?.value === schemasV2.request;
   const diagnostic = (
     phase: "request" | "capture" | "assembly",
     error: unknown,
   ): ScanRunResult => ({
-    schema: schemas.runResult,
+    schema: v2 || error instanceof UnsupportedFormatError ? schemasV2.runResult : schemas.runResult,
     status: "diagnostic",
     phase,
     diagnostics: [errorDiagnostic(error)],
@@ -491,7 +500,10 @@ export async function runScanPrepared(
       });
     }
     const reportFor = (units: DetectorResult[], descriptors: AnnexDescriptor[]): ReportBody => ({
-      schema: schemas.report,
+      schema: v2 ? schemasV2.report : schemas.report,
+      ...(v2
+        ? { reachability: request.source.kind === "git" ? ("unchecked" as const) : null }
+        : {}),
       producer: packageIdentity,
       createdAt: new Date().toISOString(),
       source:
@@ -635,6 +647,7 @@ export async function runScanPrepared(
             "0".repeat(64),
             candidate.annexes,
             [...payloads, payload],
+            candidate.schema,
           ),
         ).length +
           remaining.length * 1024 <=
@@ -978,7 +991,7 @@ export async function runScanPrepared(
           covered = run.coverage.coveredPaths.filter((path) => active.includes(path)).sort();
         ordered(covered, "detector covered paths");
         const body: ObservationBody = {
-          format: "aih-observation-v1",
+          format: v2 ? "aih-observation-v2" : "aih-observation-v1",
           input: observationInputFor({
             detectorId: id,
             detectorVersion: detector.definition?.version ?? native.analyzerVersion,
@@ -1027,7 +1040,14 @@ export async function runScanPrepared(
     const bytes = canonicalBytes(report);
     bound(bytes.length <= limits.maxReportBytes, "report bytes", limits.maxReportBytes);
     const scanId = await scanIdFor(bytes);
-    const unsigned = unsignedArtifact(bytes, scanId, await sha256(bytes), annexes, payloads);
+    const unsigned = unsignedArtifact(
+      bytes,
+      scanId,
+      await sha256(bytes),
+      annexes,
+      payloads,
+      report.schema,
+    );
     bound(
       canonicalBytes(unsigned).length <= limits.maxArtifactBytes,
       "artifact bytes",
@@ -1046,8 +1066,11 @@ export async function runScanPrepared(
         });
     }
     return {
-      schema: schemas.runResult,
+      schema: v2 ? schemasV2.runResult : schemas.runResult,
       status: "assessment",
+      ...(v2
+        ? { reachability: request.source.kind === "git" ? ("unchecked" as const) : null }
+        : {}),
       scanId,
       report,
       annexes: payloads,

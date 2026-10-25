@@ -8,7 +8,7 @@ import {
 
 export class ContractError extends TypeError {
   constructor(
-    readonly code: "invalid-input" | "resource-limit",
+    readonly code: "invalid-input" | "resource-limit" | "source-kind-unavailable",
     message: string,
   ) {
     super(message);
@@ -85,7 +85,14 @@ export async function scanIdFor(bytes: Uint8Array): Promise<`scan:sha256:${strin
   return `scan:sha256:${await sha256(input)}`;
 }
 export async function observationIdFor(body: unknown): Promise<`observation:sha256:${string}`> {
-  const prefix = new TextEncoder().encode("aih.scan.observation.v1\0"),
+  const prefix = new TextEncoder().encode(
+      typeof body === "object" &&
+        body !== null &&
+        "format" in body &&
+        body.format === "aih-observation-v2"
+        ? "aih.scan.observation.v2\0"
+        : "aih.scan.observation.v1\0",
+    ),
     bytes = canonicalBytes(body);
   const input = new Uint8Array(prefix.length + bytes.length);
   input.set(prefix);
@@ -144,7 +151,36 @@ export function base64Decode(text: string, maxBytes: number): Uint8Array {
 export function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, at) => byte === right[at]);
 }
-export function errorDiagnostic(error: unknown): { code: string; detail: string } {
+export class UnsupportedFormatError extends TypeError {
+  readonly code = "unsupported-format";
+  constructor(
+    readonly path: string,
+    readonly encountered: string,
+    readonly supported: string[],
+  ) {
+    super(`Unsupported format at ${path}`);
+  }
+}
+export function formatDiagnostic(
+  path: string,
+  encountered: string,
+  supported: string[],
+): import("./types.js").Diagnostic {
+  return {
+    code: "unsupported-format",
+    path,
+    encountered,
+    supported,
+    detail: `Unsupported format at ${path}`,
+  };
+}
+export function requireFormat(value: unknown, path: string, supported: string[]): void {
+  if (typeof value === "string" && value.length <= 256 && !supported.includes(value))
+    throw new UnsupportedFormatError(path, value, supported);
+}
+export function errorDiagnostic(error: unknown): import("./types.js").Diagnostic {
+  if (error instanceof UnsupportedFormatError)
+    return formatDiagnostic(error.path, error.encountered, error.supported);
   return {
     code: error instanceof ContractError ? error.code : "invalid-input",
     detail:

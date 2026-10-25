@@ -136,7 +136,7 @@ describe.each(["singleton", "batch"])("%s coverage contract", (reader) => {
 
     test("names an unsupported report as unavailable", async () => {
       const read = await readReport(
-        new TextEncoder().encode('{"schema":"urn:aihq:scan:report:2.0.0"}'),
+        new TextEncoder().encode('{"schema":"urn:aihq:scan:report:99.0.0"}'),
       );
       expect(await readContentCoverage({ read, descriptors: [skill] })).toMatchObject({
         status: "unavailable",

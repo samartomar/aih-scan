@@ -16,7 +16,7 @@ import {
   type ReportBody,
   type ScanRequest,
   type ScanRunResult,
-  schemas,
+  schemasV2,
 } from "../assessment/types.js";
 import { resolveDetectorCapabilityV1 } from "../capability/detector-capability-v1.js";
 import { TRUST_LINT_DETECTOR_ID_V1 } from "../detectors/trust-lint/findings.js";
@@ -494,7 +494,7 @@ export async function runScanCommand(args: readonly string[], io: ScanCommandIo)
       requestSource = { kind: "git", repository: git.repository, commit: git.commit };
     }
     const request: ScanRequest = {
-      schema: schemas.request,
+      schema: schemasV2.request,
       source: requestSource,
       selection: { paths: "all", excludedPaths: [] },
       detectors: detectorIds.map((detectorId) => ({

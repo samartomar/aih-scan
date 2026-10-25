@@ -102,11 +102,17 @@ export type ReadArtifactResult =
       status: "read";
       scanId: string;
       report: ReportBody;
+      capture?: import("../assessment/types.js").Capture;
       authenticity: "unchecked";
       annexBytes: "checked";
     }
-  | { status: "unsupported-report"; scanId: string; reportSchema: string }
-  | { status: "invalid"; diagnostics: { code: string; detail: string }[] };
+  | {
+      status: "unsupported-report";
+      scanId: string;
+      reportSchema: string;
+      diagnostics?: import("../assessment/types.js").Diagnostic[];
+    }
+  | { status: "invalid"; diagnostics: import("../assessment/types.js").Diagnostic[] };
 export interface ValidatedArtifact {
   artifact: Artifact;
   reportBytes: Uint8Array;

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   constants,
   fstatSync,
@@ -20,11 +21,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readSourceEntryNamesV1 } from "../observation/source-entry-name-v1.js";
 import { gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
 import { GitContainmentError, runPinnedGit as git } from "./git-runner.js";
-import { bound, canonicalBytes, fail, hasControl } from "./json.js";
+import { bound, ContractError, canonicalBytes, fail, hasControl } from "./json.js";
 import { validateEntries } from "./report.js";
 import { pathShape } from "./shapes.js";
 import { decodeStrictUtf8V1 } from "./strict-json.js";
 import type { Capture, CaptureEntry, Limits, ScanRequest, Selection } from "./types.js";
+import { schemasV2 } from "./types.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const posix = (root: string, path: string) => relative(root, path).split(sep).join("/");
@@ -33,7 +35,8 @@ const sameIdentity = (a: Stats, b: Stats) =>
   a.ino === b.ino &&
   a.size === b.size &&
   a.mtimeMs === b.mtimeMs &&
-  a.ctimeMs === b.ctimeMs;
+  a.ctimeMs === b.ctimeMs &&
+  a.mode === b.mode;
 function contained(root: string, target: string): string {
   const child = relative(root, target);
   if (!child || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child))
@@ -72,11 +75,21 @@ function captureTree(
   limits: Limits,
   snapshotRoot?: string,
   signal?: AbortSignal,
+  profile: Capture["profile"] = "aih-source-capture-1",
+  gitModes?: ReadonlyMap<string, boolean>,
 ): Capture {
   const rootStat = lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("Source must be a real directory");
   const realRoot = realpathSync.native(root),
     entries: CaptureEntry[] = [];
+  const state = (path: string, stat: Stats) =>
+    profile === "aih-source-capture-1"
+      ? {}
+      : {
+          executable:
+            gitModes?.get(path) ??
+            (process.platform === "win32" ? ("unknown" as const) : (stat.mode & 0o111) !== 0),
+        };
   let total = 0;
   const copyFile = (path: string, stat: Stats, outputPath: string) => {
     if (stat.nlink !== 1) fail("Hard-linked source files are not supported");
@@ -85,9 +98,10 @@ function captureTree(
     if (snapshotRoot) {
       const output = join(snapshotRoot, outputPath);
       mkdirSync(dirname(output), { recursive: true });
-      writeFileSync(output, bytes, { flag: "wx" });
+      writeFileSync(output, bytes, { flag: "wx", mode: stat.mode & 0o777 });
+      chmodSync(output, stat.mode & 0o777);
     }
-    return { sha256: hash(bytes), byteLength: bytes.length };
+    return { sha256: hash(bytes), byteLength: bytes.length, ...state(outputPath, stat) };
   };
   const visit = (directory: string) => {
     if (signal?.aborted) fail("Source capture was cancelled");
@@ -127,6 +141,7 @@ function captureTree(
             target,
             sha256: hash(bytes),
             byteLength: bytes.length,
+            ...state(target, targetStat),
           });
         } else if (targetStat.isDirectory()) entries.push({ kind: "directory-link", path, target });
         else fail("Source link target type is unsupported");
@@ -157,10 +172,14 @@ function captureTree(
   entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   validateEntries(entries, limits.maxSourceEntries, limits.maxSourceBytes);
   return {
-    profile: "aih-source-capture-1",
+    profile,
     entries,
     captureSha256: hash(
-      canonicalBytes({ domain: "aih.scan.capture.v1", profile: "aih-source-capture-1", entries }),
+      canonicalBytes({
+        domain: profile === "aih-source-capture-1" ? "aih.scan.capture.v1" : "aih.scan.capture.v2",
+        profile,
+        entries,
+      }),
     ),
   };
 }
@@ -184,7 +203,15 @@ export async function captureSource(
     snapshotRoot = join(stage, "snapshot");
   mkdirSync(snapshotRoot);
   try {
+    const profile =
+      request.schema === schemasV2.request ? "aih-source-capture-2" : "aih-source-capture-1";
+    const gitModes = new Map<string, boolean>();
     let sourceRoot: string;
+    if (request.source.kind === "npm")
+      throw new ContractError(
+        "source-kind-unavailable",
+        "npm source acquisition is not yet implemented",
+      );
     if (request.source.kind === "local") sourceRoot = resolve(request.source.path);
     else {
       const acquired = join(stage, "git"),
@@ -331,21 +358,36 @@ export async function captureSource(
             output,
             targetEntry.type === "tree" ? "dir" : "file",
           );
-        } else
+        } else {
           writeFileSync(output, bytes, {
             flag: "wx",
             mode: member.mode === "100755" ? 0o700 : 0o600,
           });
+          chmodSync(output, member.mode === "100755" ? 0o700 : 0o600);
+        }
+      }
+      for (const member of members) {
+        if (member.mode === "100755" || member.mode === "100644")
+          gitModes.set(member.path, member.mode === "100755");
       }
       sourceRoot = material;
     }
-    const capture = captureTree(sourceRoot, limits, snapshotRoot, options.signal);
+    const sourceModes = request.source.kind === "git" ? gitModes : undefined;
+    const snapshotModes = process.platform === "win32" ? sourceModes : undefined;
+    const capture = captureTree(
+      sourceRoot,
+      limits,
+      snapshotRoot,
+      options.signal,
+      profile,
+      sourceModes,
+    );
     // Re-read the original and the private snapshot before trusting the source identity.
     if (
-      captureTree(sourceRoot, limits, undefined, options.signal).captureSha256 !==
-        capture.captureSha256 ||
-      captureTree(snapshotRoot, limits, undefined, options.signal).captureSha256 !==
-        capture.captureSha256
+      captureTree(sourceRoot, limits, undefined, options.signal, profile, sourceModes)
+        .captureSha256 !== capture.captureSha256 ||
+      captureTree(snapshotRoot, limits, undefined, options.signal, profile, snapshotModes)
+        .captureSha256 !== capture.captureSha256
     )
       fail("Source changed while its snapshot was captured");
     const files = capture.entries.filter((entry) => "sha256" in entry).map((entry) => entry.path),
@@ -364,7 +406,10 @@ export async function captureSource(
       selection: { paths, excludedPaths },
       cleanup: () => rmSync(stage, { recursive: true, force: true }),
       assertUnchanged: () => {
-        if (captureTree(snapshotRoot, limits).captureSha256 !== capture.captureSha256)
+        if (
+          captureTree(snapshotRoot, limits, undefined, undefined, profile, snapshotModes)
+            .captureSha256 !== capture.captureSha256
+        )
           fail("Detector input snapshot lost its source binding");
       },
     };

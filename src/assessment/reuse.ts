@@ -1,4 +1,5 @@
 import type { ArtifactAnnex } from "../artifact/types.js";
+import { compatibleObservationInput } from "./input-scope.js";
 import {
   base64Decode,
   canonicalBytes,
@@ -182,7 +183,11 @@ async function admitCandidateV1(
     return missV1(
       `The ${core.label} observation names a different detector, so the current detector runs fresh.`,
     );
-  if (!equalBytes(canonicalBytes(body.input), canonicalBytes(core.input)))
+  const compatible = compatibleObservationInput(body, core.input);
+  if (
+    compatible === undefined ||
+    !equalBytes(canonicalBytes(body.input), canonicalBytes(compatible))
+  )
     return missV1(
       `The current detector input differs from the ${core.label} observation input, so the affected scope is measured fresh.`,
     );

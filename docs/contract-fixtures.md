@@ -70,3 +70,16 @@ without fixture fields. Referencing fixtures from a later support declaration
 belongs to samartomar/aih-scan#130. The one-off cross-package `checkContracts`
 receipt from samartomar/aih-core#102 is an additional merge gate for
 samartomar/aih-scan#128; repository checks alone do not satisfy it.
+
+## Executable capture contracts (2.0.0)
+
+Request, run-result and report `2.0.0` schemas and golden documents are exported
+beside the `1.0.0` schemas at `@aihq/scan/schemas/<name>/2.0.0.json` and
+`2.0.0.fixtures.json`. These are document versions, not package release promises.
+`tools/generate-assessment-v2-schemas.mjs` owns the new schemas (build first);
+`tools/generate-assessment-v2-fixtures.mjs` derives specimens from the existing
+real grill-me fixture materials. Neither generator rewrites the legacy documents.
+Mode variants are explicit contract specimens, not native Windows execution or
+repository reachability evidence. The packed consumer additionally exercises
+local modes, links, resource limits, observation reuse and a fixture Git executable
+at the process boundary, without contacting a remote repository.

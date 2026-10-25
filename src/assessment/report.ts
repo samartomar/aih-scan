@@ -1,3 +1,4 @@
+import { compatibleObservationInput } from "./input-scope.js";
 import {
   assertControlJson,
   bound,
@@ -5,7 +6,9 @@ import {
   equalBytes,
   errorDiagnostic,
   fail,
+  formatDiagnostic,
   observationIdFor,
+  requireFormat,
   scanIdFor,
   sha256,
   strictParse,
@@ -17,6 +20,7 @@ import {
   type ReadReportResult,
   type ReportBody,
   schemas,
+  schemasV2,
 } from "./types.js";
 export function ordered(values: readonly string[], label: string): void {
   for (let i = 1; i < values.length; i++)
@@ -58,7 +62,9 @@ export function validateEntries(
       if (
         entry.kind === "file-link" &&
         target.kind === "file" &&
-        (entry.sha256 !== target.sha256 || entry.byteLength !== target.byteLength)
+        (entry.sha256 !== target.sha256 ||
+          entry.byteLength !== target.byteLength ||
+          entry.executable !== target.executable)
       )
         fail("File link must bind target bytes");
     }
@@ -71,11 +77,35 @@ export function validateEntries(
 }
 export async function validateReport(value: unknown): Promise<ReportBody> {
   assertControlJson(value);
+  if (typeof value === "object" && value !== null && "schema" in value) {
+    requireFormat(value.schema, "$.schema", [schemas.report, schemasV2.report]);
+    const raw = value as Record<string, unknown>;
+    const source = raw.source as { capture?: { profile?: unknown } } | undefined;
+    requireFormat(source?.capture?.profile, "$.source.capture.profile", [
+      "aih-source-capture-1",
+      "aih-source-capture-2",
+    ]);
+    if (Array.isArray(raw.results))
+      for (const [i, result] of raw.results.entries()) {
+        if (result && Array.isArray(result.observations))
+          for (const [j, observation] of result.observations.entries())
+            requireFormat(
+              observation?.body?.format,
+              `$.results[${i}].observations[${j}].body.format`,
+              ["aih-observation-v1", "aih-observation-v2"],
+            );
+      }
+  }
   const parsed = reportShape.safeParse(value);
   if (!parsed.success) fail("Report does not match its closed supported schema");
   const report = parsed.data as ReportBody,
     limits = report.effectiveLimits,
     capture = report.source.capture;
+  if (
+    report.schema === schemasV2.report &&
+    (report.source.kind === "git" ? report.reachability === null : report.reachability !== null)
+  )
+    fail("Reachability is a Git source fact and must be null for other sources");
   bound(
     canonicalBytes(report).length <= limits.maxReportBytes,
     "report bytes",
@@ -86,7 +116,10 @@ export async function validateReport(value: unknown): Promise<ReportBody> {
     capture.captureSha256 !==
     (await sha256(
       canonicalBytes({
-        domain: "aih.scan.capture.v1",
+        domain:
+          capture.profile === "aih-source-capture-1"
+            ? "aih.scan.capture.v1"
+            : "aih.scan.capture.v2",
         profile: capture.profile,
         entries: capture.entries,
       }),
@@ -175,8 +208,16 @@ export async function validateReport(value: unknown): Promise<ReportBody> {
       observationIds.add(observation.observationId);
       if (observation.origin === "fresh" && observation.fromScanId !== undefined)
         fail("Fresh observation cannot name a previous assessment");
+      if (report.schema === schemas.report && observation.body.format !== "aih-observation-v1")
+        fail("Report 1 requires observation v1");
       const body = observation.body,
         input = body.input;
+      if (
+        report.schema === schemasV2.report &&
+        body.format === "aih-observation-v1" &&
+        observation.origin !== "reused"
+      )
+        fail("Legacy observations in profile 2 must retain reused provenance");
       if (observation.observationId !== (await observationIdFor(body)))
         fail("Observation digest mismatch");
       if (body.startedAt > body.completedAt || body.completedAt > report.createdAt)
@@ -190,10 +231,22 @@ export async function validateReport(value: unknown): Promise<ReportBody> {
       subset(input.targetPaths, active, "observation targets");
       subset(body.coverage.coveredPaths, new Set(input.targetPaths), "observation coverage");
       validateEntries(input.entries, limits.maxSourceEntries, limits.maxSourceBytes);
-      for (const entry of input.entries)
-        if (!same(entry, entries.get(entry.path) ?? null))
+      const currentInput = compatibleObservationInput(body, {
+        ...input,
+        entries: input.entries.map((entry) => entries.get(entry.path) ?? entry),
+      });
+      if (currentInput === undefined)
+        fail("Legacy observation cannot cover known executable states");
+      for (const [index, entry] of input.entries.entries())
+        if (!entries.has(entry.path) || !same(entry, currentInput!.entries[index]))
           fail("Observation relevant input differs from capture");
-      if (input.scopeKind === "source-tree" && !same(input.entries, capture.entries))
+      if (
+        input.scopeKind === "source-tree" &&
+        !same(
+          input.entries,
+          compatibleObservationInput(body, { ...input, entries: capture.entries })?.entries,
+        )
+      )
         fail("Whole-tree observation must bind the complete capture");
       const relevant = new Map(input.entries.map((entry) => [entry.path, entry]));
       for (const path of input.targetPaths)
@@ -267,8 +320,15 @@ export async function readReport(bytes: Uint8Array): Promise<ReadReportResult> {
     )
       fail("Report schema is required");
     const scanId = await scanIdFor(bytes);
-    if (value.schema !== schemas.report)
-      return { status: "unsupported-report", scanId, reportSchema: value.schema };
+    if (value.schema !== schemas.report && value.schema !== schemasV2.report)
+      return {
+        status: "unsupported-report",
+        scanId,
+        reportSchema: value.schema,
+        diagnostics: [
+          formatDiagnostic("$.schema", value.schema, [schemas.report, schemasV2.report]),
+        ],
+      };
     const report = await validateReport(value);
     if (!equalBytes(bytes, canonicalBytes(report)))
       fail("Supported reports require canonical bytes");
@@ -276,10 +336,22 @@ export async function readReport(bytes: Uint8Array): Promise<ReadReportResult> {
       status: "read",
       scanId,
       report,
+      capture: captureReadView(report),
       authenticity: "unchecked",
       annexBytes: "not-supplied",
     };
   } catch (error) {
     return { status: "invalid", diagnostics: [errorDiagnostic(error)] };
   }
+}
+
+/** Material read view, separate from the original identity-bearing wire report. */
+export function captureReadView(report: ReportBody): import("./types.js").Capture {
+  const capture = report.source.capture;
+  return {
+    ...capture,
+    entries: capture.entries.map((entry) =>
+      "sha256" in entry ? { ...entry, executable: entry.executable ?? "unknown" } : { ...entry },
+    ),
+  };
 }

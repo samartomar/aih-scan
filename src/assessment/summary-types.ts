@@ -55,7 +55,11 @@ export interface ScanSummary {
   scanId: string;
   createdAt: string;
   producer: Producer;
-  source: ({ kind: "local" } | { kind: "git"; repository: string; commit: string }) & {
+  source: (
+    | { kind: "local" }
+    | { kind: "git"; repository: string; commit: string }
+    | import("./types.js").NpmSource
+  ) & {
     capture: { profile: string; captureSha256: string; entries: number; files: number };
   };
   selection: Selection;

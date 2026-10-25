@@ -7,6 +7,17 @@ export const schemas = Object.freeze({
   evidenceAssociation: "urn:aihq:scan:evidence-association:1.0.0",
   materialChange: "urn:aihq:scan:material-change:1.0.0",
 } as const);
+export const schemasV2 = Object.freeze({
+  request: "urn:aihq:scan:request:2.0.0",
+  runResult: "urn:aihq:scan:run-result:2.0.0",
+  report: "urn:aihq:scan:report:2.0.0",
+} as const);
+export type ExecutableState = boolean | "unknown";
+export type Reachability = "reachable" | "unchecked";
+/** Exact npm coordinates, optionally with independently pinned archive custody. */
+export type NpmSource =
+  | { kind: "npm"; package: string; version: string; archive?: { url: string; integrity: string } }
+  | { kind: "npm"; archive: { url: string; integrity: string } };
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Digest = string;
 export type ScanId = `scan:sha256:${string}`;
@@ -15,6 +26,8 @@ export interface Diagnostic {
   detail: string;
   detectorId?: string;
   path?: string;
+  encountered?: string;
+  supported?: string[];
 }
 export interface Producer {
   name: "@aihq/scan";
@@ -23,10 +36,17 @@ export interface Producer {
 export type CaptureEntry =
   | { kind: "directory"; path: string }
   | { kind: "directory-link"; path: string; target: string }
-  | { kind: "file"; path: string; sha256: Digest; byteLength: number }
-  | { kind: "file-link"; path: string; target: string; sha256: Digest; byteLength: number };
+  | { kind: "file"; path: string; sha256: Digest; byteLength: number; executable?: ExecutableState }
+  | {
+      kind: "file-link";
+      path: string;
+      target: string;
+      sha256: Digest;
+      byteLength: number;
+      executable?: ExecutableState;
+    };
 export interface Capture {
-  profile: "aih-source-capture-1";
+  profile: "aih-source-capture-1" | "aih-source-capture-2";
   entries: CaptureEntry[];
   captureSha256: Digest;
 }
@@ -36,7 +56,8 @@ export interface Selection {
 }
 export type Source =
   | { kind: "local"; capture: Capture }
-  | { kind: "git"; repository: string; commit: string; capture: Capture };
+  | { kind: "git"; repository: string; commit: string; capture: Capture }
+  | (NpmSource & { capture: Capture });
 export interface Limits {
   maxSourceEntries: number;
   maxSourceBytes: number;
@@ -101,7 +122,7 @@ export interface Finding {
   supportingEvidence: Field<{ annexId: string; ordinal: number }>;
 }
 export interface ObservationBody {
-  format: "aih-observation-v1";
+  format: "aih-observation-v1" | "aih-observation-v2";
   input: ObservationInput;
   startedAt: string;
   completedAt: string;
@@ -130,7 +151,8 @@ export interface DetectorResult {
   diagnostics: Diagnostic[];
 }
 export interface ReportBody {
-  schema: typeof schemas.report;
+  schema: typeof schemas.report | typeof schemasV2.report;
+  reachability?: Reachability | null;
   producer: Producer;
   createdAt: string;
   source: Source;
@@ -144,8 +166,11 @@ export interface ReportBody {
 }
 export type Location = { kind: "file"; path: string } | { kind: "https"; url: string };
 export interface ScanRequest {
-  schema: typeof schemas.request;
-  source: { kind: "local"; path: string } | { kind: "git"; repository: string; commit: string };
+  schema: typeof schemas.request | typeof schemasV2.request;
+  source:
+    | { kind: "local"; path: string }
+    | { kind: "git"; repository: string; commit: string }
+    | NpmSource;
   selection: { paths: "all" | string[]; excludedPaths: string[] };
   detectors: { detectorId: string; profileId?: string; configuration: Json }[];
   priorArtifacts?: { scanId: ScanId; location: Location }[];
@@ -153,7 +178,8 @@ export interface ScanRequest {
 }
 export type ScanRunResult =
   | {
-      schema: typeof schemas.runResult;
+      schema: typeof schemas.runResult | typeof schemasV2.runResult;
+      reachability?: Reachability | "unreachable" | null;
       status: "assessment";
       scanId: ScanId;
       report: ReportBody;
@@ -161,7 +187,8 @@ export type ScanRunResult =
       diagnostics: Diagnostic[];
     }
   | {
-      schema: typeof schemas.runResult;
+      schema: typeof schemas.runResult | typeof schemasV2.runResult;
+      reachability?: Reachability | "unreachable" | null;
       status: "diagnostic";
       phase: "request" | "capture" | "assembly";
       diagnostics: Diagnostic[];
@@ -171,10 +198,17 @@ export type ReadReportResult =
       status: "read";
       scanId: ScanId;
       report: ReportBody;
+      /** Read-only projection; legacy file modes are explicitly unknown. Original report bytes stay unchanged. */
+      capture?: Capture;
       authenticity: "unchecked";
       annexBytes: "not-supplied";
     }
-  | { status: "unsupported-report"; scanId: ScanId; reportSchema: string }
+  | {
+      status: "unsupported-report";
+      scanId: ScanId;
+      reportSchema: string;
+      diagnostics?: Diagnostic[];
+    }
   | { status: "invalid"; diagnostics: Diagnostic[] };
 /** One exact file a consumer expects a report to have assessed. */
 export interface ContentDescriptor {
