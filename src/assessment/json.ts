@@ -12,6 +12,10 @@ export class ContractError extends TypeError {
       | "invalid-input"
       | "resource-limit"
       | "source-kind-unavailable"
+      | "npm-version-not-exact"
+      | "npm-acquisition-failed"
+      | "npm-integrity-mismatch"
+      | "npm-containment-failed"
       | "git-commit-unreachable"
       | "git-acquisition-failed"
       | "git-containment-failed",

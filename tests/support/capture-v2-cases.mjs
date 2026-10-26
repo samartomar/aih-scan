@@ -118,10 +118,16 @@ export async function exerciseCaptureV2() {
       if (name === 'request') {
         const req = structuredClone(entry.value);
         if (req.source.kind === 'local') req.source.path = selected;
-        const run = await runScan(req);
-        if (req.source.kind === 'npm' && entry.expectation === 'accept') {
-          assert.equal(run.phase, 'capture'); assert.equal(run.diagnostics[0].code, 'source-kind-unavailable');
-        } else assert.equal(run.status, entry.expectation === 'accept' ? 'assessment' : 'diagnostic');
+        const originalFetch = globalThis.fetch;
+        // These golden requests assert admission, not acquisition. Keep their external
+        // boundary offline now that npm acquisition is implemented.
+        if (req.source.kind === 'npm') globalThis.fetch = async () => new Response('offline fixture', { status: 503 });
+        try {
+          const run = await runScan(req);
+          if (req.source.kind === 'npm' && entry.expectation === 'accept') {
+            assert.equal(run.phase, 'capture'); assert.equal(run.diagnostics[0].code, 'npm-acquisition-failed');
+          } else assert.equal(run.status, entry.expectation === 'accept' ? 'assessment' : 'diagnostic');
+        } finally { globalThis.fetch = originalFetch; }
       }
     }
   }

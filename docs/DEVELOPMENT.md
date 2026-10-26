@@ -73,3 +73,14 @@ coverage plus both real-runtime proofs. `npm run verify` remains the complete lo
 software check; ordinary focused checks do not claim its coverage or native-runtime
 results. CI records the plan in its job summary. The required status fails if any
 selected check fails; it never treats a failed selected check as inapplicable.
+
+### Packed npm coverage
+
+`npm run test:cov` uses the locked V8 provider with an additional coverage bridge
+for npm acquisition. The existing installed-package consumer records its real
+child-process counters. A temporary TypeScript build emits coverage-only source
+maps; the bridge requires its JavaScript (excluding only the map trailer) to equal
+the installed archive bytes, and requires mapped source contents to equal the
+current source. Changed bindings or missing counters fail verification. Tamper
+cases exercise those refusals. The maps and counters do not change package bytes.
+The ordinary coverage includes, exclusions and 80% thresholds remain in force.

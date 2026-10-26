@@ -446,3 +446,51 @@ also receives the check and refusal, but its closed legacy documents retain thei
 original field shape; select request `2.0.0` for the explicit reachability field.
 Reachability records the repository refs observed during this run; it does not
 promise that those refs remain unchanged or establish approval or authenticity.
+
+## npm sources
+
+Use request `urn:aihq:scan:request:2.0.0` with either exact coordinates or an
+independently pinned archive:
+
+```js
+const source = { kind: "npm", package: "@example/mcp-server", version: "1.2.3" };
+// Or supply the archive's actual SHA-512 base64 digest:
+const pinned = {
+  kind: "npm",
+  archive: { url: "https://example.invalid/server.tgz", integrity: "sha512-<base64 digest>" },
+};
+```
+
+Pass `source` in the ordinary `runScan` request with selection and detectors.
+Exact coordinates may also include `archive`. Without it, Scan reads only that
+version's metadata from `https://registry.npmjs.org`, requires matching name and
+version plus a SHA-512 archive pin, then verifies the compressed bytes before
+extraction. Coordinates must also match the regular captured `package.json`.
+The report preserves coordinates when supplied and always names the acquired
+archive URL and integrity. An archive-only source makes no package-name claim.
+Ranges, tags, shortened versions and other non-exact specifiers produce request
+diagnostic `npm-version-not-exact` before any acquisition.
+
+Acquisition uses credential-free HTTPS with redirects disabled and a shared
+30-second deadline (also cancelled by the host `signal`). Ambient npm settings,
+credentials, installation and lifecycle scripts are unused. Metadata is capped
+at 1 MiB. Each archive download and expanded tar is bounded by
+`maxSourceBytes + 1024 * maxSourceEntries + 2048` bytes; decoded file bytes and
+all captured entries, including implicit directories and link targets' bytes,
+also obey the ordinary source limits. Bounds apply before detector selection.
+
+The archive is a gzip-compressed ustar tree under `package/`; the root prefix is
+removed from captured paths. Regular files, directories and contained file or
+directory symlinks are supported. Hard links, special files, extended headers,
+duplicate paths, traversal, root `.git` metadata and links through links are
+refused. No captured content executes. Each regular tar entry's execute bits
+supply its own `executable` state on every platform; a file link takes its target's
+state. The usual capture-profile-2 digests, observation identity, findings and
+coverage rules apply. A refused detector leaves coverage incomplete and the
+assessment partial.
+
+`npm-integrity-mismatch` means the acquired compressed bytes differ from the pin.
+`npm-containment-failed` names unsafe archive entries or failed temporary cleanup;
+`npm-acquisition-failed` names unsuccessful acquisition, malformed archive or
+package identity mismatch. Resource bounds retain `resource-limit` with the limit
+and observed value. Failures return no Scan ID and omit upstream error text.

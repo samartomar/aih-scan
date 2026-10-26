@@ -707,16 +707,48 @@ describe("published V2 package installation", () => {
       join(directory, "git-reachability-cases.mjs"),
       readFileSync(join(root, "tests/support/git-reachability-cases.mjs")),
     );
+    writeFileSync(
+      join(directory, "npm-source-cases.mjs"),
+      readFileSync(join(root, "tests/support/npm-source-cases.mjs")),
+    );
     const consumerHome = join(directory, "consumer-home");
     mkdirSync(consumerHome);
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
         cwd: directory,
-        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
+        env: {
+          ...process.env,
+          HOME: consumerHome,
+          USERPROFILE: consumerHome,
+          ...(process.env.AIH_SCAN_PACKED_COVERAGE
+            ? { NODE_V8_COVERAGE: join(process.env.AIH_SCAN_PACKED_COVERAGE, "raw") }
+            : {}),
+        },
         encoding: "utf8",
         stdio: "pipe",
       }),
     );
+    if (process.env.AIH_SCAN_PACKED_COVERAGE) {
+      execFileSync(
+        process.execPath,
+        [
+          join(root, "tools/collect-packed-coverage.mjs"),
+          directory,
+          tarball,
+          process.env.AIH_SCAN_PACKED_COVERAGE,
+        ],
+        { cwd: root, stdio: "inherit", windowsHide: true },
+      );
+      execFileSync(
+        process.execPath,
+        [
+          join(root, "tests/support/packed-coverage-binding-cases.mjs"),
+          join(root, "tools/collect-packed-coverage.mjs"),
+          join(process.env.AIH_SCAN_PACKED_COVERAGE, "npm-coverage.json"),
+        ],
+        { cwd: root, stdio: "inherit", windowsHide: true },
+      );
+    }
     expect(assessmentConsumer).toMatchObject({
       installedVersion: "0.5.0",
       completion: "partial",
