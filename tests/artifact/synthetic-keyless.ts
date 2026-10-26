@@ -1,7 +1,11 @@
 // TEST ONLY. Ephemeral local keys and a private CA/log universe are never
 // production roots or evidence. This encoder creates fixtures, not a verifier.
 import { createHash, generateKeyPairSync, type KeyObject, sign } from "node:crypto";
-import type { SigstoreBundle, VerificationPublisher } from "../../src/artifact/types.js";
+import type {
+  PrepareArtifactInput,
+  SigstoreBundle,
+  VerificationPublisher,
+} from "../../src/artifact/types.js";
 import { attachAttestation, prepareArtifact } from "../../src/public/host.js";
 import { emptyReport } from "../assessment/fixtures.js";
 
@@ -154,7 +158,10 @@ function syntheticTimestamps(signature: Buffer) {
   };
 }
 
-export async function syntheticKeyless(version: "0.0.1" | "0.0.2" = "0.0.1") {
+export async function syntheticKeyless(
+  version: "0.0.1" | "0.0.2" = "0.0.1",
+  input?: PrepareArtifactInput,
+) {
   const ca = ec(),
     leaf = ec(),
     ct = ec(),
@@ -212,10 +219,9 @@ export async function syntheticKeyless(version: "0.0.1" | "0.0.2" = "0.0.1") {
       sha256: hash(annex).toString("hex"),
     },
   ];
-  const prepared = await prepareArtifact({
-    report,
-    annexes: [{ id: "annex.test_only", bytes: annex }],
-  });
+  const prepared = await prepareArtifact(
+    input ?? { report, annexes: [{ id: "annex.test_only", bytes: annex }] },
+  );
   // Deliberately retain ordinary statement ordering and whitespace, not C(statement).
   const payload = Buffer.from(JSON.stringify(prepared.statement, null, 2));
   const payloadType = "application/vnd.in-toto+json";

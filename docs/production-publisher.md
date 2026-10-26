@@ -19,7 +19,85 @@ the redirected ZIP response as exact binary bytes. Release-asset downloads use
 `application/octet-stream`; release uploads negotiate JSON responses with a
 separate `Content-Type: application/octet-stream` for their original binary body.
 
-The maintained signing identity remains
+## Prepared signing path and caller-selected identity
+
+Scan evidence release signing reuses this manual report publisher. The npm package
+release in `release.yml` remains a separate operation; it does not sign Scan reports.
+The pinned `actions/attest` action uses ephemeral OIDC credentials and the public
+Sigstore service for events whose repository visibility is `public`, with public
+transparency-log inclusion and no stored long-lived signing key. The publisher
+admits only that exact event visibility, refusing private or missing visibility
+before the signer can run. It does not opt into private signing. The existing
+first-attempt, reviewed-head, exact-custody and protected human approval gates
+remain required. A PR or ordinary main merge cannot dispatch report signing.
+
+This is software preparation only. Integration does not select or protect a new
+production signer, populate maintained publisher trust, perform signing, or make
+evidence Verified. A later, separately authorized release operation must choose
+and protect the complete signer tuple and independently select trust. Existing
+maintained trust bytes are unchanged. Documented settings below describe the
+historical publisher policy; verify live settings before any authorized operation.
+
+Consumers explicitly pass `trust: { keys, publishers }` to `authenticateArtifact`
+from `@aihq/scan/host`. There is no default publisher, and an evidence-adjacent key
+or certificate never selects trust. A publisher has `profile: "sigstore-public"`,
+a caller-chosen `identity`, `purposes: ["scan-report"]`, independently obtained
+`trustedRoot`, and `policy`. The identity is a local attribution label; the
+certificate policy determines which signer is accepted.
+
+| Tuple field | Consumer policy and meaning | Documented historical publisher (not a new selection) |
+| --- | --- | --- |
+| Workflow | Exact workflow path in SAN and top-level caller extension | `.github/workflows/scan-report-publisher.yml` |
+| Ref | Exact SAN suffix and source-ref extension | `refs/heads/main` |
+| Issuer | `policy.issuer` | `https://token.actions.githubusercontent.com` |
+| SAN | Literal `policy.subjectAlternativeName`, not a pattern | `https://github.com/samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main` |
+| Repository | Required immutable repository ID extension; repository URL is also bound by SAN | `samartomar/aih-scan`, ID `1336836161` |
+| Owner policy | Required immutable owner ID extension plus workflow admission/protected environment | Owner ID `9993940`; sole maintainer manual dispatch and protected human approval |
+
+`policy.requiredCertificateExtensions` is an array of `{ oid: number[],
+valueDerBase64: string }`. Values are base64 of the exact DER-encoded extension
+value, not plain text base64. The historical policy uses Fulcio OIDs
+`1.3.6.1.4.1.57264.1.N`: `N=11` for `github-hosted`, `14` for the ref,
+`15` for repository ID, `17` for owner ID, `18` for the full top-level caller URI,
+`20` for `workflow_dispatch`, and `22` for `public`. Keep the entire selected
+policy; a matching SAN alone is not equivalent to that policy.
+
+For example, a consumer selecting a hypothetical `example-org/evidence` publisher
+would independently choose its workflow and ref, derive the exact SAN such as
+`https://github.com/example-org/evidence/.github/workflows/reports.yml@refs/heads/main`,
+and select its issuer, immutable repository/owner IDs, additional certificate
+constraints and Sigstore roots. These illustrative names are not production trust.
+The future owner-selected production tuple may differ from the historical tuple;
+this ticket does not choose it or install any example into maintained trust.
+
+## Unchanged statement and summary behavior
+
+The statement remains `https://in-toto.io/Statement/v1`, with exactly one subject:
+`scan-report` and its SHA-256 digest. Predicate type
+`urn:aihq:scan:artifact-attestation:1.0.0` binds `scanId`, `reportSchema`,
+`reportByteLength` and `annexManifestSha256`. There are no item subjects. The
+existing artifact container `urn:aihq:scan:artifact:1.0.0` admits report 2.0.0;
+items remain bound through derived records and captured report digests.
+
+Offline fixtures exercise the packed public exports with an ephemeral local
+certificate/log universe, a nonempty annex, and the unchanged report 2.0.0
+statement. They prove caller-selected authentication and refusal for an
+unselected SAN and an evidence-adjacent key, plus statement/annex tamper refusal.
+They make no OIDC or signing-service request and establish no production trust.
+
+`authenticateArtifact` returns `unverifiable` for an unselected identity; supplying
+that host result for the selected assessment to `summariseItem` produces
+`not-verified` / `not-authenticated` (row 15). A host reporting selected trust data
+as `expired` or `unavailable` produces `not-verified` / `offline` (row 14), including
+when authentication was skipped. A historically authenticated bundle can remain
+authentic after its leaf certificate expires; current trust-data availability is
+a separate host input. Static caller-selected trust remains the default. Any
+optional trust-update client belongs to the consumer, not the artifact or this
+publisher. See [the current summary decision table](item-summaries.md).
+
+## Historical production identity and operational gates
+
+The documented maintained signing identity remains
 `https://github.com/samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main`,
 issuer `https://token.actions.githubusercontent.com`, repository ID `1336836161`, owner ID `9993940`.
 The exact independently maintained `.github/scan-report-trust.json` bytes and public Sigstore

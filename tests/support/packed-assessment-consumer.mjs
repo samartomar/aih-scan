@@ -1,3 +1,5 @@
+import { exercisePublisherSigning } from "./publisher-signing-cases.mjs";
+await exercisePublisherSigning();
 import { exercisePackageSupport } from "./package-support-cases.mjs";
 await exercisePackageSupport();
 import { exerciseNpmSources } from './npm-source-cases.mjs';

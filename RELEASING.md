@@ -18,6 +18,13 @@ Core decision, establish an organization trust root, or prove successful Core
 custody.
 
 The Unreleased immutable assessment API has a separate report-signing path.
+Evidence release signing reuses the accepted `sigstore-public` manual publisher;
+its public visibility guard keeps the pinned attestation action on public Sigstore
+with transparency-log inclusion and no long-lived signing key. The documented
+[signer tuple and caller-selected trust](docs/production-publisher.md#prepared-signing-path-and-caller-selected-identity)
+distinguish the historical publisher, illustrative identities and a future
+owner-selected production identity. Workflow preparation and an ordinary source
+merge do not perform signing or populate maintained trust.
 The manual [report publisher](docs/production-publisher.md) admits only the
 reviewed main commit, sole maintainer `samartomar` and selected immutable upload
 custody. The same owner initiates the run and supplies required protected human
