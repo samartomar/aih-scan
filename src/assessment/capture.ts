@@ -19,7 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readSourceEntryNamesV1 } from "../observation/source-entry-name-v1.js";
-import { gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
+import { type GitFetchRelay, gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
 import { GitContainmentError, runPinnedGit as git } from "./git-runner.js";
 import { bound, ContractError, canonicalBytes, fail, hasControl } from "./json.js";
 import { validateEntries } from "./report.js";
@@ -221,23 +221,16 @@ export interface CaptureOptions {
   signal?: AbortSignal;
   gitCredentials?: { username: string; password: string };
 }
-/** Each fetch retains the same transport, process, credential and cleanup bounds. */
-async function fetchGit(
-  repository: string,
-  refs: string[],
+/** All remote operations share one acquisition-wide transport budget. */
+async function gitWithRelay(
+  argv: string[],
   acquired: string,
   options: CaptureOptions,
   hooks: string,
-  limits: Limits,
-): Promise<void> {
-  const relay = await startGitFetchRelay(
-    repository,
-    gitTransportLimit(limits.maxSourceBytes, limits.maxSourceEntries),
-    options.signal,
-  );
-  let acquisitionError: unknown;
+  relay: GitFetchRelay,
+): Promise<Uint8Array> {
   try {
-    await git(
+    const bytes = await git(
       [
         "-c",
         `http.proxy=${relay.proxy}`,
@@ -245,11 +238,7 @@ async function fetchGit(
         "fetch.unpackLimit=1",
         "-c",
         "transfer.unpackLimit=1",
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        repository,
-        ...refs,
+        ...argv,
       ],
       acquired,
       {
@@ -260,13 +249,27 @@ async function fetchGit(
       },
       hooks,
     );
+    relay.assertWithinBounds();
+    return bytes;
   } catch (error) {
-    acquisitionError = error;
+    if (!(error instanceof GitContainmentError)) relay.assertWithinBounds();
     throw error;
-  } finally {
-    await relay.close();
-    if (!(acquisitionError instanceof GitContainmentError)) relay.assertWithinBounds();
   }
+}
+
+function repositoryRefs(bytes: Uint8Array, imported = false): string[] {
+  const text = decodeStrictUtf8V1(bytes, "Repository refs").trim();
+  const rows = text ? text.split("\n") : [];
+  const names = new Set<string>();
+  return rows
+    .map((row) => {
+      const normalized = imported ? row.replace("\trefs/remotes/named/", "\trefs/heads/") : row;
+      const match = /^([0-9a-f]{40})\t(refs\/(?:heads|tags)\/[^\s]+)$/.exec(normalized);
+      if (!match || names.has(match[2]!)) fail("Repository refs are malformed or repeated");
+      names.add(match![2]!);
+      return normalized;
+    })
+    .sort();
 }
 
 export async function captureSource(
@@ -302,60 +305,111 @@ export async function captureSource(
       mkdirSync(material);
       step = "git init";
       await git(["init", "--quiet", `--template=${hooks}`], acquired, options, hooks);
-      // A fresh store contains only branches/tags fetched from this exact URL.
-      // Full ancestry is required: a shallow negative result cannot prove unreachability.
-      let reachabilityCheckCompleted = false;
-      step = "check repository reachability";
-      try {
-        await fetchGit(
-          request.source.repository,
-          ["+refs/heads/*:refs/remotes/named/*", "+refs/tags/*:refs/tags/*"],
-          acquired,
-          options,
-          hooks,
-          limits,
-        );
-        if (
-          decodeStrictUtf8V1(
-            await git(["rev-parse", "--is-shallow-repository"], acquired, options, hooks, 16),
-            "Repository shallow state",
-          ).trim() !== "false"
-        )
-          fail("Repository ancestry is shallow or unknown");
-        const ancestry = decodeStrictUtf8V1(
-          await git(["rev-list", "--all"], acquired, options, hooks),
-          "Repository ancestry",
-        );
-        const commits = ancestry.trim() ? ancestry.trim().split("\n") : [];
-        if (commits.some((commit) => !/^[0-9a-f]{40}$/.test(commit)))
-          fail("Repository ancestry is malformed");
-        reachability = commits.includes(request.source.commit) ? "reachable" : "unchecked";
-        reachabilityCheckCompleted = true;
-      } catch (error) {
-        // An unavailable/bounded check proves neither membership nor non-membership.
-        // A containment failure or cancellation must still stop all acquisition.
-        if (error instanceof GitContainmentError || options.signal?.aborted) throw error;
-        diagnostics.push({
-          code: "git-reachability-unchecked",
-          detail: `Git capture step check repository reachability: ${
-            error instanceof ContractError ? error.message : "Repository ancestry check unavailable"
-          }`,
-        });
-      }
-      if (reachabilityCheckCompleted && reachability !== "reachable")
-        throw new ContractError(
-          "git-commit-unreachable",
-          "Pinned commit is not reachable from any branch or tag of the named repository",
-        );
-      step = "git fetch";
-      await fetchGit(
+      step = "start fetch relay";
+      const relay = await startGitFetchRelay(
         request.source.repository,
-        ["--depth=1", request.source.commit],
-        acquired,
-        options,
-        hooks,
-        limits,
+        gitTransportLimit(limits.maxSourceBytes, limits.maxSourceEntries),
+        options.signal,
       );
+      const remote = (argv: string[]) => gitWithRelay(argv, acquired, options, hooks, relay);
+      let acquisitionError: unknown;
+      try {
+        // Only advertised branches and tags can establish named-repository membership.
+        // Compare imported refs as Git may exit zero after rejecting shallow remote refs.
+        let reachabilityCheckCompleted = false;
+        step = "check repository reachability";
+        try {
+          const advertised = repositoryRefs(
+            await remote([
+              "ls-remote",
+              "--refs",
+              request.source.repository,
+              "refs/heads/*",
+              "refs/tags/*",
+            ]),
+          );
+          await remote([
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            request.source.repository,
+            "+refs/heads/*:refs/remotes/named/*",
+            "+refs/tags/*:refs/tags/*",
+          ]);
+          const imported = repositoryRefs(
+            await git(
+              [
+                "for-each-ref",
+                "--format=%(objectname)\t%(refname)",
+                "refs/remotes/named/",
+                "refs/tags/",
+              ],
+              acquired,
+              options,
+              hooks,
+            ),
+            true,
+          );
+          if (
+            advertised.length !== imported.length ||
+            advertised.some((row, index) => row !== imported[index])
+          )
+            fail("Repository refs were not completely imported or changed during the check");
+          if (
+            decodeStrictUtf8V1(
+              await git(["rev-parse", "--is-shallow-repository"], acquired, options, hooks, 16),
+              "Repository shallow state",
+            ).trim() !== "false"
+          )
+            fail("Repository ancestry is shallow or unknown");
+          const ancestry = decodeStrictUtf8V1(
+            await git(["rev-list", "--all"], acquired, options, hooks),
+            "Repository ancestry",
+          );
+          const commits = ancestry.trim() ? ancestry.trim().split("\n") : [];
+          if (commits.some((commit) => !/^[0-9a-f]{40}$/.test(commit)))
+            fail("Repository ancestry is malformed");
+          reachability = commits.includes(request.source.commit) ? "reachable" : "unchecked";
+          reachabilityCheckCompleted = true;
+        } catch (error) {
+          // An unavailable check proves neither membership nor non-membership. Exhausted
+          // shared transport, containment failure and cancellation still stop acquisition.
+          if (
+            error instanceof GitContainmentError ||
+            options.signal?.aborted ||
+            relay.limitSignal.aborted
+          )
+            throw error;
+          diagnostics.push({
+            code: "git-reachability-unchecked",
+            detail: `Git capture step check repository reachability: ${
+              error instanceof ContractError
+                ? error.message
+                : "Repository ancestry check unavailable"
+            }`,
+          });
+        }
+        if (reachabilityCheckCompleted && reachability !== "reachable")
+          throw new ContractError(
+            "git-commit-unreachable",
+            "Pinned commit is not reachable from any branch or tag of the named repository",
+          );
+        step = "git fetch";
+        await remote([
+          "fetch",
+          "--quiet",
+          "--no-tags",
+          "--depth=1",
+          request.source.repository,
+          request.source.commit,
+        ]);
+      } catch (error) {
+        acquisitionError = error;
+        throw error;
+      } finally {
+        await relay.close();
+        if (!(acquisitionError instanceof GitContainmentError)) relay.assertWithinBounds();
+      }
       step = "verify commit";
       if (
         decodeStrictUtf8V1(

@@ -381,8 +381,8 @@ of `detectorTimeoutMs`.
 | --- | --- | --- |
 | `maxSourceEntries` | 100000 | Tree members, including directories and links |
 | `maxSourceBytes` | 268435456 (256 MiB) | Decoded source bytes; snapshot capture also counts file-link target bytes |
-| `gitTransportBytes` | 371884032 per fetch | Bidirectional relay bytes across retries; derived as `maxSourceBytes + 1024 * maxSourceEntries + 1048576` |
-| `gitTransportConnections` | 8 per fetch | Relay connections across retries |
+| `gitTransportBytes` | 371884032 | Bidirectional relay bytes across retries; derived as `maxSourceBytes + 1024 * maxSourceEntries + 1048576` |
+| `gitTransportConnections` | 8 | Relay connections across the acquisition |
 | `gitConnectHeaderBytes` | 8192 | CONNECT header buffer |
 | `gitRelayClientIdleMs` | 30000 before CONNECT; 600000 after connection | Client socket idle time |
 | `gitRelayRemoteIdleMs` | 60000 | Upstream socket idle time |
@@ -415,9 +415,11 @@ versioned result schemas; no new wire fields or format identifiers are introduce
 
 ## Repository reachability
 
-Before materializing Git content, Scan fetches only the named repository's
+Before materializing Git content, Scan lists the named repository's branch/tag
+refs, then fetches only that repository's
 `refs/heads/*` and `refs/tags/*` into an owned temporary store and reads their
-complete commit ancestry. Branch ancestors, lightweight tags and annotated tags
+complete commit ancestry. Imported ref names and identities must match the listing;
+a mismatch or movement leaves the check unchecked. Branch ancestors, lightweight tags and annotated tags
 can establish membership. Object presence, a fork-network commit endpoint, a
 pull-request ref or a fetch of the exact commit alone cannot establish it.
 A completed check that does not contain the commit refuses capture with
@@ -427,15 +429,17 @@ records `reachability: "unreachable"` for that refusal.
 A successful check records `reachability: "reachable"` in both report and run-result
 `2.0.0`. If the independent check cannot complete, for example because its refs
 are unavailable offline, its ancestry is shallow or malformed, or its bounded
-fetch/output exceeds a limit, exact-commit acquisition can still proceed. Both
+output exceeds a limit, exact-commit acquisition can still proceed while the
+shared transport budget remains available. Both
 documents then record `reachability: "unchecked"`, with a
 `git-reachability-unchecked` diagnostic naming the check and any encountered bound.
 An unavailable check is never evidence of membership or non-membership. If exact
 acquisition itself fails, its normal diagnostic refusal still applies.
 
-The ancestry fetch and exact-commit fetch each retain the transport budget,
-connection bound and contained command runner above. Full history may exceed the
-budget even for a small current tree; that check remains unchecked. No shallow
+The ref advertisement, ancestry fetch and exact-commit fetch share one aggregate
+transport budget and connection bound, retaining the contained command runner above. Full history may exceed the
+budget even for a small current tree; exhausting the shared transport budget
+refuses acquisition with its named resource-limit diagnostic. No shallow
 negative is treated as unreachable. Process containment failures and caller
 cancellation stop acquisition. No captured content is executed. Request `1.0.0`
 also receives the check and refusal, but its closed legacy documents retain their

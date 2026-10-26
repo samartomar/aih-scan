@@ -48,7 +48,7 @@ export async function exerciseGitDiagnostics() {
     const commit = git(['rev-parse', 'HEAD']).trim();
     const bin = join(root, 'bin'); mkdirSync(bin);
     const mode = join(root, 'mode'); writeFileSync(mode, 'objects');
-    writeFileSync(join(bin, 'git'), `#!${process.execPath}\nconst fs=require('node:fs');const {execFileSync}=require('node:child_process');const args=process.argv.slice(2);const mode=fs.readFileSync(${JSON.stringify(mode)},'utf8');if(mode==='failure')process.exit(7);if(args.includes('init')||args.includes('fetch'))process.exit(0);if(mode==='stdout'&&args.includes('cat-file')){process.stdout.write(Buffer.alloc(2*1024*1024));}else if(mode==='stderr'){process.stderr.write(Buffer.alloc(70000));}else process.stdout.write(execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(join(source, '.git'))},...args],{stdio:['ignore','pipe','pipe'],maxBuffer:4*1024*1024}));\n`, { mode: 0o755 });
+    writeFileSync(join(bin, 'git'), `#!${process.execPath}\nconst fs=require('node:fs');const {execFileSync}=require('node:child_process');const args=process.argv.slice(2);if(args.includes('ls-remote'))process.exit(1);const mode=fs.readFileSync(${JSON.stringify(mode)},'utf8');if(mode==='failure')process.exit(7);if(args.includes('init')||args.includes('fetch'))process.exit(0);if(mode==='stdout'&&args.includes('cat-file')){process.stdout.write(Buffer.alloc(2*1024*1024));}else if(mode==='stderr'){process.stderr.write(Buffer.alloc(70000));}else process.stdout.write(execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(join(source, '.git'))},...args],{stdio:['ignore','pipe','pipe'],maxBuffer:4*1024*1024}));\n`, { mode: 0o755 });
     process.env.PATH = `${bin}${delimiter}${oldPath}`;
     const exact = { ...request, source: { ...request.source, commit } };
     for (const paths of ['all', ['skills/productivity/grill-me/SKILL.md']]) {
@@ -85,7 +85,7 @@ export async function exerciseGitDiagnostics() {
     // A malfunctioning external wrapper crosses its own stream budget. Real containment
     // and byte accounting run unchanged, independently of the raw Git helper's caps.
     const wrapper = join(bin, 'fixture-node');
-    writeFileSync(wrapper, `#!${realNode}\nconst fs=require('node:fs');const {spawnSync}=require('node:child_process');const args=process.argv.slice(2);const mode=fs.readFileSync(${JSON.stringify(mode)},'utf8');if(args[2]==='64'&&mode==='wrapper-stdout')process.stdout.write(Buffer.alloc(4096));else if(args[2]==='64'&&mode==='wrapper-stderr')process.stderr.write(Buffer.alloc(70000));else{const child=spawnSync(${JSON.stringify(realNode)},args,{stdio:'inherit'});process.exit(child.status??1);}\n`, { mode: 0o755 });
+    writeFileSync(wrapper, `#!${realNode}\nconst fs=require('node:fs');const {spawnSync}=require('node:child_process');const args=process.argv.slice(2);if(args.includes('ls-remote'))process.exit(1);const mode=fs.readFileSync(${JSON.stringify(mode)},'utf8');if(args[2]==='64'&&mode==='wrapper-stdout')process.stdout.write(Buffer.alloc(4096));else if(args[2]==='64'&&mode==='wrapper-stderr')process.stderr.write(Buffer.alloc(70000));else{const child=spawnSync(${JSON.stringify(realNode)},args,{stdio:'inherit'});process.exit(child.status??1);}\n`, { mode: 0o755 });
     process.execPath = wrapper;
     try {
       for (const [modeName, name, value] of [['wrapper-stdout', 'maxStdoutBytes', 152], ['wrapper-stderr', 'maxStderrBytes', 65536]]) {

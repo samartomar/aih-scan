@@ -55,9 +55,19 @@ test.each([
   ]);
   const commit = command(["rev-parse", "HEAD"]).toString().trim();
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv) => {
-    const args = JSON.parse(argv[2]!) as string[],
-      start = args.findIndex((arg) =>
-        ["init", "fetch", "rev-parse", "rev-list", "ls-tree", "cat-file"].includes(arg),
+    const args = JSON.parse(argv[2]!) as string[];
+    if (args.includes("ls-remote")) return { code: 1, stdout: "", stderr: "", truncated: false };
+    const start = args.findIndex((arg) =>
+        [
+          "init",
+          "fetch",
+          "ls-remote",
+          "for-each-ref",
+          "rev-parse",
+          "rev-list",
+          "ls-tree",
+          "cat-file",
+        ].includes(arg),
       ),
       tail = args.slice(start),
       bytes = ["init", "fetch"].includes(tail[0]!) ? Buffer.alloc(0) : command(tail);
@@ -119,8 +129,9 @@ test("pinned Git material uses exact blob bytes and cannot execute source checko
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv, options) => {
     // External Git subprocess responses are supplied from a disposable real object store.
     expect(options.containProcessTree).toBe(true);
-    const args = JSON.parse(argv[2]!) as string[],
-      hookIndex = args.indexOf("core.hooksPath") /* separate key=value form below */;
+    const args = JSON.parse(argv[2]!) as string[];
+    if (args.includes("ls-remote")) return { code: 1, stdout: "", stderr: "", truncated: false };
+    const hookIndex = args.indexOf("core.hooksPath") /* separate key=value form below */;
     expect(hookIndex).toBe(-1);
     const hooks = args
       .find((arg) => arg.startsWith("core.hooksPath="))!
@@ -128,7 +139,17 @@ test("pinned Git material uses exact blob bytes and cannot execute source checko
     expect(isAbsolute(hooks)).toBe(true);
     expect(hooks.startsWith(options.cwd!)).toBe(false);
     const operation = args.findIndex((arg) =>
-      ["init", "fetch", "rev-parse", "rev-list", "ls-tree", "cat-file", "checkout"].includes(arg),
+      [
+        "init",
+        "fetch",
+        "ls-remote",
+        "for-each-ref",
+        "rev-parse",
+        "rev-list",
+        "ls-tree",
+        "cat-file",
+        "checkout",
+      ].includes(arg),
     );
     const tail = args.slice(operation);
     expect(tail[0]).not.toBe("checkout");

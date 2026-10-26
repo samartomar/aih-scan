@@ -121,7 +121,7 @@ beforeAll(() => {
     boundary = join(temporary, "git-boundary.cjs");
   writeFileSync(
     helper,
-    `const cp=require('node:child_process');const args=JSON.parse(process.argv[2]);const i=args.findIndex(a=>['init','fetch','rev-parse','rev-list','ls-tree','cat-file'].includes(a));const tail=args.slice(i);let bytes=Buffer.alloc(0);if(!['init','fetch'].includes(tail[0])){const r=cp.spawnSync('git',['--git-dir',${JSON.stringify(join(fixture, ".git"))},...tail],{windowsHide:true});if(r.status!==0)process.exit(1);bytes=r.stdout;}process.stdout.write(JSON.stringify({bytesBase64:bytes.toString('base64')}));`,
+    `const cp=require('node:child_process');const args=JSON.parse(process.argv[2]);if(args.includes('ls-remote'))process.exit(1);const i=args.findIndex(a=>['init','fetch','rev-parse','rev-list','ls-tree','cat-file'].includes(a));const tail=args.slice(i);let bytes=Buffer.alloc(0);if(!['init','fetch'].includes(tail[0])){const r=cp.spawnSync('git',['--git-dir',${JSON.stringify(join(fixture, ".git"))},...tail],{windowsHide:true});if(r.status!==0)process.exit(1);bytes=r.stdout;}process.stdout.write(JSON.stringify({bytesBase64:bytes.toString('base64')}));`,
   );
   // Portable boundary fixture; this does not establish actual Linux execution.
   writeFileSync(
