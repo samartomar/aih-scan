@@ -222,7 +222,7 @@ export async function readContentCoverage(
   return { ...classified, scanId: admitted.scanId, authenticity: "unchecked" };
 }
 
-async function admitCoverageRead(
+export async function admitCoverageRead(
   input: unknown,
 ): Promise<
   | { status: "admitted"; report: ReportBody; scanId: ScanId }
@@ -288,9 +288,12 @@ export const coverageBatchLimits = Object.freeze({
 
 // Bound before traversing potentially hostile extra fields or calling a schema parser.
 // Counts the exact JSON encoding size (including keys/punctuation) as it snapshots.
-function snapshotQueries(value: unknown): unknown[] {
+export function snapshotQueries(
+  value: unknown,
+  limits: { readonly [K in keyof typeof coverageBatchLimits]: number } = coverageBatchLimits,
+): unknown[] {
   if (!Array.isArray(value)) fail("Queries must be an array");
-  bound(value.length <= coverageBatchLimits.maxQueries, "queries", coverageBatchLimits.maxQueries);
+  bound(value.length <= limits.maxQueries, "queries", limits.maxQueries);
   if (value.length === 0) fail("At least one query is required");
   let bytes = 0,
     nodes = 0;
@@ -298,32 +301,16 @@ function snapshotQueries(value: unknown): unknown[] {
   const active = new WeakSet<object>();
   const add = (size: number) => {
     bytes += size;
-    bound(
-      bytes <= coverageBatchLimits.maxRequestBytes,
-      "query bytes",
-      coverageBatchLimits.maxRequestBytes,
-    );
+    bound(bytes <= limits.maxRequestBytes, "query bytes", limits.maxRequestBytes);
   };
   const string = (text: string) => {
     // UTF-16 length is a cheap lower bound before allocating its JSON/UTF-8 encoding.
-    bound(
-      text.length <= coverageBatchLimits.maxRequestBytes,
-      "query string",
-      coverageBatchLimits.maxRequestBytes,
-    );
+    bound(text.length <= limits.maxRequestBytes, "query string", limits.maxRequestBytes);
     add(encoder.encode(JSON.stringify(text)).length);
   };
   const copy = (item: unknown, depth: number): unknown => {
-    bound(
-      depth <= coverageBatchLimits.maxRequestDepth,
-      "query depth",
-      coverageBatchLimits.maxRequestDepth,
-    );
-    bound(
-      ++nodes <= coverageBatchLimits.maxRequestNodes,
-      "query nodes",
-      coverageBatchLimits.maxRequestNodes,
-    );
+    bound(depth <= limits.maxRequestDepth, "query depth", limits.maxRequestDepth);
+    bound(++nodes <= limits.maxRequestNodes, "query nodes", limits.maxRequestNodes);
     if (typeof item === "string") {
       string(item);
       return item;
@@ -344,11 +331,7 @@ function snapshotQueries(value: unknown): unknown[] {
     const keys = Object.keys(item);
     if (Object.getOwnPropertyNames(item).length !== keys.length + Number(array))
       fail("Queries cannot contain hidden fields");
-    bound(
-      keys.length <= coverageBatchLimits.maxRequestNodes,
-      "query keys",
-      coverageBatchLimits.maxRequestNodes,
-    );
+    bound(keys.length <= limits.maxRequestNodes, "query keys", limits.maxRequestNodes);
     if (array && (keys.length !== item.length || keys.some((key, at) => key !== String(at))))
       fail("Query arrays require dense own data properties");
     active.add(item);

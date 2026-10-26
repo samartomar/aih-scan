@@ -6,6 +6,21 @@ export {
   readContentCoverage,
   readContentCoverageBatch,
 } from "../assessment/content-coverage.js";
+export type {
+  ItemAssessment,
+  ItemDescriptor,
+  ItemMaterial,
+  ItemRecord,
+  ItemRecordBatchResult,
+  ItemRecordResult,
+  ItemSubject,
+} from "../assessment/item-record.js";
+export {
+  itemRecordSchema,
+  recordItem,
+  recordItemBatch,
+  verifyItemRecord,
+} from "../assessment/item-record.js";
 export { readReport } from "../assessment/report.js";
 export { maxAssessments, selectAssessments } from "../assessment/selection.js";
 export { maxAssessmentBytes, readSummary } from "../assessment/summary.js";
