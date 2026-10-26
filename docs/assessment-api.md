@@ -392,8 +392,9 @@ of `detectorTimeoutMs`.
 
 The bounded subprocess wrapper separately caps base64-encoded JSON stdout at
 `ceil(gitStdoutBytes / 3) * 4 + 64` bytes (`maxStdoutBytes`), and its stderr at
-65536 bytes (`maxStderrBytes`). A stopped stream is reported as exceeding its
-limit; observed counts may be lower bounds because reading stops at the bound.
+65536 bytes (`maxStderrBytes`). The failed stream is named with its configured limit and observed byte count,
+including the rejected chunk. Observed counts may be lower bounds because
+reading stops at the bound.
 
 A diagnostic result has no Scan ID. Every Git capture diagnostic's `detail` names
 the failing step, such as `git init`, `git fetch`, `verify commit`, `validate tree`,

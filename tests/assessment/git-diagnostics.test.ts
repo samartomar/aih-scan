@@ -85,6 +85,7 @@ test("an uncontained Git process names the operation without becoming invalid in
     stderr: "private upstream text",
     truncated: true,
     termination: "containment-failure",
+    outputLimit: { stream: "stderr", limit: 65536, observed: 70000 },
   });
   const result = await runScan(request("0".repeat(40)));
   expect(result).toMatchObject({
@@ -146,7 +147,6 @@ test.each([
   [undefined, "git-acquisition-failed", /exit code 1/],
   ["timeout", "resource-limit", /gitCommandTimeoutMs.*600000.*observed.*600000/],
   ["abort", "git-acquisition-failed", /cancelled/],
-  ["output-limit", "resource-limit", /maxStdoutBytes.*maxStderrBytes.*observed/],
 ] as const)("Git operation failure %s stays actionable", async (termination, code, detail) => {
   vi.spyOn(processBoundary, "spawnBoundedV1").mockResolvedValue({
     code: 1,
@@ -163,4 +163,29 @@ test.each([
   });
   expect(result.diagnostics[0]?.detail).toMatch(/git init/);
   expect(JSON.stringify(result)).not.toContain("sensitive upstream");
+});
+
+test.each([
+  ["stdout", 22369688, 22370000, "maxStdoutBytes"],
+  ["stderr", 65536, 70000, "maxStderrBytes"],
+] as const)("wrapper %s overflow identifies its own limit and observed bytes", async (stream, limit, observed, name) => {
+  vi.spyOn(processBoundary, "spawnBoundedV1").mockResolvedValue({
+    code: 1,
+    stdout: "",
+    stderr: "",
+    truncated: true,
+    termination: "output-limit",
+    ...{ outputLimit: { stream, limit, observed } },
+  });
+  const result = await runScan(request("0".repeat(40)));
+  expect(result).toMatchObject({
+    status: "diagnostic",
+    phase: "capture",
+    diagnostics: [
+      {
+        code: "resource-limit",
+        detail: expect.stringContaining(`${name} limit ${limit}; observed ${observed}`),
+      },
+    ],
+  });
 });

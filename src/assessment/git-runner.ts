@@ -103,11 +103,18 @@ export async function runPinnedGit(
       "resource-limit",
       "gitCommandTimeoutMs limit 600000; observed elapsed time at least 600000 ms",
     );
-  if (output.termination === "output-limit")
+  if (output.termination === "output-limit") {
+    const crossed = output.outputLimit;
+    if (crossed)
+      throw new ContractError(
+        "resource-limit",
+        `Git wrapper ${crossed.stream === "stdout" ? "maxStdoutBytes" : "maxStderrBytes"} limit ${crossed.limit}; observed ${crossed.observed} bytes`,
+      );
     throw new ContractError(
-      "resource-limit",
-      `Git wrapper output limits maxStdoutBytes=${Math.ceil(maxBytes / 3) * 4 + 64}, maxStderrBytes=65536; observed at least one stream exceeding its limit`,
+      "git-acquisition-failed",
+      "Git wrapper stopped for output overflow without byte-count evidence",
     );
+  }
   if (output.termination === "abort")
     throw new ContractError("git-acquisition-failed", "Pinned Git acquisition was cancelled");
   const value =

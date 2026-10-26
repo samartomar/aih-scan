@@ -34,6 +34,7 @@ export async function exerciseGitDiagnostics() {
   const root = mkdtempSync(join(tmpdir(), 'scan-packed-git-diagnostics-'));
   const oldPath = process.env.PATH;
   const realKill = process.kill;
+  const realNode = process.execPath;
   try {
     const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
     const source = join(root, 'source'); mkdirSync(source);
@@ -81,6 +82,20 @@ export async function exerciseGitDiagnostics() {
     writeFileSync(mode, 'stderr');
     await diagnostic(exact, 'resource-limit', /verify commit.*gitStderrBytes.*65536.*observed/);
     writeFileSync(mode, 'objects');
+    // A malfunctioning external wrapper crosses its own stream budget. Real containment
+    // and byte accounting run unchanged, independently of the raw Git helper's caps.
+    const wrapper = join(bin, 'fixture-node');
+    writeFileSync(wrapper, `#!${realNode}\nconst fs=require('node:fs');const {spawnSync}=require('node:child_process');const args=process.argv.slice(2);const mode=fs.readFileSync(${JSON.stringify(mode)},'utf8');if(args[2]==='64'&&mode==='wrapper-stdout')process.stdout.write(Buffer.alloc(4096));else if(args[2]==='64'&&mode==='wrapper-stderr')process.stderr.write(Buffer.alloc(70000));else{const child=spawnSync(${JSON.stringify(realNode)},args,{stdio:'inherit'});process.exit(child.status??1);}\n`, { mode: 0o755 });
+    process.execPath = wrapper;
+    try {
+      for (const [modeName, name, value] of [['wrapper-stdout', 'maxStdoutBytes', 152], ['wrapper-stderr', 'maxStderrBytes', 65536]]) {
+        writeFileSync(mode, modeName);
+        const result = await diagnostic(exact, 'resource-limit', new RegExp(`read blob size.*${name} limit ${value}; observed \\d+ bytes`));
+        const observed = Number(/observed (\d+) bytes/.exec(result.diagnostics[0].detail)[1]);
+        assert(observed > value);
+      }
+    } finally { process.execPath = realNode; }
+    writeFileSync(mode, 'objects');
     // Simulated OS refusal of the group-existence probe, after a normal finite child exits.
     // No process is left running and production containment remains enabled.
     process.kill = (pid, signal) => {
@@ -90,6 +105,7 @@ export async function exerciseGitDiagnostics() {
     await diagnostic(exact, 'git-containment-failed', /git init.*process-tree cleanup/);
   } finally {
     process.kill = realKill;
+    process.execPath = realNode;
     process.env.PATH = oldPath;
     rmSync(root, { recursive: true, force: true });
   }

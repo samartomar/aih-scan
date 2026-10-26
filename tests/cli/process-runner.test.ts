@@ -192,6 +192,7 @@ describe("dockerRunner", () => {
       stderr: "",
       truncated: true,
       termination: "output-limit",
+      outputLimit: { stream, limit: 1024, observed: 1025 },
     });
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
