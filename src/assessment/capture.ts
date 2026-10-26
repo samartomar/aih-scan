@@ -25,7 +25,7 @@ import { bound, ContractError, canonicalBytes, fail, hasControl } from "./json.j
 import { validateEntries } from "./report.js";
 import { pathShape } from "./shapes.js";
 import { decodeStrictUtf8V1 } from "./strict-json.js";
-import type { Capture, CaptureEntry, Limits, ScanRequest, Selection } from "./types.js";
+import type { Capture, CaptureEntry, Diagnostic, Limits, ScanRequest, Selection } from "./types.js";
 import { schemasV2 } from "./types.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -212,6 +212,8 @@ export interface CapturedSource {
   root: string;
   capture: Capture;
   selection: Selection;
+  reachability: "reachable" | "unchecked" | null;
+  diagnostics: Diagnostic[];
   cleanup(): void;
   assertUnchanged(): void;
 }
@@ -219,6 +221,54 @@ export interface CaptureOptions {
   signal?: AbortSignal;
   gitCredentials?: { username: string; password: string };
 }
+/** Each fetch retains the same transport, process, credential and cleanup bounds. */
+async function fetchGit(
+  repository: string,
+  refs: string[],
+  acquired: string,
+  options: CaptureOptions,
+  hooks: string,
+  limits: Limits,
+): Promise<void> {
+  const relay = await startGitFetchRelay(
+    repository,
+    gitTransportLimit(limits.maxSourceBytes, limits.maxSourceEntries),
+    options.signal,
+  );
+  let acquisitionError: unknown;
+  try {
+    await git(
+      [
+        "-c",
+        `http.proxy=${relay.proxy}`,
+        "-c",
+        "fetch.unpackLimit=1",
+        "-c",
+        "transfer.unpackLimit=1",
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        repository,
+        ...refs,
+      ],
+      acquired,
+      {
+        ...options,
+        signal: options.signal
+          ? AbortSignal.any([options.signal, relay.limitSignal])
+          : relay.limitSignal,
+      },
+      hooks,
+    );
+  } catch (error) {
+    acquisitionError = error;
+    throw error;
+  } finally {
+    await relay.close();
+    if (!(acquisitionError instanceof GitContainmentError)) relay.assertWithinBounds();
+  }
+}
+
 export async function captureSource(
   request: ScanRequest,
   limits: Limits,
@@ -233,7 +283,10 @@ export async function captureSource(
     const profile =
       request.schema === schemasV2.request ? "aih-source-capture-2" : "aih-source-capture-1";
     const gitModes = new Map<string, boolean>();
+    const diagnostics: Diagnostic[] = [];
     let sourceRoot: string;
+    let reachability: CapturedSource["reachability"] =
+      request.source.kind === "git" ? "unchecked" : null;
     if (request.source.kind === "npm")
       throw new ContractError(
         "source-kind-unavailable",
@@ -249,46 +302,60 @@ export async function captureSource(
       mkdirSync(material);
       step = "git init";
       await git(["init", "--quiet", `--template=${hooks}`], acquired, options, hooks);
-      step = "start fetch relay";
-      const relay = await startGitFetchRelay(
-        request.source.repository,
-        gitTransportLimit(limits.maxSourceBytes, limits.maxSourceEntries),
-        options.signal,
-      );
-      step = "git fetch";
-      let acquisitionError: unknown;
+      // A fresh store contains only branches/tags fetched from this exact URL.
+      // Full ancestry is required: a shallow negative result cannot prove unreachability.
+      let reachabilityCheckCompleted = false;
+      step = "check repository reachability";
       try {
-        await git(
-          [
-            "-c",
-            `http.proxy=${relay.proxy}`,
-            "-c",
-            "fetch.unpackLimit=1",
-            "-c",
-            "transfer.unpackLimit=1",
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--depth=1",
-            request.source.repository,
-            request.source.commit,
-          ],
+        await fetchGit(
+          request.source.repository,
+          ["+refs/heads/*:refs/remotes/named/*", "+refs/tags/*:refs/tags/*"],
           acquired,
-          {
-            ...options,
-            signal: options.signal
-              ? AbortSignal.any([options.signal, relay.limitSignal])
-              : relay.limitSignal,
-          },
+          options,
           hooks,
+          limits,
         );
+        if (
+          decodeStrictUtf8V1(
+            await git(["rev-parse", "--is-shallow-repository"], acquired, options, hooks, 16),
+            "Repository shallow state",
+          ).trim() !== "false"
+        )
+          fail("Repository ancestry is shallow or unknown");
+        const ancestry = decodeStrictUtf8V1(
+          await git(["rev-list", "--all"], acquired, options, hooks),
+          "Repository ancestry",
+        );
+        const commits = ancestry.trim() ? ancestry.trim().split("\n") : [];
+        if (commits.some((commit) => !/^[0-9a-f]{40}$/.test(commit)))
+          fail("Repository ancestry is malformed");
+        reachability = commits.includes(request.source.commit) ? "reachable" : "unchecked";
+        reachabilityCheckCompleted = true;
       } catch (error) {
-        acquisitionError = error;
-        throw error;
-      } finally {
-        await relay.close();
-        if (!(acquisitionError instanceof GitContainmentError)) relay.assertWithinBounds();
+        // An unavailable/bounded check proves neither membership nor non-membership.
+        // A containment failure or cancellation must still stop all acquisition.
+        if (error instanceof GitContainmentError || options.signal?.aborted) throw error;
+        diagnostics.push({
+          code: "git-reachability-unchecked",
+          detail: `Git capture step check repository reachability: ${
+            error instanceof ContractError ? error.message : "Repository ancestry check unavailable"
+          }`,
+        });
       }
+      if (reachabilityCheckCompleted && reachability !== "reachable")
+        throw new ContractError(
+          "git-commit-unreachable",
+          "Pinned commit is not reachable from any branch or tag of the named repository",
+        );
+      step = "git fetch";
+      await fetchGit(
+        request.source.repository,
+        ["--depth=1", request.source.commit],
+        acquired,
+        options,
+        hooks,
+        limits,
+      );
       step = "verify commit";
       if (
         decodeStrictUtf8V1(
@@ -456,6 +523,8 @@ export async function captureSource(
       if (!paths.includes(path)) fail("An exclusion is absent from the resolved selection");
     return {
       root: snapshotRoot,
+      reachability,
+      diagnostics,
       capture,
       selection: { paths, excludedPaths },
       cleanup: () => {

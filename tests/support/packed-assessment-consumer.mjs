@@ -1,3 +1,5 @@
+import { exerciseGitReachability } from './git-reachability-cases.mjs';
+await exerciseGitReachability();
 import { exerciseGitDiagnostics } from './git-diagnostic-cases.mjs';
 await exerciseGitDiagnostics();
 import { exerciseItemSummaries } from './item-summary-cases.mjs';

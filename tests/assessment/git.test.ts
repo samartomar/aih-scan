@@ -57,7 +57,7 @@ test.each([
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv) => {
     const args = JSON.parse(argv[2]!) as string[],
       start = args.findIndex((arg) =>
-        ["init", "fetch", "rev-parse", "ls-tree", "cat-file"].includes(arg),
+        ["init", "fetch", "rev-parse", "rev-list", "ls-tree", "cat-file"].includes(arg),
       ),
       tail = args.slice(start),
       bytes = ["init", "fetch"].includes(tail[0]!) ? Buffer.alloc(0) : command(tail);
@@ -128,7 +128,7 @@ test("pinned Git material uses exact blob bytes and cannot execute source checko
     expect(isAbsolute(hooks)).toBe(true);
     expect(hooks.startsWith(options.cwd!)).toBe(false);
     const operation = args.findIndex((arg) =>
-      ["init", "fetch", "rev-parse", "ls-tree", "cat-file", "checkout"].includes(arg),
+      ["init", "fetch", "rev-parse", "rev-list", "ls-tree", "cat-file", "checkout"].includes(arg),
     );
     const tail = args.slice(operation);
     expect(tail[0]).not.toBe("checkout");

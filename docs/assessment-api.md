@@ -49,8 +49,9 @@ before and after each unit. Losing that binding yields a diagnostic result witho
 a Scan ID. Absolute local acquisition paths are absent from portable reports.
 
 Git requests specify a credential-free HTTPS repository URL and a full lowercase
-40-hex commit. Scan acquires only that explicit commit into an owned temporary
-object store and reconstructs source from its raw tree/blob objects. It verifies
+40-hex commit. Scan checks named-repository reachability, then acquires that
+explicit commit into an owned temporary object store and reconstructs only its
+source from raw tree/blob objects. It verifies
 commit and blob object identities. It performs no working-tree checkout, so
 attributes, filters, line-ending conversion and source-provided checkout hooks
 cannot change or execute the pinned material. Unsupported modes, submodules and
@@ -380,13 +381,13 @@ of `detectorTimeoutMs`.
 | --- | --- | --- |
 | `maxSourceEntries` | 100000 | Tree members, including directories and links |
 | `maxSourceBytes` | 268435456 (256 MiB) | Decoded source bytes; snapshot capture also counts file-link target bytes |
-| `gitTransportBytes` | 371884032 | Bidirectional relay bytes across retries; derived as `maxSourceBytes + 1024 * maxSourceEntries + 1048576` |
-| `gitTransportConnections` | 8 | Relay connections across the acquisition |
+| `gitTransportBytes` | 371884032 per fetch | Bidirectional relay bytes across retries; derived as `maxSourceBytes + 1024 * maxSourceEntries + 1048576` |
+| `gitTransportConnections` | 8 per fetch | Relay connections across retries |
 | `gitConnectHeaderBytes` | 8192 | CONNECT header buffer |
 | `gitRelayClientIdleMs` | 30000 before CONNECT; 600000 after connection | Client socket idle time |
 | `gitRelayRemoteIdleMs` | 60000 | Upstream socket idle time |
 | `gitCommandTimeoutMs` | 600000 per Git command | Elapsed subprocess time |
-| `gitStdoutBytes` | 16777216 normally; 1048576 for a commit object; 64 for a blob size; declared blob size for a blob | Raw Git stdout bytes per command |
+| `gitStdoutBytes` | 16777216 normally; 16 for shallow-state metadata; 1048576 for a commit object; 64 for a blob size; declared blob size for a blob | Raw Git stdout bytes per command |
 | `gitStderrBytes` | 65536 | Raw Git stderr bytes per command, never echoed |
 | `sourcePathBytes` | 4096 | UTF-8 bytes per source-relative path |
 
@@ -410,3 +411,34 @@ case. Containment failure takes precedence over a simultaneous transport bound.
 Request-form refusals remain `invalid-input` at phase `request` and explain the
 accepted forms. These are diagnostic code/detail values within the existing
 versioned result schemas; no new wire fields or format identifiers are introduced.
+
+
+## Repository reachability
+
+Before materializing Git content, Scan fetches only the named repository's
+`refs/heads/*` and `refs/tags/*` into an owned temporary store and reads their
+complete commit ancestry. Branch ancestors, lightweight tags and annotated tags
+can establish membership. Object presence, a fork-network commit endpoint, a
+pull-request ref or a fetch of the exact commit alone cannot establish it.
+A completed check that does not contain the commit refuses capture with
+`git-commit-unreachable`; no report or Scan ID is produced. Run-result `2.0.0`
+records `reachability: "unreachable"` for that refusal.
+
+A successful check records `reachability: "reachable"` in both report and run-result
+`2.0.0`. If the independent check cannot complete, for example because its refs
+are unavailable offline, its ancestry is shallow or malformed, or its bounded
+fetch/output exceeds a limit, exact-commit acquisition can still proceed. Both
+documents then record `reachability: "unchecked"`, with a
+`git-reachability-unchecked` diagnostic naming the check and any encountered bound.
+An unavailable check is never evidence of membership or non-membership. If exact
+acquisition itself fails, its normal diagnostic refusal still applies.
+
+The ancestry fetch and exact-commit fetch each retain the transport budget,
+connection bound and contained command runner above. Full history may exceed the
+budget even for a small current tree; that check remains unchecked. No shallow
+negative is treated as unreachable. Process containment failures and caller
+cancellation stop acquisition. No captured content is executed. Request `1.0.0`
+also receives the check and refusal, but its closed legacy documents retain their
+original field shape; select request `2.0.0` for the explicit reachability field.
+Reachability records the repository refs observed during this run; it does not
+promise that those refs remain unchanged or establish approval or authenticity.

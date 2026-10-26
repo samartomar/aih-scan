@@ -49,7 +49,7 @@ test("a consumer can explain an oversized pinned repository even with one select
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv) => {
     const args = JSON.parse(argv[2]!) as string[];
     const operation = args.findIndex((arg) =>
-      ["init", "fetch", "rev-parse", "ls-tree", "cat-file"].includes(arg),
+      ["init", "fetch", "rev-parse", "rev-list", "ls-tree", "cat-file"].includes(arg),
     );
     const tail = args.slice(operation);
     const bytes = ["init", "fetch"].includes(tail[0]!) ? Buffer.alloc(0) : command(tail);
