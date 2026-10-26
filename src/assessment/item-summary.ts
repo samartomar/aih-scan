@@ -8,7 +8,7 @@ import {
   verifyItemRecord,
 } from "./item-record.js";
 import { bound, canonicalBytes, errorDiagnostic, fail, sha256 } from "./json.js";
-import { selectAssessments, snapshotSelectionInput } from "./selection.js";
+import { associationResultShape, selectAssessments, snapshotSelectionInput } from "./selection.js";
 import {
   diagnosticShape,
   digestShape,
@@ -168,16 +168,9 @@ export type SummariseItemResult =
       selection: Exclude<SelectAssessmentsResult, { status: "invalid" }> | null;
     }
   | { status: "invalid"; diagnostics: Diagnostic[] };
-const authenticationShape = z
-  .object({
-    status: z.enum(["skipped", "authenticated", "unverifiable", "revoked"]),
-    scanId: scanIdShape.optional(),
-    reason: labelShape.optional(),
-    producerIdentity: labelShape.optional(),
-    keyId: labelShape.optional(),
-    reportRead: z.enum(["supported", "unsupported", "not-requested"]).optional(),
-  })
-  .strict();
+const authenticationShape = associationResultShape.extend({
+  status: z.enum(["skipped", "authenticated", "unverifiable", "revoked"]),
+});
 function countFindings(
   record: ItemRecord,
   policy: EvidencePolicy,

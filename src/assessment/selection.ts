@@ -61,7 +61,7 @@ const checkShape = z
     diagnostics: z.array(diagnosticShape).max(1000),
   })
   .strict();
-const authenticationShape = z
+export const associationResultShape = z
   .object({
     scanId: scanIdShape.optional(),
     status: z.enum(["skipped", "authenticated", "unverifiable"]),
@@ -91,7 +91,7 @@ const candidateMetadataShape = z
     sourceId: labelShape,
     location: labelShape,
     expectedScanId: scanIdShape.optional(),
-    authentication: authenticationShape.optional(),
+    authentication: associationResultShape.optional(),
   })
   .strict();
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);

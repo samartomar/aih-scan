@@ -36,6 +36,9 @@ export async function exerciseItemSummaries() {
   assert.equal(unsuppressed.summary.suppressed.count, 0, 'suppression paths match exactly');
   delete wrongPath.evidencePolicy.suppressions[0].path;
   assert.equal((await api.summariseItem(wrongPath)).summary.suppressed.count, 4, 'path is optional');
+  const malformedAuthentication = example('verified-no-age-limit');
+  malformedAuthentication.authentication = { status: 'authenticated', reason: 'not-a-known-association-reason' };
+  assert.equal((await api.summariseItem(malformedAuthentication)).status, 'invalid', 'host authentication reasons retain the existing closed enum');
   const mismatch = example('verified-no-age-limit'); mismatch.evidencePolicy.severityProfile.sha256 = '0'.repeat(64);
   assert.equal((await api.summariseItem(mismatch)).diagnostics[0].code, 'severity-profile-mismatch');
   const badContext = example('verified-no-age-limit'); badContext.assessmentsInput.context.selection.excludedPaths = ['not-selected'];
