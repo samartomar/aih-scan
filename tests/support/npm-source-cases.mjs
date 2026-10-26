@@ -26,7 +26,7 @@ export function npmTar(entries) {
 export async function exerciseNpmSources() {
   const originalFetch = globalThis.fetch;
   const archive = npmTar([
-    { path: 'package/package.json', text: JSON.stringify({ name: '@fixture/mcp', version: '1.2.3', scripts: { preinstall: 'exit 99' } }) },
+    { path: 'package/package.json', text: JSON.stringify({ name: '@fixture/mcp', version: '1.2.3', scripts: { preinstall: 'exit 99' }, config: { threshold: 0.5, offset: -1, label: 'e\u0301', large: 1e99, syntax: '{[\"' } }) },
     { path: 'package/server.js', text: 'console.log("fixture");\n', mode: 0o755 },
     { path: 'package/data.txt', text: 'plain\n', mode: 0o644 },
   ]);
@@ -41,11 +41,12 @@ export async function exerciseNpmSources() {
     calls++;
     assert.equal(options.redirect, 'error'); assert.equal(options.credentials, 'omit');
     if (String(location) === 'https://registry.npmjs.org/%40fixture%2Fmcp/1.2.3')
-      return new Response(JSON.stringify({ name: '@fixture/mcp', version: '1.2.3', dist: { tarball: url, integrity } }));
+      return new Response(JSON.stringify({ name: '@fixture/mcp', version: '1.2.3', dist: { tarball: url, integrity }, config: { threshold: 0.5, offset: -1, label: 'e\u0301', large: 1e99, syntax: '{[\"' } }));
     assert.equal(String(location), url);
     return new Response(archive);
   };
   try {
+    if (process.env.NPM_CASE_SLICE === 'namespace') return await exerciseNpmNamespaceBound();
     for (const version of ['latest', '^1.2.3', '~1.2.3', '*', '1', 'v1.2.3', 'git+https://fixture.invalid/repo', '1.2.3 || 2.0.0']) {
       const result = await runScan(request({ kind: 'npm', package: '@fixture/mcp', version }));
       assert.equal(result.status, 'diagnostic'); assert.equal(result.phase, 'request');
@@ -140,10 +141,46 @@ export async function exerciseNpmSources() {
     await diagnostic({ kind: 'npm', package: '@fixture/mcp', version: '1.2.3' }, 'npm-acquisition-failed');
     globalThis.fetch = async () => new Response(JSON.stringify({ name: '@fixture/mcp', version: '1.2.3', dist: { tarball: url, integrity: 'sha1-not-enough' } }));
     await diagnostic({ kind: 'npm', package: '@fixture/mcp', version: '1.2.3' }, 'npm-acquisition-failed');
+    for (const text of [
+      '{"name":"@fixture/mcp","name":"@fixture/mcp","version":"1.2.3"}',
+      '{"name":"@fixture/mcp","version":"1.2.3",}',
+      '{/*comment*/"name":"@fixture/mcp","version":"1.2.3"}',
+    ]) {
+      const source = serve(npmTar([{ path: 'package/package.json', text }]));
+      await diagnostic({ ...source, package: '@fixture/mcp', version: '1.2.3' }, 'npm-acquisition-failed');
+    }
+    const deep = '{"nested":'.repeat(513) + 'null' + '}'.repeat(513);
+    const deepSource = serve(npmTar([{ path: 'package/package.json', text: deep }]));
+    await diagnostic({ ...deepSource, package: '@fixture/mcp', version: '1.2.3' }, 'resource-limit');
+    const ordinary = serve(npmTar([{ path: 'package/package.json', text: '{"name":"@fixture/mcp","version":"1.2.3","config":{"large":9007199254740993,"zero":-0,"decimal":0.5}}' }]));
+    assert.equal((await runScan(request({ ...ordinary, package: '@fixture/mcp', version: '1.2.3' }))).status, 'assessment');
+    globalThis.fetch = async () => new Response('{"name":"@fixture/mcp","name":"other","version":"1.2.3"}');
+    await diagnostic({ kind: 'npm', package: '@fixture/mcp', version: '1.2.3' }, 'npm-acquisition-failed');
     const controller = new AbortController(); controller.abort();
     const cancelled = await runScan(request(pinned), { signal: controller.signal });
     assert.equal(cancelled.status, 'diagnostic');
     assert.match(cancelled.diagnostics[0].detail, /cancelled/);
+    await exerciseNpmNamespaceBound();
     return { cases: 'npm exact coordinates/archive, mutable refusal, modes/links, findings/coverage, identity/integrity, path/link/type/size/count/network/cancellation failures' };
+  } finally { globalThis.fetch = originalFetch; }
+}
+
+export async function exerciseNpmNamespaceBound() {
+  const originalFetch = globalThis.fetch;
+  const archive = npmTar([{ path: 'package/a/b/c/d/file', text: 'inert' }]);
+  const integrity = 'sha512-' + createHash('sha512').update(archive).digest('base64');
+  globalThis.fetch = async () => new Response(archive);
+  try {
+    const result = await runScan({
+      schema: 'urn:aihq:scan:request:2.0.0',
+      source: { kind: 'npm', archive: { url: 'https://fixture.invalid/deep.tgz', integrity } },
+      selection: { paths: 'all', excludedPaths: [] },
+      detectors: [{ detectorId: 'detector.unavailable', configuration: {} }],
+      limits: { maxSourceEntries: 3 },
+    });
+    assert.equal(result.status, 'diagnostic');
+    assert.equal(result.diagnostics[0].code, 'resource-limit');
+    assert.match(result.diagnostics[0].detail, /maxSourceEntries.*limit 3.*observed 4/);
+    assert.equal('scanId' in result, false);
   } finally { globalThis.fetch = originalFetch; }
 }

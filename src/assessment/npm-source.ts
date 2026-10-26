@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { bound, ContractError, hasControl, strictParse } from "./json.js";
+import { createScanner } from "jsonc-parser";
+import { bound, ContractError, hasControl } from "./json.js";
 import { pathShape, repositoryShape } from "./shapes.js";
 import { decodeStrictUtf8V1 } from "./strict-json.js";
 import type { Limits, NpmSource } from "./types.js";
@@ -14,6 +15,38 @@ function containment(detail: string): never {
   throw new ContractError("npm-containment-failed", detail);
 }
 const integrityPattern = /^sha512-[A-Za-z0-9+/]{86}==$/;
+
+/** External npm JSON is source data, not a Scan canonical control document. */
+function npmJson(bytes: Uint8Array, maximum: number): Record<string, unknown> {
+  bound(bytes.byteLength <= maximum, "npmJsonBytes", maximum, bytes.byteLength);
+  const text = decodeStrictUtf8V1(bytes, "npm JSON"),
+    scanner = createScanner(text);
+  const containers: { object: boolean; key: boolean; keys: Set<string> }[] = [];
+  for (scanner.scan(); scanner.getTokenLength() > 0; scanner.scan()) {
+    // Inspect each token's opening character, never punctuation inside strings/comments.
+    const token = text[scanner.getTokenOffset()];
+    if (token === "{" || token === "[") {
+      bound(containers.length < 512, "npmJsonDepth", 512, containers.length + 1);
+      containers.push({ object: token === "{", key: true, keys: new Set() });
+    } else if (token === "}" || token === "]") containers.pop();
+    else {
+      const parent = containers.at(-1);
+      if (parent?.object && token === ",") parent.key = true;
+      if (parent?.object && parent.key && token === '"') {
+        const key = scanner.getTokenValue();
+        if (parent.keys.has(key)) refuse("npm JSON contains a repeated object key");
+        parent.keys.add(key);
+        parent.key = false;
+      }
+    }
+  }
+  // Syntax admission remains strict JSON. Unrelated numbers/Unicode are left uninterpreted;
+  // only the identity strings below are compared or copied into a report.
+  const value: unknown = JSON.parse(text);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    refuse("npm JSON must be an object");
+  return value as Record<string, unknown>;
+}
 
 /** One finite, credential-free HTTPS read; no ambient npm configuration or redirects. */
 async function download(url: string, maximum: number, signal: AbortSignal): Promise<Buffer> {
@@ -149,18 +182,28 @@ function unpack(
   if (!ended) refuse("npm tar is missing its end marker");
   // Validate the complete namespace before any write. Implicit parents are ordinary directories.
   const directories = new Set<string>();
+  let namespaceEntries = members.size;
   for (const member of members.values()) {
     let parent = posix.dirname(member.path);
     while (parent !== ".") {
       const entry = members.get(parent);
       if (entry && entry.type !== "5") containment("npm tar entry traverses a file or link");
-      directories.add(parent);
+      if (!directories.has(parent)) {
+        if (!entry) {
+          bound(
+            namespaceEntries < limits.maxSourceEntries,
+            "maxSourceEntries",
+            limits.maxSourceEntries,
+            namespaceEntries + 1,
+          );
+          namespaceEntries++;
+        }
+        directories.add(parent);
+      }
       parent = posix.dirname(parent);
     }
     if (member.type === "5") directories.add(member.path);
   }
-  const count = directories.size + [...members.values()].filter((m) => m.type !== "5").length;
-  bound(count <= limits.maxSourceEntries, "maxSourceEntries", limits.maxSourceEntries, count);
   const linkTargets = new Map<string, string>();
   for (const member of members.values()) {
     if (member.type !== "2") continue;
@@ -230,11 +273,11 @@ export async function acquireNpm(
     let archive = source.archive;
     if (!archive && "package" in source) {
       const url = `https://registry.npmjs.org/${encodeURIComponent(source.package)}/${encodeURIComponent(source.version)}`;
-      const metadata = strictParse(
-        await download(url, 1024 * 1024, signal),
-        "npm version metadata",
-        1024 * 1024,
-      ) as { name?: unknown; version?: unknown; dist?: { tarball?: unknown; integrity?: unknown } };
+      const metadata = npmJson(await download(url, 1024 * 1024, signal), 1024 * 1024) as {
+        name?: unknown;
+        version?: unknown;
+        dist?: { tarball?: unknown; integrity?: unknown };
+      };
       if (
         !metadata ||
         metadata.name !== source.package ||
@@ -260,11 +303,10 @@ export async function acquireNpm(
     if ("package" in source) {
       if (!modes.has("package.json"))
         refuse("npm coordinates require a regular captured package.json");
-      const manifest = strictParse(
-        readFileSync(join(root, "package.json")),
-        "npm package manifest",
-        limits.maxSourceBytes,
-      ) as { name?: unknown; version?: unknown };
+      const manifest = npmJson(readFileSync(join(root, "package.json")), limits.maxSourceBytes) as {
+        name?: unknown;
+        version?: unknown;
+      };
       if (!manifest || manifest.name !== source.package || manifest.version !== source.version)
         refuse("npm archive package.json does not match the requested exact package version");
     }
