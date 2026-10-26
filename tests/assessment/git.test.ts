@@ -77,7 +77,7 @@ test.each([
   expect(result).toMatchObject({
     status: "diagnostic",
     phase: "capture",
-    diagnostics: [{ code: "invalid-input", detail }],
+    diagnostics: [{ code: "git-acquisition-failed", detail: expect.stringContaining(detail) }],
   });
   expect(result).not.toHaveProperty("scanId");
 });

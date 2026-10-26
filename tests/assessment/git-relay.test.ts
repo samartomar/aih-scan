@@ -145,9 +145,12 @@ test.each([
   expect(result).toMatchObject({
     status: "diagnostic",
     phase: "capture",
-    diagnostics: [{ code: containmentFailure ? "invalid-input" : "resource-limit" }],
+    diagnostics: [{ code: containmentFailure ? "git-containment-failed" : "resource-limit" }],
   });
   expect(result).not.toHaveProperty("scanId");
+  expect(result.diagnostics[0]?.detail).toContain("git fetch");
+  if (!containmentFailure)
+    expect(result.diagnostics[0]?.detail).toMatch(/gitTransportBytes.*1049601.*observed \d+/);
   if (containmentFailure) expect(result.diagnostics[0]?.detail).toContain("process-tree cleanup");
   expect(received).toBeLessThanOrEqual(1024 * 1024 + 1024 + 1 + 39);
 });

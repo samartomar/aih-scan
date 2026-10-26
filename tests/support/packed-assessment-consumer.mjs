@@ -1,3 +1,5 @@
+import { exerciseGitDiagnostics } from './git-diagnostic-cases.mjs';
+await exerciseGitDiagnostics();
 import { exerciseItemSummaries } from './item-summary-cases.mjs';
 const itemSummaries = await exerciseItemSummaries();
 import { exerciseItemRecords } from './item-record-cases.mjs';

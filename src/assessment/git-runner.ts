@@ -1,7 +1,7 @@
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnBoundedV1 } from "../cli/process-runner.js";
-import { base64Decode, ContractError, fail, hasControl, strictParse } from "./json.js";
+import { base64Decode, bound, ContractError, fail, hasControl, strictParse } from "./json.js";
 
 /**
  * The hardened Git runner shared by pinned acquisition and remote ref resolution.
@@ -17,7 +17,10 @@ export interface PinnedGitOptions {
 }
 export class GitContainmentError extends ContractError {
   constructor() {
-    super("invalid-input", "Pinned Git acquisition could not confirm process-tree cleanup");
+    super(
+      "git-containment-failed",
+      "Pinned Git acquisition could not confirm process-tree cleanup",
+    );
   }
 }
 export async function runPinnedGit(
@@ -95,13 +98,48 @@ export async function runPinnedGit(
     },
   );
   if (output.termination === "containment-failure") throw new GitContainmentError();
+  if (output.termination === "timeout")
+    throw new ContractError(
+      "resource-limit",
+      "gitCommandTimeoutMs limit 600000; observed elapsed time at least 600000 ms",
+    );
+  if (output.termination === "output-limit")
+    throw new ContractError(
+      "resource-limit",
+      `Git wrapper output limits maxStdoutBytes=${Math.ceil(maxBytes / 3) * 4 + 64}, maxStderrBytes=65536; observed at least one stream exceeding its limit`,
+    );
+  if (output.termination === "abort")
+    throw new ContractError("git-acquisition-failed", "Pinned Git acquisition was cancelled");
+  const value =
+    output.stdout && !output.stdoutMalformedUtf8
+      ? strictParse(
+          new TextEncoder().encode(output.stdout),
+          "Git transport",
+          Math.ceil(maxBytes / 3) * 4 + 64,
+        )
+      : null;
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "failure" in value &&
+    "observed" in value &&
+    (value.failure === "stdout-limit" || value.failure === "stderr-limit") &&
+    typeof value.observed === "number" &&
+    Number.isSafeInteger(value.observed)
+  ) {
+    const limit = value.failure === "stdout-limit" ? maxBytes : 65536;
+    bound(
+      false,
+      value.failure === "stdout-limit" ? "gitStdoutBytes" : "gitStderrBytes",
+      limit,
+      value.observed,
+    );
+  }
   if (output.code !== 0 || output.truncated || output.termination || output.stdoutMalformedUtf8)
-    fail("Pinned Git acquisition failed or could not confirm process cleanup");
-  const value = strictParse(
-    new TextEncoder().encode(output.stdout),
-    "Git transport",
-    Math.ceil(maxBytes / 3) * 4 + 64,
-  );
+    throw new ContractError(
+      "git-acquisition-failed",
+      `Pinned Git acquisition failed (exit code ${output.code}${output.termination === "residual-descendants" ? "; residual descendants were terminated" : ""}); check Git availability and repository/commit access`,
+    );
   if (
     typeof value !== "object" ||
     value === null ||
