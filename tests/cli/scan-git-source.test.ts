@@ -126,6 +126,8 @@ function serve(fixture: Fixture, answer: Answer = () => undefined): Served {
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv, options) => {
     expect(options.containProcessTree).toBe(true);
     const args = JSON.parse(argv[2] as string) as string[];
+    if (args.includes("ls-remote") && args.includes("--refs"))
+      return { code: 1, stdout: "", stderr: "", truncated: false };
     served.calls.push(args);
     served.argv.push([...argv]);
     served.envs.push(options.env);

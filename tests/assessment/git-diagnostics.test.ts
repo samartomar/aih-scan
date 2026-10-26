@@ -48,8 +48,18 @@ test("a consumer can explain an oversized pinned repository even with one select
   // Only the external process boundary is doubled; pinned objects come from real Git.
   vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv) => {
     const args = JSON.parse(argv[2]!) as string[];
+    if (args.includes("ls-remote")) return { code: 1, stdout: "", stderr: "", truncated: false };
     const operation = args.findIndex((arg) =>
-      ["init", "fetch", "rev-parse", "ls-tree", "cat-file"].includes(arg),
+      [
+        "init",
+        "fetch",
+        "ls-remote",
+        "for-each-ref",
+        "rev-parse",
+        "rev-list",
+        "ls-tree",
+        "cat-file",
+      ].includes(arg),
     );
     const tail = args.slice(operation);
     const bytes = ["init", "fetch"].includes(tail[0]!) ? Buffer.alloc(0) : command(tail);

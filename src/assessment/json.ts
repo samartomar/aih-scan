@@ -12,6 +12,7 @@ export class ContractError extends TypeError {
       | "invalid-input"
       | "resource-limit"
       | "source-kind-unavailable"
+      | "git-commit-unreachable"
       | "git-acquisition-failed"
       | "git-containment-failed",
     message: string,

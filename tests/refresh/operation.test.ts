@@ -46,7 +46,7 @@ writeFileSync(process.argv[6],canonicalBytes(result));`,
   const helper = join(temporary, "fixture-git-command.cjs");
   writeFileSync(
     helper,
-    `const cp=require('node:child_process');const argv=JSON.parse(process.argv[2]);const operation=argv.findIndex(arg=>['init','fetch','rev-parse','ls-tree','cat-file'].includes(arg));const tail=argv.slice(operation);let bytes=Buffer.alloc(0);if(!['init','fetch'].includes(tail[0])){const result=cp.spawnSync('git',['--git-dir',${JSON.stringify(join(fixture, ".git"))},...tail],{windowsHide:true,maxBuffer:268435456});if(result.status!==0)process.exit(1);bytes=result.stdout;}process.stdout.write(JSON.stringify({bytesBase64:bytes.toString('base64')}));`,
+    `const cp=require('node:child_process');const argv=JSON.parse(process.argv[2]);if(argv.includes('ls-remote'))process.exit(1);const operation=argv.findIndex(arg=>['init','fetch','rev-parse','rev-list','ls-tree','cat-file'].includes(arg));const tail=argv.slice(operation);let bytes=Buffer.alloc(0);if(!['init','fetch'].includes(tail[0])){const result=cp.spawnSync('git',['--git-dir',${JSON.stringify(join(fixture, ".git"))},...tail],{windowsHide:true,maxBuffer:268435456});if(result.status!==0)process.exit(1);bytes=result.stdout;}process.stdout.write(JSON.stringify({bytesBase64:bytes.toString('base64')}));`,
   );
   writeFileSync(
     boundary,
@@ -523,7 +523,7 @@ async function interruptedFixture(signal: NodeJS.Signals, shell: boolean) {
 // this boundary does not establish real Linux process-tree containment.
 if(fixtureHostPlatform==='win32'){const nativeKill=process.kill.bind(process);process.kill=(pid,...args)=>nativeKill(pid<0?-pid:pid,...args);}
 let fixtureFetches=0;const fixtureSpawn=cp.spawn;
-cp.spawn=function(executable,args,options){if(executable===process.execPath&&args?.[0]?.endsWith('git-command.js')&&JSON.parse(args[1]).includes('fetch')){fs.appendFileSync(${JSON.stringify(trace)},'fetch\\n');fixtureFetches++;if(fixtureFetches===2){const child=original(process.execPath,['-e','setTimeout(()=>{},60000)'],options);fs.writeFileSync(${JSON.stringify(activePid)},String(process.pid));setImmediate(()=>process.send?.({phase:'second-source'}));return child;}}return fixtureSpawn(executable,args,options);};
+cp.spawn=function(executable,args,options){if(executable===process.execPath&&args?.[0]?.endsWith('git-command.js')&&JSON.parse(args[1]).includes('fetch')&&JSON.parse(args[1]).includes('--depth=1')){fs.appendFileSync(${JSON.stringify(trace)},'fetch\\n');fixtureFetches++;if(fixtureFetches===2){const child=original(process.execPath,['-e','setTimeout(()=>{},60000)'],options);fs.writeFileSync(${JSON.stringify(activePid)},String(process.pid));setImmediate(()=>process.send?.({phase:'second-source'}));return child;}}return fixtureSpawn(executable,args,options);};
 // Windows cannot deliver POSIX signals to Node. Only this labelled process ingress
 // translates real parent IPC into the same signal event; Linux sends actual SIGTERM.
 process.on('message',message=>{if(message==='fixture-SIGTERM'){process.emit('SIGTERM');process.disconnect();}});process.channel?.unref();moduleApi.syncBuiltinESMExports();`,

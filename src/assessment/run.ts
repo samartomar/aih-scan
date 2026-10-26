@@ -456,6 +456,9 @@ export async function runScanPrepared(
     schema: v2 || error instanceof UnsupportedFormatError ? schemasV2.runResult : schemas.runResult,
     status: "diagnostic",
     phase,
+    ...(v2 && error instanceof ContractError && error.code === "git-commit-unreachable"
+      ? { reachability: "unreachable" as const }
+      : {}),
     diagnostics: [errorDiagnostic(error)],
   });
   let request: ScanRequest;
@@ -514,7 +517,7 @@ export async function runScanPrepared(
       payloads: { id: string; bytesBase64: string }[] = [];
     // Imported prior artifacts are acquired, authenticated and fully read once, under the
     // caller's independently selected trust. Without that trust they admit nothing.
-    const diagnostics: Diagnostic[] = [];
+    const diagnostics: Diagnostic[] = [...captured.diagnostics];
     let priorArtifacts: PriorArtifactCandidate[] = [];
     try {
       const priors = await readPriorArtifacts(request.priorArtifacts ?? [], {
@@ -533,9 +536,7 @@ export async function runScanPrepared(
     }
     const reportFor = (units: DetectorResult[], descriptors: AnnexDescriptor[]): ReportBody => ({
       schema: v2 ? schemasV2.report : schemas.report,
-      ...(v2
-        ? { reachability: request.source.kind === "git" ? ("unchecked" as const) : null }
-        : {}),
+      ...(v2 ? { reachability: captured.reachability } : {}),
       producer: packageIdentity,
       createdAt: new Date().toISOString(),
       source:
@@ -1100,9 +1101,7 @@ export async function runScanPrepared(
     result = {
       schema: v2 ? schemasV2.runResult : schemas.runResult,
       status: "assessment",
-      ...(v2
-        ? { reachability: request.source.kind === "git" ? ("unchecked" as const) : null }
-        : {}),
+      ...(v2 ? { reachability: captured.reachability } : {}),
       scanId,
       report,
       annexes: payloads,

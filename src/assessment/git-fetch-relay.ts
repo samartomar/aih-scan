@@ -10,7 +10,7 @@ export function gitTransportLimit(sourceBytes: number, sourceEntries: number): n
  * Git's http.proxy override is documented at https://git-scm.com/docs/git-config#Documentation/git-config.txt-httpproxy.
  * Admission occurs before forwarding a chunk, cumulatively across all connections/retries.
  */
-interface GitFetchRelay {
+export interface GitFetchRelay {
   proxy: string;
   limitSignal: AbortSignal;
   assertWithinBounds(): void;

@@ -1121,7 +1121,9 @@ forms currently return capture diagnostic `source-kind-unavailable`; acquisition
 belongs to [samartomar/aih-scan#120](https://github.com/samartomar/aih-scan/issues/120).
 
 Report and assessment run-result `2.0.0` require `reachability`, with `null` for
-non-Git sources and `"reachable" | "unchecked"` for Git. Until
-[samartomar/aih-scan#122](https://github.com/samartomar/aih-scan/issues/122) adds
-execution, Git capture records `unchecked`. Diagnostic run results may additionally
-record `unreachable` when that future check refuses a source. No outcome is guessed.
+non-Git sources and `"reachable" | "unchecked"` for Git. Before capture, Scan checks
+full branch/tag ancestry from the named repository. A commit present only in its
+fork network is refused with `git-commit-unreachable` and diagnostic run-result
+`reachability: "unreachable"`. An unavailable or incomplete check records
+`unchecked` in both the run result and report, with a `git-reachability-unchecked`
+diagnostic. No outcome is guessed. See [reachability and its bounds](docs/assessment-api.md#repository-reachability).

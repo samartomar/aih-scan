@@ -703,9 +703,16 @@ describe("published V2 package installation", () => {
       join(directory, "item-summary-replay.mjs"),
       readFileSync(join(root, "tests/support/item-summary-replay.mjs")),
     );
+    writeFileSync(
+      join(directory, "git-reachability-cases.mjs"),
+      readFileSync(join(root, "tests/support/git-reachability-cases.mjs")),
+    );
+    const consumerHome = join(directory, "consumer-home");
+    mkdirSync(consumerHome);
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
         cwd: directory,
+        env: { ...process.env, HOME: consumerHome, USERPROFILE: consumerHome },
         encoding: "utf8",
         stdio: "pipe",
       }),

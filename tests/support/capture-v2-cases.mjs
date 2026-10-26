@@ -173,7 +173,7 @@ async function exerciseGitModesV2(request) {
   const commit = git(['rev-parse', 'HEAD']).trim();
   const bin = resolve('capture-v2-fixture-bin'); mkdirSync(bin);
   // Mock only the external Git executable. Production modules and process containment run unchanged.
-  writeFileSync(resolve(bin, 'git'), `#!${process.execPath}\nconst {execFileSync}=require('node:child_process');\nconst args=process.argv.slice(2);\nif(args.includes('init')||args.includes('fetch'))process.exit(0);\nprocess.stdout.write(execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(resolve(fixtureRoot,'.git'))},...args],{stdio:['ignore','pipe','pipe']}));\n`, { mode: 0o755 });
+  writeFileSync(resolve(bin, 'git'), `#!${process.execPath}\nconst {execFileSync}=require('node:child_process');\nconst args=process.argv.slice(2);if(args.includes('ls-remote'))process.exit(1);\nif(args.includes('rev-list'))process.exit(1);\nif(args.includes('init')||args.includes('fetch'))process.exit(0);\nprocess.stdout.write(execFileSync(${JSON.stringify(realGit)},['--git-dir='+${JSON.stringify(resolve(fixtureRoot,'.git'))},...args],{stdio:['ignore','pipe','pipe']}));\n`, { mode: 0o755 });
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}${delimiter}${oldPath}`;
   try {

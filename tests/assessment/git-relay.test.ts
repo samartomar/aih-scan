@@ -148,7 +148,7 @@ test.each([
     diagnostics: [{ code: containmentFailure ? "git-containment-failed" : "resource-limit" }],
   });
   expect(result).not.toHaveProperty("scanId");
-  expect(result.diagnostics[0]?.detail).toContain("git fetch");
+  expect(result.diagnostics[0]?.detail).toMatch(/git fetch|check repository reachability/);
   if (!containmentFailure)
     expect(result.diagnostics[0]?.detail).toMatch(/gitTransportBytes.*1049601.*observed \d+/);
   if (containmentFailure) expect(result.diagnostics[0]?.detail).toContain("process-tree cleanup");
