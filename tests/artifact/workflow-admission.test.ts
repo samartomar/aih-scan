@@ -10,6 +10,7 @@ const workflow = (name: string) =>
 const context = (name: string) => ({
   github: {
     event_name: "workflow_dispatch",
+    event: { repository: { visibility: "public" } },
     repository: "samartomar/aih-scan",
     repository_id: "1336836161",
     repository_owner_id: "9993940",
@@ -71,7 +72,7 @@ test("only the sole maintainer's reviewed first manual main run can enter each p
         workflow_ref: "samartomar/aih-scan/.github/workflows/other.yml@refs/heads/main",
       })) {
         const changed = structuredClone(selected);
-        changed.github[key as keyof typeof changed.github] = value;
+        changed.github[key as Exclude<keyof typeof changed.github, "event">] = value;
         expect(admits(job.if, changed), `${name}: refused ${key}`).toBe(false);
       }
       for (const identity of [
@@ -111,6 +112,20 @@ test("only the sole maintainer's reviewed first manual main run can enter each p
         }
       }
     }
+  }
+});
+
+test("publisher refuses private or unknown visibility before any signing authority is admitted", () => {
+  const config = workflow("publisher");
+  for (const job of Object.values(config.jobs) as { if: string }[]) {
+    for (const visibility of ["private", "internal", ""]) {
+      const selected = context("publisher");
+      selected.github.event.repository.visibility = visibility;
+      expect(admits(job.if, selected), visibility).toBe(false);
+    }
+    const missing = context("publisher");
+    Reflect.deleteProperty(missing.github.event.repository, "visibility");
+    expect(admits(job.if, missing)).toBe(false);
   }
 });
 

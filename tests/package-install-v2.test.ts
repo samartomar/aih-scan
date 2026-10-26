@@ -32,6 +32,7 @@ import {
 import { createScannerManifestV1 } from "../src/observation/scanner-manifest-v1.js";
 import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source-hash-v1.js";
 import { contractSupport, entrySupport } from "../src/public/contracts.js";
+import { syntheticKeyless } from "./artifact/synthetic-keyless.js";
 import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
 
 const root = resolve(import.meta.dirname, "..");
@@ -714,6 +715,41 @@ describe("published V2 package installation", () => {
     writeFileSync(
       join(directory, "npm-source-cases.mjs"),
       readFileSync(join(root, "tests/support/npm-source-cases.mjs")),
+    );
+    // Generate local-only certificates with the existing fixture encoder. The
+    // installed consumer independently prepares, attaches and authenticates.
+    const summaryFixtures = JSON.parse(
+      readFileSync(join(root, "schemas/item-summary/1.0.0.fixtures.json"), "utf8"),
+    );
+    const summaryInput = summaryFixtures.cases.find(
+      (entry: { name: string }) => entry.name === "verified-no-age-limit",
+    ).input;
+    const report = summaryInput.assessmentsInput.assessments[0].document;
+    const annexBytes = Buffer.from("TEST ONLY offline publisher summary annex\n");
+    const annexId = report.annexes[0].id;
+    report.annexes = [
+      {
+        id: annexId,
+        mediaType: "text/plain",
+        sha256: sha256(annexBytes),
+        byteLength: annexBytes.length,
+      },
+    ];
+    const keyless = await syntheticKeyless("0.0.1", {
+      report,
+      annexes: [{ id: annexId, bytes: annexBytes }],
+    });
+    writeFileSync(
+      join(directory, "offline-publisher-fixture.json"),
+      JSON.stringify({
+        artifact: keyless.attached.artifact,
+        publisher: keyless.publisher,
+        summaryInput,
+      }),
+    );
+    writeFileSync(
+      join(directory, "publisher-signing-cases.mjs"),
+      readFileSync(join(root, "tests/support/publisher-signing-cases.mjs")),
     );
     const consumerHome = join(directory, "consumer-home");
     mkdirSync(consumerHome);
