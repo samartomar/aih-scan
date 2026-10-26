@@ -23,6 +23,21 @@ export const contractSupport = Object.freeze({
   package: packageIdentity,
   contracts: Object.freeze([
     Object.freeze({
+      id: "urn:aihq:scan:evidence-policy:1.0.0",
+      role: "accepts",
+      schemaExport: "@aihq/scan/schemas/evidence-policy/1.0.0.json",
+    }),
+    Object.freeze({
+      id: "urn:aihq:scan:severity-profile:1.0.0",
+      role: "accepts",
+      schemaExport: "@aihq/scan/schemas/severity-profile/1.0.0.json",
+    }),
+    Object.freeze({
+      id: "urn:aihq:scan:item-summary:1.0.0",
+      role: "produces",
+      schemaExport: "@aihq/scan/schemas/item-summary/1.0.0.json",
+    }),
+    Object.freeze({
       id: "urn:aihq:scan:item-record:1.0.0",
       role: "both",
       schemaExport: "@aihq/scan/schemas/item-record/1.0.0.json",
@@ -247,3 +262,13 @@ export type {
   ItemRecordResult,
   ItemSubject,
 } from "../assessment/item-record.js";
+
+export type {
+  EvidencePolicy,
+  ItemAuthentication,
+  ItemSummary,
+  ItemTrustStatus,
+  SeverityProfile,
+  SummariseItemInput,
+  SummariseItemResult,
+} from "../assessment/item-summary.js";

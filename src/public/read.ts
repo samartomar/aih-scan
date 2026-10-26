@@ -21,6 +21,21 @@ export {
   recordItemBatch,
   verifyItemRecord,
 } from "../assessment/item-record.js";
+export type {
+  EvidencePolicy,
+  ItemAuthentication,
+  ItemSummary,
+  ItemTrustStatus,
+  SeverityProfile,
+  SummariseItemInput,
+  SummariseItemResult,
+} from "../assessment/item-summary.js";
+export {
+  evidencePolicySchema,
+  itemSummarySchema,
+  severityProfileSchema,
+  summariseItem,
+} from "../assessment/item-summary.js";
 export { readReport } from "../assessment/report.js";
 export { maxAssessments, selectAssessments } from "../assessment/selection.js";
 export { maxAssessmentBytes, readSummary } from "../assessment/summary.js";

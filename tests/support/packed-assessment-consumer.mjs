@@ -1,3 +1,5 @@
+import { exerciseItemSummaries } from './item-summary-cases.mjs';
+const itemSummaries = await exerciseItemSummaries();
 import { exerciseItemRecords } from './item-record-cases.mjs';
 await exerciseItemRecords();
 // Copied into an isolated installed consumer by package-install-v2.test.ts.
@@ -31,7 +33,7 @@ const manifest = JSON.parse(readFileSync("node_modules/@aihq/scan/package.json",
 const goldenFixtures = await exerciseGoldenFixtures();
 assert.deepEqual(contractSupport.package, { name: manifest.name, version: manifest.version });
 assert.equal(contractSupport.schema, "urn:aihq:package-support:1.0.0");
-assert.equal(contractSupport.contracts.length, 11);
+assert.equal(contractSupport.contracts.length, 14);
 // Exactly the package-support 1.0.0 entry shape; lifecycle status is the sibling entrySupport.
 assert.deepEqual(contractSupport.entries, [
   { export: "@aihq/scan/contracts", runtime: "portable" },
@@ -280,6 +282,14 @@ const portableItemAssessment = await portableRead.namespace.readReport(canonical
 const portableItemRecord = await portableRead.namespace.recordItem(portableItemAssessment, portableItemGolden.item);
 assert.deepEqual(JSON.parse(JSON.stringify(portableItemRecord)), itemGolden.value);
 assert.equal(await portableRead.namespace.verifyItemRecord(portableItemRecord, portableItemAssessment, portableItemGolden.item), 'same');
+const summaryGolden = JSON.parse(readFileSync(new URL(import.meta.resolve('@aihq/scan/schemas/item-summary/1.0.0.fixtures.json')), 'utf8'));
+context.summaryGoldenJson = JSON.stringify(summaryGolden);
+const portableSummaryGolden = runInContext('JSON.parse(summaryGoldenJson)', context);
+const portableSummaryReplay = moduleFor(new URL('./item-summary-replay.mjs', import.meta.url).href);
+await portableSummaryReplay.link(linkPortable);
+await portableSummaryReplay.evaluate();
+const portableItemSummaries = await portableSummaryReplay.namespace.replayItemSummaries(portableRead.namespace, portableSummaryGolden);
+assert.deepEqual(JSON.parse(JSON.stringify(portableItemSummaries)), itemSummaries);
 const portableResult = await portableRead.namespace.readArtifact(new Uint8Array(signed.bytes));
 assert.equal(portableResult.status, "read");
 assert.equal(portableResult.scanId, result.scanId);
@@ -318,4 +328,5 @@ process.stdout.write(JSON.stringify({
   materialChange: material.materialChange.changes[0].kind,
   summarySelection,
   goldenFixtures,
+  itemSummaries,
 }) + "\n");

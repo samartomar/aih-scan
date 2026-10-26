@@ -691,6 +691,14 @@ describe("published V2 package installation", () => {
       join(directory, "item-record-cases.mjs"),
       readFileSync(join(root, "tests/support/item-record-cases.mjs")),
     );
+    writeFileSync(
+      join(directory, "item-summary-cases.mjs"),
+      readFileSync(join(root, "tests/support/item-summary-cases.mjs")),
+    );
+    writeFileSync(
+      join(directory, "item-summary-replay.mjs"),
+      readFileSync(join(root, "tests/support/item-summary-replay.mjs")),
+    );
     const assessmentConsumer = JSON.parse(
       execFileSync(process.execPath, ["--experimental-vm-modules", "assessment-consumer.mjs"], {
         cwd: directory,
@@ -708,17 +716,20 @@ describe("published V2 package installation", () => {
       materialChange: "modified",
     });
     expect(assessmentConsumer.summarySelection.cases).toBeGreaterThan(40);
-    expect(assessmentConsumer.goldenFixtures).toHaveLength(18);
+    expect(assessmentConsumer.itemSummaries.rows).toEqual(
+      Array.from({ length: 17 }, (_, i) => i + 1),
+    );
+    expect(assessmentConsumer.goldenFixtures).toHaveLength(40);
     expect(
       assessmentConsumer.goldenFixtures.filter(
         (entry: { expectation: string }) => entry.expectation === "accept",
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(29);
     expect(
       assessmentConsumer.goldenFixtures.filter(
         (entry: { expectation: string }) => entry.expectation === "refuse",
       ),
-    ).toHaveLength(8);
+    ).toHaveLength(11);
     expect(assessmentConsumer.summarySelection.summaryBytes).toBeLessThan(
       assessmentConsumer.summarySelection.reportBytes,
     );
@@ -730,6 +741,11 @@ describe("published V2 package installation", () => {
         'import { readArtifact, readContentCoverage, readReport, type ContentDescriptor, type ReadContentCoverageResult } from "@aihq/scan/read";',
         'import { readSummary, selectAssessments, type ReadSummaryInput, type ReadSummaryResult, type SelectAssessmentsInput, type SelectAssessmentsResult, type AssessmentContext, type ScanSummary } from "@aihq/scan/read";',
         'import type { EvidenceCandidate, EvidenceCheck, ProviderSummary } from "@aihq/scan/contracts";',
+        'import { summariseItem, type SummariseItemInput, type SummariseItemResult } from "@aihq/scan/read";',
+        'import type { EvidencePolicy, SeverityProfile, ItemSummary } from "@aihq/scan/contracts";',
+        "declare const itemInput: SummariseItemInput; declare const evidencePolicy: EvidencePolicy; declare const severityProfile: SeverityProfile;",
+        'const itemResult: Promise<SummariseItemResult> = summariseItem(itemInput); const itemSummary: Promise<ItemSummary | null> = itemResult.then(result => result.status === "summarised" ? result.summary : null); void [itemSummary, evidencePolicy, severityProfile];',
+
         "declare const summaryInput: ReadSummaryInput; declare const selectionInput: SelectAssessmentsInput; declare const context: AssessmentContext; declare const candidate: EvidenceCandidate; declare const check: EvidenceCheck; declare const provider: ProviderSummary;",
         'const compact: Promise<ReadSummaryResult> = readSummary(summaryInput); const selected: Promise<SelectAssessmentsResult> = selectAssessments(selectionInput); const summary: Promise<ScanSummary | null> = compact.then(value => value.status === "read" ? value.summary : null); void [selected, summary, context, candidate, check, provider];',
         "declare const request: ScanRequest;",

@@ -101,7 +101,7 @@ const sameSelection = (
   right: { paths: string[]; excludedPaths: string[] },
 ) => equalBytes(canonicalBytes(left), canonicalBytes(right));
 
-function snapshot(input: SelectAssessmentsInput) {
+export function snapshotSelectionInput(input: SelectAssessmentsInput, allowEmptySources = false) {
   const raw = dataObject(
     input,
     ["assessments", "context", "evaluationTime", "checks"],
@@ -131,7 +131,11 @@ function snapshot(input: SelectAssessmentsInput) {
     bytes += candidate.bytes.byteLength;
     bound(bytes <= maxAssessmentBytes, "supplied bytes", maxAssessmentBytes);
   }
-  const context = contextShape.parse(snapshotJson(raw.context));
+  const context = (
+    allowEmptySources
+      ? contextShape.extend({ sourceIds: z.array(labelShape).max(32) })
+      : contextShape
+  ).parse(snapshotJson(raw.context));
   if (new Set(context.descriptors.map((d) => d.path)).size !== context.descriptors.length)
     fail("Descriptor paths must be unique");
   context.sourceIds = normalized(context.sourceIds);
@@ -175,7 +179,7 @@ export async function selectAssessments(
   input: SelectAssessmentsInput,
 ): Promise<SelectAssessmentsResult> {
   try {
-    const { assessments, context, checks, evaluationTime, ids } = snapshot(input);
+    const { assessments, context, checks, evaluationTime, ids } = snapshotSelectionInput(input);
     const failures: EvidenceSourceFailure[] = [];
     const entries = new Map<string, AssessmentSelectionEntry>();
     const reportBytes = new Map<string, Uint8Array>();

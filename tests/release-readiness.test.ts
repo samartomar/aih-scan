@@ -1019,6 +1019,7 @@ describe("@aihq/scan release boundary (#12)", () => {
         "tools/baseline-analyzers",
         "tools/verify-core-contract-lock-v2.mjs",
         "docs/item-records.md",
+        "docs/item-summaries.md",
       ],
     });
     expect(existsSync(resolve(root, "LICENSE"))).toBe(true);
