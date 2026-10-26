@@ -669,6 +669,10 @@ describe("published V2 package installation", () => {
       directory,
       isolatedNpmInstallEnvironment(emptyUserconfig, inheritedEnvironment),
     );
+    writeFileSync(
+      join(directory, "package-support-cases.mjs"),
+      readFileSync(join(root, "tests/support/package-support-cases.mjs")),
+    );
     // Extend the existing single packed/install boundary; a second parallel pack
     // would race the build. This proof uses only the installed public entries.
     writeFileSync(

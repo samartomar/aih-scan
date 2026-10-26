@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import * as contracts from "../../src/public/contracts.js";
 import { contractSupport, entrySupport } from "../../src/public/contracts.js";
 
 // Verbatim copy of the @aihq/core schema export schemas/package-support/1.0.0.json.
@@ -150,5 +152,67 @@ describe("contractSupport", () => {
     expect(entrySupport.entries.map((entry) => entry.export)).toEqual(
       contractSupport.entries.map((entry) => entry.export),
     );
+  });
+});
+
+describe("package-support 1.1 fixture discovery", () => {
+  it("publishes the Core 1.1 shape with exact exported golden suite identities", () => {
+    const support = (contracts as Record<string, unknown>).contractSupport11 as {
+      schema: string;
+      package: unknown;
+      entries: unknown;
+      contracts: {
+        id: string;
+        role: string;
+        schemaExport: string;
+        versions: string[];
+        fixtures: { export: string; expect: string }[];
+      }[];
+    };
+    expect(support).toBeDefined();
+    const schema11 = JSON.parse(
+      readFileSync(
+        new URL("../fixtures/core/package-support-1.1.0.schema.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(schema11.$id).toBe("urn:aihq:package-support:1.1.0");
+    const validate11 = new Ajv2020({ strict: true }).compile(schema11);
+    expect(validate11(support), JSON.stringify(validate11.errors)).toBe(true);
+    expect(support.package).toBe(contractSupport.package);
+    expect(support.entries).toBe(contractSupport.entries);
+    expect(support.contracts).toHaveLength(14);
+    expect(support.contracts.map(({ fixtures, versions, ...entry }) => entry)).toEqual(
+      contractSupport.contracts,
+    );
+    const manifest = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    );
+    const referenced: string[] = [];
+    for (const entry of support.contracts) {
+      expect(entry.versions).toEqual([entry.id.split(":").at(-1)]);
+      expect(entry.fixtures).toHaveLength(1);
+      for (const fixture of entry.fixtures) {
+        expect(fixture.expect).toBe("accept");
+        const key = fixture.export.replace("@aihq/scan/", "./");
+        expect(manifest.exports[key]).toBe(key);
+        const suite = JSON.parse(readFileSync(new URL(`../../${key}`, import.meta.url), "utf8"));
+        expect(suite.contractId).toBe(entry.id);
+        expect(suite.contractVersion).toBe(entry.versions[0]);
+        expect(
+          suite.cases.some((item: { expectation: string }) => item.expectation === "accept"),
+        ).toBe(true);
+        expect(
+          suite.cases.some((item: { expectation: string }) => item.expectation === "refuse"),
+        ).toBe(true);
+        referenced.push(key);
+      }
+    }
+    expect(referenced.sort()).toEqual(
+      Object.keys(manifest.exports)
+        .filter((key) => key.endsWith(".fixtures.json"))
+        .sort(),
+    );
+    expect(validate(schema, plain(contractSupport))).toEqual([]);
   });
 });

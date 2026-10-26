@@ -6,7 +6,7 @@ import * as batchV1 from "../src/baseline/batch-v1.js";
 import * as publicationV1 from "../src/baseline/publication-v1.js";
 import * as publicApi from "../src/index.js";
 import * as attestationV2 from "../src/observation/scan-attestation-v2.js";
-import { contractSupport, entrySupport } from "../src/public/contracts.js";
+import { contractSupport, contractSupport11, entrySupport } from "../src/public/contracts.js";
 import * as registrationV1 from "../src/registration/detector-registration-v1.js";
 
 const legacyImplementations: Record<string, unknown> = {
@@ -21,6 +21,17 @@ const root = resolve(import.meta.dirname, "..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
 describe("Strict V2 public boundary", () => {
+  it("publishes fixture discovery only through the portable contracts entry", () => {
+    expect(contractSupport11.schema).toBe("urn:aihq:package-support:1.1.0");
+    expect(contractSupport.schema).toBe("urn:aihq:package-support:1.0.0");
+    expect(contractSupport11.entries).toBe(contractSupport.entries);
+    expect(Object.isFrozen(contractSupport11)).toBe(true);
+    for (const entry of contractSupport11.contracts) {
+      expect(Object.isFrozen(entry.fixtures[0])).toBe(true);
+      expect(entry.fixtures[0]?.export).toMatch(/^@aihq\/scan\/schemas\/.+\.fixtures\.json$/);
+    }
+    expect(publicApi).not.toHaveProperty("contractSupport11");
+  });
   it("exports only the bounded V2 evidence and compatibility contracts", () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       "AI_HARNESS_CORE_CONTRACTS_ACCEPTED",
