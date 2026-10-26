@@ -1,3 +1,5 @@
+import { exercisePackageSupport } from "./package-support-cases.mjs";
+await exercisePackageSupport();
 import { exerciseNpmSources } from './npm-source-cases.mjs';
 await exerciseNpmSources();
 import { exerciseGitReachability } from './git-reachability-cases.mjs';
@@ -278,6 +280,8 @@ const portableContracts = moduleFor(import.meta.resolve("@aihq/scan/contracts"))
 await portableContracts.link(linkPortable);
 await portableContracts.evaluate();
 assert.equal(portableContracts.namespace.contractSupport.package.version, manifest.version);
+assert.equal(portableContracts.namespace.contractSupport11.schema, "urn:aihq:package-support:1.1.0");
+assert.equal(JSON.stringify(portableContracts.namespace.contractSupport11), JSON.stringify((await import("@aihq/scan/contracts")).contractSupport11));
 const portableRead = moduleFor(import.meta.resolve("@aihq/scan/read"));
 await portableRead.link(linkPortable);
 await portableRead.evaluate();

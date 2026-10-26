@@ -66,11 +66,34 @@ development dependency of the test consumer; it adds no Scan runtime dependency.
 The package-support and public-boundary tests pin the exports. Ordinary public
 CI includes this test through its full validation route for package/schema changes.
 
-`contractSupport` remains the closed `urn:aihq:package-support:1.0.0` declaration
-without fixture fields. Referencing fixtures from a later support declaration
-belongs to samartomar/aih-scan#130. The one-off cross-package `checkContracts`
-receipt from samartomar/aih-core#102 is an additional merge gate for
-samartomar/aih-scan#128; repository checks alone do not satisfy it.
+## Package-support discovery
+
+`contractSupport11` from `@aihq/scan/contracts` is the Core-owned
+`urn:aihq:package-support:1.1.0` shape. Every contract entry includes its exact
+`versions` and a `fixtures` reference to the existing schema-adjacent case suite.
+`contractSupport` remains the unchanged closed 1.0.0 declaration, so existing
+1.0 readers continue to receive the shape they support. Both declarations share
+package identity and entry runtimes; lifecycle status stays in `entrySupport`.
+
+A reference's `expect: "accept"` means the **suite** must replay successfully,
+including its negative cases. The exported bytes are the wrapper described
+above, not a raw contract document. A host adapter for Core's public
+`checkContracts` loads the reference through the producing package's exports,
+checks `contractId` and `contractVersion`, and replays every case against the
+exported schema and the corresponding public reader where one exists. It
+accepts the suite only when the individual accept/refuse outcomes agree.
+Do not pass wrapper bytes directly to `readReport` or `readArtifact`.
+
+The packed-consumer helper `tests/support/package-support-cases.mjs` illustrates
+this adapter and can run with Core's public `checkContracts` and
+`validatePackageSupport`. It checks all 14 declared suites through exported
+schemas, plus report/artifact byte readers, cached item-record verification and
+disabled material-change delivery. The existing packed replay separately covers
+request/definition admission, executable capture and item summary semantics.
+Run-result and evidence-association have no standalone public reader: their
+schema checks establish structural conformance only. Missing readers or fixture
+bytes stay unavailable in Core's checker. Cross-package acceptance uses the exact
+packed archive; package versions alone never establish compatibility.
 
 ## Executable capture contracts (2.0.0)
 

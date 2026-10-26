@@ -73,7 +73,11 @@ Golden contract fixtures are exported beside all supported schemas as
 `@aihq/scan/schemas/<name>/1.0.0.fixtures.json`, including `detector-definition`.
 See [the fixture manifest and replay guide](docs/contract-fixtures.md). Public CI
 replays these exports from an exact packed archive installed in a temporary
-consumer outside the source workspace. Package-support 1.0.0 stays unchanged.
+consumer outside the source workspace. `contractSupport11` from
+`@aihq/scan/contracts` publishes package-support 1.1.0 with each contract's
+version and golden suite export. `contractSupport` retains the closed 1.0.0
+shape for existing readers. Fixture references identify case suites; host adapters
+replay their cases, including refusals, rather than treating wrappers as documents.
 
 These changes are unreleased. Manual report workflows refuse admission without
 the exact reviewed main commit and independently selected upload custody. Protected
@@ -408,7 +412,7 @@ identity for a normal release or describe either signature as the other.
 
 New work uses the three current entries. Each step is a separate, explicit call:
 
-1. **Check support.** Read `contractSupport` from `@aihq/scan/contracts` to confirm
+1. **Check support.** Read `contractSupport11` from `@aihq/scan/contracts` to confirm
    the installed package version, the schema IDs it accepts or produces and the
    runtime of each entry. Read `entrySupport` from the same entry for each entry's
    status.

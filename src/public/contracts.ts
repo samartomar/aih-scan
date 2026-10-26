@@ -102,6 +102,31 @@ export const contractSupport = Object.freeze({
 } as const);
 
 /**
+ * Fixture-aware declaration. Each fixture export is a golden case suite, whose
+ * reader adapter replays all accept/refuse cases rather than reading the wrapper
+ * as a Scan document. The closed 1.0 declaration above remains unchanged.
+ */
+export const contractSupport11 = Object.freeze({
+  schema: "urn:aihq:package-support:1.1.0",
+  package: packageIdentity,
+  contracts: Object.freeze(
+    contractSupport.contracts.map((contract) =>
+      Object.freeze({
+        ...contract,
+        versions: Object.freeze([contract.id.split(":").at(-1) as string]),
+        fixtures: Object.freeze([
+          Object.freeze({
+            export: contract.schemaExport.replace(/\.json$/, ".fixtures.json"),
+            expect: "accept" as const,
+          }),
+        ]),
+      }),
+    ),
+  ),
+  entries: contractSupport.entries,
+} as const);
+
+/**
  * `current` entries and groups are the recommended way to start new work;
  * `compatibility-only` ones keep existing evidence readable and existing callers
  * working without new capability; `deprecated` ones still work but carry
