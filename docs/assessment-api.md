@@ -358,3 +358,55 @@ It performs no host access, authentication or qualification. Results remain
 `authenticity: "unchecked"`; authenticate artifacts and apply inventory/scope and
 qualification checks independently. Report/artifact/signature/Scan ID formats do
 not change.
+
+## Git request forms, limits and diagnostics
+
+The `runScan` API accepts `source.repository` only as a credential-free `https://`
+URL with a hostname, at most 2048 UTF-8 bytes, without a query, fragment, controls
+or whitespace. A repository path and optional `.git` suffix are accepted, for
+example `https://github.com/owner/repository.git`. `owner/repository`, local paths,
+SCP syntax and non-HTTPS transports are refused by this API. Its `source.commit`
+is exactly 40 lowercase hexadecimal characters naming a full SHA-1 commit object.
+Short hashes, uppercase hashes, branches, tags, `HEAD` and SHA-256 object IDs are
+refused before capture. The CLI's explicit ref-resolution convenience is separate;
+`runScan` never resolves mutable refs.
+
+Capture bounds apply to the whole pinned tree before selection, including
+unselected entries. Lower `request.limits` values can tighten the source limits;
+they cannot exceed the ceilings below. Git's command limits are fixed independently
+of `detectorTimeoutMs`.
+
+| Limit | Default / ceiling | What is counted |
+| --- | --- | --- |
+| `maxSourceEntries` | 100000 | Tree members, including directories and links |
+| `maxSourceBytes` | 268435456 (256 MiB) | Decoded source bytes; snapshot capture also counts file-link target bytes |
+| `gitTransportBytes` | 371884032 | Bidirectional relay bytes across retries; derived as `maxSourceBytes + 1024 * maxSourceEntries + 1048576` |
+| `gitTransportConnections` | 8 | Relay connections across the acquisition |
+| `gitConnectHeaderBytes` | 8192 | CONNECT header buffer |
+| `gitRelayClientIdleMs` | 30000 before CONNECT; 600000 after connection | Client socket idle time |
+| `gitRelayRemoteIdleMs` | 60000 | Upstream socket idle time |
+| `gitCommandTimeoutMs` | 600000 per Git command | Elapsed subprocess time |
+| `gitStdoutBytes` | 16777216 normally; 1048576 for a commit object; 64 for a blob size; declared blob size for a blob | Raw Git stdout bytes per command |
+| `gitStderrBytes` | 65536 | Raw Git stderr bytes per command, never echoed |
+| `sourcePathBytes` | 4096 | UTF-8 bytes per source-relative path |
+
+The bounded subprocess wrapper separately caps base64-encoded JSON stdout at
+`ceil(gitStdoutBytes / 3) * 4 + 64` bytes (`maxStdoutBytes`), and its stderr at
+65536 bytes (`maxStderrBytes`). The failed stream is named with its configured limit and observed byte count,
+including the rejected chunk. Observed counts may be lower bounds because
+reading stops at the bound.
+
+A diagnostic result has no Scan ID. Every Git capture diagnostic's `detail` names
+the failing step, such as `git init`, `git fetch`, `verify commit`, `validate tree`,
+`read blob size`, `capture snapshot` or `cleanup`. Bound diagnostics use
+`resource-limit` and name the limit, its value and the observed count or time.
+For example, `Git capture step validate tree: maxSourceEntries exceeds limit 1;
+observed 2` is actionable even if only one of those entries was selected.
+`git-acquisition-failed` covers failed acquisition, invalid pinned material,
+cancellation and capture I/O; it never repeats raw Git stderr, URLs or host paths.
+`git-containment-failed` means process-tree cleanup could not be confirmed or
+temporary capture material could not be removed. No assessment proceeds in that
+case. Containment failure takes precedence over a simultaneous transport bound.
+Request-form refusals remain `invalid-input` at phase `request` and explain the
+accepted forms. These are diagnostic code/detail values within the existing
+versioned result schemas; no new wire fields or format identifiers are introduced.

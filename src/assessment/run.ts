@@ -58,7 +58,7 @@ import {
   type RetainedObservationsV1,
   retainObservationV1,
 } from "./reuse.js";
-import { requestShape } from "./shapes.js";
+import { repositoryShape, requestShape } from "./shapes.js";
 import {
   type AnnexDescriptor,
   type DetectorResult,
@@ -184,6 +184,33 @@ function requestSnapshot(raw: unknown): ScanRequest {
   const snapshot = strictParse(bytes, "request", limitCeilings.maxRequestBytes);
   if (snapshot && typeof snapshot === "object" && "schema" in snapshot)
     requireFormat(snapshot.schema, "$.schema", [schemas.request, schemasV2.request]);
+  if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)) {
+    const source = (snapshot as Record<string, unknown>).source;
+    if (
+      source &&
+      typeof source === "object" &&
+      !Array.isArray(source) &&
+      "kind" in source &&
+      source.kind === "git"
+    ) {
+      const refusals: string[] = [];
+      if (
+        !repositoryShape.safeParse("repository" in source ? source.repository : undefined).success
+      )
+        refusals.push(
+          "repository must be a credential-free HTTPS URL (at most 2048 UTF-8 bytes), without a query or fragment; owner/name shorthand is not accepted by runScan",
+        );
+      if (
+        !("commit" in source) ||
+        typeof source.commit !== "string" ||
+        !/^[0-9a-f]{40}$/.test(source.commit)
+      )
+        refusals.push(
+          "commit must be exactly 40 lowercase hexadecimal characters identifying a full SHA-1 commit; short commits, branches, tags and mutable refs are not accepted",
+        );
+      if (refusals.length) fail(refusals.join("; "));
+    }
+  }
   const parsed = requestShape.safeParse(snapshot);
   if (!parsed.success) fail("Request does not match the closed supported schema");
   const request = parsed.data as ScanRequest;
@@ -467,10 +494,15 @@ export async function runScanPrepared(
         })),
       };
     } catch (error) {
-      captured.cleanup();
+      try {
+        captured.cleanup();
+      } catch (cleanupError) {
+        return diagnostic("capture", cleanupError);
+      }
       return diagnostic("request", error);
     }
   }
+  let result: ScanRunResult;
   try {
     const implementationDigester = createImplementationDigester({
       moduleRoot: resolve(moduleDirectory, ".."),
@@ -1065,7 +1097,7 @@ export async function runScanPrepared(
           fromScanId: scanId,
         });
     }
-    return {
+    result = {
       schema: v2 ? schemasV2.runResult : schemas.runResult,
       status: "assessment",
       ...(v2
@@ -1077,8 +1109,12 @@ export async function runScanPrepared(
       diagnostics,
     };
   } catch (error) {
-    return diagnostic("assembly", error);
-  } finally {
-    captured.cleanup();
+    result = diagnostic("assembly", error);
   }
+  try {
+    captured.cleanup();
+  } catch (error) {
+    return diagnostic("capture", error);
+  }
+  return result;
 }

@@ -8,7 +8,12 @@ import {
 
 export class ContractError extends TypeError {
   constructor(
-    readonly code: "invalid-input" | "resource-limit" | "source-kind-unavailable",
+    readonly code:
+      | "invalid-input"
+      | "resource-limit"
+      | "source-kind-unavailable"
+      | "git-acquisition-failed"
+      | "git-containment-failed",
     message: string,
   ) {
     super(message);
@@ -23,8 +28,12 @@ export function hasControl(value: string, includeSpace = false): boolean {
       character.charCodeAt(0) <= (includeSpace ? 32 : 31) || character.charCodeAt(0) === 127,
   );
 }
-export function bound(ok: boolean, label: string, limit: number): void {
-  if (!ok) throw new ContractError("resource-limit", `${label} exceeds limit ${limit}`);
+export function bound(ok: boolean, label: string, limit: number, observed?: number | string): void {
+  if (!ok)
+    throw new ContractError(
+      "resource-limit",
+      `${label} exceeds limit ${limit}${observed === undefined ? "" : `; observed ${observed}`}`,
+    );
 }
 export function assertControlJson(value: unknown): void {
   const pending: { value: unknown; depth: number; exit?: boolean }[] = [{ value, depth: 0 }],

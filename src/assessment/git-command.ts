@@ -18,18 +18,35 @@ const child = spawn("git", argv, {
 });
 const chunks: Buffer[] = [];
 let length = 0,
-  stderrLength = 0;
+  stderrLength = 0,
+  failed = false;
 child.stdout.on("data", (chunk: Buffer) => {
+  if (failed) return;
   length += chunk.length;
-  if (length > maximum) process.exit(1);
+  if (length > maximum) {
+    failed = true;
+    process.stdout.write(JSON.stringify({ failure: "stdout-limit", observed: length }), () =>
+      process.exit(0),
+    );
+    child.stdout.pause();
+    return;
+  }
   chunks.push(chunk);
 });
 child.stderr.on("data", (chunk: Buffer) => {
+  if (failed) return;
   stderrLength += chunk.length;
-  if (stderrLength > 65536) process.exit(1);
+  if (stderrLength > 65536) {
+    failed = true;
+    process.stdout.write(JSON.stringify({ failure: "stderr-limit", observed: stderrLength }), () =>
+      process.exit(0),
+    );
+    child.stderr.pause();
+  }
 });
 child.once("error", () => process.exit(1));
 child.once("close", (code) => {
+  if (failed) return;
   if (code !== 0) process.exit(1);
   process.stdout.write(JSON.stringify({ bytesBase64: Buffer.concat(chunks).toString("base64") }));
 });

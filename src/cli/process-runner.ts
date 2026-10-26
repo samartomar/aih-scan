@@ -61,6 +61,8 @@ export type ProcessRunnerResult = Readonly<{
   termination?: ProcessTerminationV1;
   /** What the containment observed, when it has something to say. */
   containmentDetail?: string;
+  /** First stream byte bound crossed; counts include the rejected chunk. */
+  outputLimit?: Readonly<{ stream: "stdout" | "stderr"; limit: number; observed: number }>;
 }>;
 
 function fail(message: string): never {
@@ -109,6 +111,7 @@ export function spawnBoundedV1(
     let stdoutSize = 0;
     let stderrSize = 0;
     let termination: ProcessTerminationV1 | undefined;
+    let outputLimit: ProcessRunnerResult["outputLimit"];
     let settled = false;
     let terminationRequested = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -135,6 +138,7 @@ export function spawnBoundedV1(
           ...processOutputV1(stdout, stderr),
           truncated,
           ...(termination === undefined ? {} : { termination }),
+          ...(outputLimit === undefined ? {} : { outputLimit }),
         },
       });
     };
@@ -203,14 +207,20 @@ export function spawnBoundedV1(
     child.stdout.on("data", (chunk: Buffer) => {
       if (settled) return;
       stdoutSize += chunk.byteLength;
-      if (stdoutSize > options.maxStdoutBytes) terminate("output-limit");
-      else stdout.push(chunk);
+      if (stdoutSize > options.maxStdoutBytes) {
+        if (!terminationRequested)
+          outputLimit = { stream: "stdout", limit: options.maxStdoutBytes, observed: stdoutSize };
+        terminate("output-limit");
+      } else stdout.push(chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => {
       if (settled) return;
       stderrSize += chunk.byteLength;
-      if (stderrSize > options.maxStderrBytes) terminate("output-limit");
-      else stderr.push(chunk);
+      if (stderrSize > options.maxStderrBytes) {
+        if (!terminationRequested)
+          outputLimit = { stream: "stderr", limit: options.maxStderrBytes, observed: stderrSize };
+        terminate("output-limit");
+      } else stderr.push(chunk);
     });
     child.once("error", (error) => settle({ error }));
     child.once("close", (code) => {

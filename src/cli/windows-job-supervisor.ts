@@ -636,6 +636,7 @@ export function runUnderWindowsJobV1(
     let stdoutSize = 0;
     let stderrSize = 0;
     let termination: ProcessTerminationV1 | undefined;
+    let outputLimit: ProcessRunnerResult["outputLimit"];
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -652,7 +653,10 @@ export function runUnderWindowsJobV1(
       if ("error" in outcome) reject(outcome.error);
       else resolveResult(Object.freeze(outcome.result));
     };
-    const output = () => processOutputV1(stdout, stderr);
+    const output = () => ({
+      ...processOutputV1(stdout, stderr),
+      ...(outputLimit === undefined ? {} : { outputLimit }),
+    });
     function terminate(reason: ProcessTerminationV1): void {
       if (settled || termination !== undefined) return;
       termination = reason;
@@ -679,14 +683,20 @@ export function runUnderWindowsJobV1(
     child.stdout?.on("data", (chunk: Buffer) => {
       if (settled) return;
       stdoutSize += chunk.byteLength;
-      if (stdoutSize > options.maxStdoutBytes) terminate("output-limit");
-      else stdout.push(chunk);
+      if (stdoutSize > options.maxStdoutBytes) {
+        if (termination === undefined)
+          outputLimit = { stream: "stdout", limit: options.maxStdoutBytes, observed: stdoutSize };
+        terminate("output-limit");
+      } else stdout.push(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       if (settled) return;
       stderrSize += chunk.byteLength;
-      if (stderrSize > options.maxStderrBytes) terminate("output-limit");
-      else stderr.push(chunk);
+      if (stderrSize > options.maxStderrBytes) {
+        if (termination === undefined)
+          outputLimit = { stream: "stderr", limit: options.maxStderrBytes, observed: stderrSize };
+        terminate("output-limit");
+      } else stderr.push(chunk);
     });
     child.once("error", (error) => settle({ error }));
     child.once("close", () => {

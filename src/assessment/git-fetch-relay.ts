@@ -1,5 +1,5 @@
 import { connect, createServer, type Socket } from "node:net";
-import { bound, fail } from "./json.js";
+import { bound, ContractError, fail } from "./json.js";
 
 /** Transport ciphertext has its own finite budget; source material is bounded separately. */
 export function gitTransportLimit(sourceBytes: number, sourceEntries: number): number {
@@ -29,11 +29,13 @@ export async function startGitFetchRelay(
   let transferred = 0,
     connections = 0,
     exceeded = false,
+    exceededLimit: { name: string; value: number; observed: number } | undefined,
     closed = false;
   const destroySockets = () => {
     for (const socket of sockets) socket.destroy();
   };
-  const exceed = () => {
+  const exceed = (name: string, value: number, observed: number) => {
+    exceededLimit ??= { name, value, observed };
     exceeded = true;
     destroySockets();
     limitController.abort();
@@ -43,14 +45,17 @@ export async function startGitFetchRelay(
     client.on("error", () => client.destroy());
     client.once("close", () => sockets.delete(client));
     if (closed || exceeded || ++connections > 8) {
-      exceed();
+      exceed("gitTransportConnections", 8, connections);
       return;
     }
-    client.setTimeout(30000, () => client.destroy());
+    let clientIdleMs = 30000;
+    client.setTimeout(clientIdleMs, () =>
+      exceed("gitRelayClientIdleMs", clientIdleMs, clientIdleMs),
+    );
     let header = Buffer.alloc(0);
     const readHeader = (chunk: Buffer) => {
       if (header.length + chunk.length > 8192) {
-        client.destroy();
+        exceed("gitConnectHeaderBytes", 8192, header.length + chunk.length);
         return;
       }
       header = Buffer.concat([header, chunk]);
@@ -81,14 +86,11 @@ export async function startGitFetchRelay(
         if (hadError || !remote.readableEnded) client.destroy();
       });
       client.once("close", () => remote.destroy());
-      remote.setTimeout(60000, () => {
-        remote.destroy();
-        client.destroy();
-      });
+      remote.setTimeout(60000, () => exceed("gitRelayRemoteIdleMs", 60000, 60000));
       const forward = (source: Socket, destination: Socket, bytes: Buffer) => {
         if (exceeded || closed) return;
         if (bytes.length > maximum - transferred) {
-          exceed();
+          exceed("gitTransportBytes", maximum, transferred + bytes.length);
           return;
         }
         transferred += bytes.length;
@@ -105,7 +107,8 @@ export async function startGitFetchRelay(
           remote.destroy();
           return;
         }
-        client.setTimeout(600000);
+        clientIdleMs = 600000;
+        client.setTimeout(clientIdleMs);
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         client.on("data", (bytes: Buffer) => forward(client, remote, bytes));
         remote.on("data", (bytes: Buffer) => forward(remote, client, bytes));
@@ -138,8 +141,13 @@ export async function startGitFetchRelay(
     return {
       proxy: `http://127.0.0.1:${address.port}`,
       limitSignal: limitController.signal,
-      assertWithinBounds: () =>
-        bound(!exceeded, "Git acquisition transport bytes or connections", maximum),
+      assertWithinBounds: () => {
+        if (exceededLimit)
+          throw new ContractError(
+            "resource-limit",
+            `Git acquisition transport ${exceededLimit.name} limit ${exceededLimit.value}; observed ${exceededLimit.observed}`,
+          );
+      },
       close: async () => {
         closed = true;
         signal?.removeEventListener("abort", abort);

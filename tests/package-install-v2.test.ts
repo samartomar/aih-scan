@@ -684,6 +684,10 @@ describe("published V2 package installation", () => {
       readFileSync(join(root, "tests/support/golden-fixture-cases.mjs")),
     );
     writeFileSync(
+      join(directory, "git-diagnostic-cases.mjs"),
+      readFileSync(join(root, "tests/support/git-diagnostic-cases.mjs")),
+    );
+    writeFileSync(
       join(directory, "capture-v2-cases.mjs"),
       readFileSync(join(root, "tests/support/capture-v2-cases.mjs")),
     );

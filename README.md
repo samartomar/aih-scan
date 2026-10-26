@@ -30,6 +30,8 @@ The new assessment surface has three explicit entry points:
 | `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25` |
 
 `runScan` captures pinned Git or local input and accounts for every requested detector.
+Its Git API requires a credential-free HTTPS URL and a full lowercase 40-hex
+commit; see [accepted forms, default bounds and actionable failure diagnostics](docs/assessment-api.md#git-request-forms-limits-and-diagnostics).
 Reliable results survive failed or refused sibling work in a partial assessment.
 `prepareArtifact` and local Ed25519 `signArtifact` preserve the same Scan ID for
 unchanged report bytes. `attachAttestation` checks bindings; callers separately

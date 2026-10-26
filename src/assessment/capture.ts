@@ -48,8 +48,18 @@ function contained(root: string, target: string): string {
   return path;
 }
 /** Adapted stable descriptor reads from SourceObservationSealV1. The bytes hashed are the bytes copied. */
-function readStable(path: string, expected: Stats, maxBytes: number): Uint8Array {
-  bound(expected.size <= maxBytes, "source bytes", maxBytes);
+function readStable(
+  path: string,
+  expected: Stats,
+  maxBytes: number,
+  capturedBytes = 0,
+): Uint8Array {
+  bound(
+    expected.size <= maxBytes - capturedBytes,
+    "maxSourceBytes",
+    maxBytes,
+    capturedBytes + expected.size,
+  );
   let descriptor: number | undefined;
   try {
     descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -93,7 +103,7 @@ function captureTree(
   let total = 0;
   const copyFile = (path: string, stat: Stats, outputPath: string) => {
     if (stat.nlink !== 1) fail("Hard-linked source files are not supported");
-    const bytes = readStable(path, stat, limits.maxSourceBytes - total);
+    const bytes = readStable(path, stat, limits.maxSourceBytes, total);
     total += bytes.length;
     if (snapshotRoot) {
       const output = join(snapshotRoot, outputPath);
@@ -115,13 +125,23 @@ function captureTree(
     const names = readSourceEntryNamesV1(directory, parent, {
       maximum: limits.maxSourceEntries + 1,
       onBound: () => {
-        bound(false, "source entries", limits.maxSourceEntries);
+        bound(
+          false,
+          "maxSourceEntries",
+          limits.maxSourceEntries,
+          `at least ${limits.maxSourceEntries + 1}`,
+        );
         return fail("Source entry bound");
       },
     }).sort();
     for (const name of names) {
       if (directory === root && name === ".git") continue;
-      bound(entries.length < limits.maxSourceEntries, "source entries", limits.maxSourceEntries);
+      bound(
+        entries.length < limits.maxSourceEntries,
+        "maxSourceEntries",
+        limits.maxSourceEntries,
+        entries.length + 1,
+      );
       const absolute = join(directory, name),
         path = posix(root, absolute);
       pathShape.parse(path);
@@ -137,7 +157,7 @@ function captureTree(
           targetStat = statSync(real!);
         if (targetStat.isFile()) {
           // The target's regular path is separately copied. Preserve link identity in the snapshot.
-          const bytes = readStable(real!, targetStat, limits.maxSourceBytes - total);
+          const bytes = readStable(real!, targetStat, limits.maxSourceBytes, total);
           if (targetStat.nlink !== 1) fail("Hard-linked source targets are not supported");
           total += bytes.length;
           entries.push({
@@ -204,10 +224,12 @@ export async function captureSource(
   limits: Limits,
   options: CaptureOptions,
 ): Promise<CapturedSource> {
-  const stage = mkdtempSync(join(tmpdir(), "aih-scan-assessment-")),
-    snapshotRoot = join(stage, "snapshot");
-  mkdirSync(snapshotRoot);
+  let step = "prepare temporary capture";
+  let stage: string | undefined;
   try {
+    stage = mkdtempSync(join(tmpdir(), "aih-scan-assessment-"));
+    const snapshotRoot = join(stage, "snapshot");
+    mkdirSync(snapshotRoot);
     const profile =
       request.schema === schemasV2.request ? "aih-source-capture-2" : "aih-source-capture-1";
     const gitModes = new Map<string, boolean>();
@@ -225,12 +247,15 @@ export async function captureSource(
       mkdirSync(acquired);
       mkdirSync(hooks);
       mkdirSync(material);
+      step = "git init";
       await git(["init", "--quiet", `--template=${hooks}`], acquired, options, hooks);
+      step = "start fetch relay";
       const relay = await startGitFetchRelay(
         request.source.repository,
         gitTransportLimit(limits.maxSourceBytes, limits.maxSourceEntries),
         options.signal,
       );
+      step = "git fetch";
       let acquisitionError: unknown;
       try {
         await git(
@@ -264,6 +289,7 @@ export async function captureSource(
         await relay.close();
         if (!(acquisitionError instanceof GitContainmentError)) relay.assertWithinBounds();
       }
+      step = "verify commit";
       if (
         decodeStrictUtf8V1(
           await git(["rev-parse", `${request.source.commit}^{commit}`], acquired, options, hooks),
@@ -271,6 +297,7 @@ export async function captureSource(
         ).trim() !== request.source.commit
       )
         fail("Git acquisition did not produce the pinned commit");
+      step = "read commit object";
       const commitBytes = await git(
         ["cat-file", "commit", request.source.commit],
         acquired,
@@ -285,25 +312,39 @@ export async function captureSource(
           .digest("hex") !== request.source.commit
       )
         fail("Git commit object does not match the requested identity");
+      step = "read tree";
       const tree = decodeStrictUtf8V1(
         await git(["ls-tree", "-r", "-t", "-z", request.source.commit], acquired, options, hooks),
         "Git tree",
       );
+      step = "validate tree";
       const members = tree
         .split("\0")
         .filter(Boolean)
         .map((row) => {
           const match = /^(\d{6}) (blob|tree|commit) ([0-9a-f]{40})\t([\s\S]+)$/.exec(row);
           if (!match) fail("Git tree is malformed");
+          bound(
+            new TextEncoder().encode(match![4]!).length <= 4096,
+            "sourcePathBytes",
+            4096,
+            new TextEncoder().encode(match![4]!).length,
+          );
           const path = pathShape.parse(match![4]);
           if (path === ".git" || path.startsWith(".git/"))
             fail("Git tree contains reserved root metadata");
           return { mode: match![1]!, type: match![2]!, oid: match![3]!, path };
         });
-      bound(members.length <= limits.maxSourceEntries, "source entries", limits.maxSourceEntries);
+      bound(
+        members.length <= limits.maxSourceEntries,
+        "maxSourceEntries",
+        limits.maxSourceEntries,
+        members.length,
+      );
       const membersByPath = new Map(members.map((member) => [member.path, member]));
       let bytesTotal = 0;
       for (const member of members) {
+        step = "materialize tree";
         const output = join(material, member.path);
         if (member.mode === "040000" && member.type === "tree") {
           mkdirSync(output, { recursive: true });
@@ -311,6 +352,7 @@ export async function captureSource(
         }
         if (!["100644", "100755", "120000"].includes(member.mode) || member.type !== "blob")
           fail("Pinned Git contains an unsupported tree entry or submodule");
+        step = "read blob size";
         const sizeText = decodeStrictUtf8V1(
           await git(["cat-file", "-s", member.oid], acquired, options, hooks, 64),
           "Git blob size",
@@ -319,14 +361,18 @@ export async function captureSource(
         const size = Number(sizeText);
         bound(
           Number.isSafeInteger(size) && size <= limits.maxSourceBytes - bytesTotal,
-          "source bytes",
+          "maxSourceBytes",
           limits.maxSourceBytes,
+          bytesTotal + size,
         );
         bytesTotal += size;
+        step = "read blob";
         const bytes = await git(["cat-file", "blob", member.oid], acquired, options, hooks, size);
+        step = "verify blob";
         if (bytes.length !== size) fail("Git blob length disagrees with pinned object");
         const gitBlobHash = createHash("sha1").update(`blob ${size}\0`).update(bytes).digest("hex");
         if (gitBlobHash !== member.oid) fail("Git blob differs from the pinned tree object");
+        step = "materialize tree";
         mkdirSync(dirname(output), { recursive: true });
         if (member.mode === "120000") {
           const target = decodeStrictUtf8V1(bytes, "Git link target");
@@ -379,6 +425,7 @@ export async function captureSource(
     }
     const sourceModes = request.source.kind === "git" ? gitModes : undefined;
     const snapshotModes = process.platform === "win32" ? sourceModes : undefined;
+    step = "capture snapshot";
     const capture = captureTree(
       sourceRoot,
       limits,
@@ -387,6 +434,7 @@ export async function captureSource(
       profile,
       sourceModes,
     );
+    step = "verify snapshot";
     // Re-read the original and the private snapshot before trusting the source identity.
     if (
       captureTree(sourceRoot, limits, undefined, options.signal, profile, sourceModes)
@@ -395,6 +443,7 @@ export async function captureSource(
         .captureSha256 !== capture.captureSha256
     )
       fail("Source changed while its snapshot was captured");
+    step = "resolve selection";
     const files = capture.entries.filter((entry) => "sha256" in entry).map((entry) => entry.path),
       byPath = new Set(files);
     const paths = request.selection.paths === "all" ? files : [...request.selection.paths].sort(),
@@ -409,7 +458,18 @@ export async function captureSource(
       root: snapshotRoot,
       capture,
       selection: { paths, excludedPaths },
-      cleanup: () => rmSync(stage, { recursive: true, force: true }),
+      cleanup: () => {
+        try {
+          rmSync(stage!, { recursive: true, force: true });
+        } catch (error) {
+          if (request.source.kind === "git")
+            throw new ContractError(
+              "git-containment-failed",
+              "Git capture step cleanup: temporary capture could not be removed",
+            );
+          throw error;
+        }
+      },
       assertUnchanged: () => {
         if (
           captureTree(snapshotRoot, limits, undefined, undefined, profile, snapshotModes)
@@ -419,7 +479,36 @@ export async function captureSource(
       },
     };
   } catch (error) {
-    rmSync(stage, { recursive: true, force: true });
+    try {
+      if (stage) rmSync(stage, { recursive: true, force: true });
+    } catch {
+      if (request.source.kind === "git")
+        throw new ContractError(
+          "git-containment-failed",
+          `Git capture step cleanup: temporary capture could not be removed after ${step}`,
+        );
+      throw error;
+    }
+    if (request.source.kind === "git") {
+      const code =
+        error instanceof ContractError && error.code !== "invalid-input"
+          ? error.code
+          : "git-acquisition-failed";
+      // Contract messages are code-owned; raw filesystem/Git messages may contain secrets.
+      const errno =
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        ["EACCES", "EPERM", "ENOENT", "ENOSPC", "EROFS", "EMFILE", "ENFILE"].includes(error.code)
+          ? ` (${error.code})`
+          : "";
+      const detail =
+        error instanceof ContractError
+          ? error.message
+          : `Capture I/O or source validation failed${errno}`;
+      throw new ContractError(code, `Git capture step ${step}: ${detail}`);
+    }
     throw error;
   }
 }
