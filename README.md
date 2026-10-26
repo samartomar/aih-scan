@@ -44,6 +44,10 @@ For exact per-item evidence, use the policy-independent `recordItem`,
 `recordItemBatch` and `verifyItemRecord` from `@aihq/scan/read`; see
 [item records and behaviour coverage](docs/item-records.md).
 
+For one policy-aware item state, use `summariseItem` from `@aihq/scan/read`. It
+preserves newest-matching selection and exposes full selection details beside the
+summary. See [the 17-row table, evidence policy and severity profile](docs/item-summaries.md).
+
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
 [summary and latest matching selection](docs/summary-selection.md),
 [maintainer refresh](docs/production-refresh.md) and the
@@ -58,7 +62,8 @@ software APIs keep findings, report publication and issue delivery independent.
 
 Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
 `run-result`, `report`, `artifact`, `evidence-association`, `material-change`,
-`detector-definition` and `item-record`.
+`detector-definition`, `item-record`, `item-summary`, `evidence-policy` and
+`severity-profile`.
 The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
 byte bindings and cross-field semantics require the corresponding reader.
 

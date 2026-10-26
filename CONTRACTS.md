@@ -126,3 +126,12 @@ bumping a version is `semver:major`, because an installed consumer that reads th
 identity would start being refused. Add the new value to the accepted set, keep the old
 one until the evidence produced against it is out of support, and move the default to the
 newest member in the same change.
+
+## Unreleased item summaries
+
+`urn:aihq:scan:item-summary:1.0.0`, `urn:aihq:scan:evidence-policy:1.0.0` and
+`urn:aihq:scan:severity-profile:1.0.0` are closed public contracts. The portable
+`summariseItem` reader applies the [published decision table](docs/item-summaries.md)
+without changing selection or item-record identities. Its result keeps the full
+selection beside the summary. Host authentication, current trust and evaluation
+time are explicit inputs. Schemas, golden fixtures and types are package exports.

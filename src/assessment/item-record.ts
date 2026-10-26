@@ -140,7 +140,7 @@ export const itemRecordResultShape = z.union([
     .object({ coverage: z.enum(["invalid", "unavailable"]), diagnostics: z.array(diagnosticShape) })
     .strict(),
 ]);
-function descriptor(value: unknown): ItemDescriptor {
+export function parseItemDescriptor(value: unknown): ItemDescriptor {
   const parsed = itemShape.safeParse(value);
   if (!parsed.success)
     fail("An item requires its subject and exact materials, including one behaviour file");
@@ -200,7 +200,7 @@ export async function recordItemBatch(input: {
       fail("Item batch requires own data properties");
     const items = snapshotQueries(itemsProperty.value).map((value) => {
       try {
-        return { item: descriptor(value) };
+        return { item: parseItemDescriptor(value) };
       } catch (error) {
         return { invalid: { coverage: "invalid" as const, diagnostics: [errorDiagnostic(error)] } };
       }

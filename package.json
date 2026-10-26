@@ -58,7 +58,13 @@
     "./schemas/report/2.0.0.json": "./schemas/report/2.0.0.json",
     "./schemas/report/2.0.0.fixtures.json": "./schemas/report/2.0.0.fixtures.json",
     "./schemas/item-record/1.0.0.json": "./schemas/item-record/1.0.0.json",
-    "./schemas/item-record/1.0.0.fixtures.json": "./schemas/item-record/1.0.0.fixtures.json"
+    "./schemas/item-record/1.0.0.fixtures.json": "./schemas/item-record/1.0.0.fixtures.json",
+    "./schemas/evidence-policy/1.0.0.json": "./schemas/evidence-policy/1.0.0.json",
+    "./schemas/evidence-policy/1.0.0.fixtures.json": "./schemas/evidence-policy/1.0.0.fixtures.json",
+    "./schemas/severity-profile/1.0.0.json": "./schemas/severity-profile/1.0.0.json",
+    "./schemas/severity-profile/1.0.0.fixtures.json": "./schemas/severity-profile/1.0.0.fixtures.json",
+    "./schemas/item-summary/1.0.0.json": "./schemas/item-summary/1.0.0.json",
+    "./schemas/item-summary/1.0.0.fixtures.json": "./schemas/item-summary/1.0.0.fixtures.json"
   },
   "bin": {
     "aih-scan": "./dist/cli.js"
@@ -71,7 +77,8 @@
     "examples/detector-definitions",
     "tools/baseline-analyzers",
     "tools/verify-core-contract-lock-v2.mjs",
-    "docs/item-records.md"
+    "docs/item-records.md",
+    "docs/item-summaries.md"
   ],
   "scripts": {
     "generate:identity": "node tools/generate-package-identity.mjs",

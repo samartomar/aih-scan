@@ -196,6 +196,14 @@ describe("Strict V2 public boundary", () => {
       },
       "./read": { types: "./dist/public/read.d.ts", import: "./dist/public/read.js" },
       "./host": { types: "./dist/public/host.d.ts", import: "./dist/public/host.js" },
+      "./schemas/evidence-policy/1.0.0.json": "./schemas/evidence-policy/1.0.0.json",
+      "./schemas/evidence-policy/1.0.0.fixtures.json":
+        "./schemas/evidence-policy/1.0.0.fixtures.json",
+      "./schemas/severity-profile/1.0.0.json": "./schemas/severity-profile/1.0.0.json",
+      "./schemas/severity-profile/1.0.0.fixtures.json":
+        "./schemas/severity-profile/1.0.0.fixtures.json",
+      "./schemas/item-summary/1.0.0.json": "./schemas/item-summary/1.0.0.json",
+      "./schemas/item-summary/1.0.0.fixtures.json": "./schemas/item-summary/1.0.0.fixtures.json",
       "./schemas/item-record/1.0.0.json": "./schemas/item-record/1.0.0.json",
       "./schemas/item-record/1.0.0.fixtures.json": "./schemas/item-record/1.0.0.fixtures.json",
       "./schemas/request/2.0.0.json": "./schemas/request/2.0.0.json",

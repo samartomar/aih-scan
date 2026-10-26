@@ -106,3 +106,16 @@ record tampering, changed behaviour bytes, recipe-only MCP capture, identical by
 at different paths, original finding attribution and batch/singleton equality.
 The published-format merge also requires current-head cross-package contract
 verification; local Scan checks alone do not satisfy that separate gate.
+
+## Item summary fixtures (1.0.0)
+
+The `item-summary`, `evidence-policy` and `severity-profile` exports document the
+[17-row item summary contract](item-summaries.md). Summary specimens derive from
+the real published item-record fixtures. Their expected values are literal table
+outcomes; the generator does not call `summariseItem` to create expectations.
+`tools/generate-item-summary-fixtures.mjs` owns the controlled specimens, and
+`tools/generate-item-summary-schemas.mjs` owns only their three schemas (build
+first). Every row is replayed through the exact installed archive, including in a
+realm without Node globals. Variants cover detector coverage, age, trust, severity
+occurrences and suppression. Historical authenticity is separately exercised with
+an ephemeral local key, without production signing or trust changes.
