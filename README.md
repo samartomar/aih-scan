@@ -29,7 +29,7 @@ The new assessment surface has three explicit entry points:
 | `@aihq/scan/read` | Read reports/artifacts, summarize provider facts, match exact content and select latest matching evidence; authenticity remains unchecked | Portable JavaScript |
 | `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25` |
 
-`runScan` captures pinned Git or local input and accounts for every requested detector.
+`runScan` captures exact npm, pinned Git or local input and accounts for every requested detector.
 Its Git API requires a credential-free HTTPS URL and a full lowercase 40-hex
 commit; see [accepted forms, default bounds and actionable failure diagnostics](docs/assessment-api.md#git-request-forms-limits-and-diagnostics).
 Reliable results survive failed or refused sibling work in a partial assessment.
@@ -1108,7 +1108,7 @@ report schema and exact report bytes. Unsupported schemas, capture profiles and
 observation formats carry a diagnostic with `code: "unsupported-format"`, `path`,
 `encountered` and `supported`; unknown reports retain status `unsupported-report`.
 
-The new request source forms reserve npm acquisition:
+Request 2.0.0 accepts exact npm coordinates:
 
 ```json
 { "kind": "npm", "package": "@example/server", "version": "1.2.3" }
@@ -1116,9 +1116,11 @@ The new request source forms reserve npm acquisition:
 
 or `{ "kind": "npm", "archive": { "url": "https://example.invalid/server.tgz",
 "integrity": "sha512-<base64 digest>" } }`. Exact package coordinates may also
-include `archive`. Mutable versions are refused by the request contract. These
-forms currently return capture diagnostic `source-kind-unavailable`; acquisition
-belongs to [samartomar/aih-scan#120](https://github.com/samartomar/aih-scan/issues/120).
+include `archive`. Mutable versions are refused before acquisition with
+`npm-version-not-exact`. Scan verifies the compressed archive's SHA-512 pin and
+records that archive in the report, captures inert package contents with each tar
+entry's executable state, and reports ordinary detector coverage and findings.
+It runs no package lifecycle scripts. See [npm sources and bounds](docs/assessment-api.md#npm-sources).
 
 Report and assessment run-result `2.0.0` require `reachability`, with `null` for
 non-Git sources and `"reachable" | "unchecked"` for Git. Before capture, Scan checks

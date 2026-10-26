@@ -707,6 +707,10 @@ describe("published V2 package installation", () => {
       join(directory, "git-reachability-cases.mjs"),
       readFileSync(join(root, "tests/support/git-reachability-cases.mjs")),
     );
+    writeFileSync(
+      join(directory, "npm-source-cases.mjs"),
+      readFileSync(join(root, "tests/support/npm-source-cases.mjs")),
+    );
     const consumerHome = join(directory, "consumer-home");
     mkdirSync(consumerHome);
     const assessmentConsumer = JSON.parse(

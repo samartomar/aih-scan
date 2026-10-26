@@ -22,6 +22,7 @@ import { readSourceEntryNamesV1 } from "../observation/source-entry-name-v1.js";
 import { type GitFetchRelay, gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
 import { GitContainmentError, runPinnedGit as git } from "./git-runner.js";
 import { bound, ContractError, canonicalBytes, fail, hasControl } from "./json.js";
+import { acquireNpm } from "./npm-source.js";
 import { validateEntries } from "./report.js";
 import { pathShape } from "./shapes.js";
 import { decodeStrictUtf8V1 } from "./strict-json.js";
@@ -209,6 +210,7 @@ function captureTree(
   };
 }
 export interface CapturedSource {
+  source: ScanRequest["source"];
   root: string;
   capture: Capture;
   selection: Selection;
@@ -290,12 +292,14 @@ export async function captureSource(
     let sourceRoot: string;
     let reachability: CapturedSource["reachability"] =
       request.source.kind === "git" ? "unchecked" : null;
-    if (request.source.kind === "npm")
-      throw new ContractError(
-        "source-kind-unavailable",
-        "npm source acquisition is not yet implemented",
-      );
-    if (request.source.kind === "local") sourceRoot = resolve(request.source.path);
+    let resolvedSource = request.source;
+    if (request.source.kind === "npm") {
+      step = "acquire npm archive";
+      sourceRoot = join(stage, "material");
+      const acquired = await acquireNpm(request.source, sourceRoot, limits, options.signal);
+      resolvedSource = acquired.source;
+      for (const [path, mode] of acquired.modes) gitModes.set(path, mode);
+    } else if (request.source.kind === "local") sourceRoot = resolve(request.source.path);
     else {
       const acquired = join(stage, "git"),
         hooks = join(stage, "empty-hooks"),
@@ -544,7 +548,7 @@ export async function captureSource(
       }
       sourceRoot = material;
     }
-    const sourceModes = request.source.kind === "git" ? gitModes : undefined;
+    const sourceModes = request.source.kind !== "local" ? gitModes : undefined;
     const snapshotModes = process.platform === "win32" ? sourceModes : undefined;
     step = "capture snapshot";
     const capture = captureTree(
@@ -576,6 +580,7 @@ export async function captureSource(
     for (const path of excludedPaths)
       if (!paths.includes(path)) fail("An exclusion is absent from the resolved selection");
     return {
+      source: resolvedSource,
       root: snapshotRoot,
       reachability,
       diagnostics,
@@ -585,10 +590,10 @@ export async function captureSource(
         try {
           rmSync(stage!, { recursive: true, force: true });
         } catch (error) {
-          if (request.source.kind === "git")
+          if (request.source.kind !== "local")
             throw new ContractError(
-              "git-containment-failed",
-              "Git capture step cleanup: temporary capture could not be removed",
+              request.source.kind === "git" ? "git-containment-failed" : "npm-containment-failed",
+              `${request.source.kind === "git" ? "Git" : "npm"} capture step cleanup: temporary capture could not be removed`,
             );
           throw error;
         }
@@ -605,10 +610,10 @@ export async function captureSource(
     try {
       if (stage) rmSync(stage, { recursive: true, force: true });
     } catch {
-      if (request.source.kind === "git")
+      if (request.source.kind !== "local")
         throw new ContractError(
-          "git-containment-failed",
-          `Git capture step cleanup: temporary capture could not be removed after ${step}`,
+          request.source.kind === "git" ? "git-containment-failed" : "npm-containment-failed",
+          `${request.source.kind === "git" ? "Git" : "npm"} capture step cleanup: temporary capture could not be removed after ${step}`,
         );
       throw error;
     }

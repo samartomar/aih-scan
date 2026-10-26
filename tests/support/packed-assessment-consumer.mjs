@@ -1,3 +1,5 @@
+import { exerciseNpmSources } from './npm-source-cases.mjs';
+await exerciseNpmSources();
 import { exerciseGitReachability } from './git-reachability-cases.mjs';
 await exerciseGitReachability();
 import { exerciseGitDiagnostics } from './git-diagnostic-cases.mjs';

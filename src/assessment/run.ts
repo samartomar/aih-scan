@@ -191,6 +191,23 @@ function requestSnapshot(raw: unknown): ScanRequest {
       typeof source === "object" &&
       !Array.isArray(source) &&
       "kind" in source &&
+      source.kind === "npm" &&
+      ("package" in source || "version" in source) &&
+      (!("version" in source) ||
+        typeof source.version !== "string" ||
+        !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
+          source.version,
+        ))
+    )
+      throw new ContractError(
+        "npm-version-not-exact",
+        "npm version must be an exact major.minor.patch version, optionally with prerelease/build identifiers; ranges, tags and other mutable specifiers are not accepted",
+      );
+    if (
+      source &&
+      typeof source === "object" &&
+      !Array.isArray(source) &&
+      "kind" in source &&
       source.kind === "git"
     ) {
       const refusals: string[] = [];
@@ -540,14 +557,19 @@ export async function runScanPrepared(
       producer: packageIdentity,
       createdAt: new Date().toISOString(),
       source:
-        request.source.kind === "git"
+        captured.source.kind === "git"
           ? {
               kind: "git",
-              repository: request.source.repository,
-              commit: request.source.commit,
+              repository: captured.source.repository,
+              commit: captured.source.commit,
               capture: captured.capture,
             }
-          : { kind: "local", capture: captured.capture },
+          : captured.source.kind === "npm"
+            ? {
+                ...captured.source,
+                capture: captured.capture,
+              }
+            : { kind: "local", capture: captured.capture },
       selection: captured.selection,
       requestedDetectors: resolved.map((d) => d.request),
       results: units,
