@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse } from "yaml";
+import { readPackedPackage } from "../support/npm-pack-output.js";
 
 test("five independent packed captures keep reports, matching, mixed outcomes, signing and subset custody", () => {
   const root = resolve(import.meta.dirname, "../.."),
@@ -31,7 +32,7 @@ test("five independent packed captures keep reports, matching, mixed outcomes, s
       root,
     );
     expect(packed.status, packed.stderr).toBe(0);
-    const tarball = join(temporary, JSON.parse(packed.stdout)[0].filename),
+    const tarball = join(temporary, readPackedPackage(packed.stdout).filename),
       consumer = join(temporary, "consumer");
     mkdirSync(consumer);
     writeFileSync(

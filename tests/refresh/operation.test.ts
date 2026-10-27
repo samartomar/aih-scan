@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { readPackedPackage } from "../support/npm-pack-output.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const realCaptureProof =
@@ -71,13 +72,13 @@ beforeAll(() => {
   // while parallel historical subprocess consumers are importing it.
   tarball = join(
     temporary,
-    JSON.parse(
+    readPackedPackage(
       run(
         process.execPath,
         [npmCli, "pack", "--ignore-scripts", "--json", "--pack-destination", temporary],
         repositoryRoot,
       ),
-    )[0].filename,
+    ).filename,
   );
   consumer = join(temporary, "consumer");
   mkdirSync(consumer);
