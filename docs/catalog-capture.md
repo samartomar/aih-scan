@@ -30,17 +30,34 @@ acquisition input. Never use a Scan source checkout as a capture target.
 The data envelope has exactly `schema`, `inventory` and `files`. Schema is
 `urn:aihq:scan:catalog-capture:1.0.0`. `inventory` has `path`, `sha256`,
 `byteLength`. Each sorted `files` row has exactly those three fields plus canonical
-`bytesBase64`. Files are exactly the inventory plus every `release.items[].recipe`
-and `release.items[].materials[]` descriptor; shared identical descriptors appear
-once. Missing/extra files and conflicting declarations refuse. Binary material is
-preserved. No links, executable flags, extraction instructions, scripts or paths
-to acquire additional files are supported.
+`bytesBase64`. Files are exactly the inventory plus every package member its
+items declare (below); shared identical descriptors appear once. Missing/extra
+files and conflicting declarations refuse. Binary material is preserved. No links,
+executable flags, extraction instructions, scripts or paths to acquire additional
+files are supported.
 
-Inventory must retain Catalog's canonical JSON plus LF, with schema
-`urn:aihq:catalog:content-inventory:1.0.0`, projection
-`urn:aihq:catalog:release-content:1.0.0`, release schema 1.5.0 and package name
-`@aihq/catalog`. The helper checks byte closure, not Catalog's complete semantic
-authoring contract; Catalog's reader and baseline gate remain authoritative.
+Inventory must retain Catalog's canonical JSON plus LF, package name
+`@aihq/catalog`, no `baseline`, and one of these Catalog document-format pairs:
+
+| Release document | Content inventory | Projection |
+| --- | --- | --- |
+| `urn:aihq:catalog:release:1.5.0` | `urn:aihq:catalog:content-inventory:1.0.0` | `urn:aihq:catalog:release-content:1.0.0` |
+| `urn:aihq:catalog:release:1.7.0` | `urn:aihq:catalog:content-inventory:1.2.0` | `urn:aihq:catalog:release-content:1.2.0` |
+
+Mismatched pairs, release 1.6.0 (inventory 1.1.0) and other formats refuse.
+These are Catalog document schemas. They are distinct from the capture envelope
+schema, the upstream source identities recorded inside the inventory, and the
+Scan assessment and report versions.
+
+Release 1.5.0 members are each item's `recipe` and `materials[].path`. Release
+1.7.0 members are each item's single `recipe` or every entry of its `recipes`
+transition map (exactly one of the two), plus every material by its package path:
+legacy `path` or extended `packagePath`, never both. Extended members include the
+item's behaviour file. A map entry may name only that item's content materials.
+Cross-release dependency manifests and release-level sets are not package
+members and are not captured. The helper checks byte closure, not Catalog's
+complete semantic authoring contract; Catalog's reader and baseline gate remain
+authoritative.
 
 ## Select immutable input transport
 
@@ -149,6 +166,9 @@ capture matching/readability, original partial results, refused Semgrep coverage
 cancelled/no-ID work, input tampering, candidate checks, detached signing selection,
 and publication assembly/authentication with a disposable **fixture** identity.
 Deterministic boundary tests cover namespace, closure, resource and custody refusals.
+A real Catalog release 1.7.0 inventory and its exact member bytes, copied from
+public Catalog producer output, are fixtures under `tests/fixtures/catalog-capture-1.7/`.
+The independent batch consumer captures that fixture next to release 1.5.0 inputs.
 Portable Windows tests use labelled runtime/prerequisite boundaries; they do not
 establish Linux execution or production signing.
 
