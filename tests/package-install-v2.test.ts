@@ -34,6 +34,7 @@ import { hashComponentTreeV1, hashSourceTreeV1 } from "../src/observation/source
 import { contractSupport, entrySupport } from "../src/public/contracts.js";
 import { syntheticKeyless } from "./artifact/synthetic-keyless.js";
 import { batchAnalyzerVersion } from "./baseline/batch-version-support.js";
+import { readPackedPackage } from "./support/npm-pack-output.js";
 
 const root = resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
@@ -146,22 +147,11 @@ afterEach(() => {
 
 function packagePaths(directory: string): { tarball: string; paths: readonly string[] } {
   const output = runNpm(["pack", "--json", "--pack-destination", directory], root);
-  const packed: unknown = JSON.parse(output);
-  if (!Array.isArray(packed) || packed.length !== 1) throw new Error("unexpected npm pack output");
-  const entry = packed[0];
-  if (typeof entry !== "object" || entry === null || Array.isArray(entry))
-    throw new Error("unexpected npm pack entry");
-  const { filename, files } = entry as { filename?: unknown; files?: unknown };
-  if (typeof filename !== "string" || !Array.isArray(files))
-    throw new Error("missing npm pack files");
-  const paths = files.map((file) => {
-    if (typeof file !== "object" || file === null || Array.isArray(file))
-      throw new Error("unexpected npm pack file");
-    const path = (file as { path?: unknown }).path;
-    if (typeof path !== "string") throw new Error("missing npm pack path");
-    return path;
-  });
-  return { tarball: join(directory, filename), paths };
+  const packed = readPackedPackage(output);
+  return {
+    tarball: join(directory, packed.filename),
+    paths: packed.files.map(({ path }) => path),
+  };
 }
 
 function packedManifest(tarball: string): Record<string, unknown> {

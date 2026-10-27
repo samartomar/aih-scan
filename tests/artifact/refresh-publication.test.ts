@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { readPackedPackage } from "../support/npm-pack-output.js";
 
 let temporary: string,
   candidate: string,
@@ -75,7 +76,7 @@ beforeAll(() => {
   ]);
   expect(packed.status, packed.stderr).toBe(0);
   const tarball = join(temporary, "scanner.tgz");
-  copyFileSync(join(temporary, JSON.parse(packed.stdout)[0].filename), tarball);
+  copyFileSync(join(temporary, readPackedPackage(packed.stdout).filename), tarball);
   writeFileSync(
     join(consumer, "package.json"),
     JSON.stringify({

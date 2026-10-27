@@ -6,7 +6,7 @@ bindings. Successful reads always report `authenticity: "unchecked"`; presence
 of a signature makes no authentication claim. Unsupported detailed report
 generations remain explicitly unsupported after outer byte checks.
 
-`@aihq/scan/host` requires Node `>=24.15.0 <25` and exposes separate promise APIs:
+`@aihq/scan/host` requires Node `>=24.15.0 <25 || >=26.12.1 <27` and exposes separate promise APIs:
 
 ```js
 const prepared = await prepareArtifact({ report, annexes: [{ id, bytes }] });

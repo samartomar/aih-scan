@@ -48,8 +48,8 @@ assert.equal(contractSupport.contracts.length, 14);
 assert.deepEqual(contractSupport.entries, [
   { export: "@aihq/scan/contracts", runtime: "portable" },
   { export: "@aihq/scan/read", runtime: "portable" },
-  { export: "@aihq/scan/host", runtime: "node", nodeRange: ">=24.15.0 <25" },
-  { export: "@aihq/scan", runtime: "node", nodeRange: ">=24.15.0 <25" },
+  { export: "@aihq/scan/host", runtime: "node", nodeRange: ">=24.15.0 <25 || >=26.12.1 <27" },
+  { export: "@aihq/scan", runtime: "node", nodeRange: ">=24.15.0 <25 || >=26.12.1 <27" },
 ]);
 assert.equal(entrySupport.package, contractSupport.package);
 assert.deepEqual(entrySupport.entries.map(({ export: name, status }) => [name, status]), [

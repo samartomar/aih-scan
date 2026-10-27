@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { readPackedPackage } from "./npm-pack-output.js";
 
 const sourceRoot = resolve(import.meta.dirname, "../..");
 
@@ -25,13 +26,13 @@ export function npmCliPath(): string {
 // npm owns the public asset selection, including implicit package files and
 // future additions to published directories. Never import npm's private internals.
 export function copyPackedPublicAssets(source: string, destination: string): string[] {
-  const [packed] = JSON.parse(
+  const packed = readPackedPackage(
     execFileSync(
       process.execPath,
       [npmCliPath(), "pack", "--ignore-scripts", "--dry-run", "--json"],
       { cwd: source, encoding: "utf8", windowsHide: true },
     ),
-  ) as { files: { path: string }[] }[];
+  );
   if (!packed) throw new Error("Public fixture package inventory unavailable");
   const paths = packed.files.map(({ path }) => path);
   for (const path of paths) {

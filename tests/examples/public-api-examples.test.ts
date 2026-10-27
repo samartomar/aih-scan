@@ -50,7 +50,7 @@ describe("public API examples", () => {
     expect(readme).toContain("## Runtime boundaries");
     expect(readme).toContain("The assessment `contracts` and `read` entries use portable");
     expect(readme).toContain("they import no Node scanner, filesystem or process modules");
-    expect(readme).toContain("Node `>=24.15.0 <25`");
+    expect(readme).toContain("Node `>=24.15.0 <25 || >=26.12.1 <27`");
     expect(readme).toContain("The package is ESM only.");
     expect(readme).toContain("node examples/run-detector.mjs");
     expect(readme).toContain("node examples/verify-capture-bundle.mjs --help");

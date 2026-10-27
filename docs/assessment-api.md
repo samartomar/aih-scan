@@ -8,7 +8,7 @@ signed format or scanner execution.
 `@aihq/scan/contracts` publishes the installed package identity, exact supported
 schema IDs, entry runtimes and JSON-compatible wire types. `@aihq/scan/read`
 provides portable promise-based readers. `@aihq/scan/host` runs source acquisition
-and detectors on Node `>=24.15.0 <25`.
+and detectors on Node `>=24.15.0 <25 || >=26.12.1 <27`.
 
 ```js
 import { runScan, prepareArtifact } from "@aihq/scan/host";

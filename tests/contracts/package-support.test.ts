@@ -153,6 +153,19 @@ describe("contractSupport", () => {
       contractSupport.entries.map((entry) => entry.export),
     );
   });
+
+  it("keeps node entry ranges aligned with the package engine", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { engines: { node: string } };
+    for (const entry of contractSupport.entries) {
+      if (entry.runtime === "node") {
+        expect(entry.nodeRange).toBe(manifest.engines.node);
+      } else {
+        expect(entry).not.toHaveProperty("nodeRange");
+      }
+    }
+  });
 });
 
 describe("package-support 1.1 fixture discovery", () => {

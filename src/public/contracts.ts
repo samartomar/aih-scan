@@ -96,8 +96,16 @@ export const contractSupport = Object.freeze({
   entries: Object.freeze([
     Object.freeze({ export: "@aihq/scan/contracts", runtime: "portable" }),
     Object.freeze({ export: "@aihq/scan/read", runtime: "portable" }),
-    Object.freeze({ export: "@aihq/scan/host", runtime: "node", nodeRange: ">=24.15.0 <25" }),
-    Object.freeze({ export: "@aihq/scan", runtime: "node", nodeRange: ">=24.15.0 <25" }),
+    Object.freeze({
+      export: "@aihq/scan/host",
+      runtime: "node",
+      nodeRange: ">=24.15.0 <25 || >=26.12.1 <27",
+    }),
+    Object.freeze({
+      export: "@aihq/scan",
+      runtime: "node",
+      nodeRange: ">=24.15.0 <25 || >=26.12.1 <27",
+    }),
   ]),
 } as const);
 

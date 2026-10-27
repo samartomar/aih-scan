@@ -5,7 +5,9 @@ editing, then npm run verify (typecheck, lint, build, tests, and pinned-action v
 Run any additional contract/evidence checks required by the touched workflow.
 Resolve current commands from package.json and protected CI, not cached task notes.
 
-Use Node `>=24.15.0 <25` for the assessment host API and repository checks.
+The `@aihq/scan` host/root package range is Node `>=24.15.0 <25 || >=26.12.1 <27`.
+Current repository CI and release verification run on Node 24; Node 26 candidate
+verification is separate.
 The installed-package test exercises `@aihq/scan/contracts`, `/read`, `/host`
 and the versioned schema exports from a packed tarball in a temporary consumer.
 It also loads the portable entry graph without Node globals or built-ins.
