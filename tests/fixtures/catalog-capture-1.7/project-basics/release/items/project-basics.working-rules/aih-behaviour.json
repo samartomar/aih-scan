@@ -1,0 +1,1 @@
+{"dependencies":{"conflicts":[],"optional":[],"requires":[]},"executable":{"rules/agent-behavior-core.md":false},"kind":"rule","payload":{"applyTo":["**"],"applyToBasis":"publisher","placement":"project-folder"},"requirements":{"inputs":{}}}

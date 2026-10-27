@@ -18,8 +18,19 @@ const identities=["default","extensions","ecc","superpowers","anthropic","diagno
 const commit="b".repeat(40),captures=[],contents=[];
 const member=(path,bytes)=>({path,sha256:sha256(bytes),byteLength:bytes.length});
 const releaseBytes=value=>Buffer.from(`${canonicalBytes(value)}\n`);
+// One capture is a real Catalog release 1.7 producer output (inventory 1.2.0); the rest stay release 1.5.
+const current=new URL("../fixtures/catalog-capture-1.7/",import.meta.url);
 for(const [index,captureId] of identities.entries()) {
-  const root=join(out,captureId);mkdirSync(join(root,"release","recipes"),{recursive:true});mkdirSync(join(root,"release","materials"));
+  const root=join(out,captureId);
+  if(captureId==="extensions") {
+    cpSync(new URL("project-basics",current),root,{recursive:true});
+    const path="release/baselines/project-basics/content-inventory.json",inventory=readFileSync(join(root,path));
+    const bytes=prepareCatalogCapture({root,inventoryPath:path,inventorySha256:sha256(inventory)});
+    captures.push({captureId,bytes,selector:{releaseId:String(11+index*2),assetId:String(12+index*2),sha256:sha256(bytes),byteLength:bytes.length,inventory:member(path,inventory)}});
+    contents.push({contentBytes:readFileSync(new URL("project-basics.content.json",current)),inventory});
+    continue;
+  }
+  mkdirSync(join(root,"release","recipes"),{recursive:true});mkdirSync(join(root,"release","materials"));
   const text=Buffer.from(`Independent ${captureId}\n`),material={id:"text",...member("release/materials/entry.txt",text)};
   const recipe={schema:"urn:aihq:core:recipe:1.0.0",id:"entry",description:"Place fixture material",inputs:{},materials:[{id:"text",sha256:material.sha256,byteLength:material.byteLength}],targets:["project"],prerequisites:[],operations:[{id:"write",kind:"file.write",purpose:"Place fixture text",scope:"project",target:{root:"project",segments:[{literal:"entry.txt"}]},material:"text",requires:[],checks:[]}],checks:[]};
   const recipeBytes=releaseBytes(recipe),recipeDescriptor={id:"entry",schema:recipe.schema,...member("release/recipes/entry.json",recipeBytes)};

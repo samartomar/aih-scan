@@ -1,0 +1,1 @@
+{"dependencies":{"conflicts":[],"optional":[],"requires":[{"itemId":"project-basics.working-rules"}]},"executable":{"RULE_ROUTER.md":false},"kind":"document","payload":{"files":["rule-router"],"placement":"project-folder","purpose":"guide"},"requirements":{"inputs":{}}}

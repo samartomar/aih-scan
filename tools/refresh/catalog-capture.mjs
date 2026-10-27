@@ -39,6 +39,42 @@ function decodeCapture(bytes, selector, limits) {
   return { frozen, files };
 }
 
+const isRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
+
+// Release 1.7 package members, as Catalog enumerates them: the single recipe or
+// every transition-map recipe, then each material by its package path (legacy
+// `path` or extended `packagePath`, never both). Map entries may reference only
+// this item's content materials, so the closure carries every recipe input.
+function members17(item) {
+  if (Object.hasOwn(item, "recipe") === Object.hasOwn(item, "recipes"))
+    throw new Error("Item must declare exactly one recipe or recipe map");
+  const content = new Set();
+  const materials = item.materials.map(member => {
+    if (!isRecord(member) || Object.hasOwn(member, "path") === Object.hasOwn(member, "packagePath"))
+      throw new Error("Material must declare exactly one package path");
+    if (member.role !== "behaviour") content.add(member.id);
+    return {...member, path: Object.hasOwn(member, "path") ? member.path : member.packagePath};
+  });
+  if (!Object.hasOwn(item, "recipes")) return [item.recipe ?? {}, ...materials];
+  const map = item.recipes;
+  if (!isRecord(map) || Object.keys(map).length === 0 || Object.keys(map).length > 64)
+    throw new Error("Invalid recipe map");
+  const recipes = Object.values(map);
+  for (const entry of recipes)
+    if (!isRecord(entry) || !Array.isArray(entry.materials) || entry.materials.some(id => !content.has(id)))
+      throw new Error("Recipe map references undeclared material");
+  return [...recipes, ...materials];
+}
+
+// Catalog pairs each baseline-bound release format with one inventory/projection.
+// Release 1.6 (content-inventory 1.1.0) is not a supported capture input.
+const inventoryVersions = Object.freeze([
+  {release: "urn:aihq:catalog:release:1.5.0", inventory: "urn:aihq:catalog:content-inventory:1.0.0",
+    projection: "urn:aihq:catalog:release-content:1.0.0", members: item => [item.recipe, ...item.materials].map(member => member ?? {})},
+  {release: "urn:aihq:catalog:release:1.7.0", inventory: "urn:aihq:catalog:content-inventory:1.2.0",
+    projection: "urn:aihq:catalog:release-content:1.2.0", members: members17},
+]);
+
 function inventoryDescriptors(inventoryBytes, inventoryDescriptor) {
   if (inventoryBytes.length > 16 * 1024 * 1024) throw new Error("Inventory bound exceeded");
   const text = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(inventoryBytes);
@@ -63,9 +99,9 @@ function inventoryDescriptors(inventoryBytes, inventoryDescriptor) {
   const inventory = JSON.parse(text);
   if (`${encode(inventory)}\n` !== text) throw new Error("Inventory must retain canonical Catalog bytes");
   object(inventory, ["schema", "projection", "release"]);
-  if (inventory.schema !== "urn:aihq:catalog:content-inventory:1.0.0" ||
-    inventory.projection !== "urn:aihq:catalog:release-content:1.0.0" ||
-    inventory.release?.schema !== "urn:aihq:catalog:release:1.5.0" ||
+  const version = inventoryVersions.find(entry => entry.inventory === inventory.schema);
+  if (!version || inventory.projection !== version.projection ||
+    inventory.release?.schema !== version.release ||
     inventory.release?.package?.name !== "@aihq/catalog" ||
     Object.hasOwn(inventory.release, "baseline") || !Array.isArray(inventory.release.items) ||
     inventory.release.items.length > 10000)
@@ -73,9 +109,10 @@ function inventoryDescriptors(inventoryBytes, inventoryDescriptor) {
   // This is byte closure, not a replacement for Catalog's semantic reader.
   const required = new Map([[inventoryDescriptor.path, inventoryDescriptor]]);
   for (const item of inventory.release.items) {
-    if (!Array.isArray(item.materials)) throw new Error("Missing material declarations");
-    for (const member of [item.recipe, ...item.materials]) {
-      const entry = descriptor({path: member?.path, sha256: member?.sha256, byteLength: member?.byteLength});
+    if (!isRecord(item) || !Array.isArray(item.materials) || item.materials.length > 4096)
+      throw new Error("Missing material declarations");
+    for (const member of version.members(item)) {
+      const entry = descriptor({path: member.path, sha256: member.sha256, byteLength: member.byteLength});
       if (required.has(entry.path) && !same(required.get(entry.path), entry))
         throw new Error("Conflicting inventory descriptors");
       required.set(entry.path, entry);
