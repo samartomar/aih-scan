@@ -3,7 +3,7 @@
 The Unreleased `@aihq/scan/host` API compares installation material independently
 of scan findings. `compareMaterialInventories` accepts caller-declared inventories;
 it does not scan a source, read report files, authenticate a producer or post issues.
-Use Node `>=24.15.0 <25`.
+Use Node `>=24.15.0 <25 || >=26.12.1 <27`.
 
 ```ts
 import { compareMaterialInventories } from "@aihq/scan/host";

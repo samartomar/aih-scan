@@ -27,7 +27,7 @@ The new assessment surface has three explicit entry points:
 | --- | --- | --- |
 | `@aihq/scan/contracts` | Contract support, public types and schema identities | Portable JavaScript |
 | `@aihq/scan/read` | Read reports/artifacts, summarize provider facts, match exact content and select latest matching evidence; authenticity remains unchecked | Portable JavaScript |
-| `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25` |
+| `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25 \|\| >=26.12.1 <27` |
 
 `runScan` captures exact npm, pinned Git or local input and accounts for every requested detector.
 Its Git API requires a credential-free HTTPS URL and a full lowercase 40-hex
@@ -174,7 +174,7 @@ data and Web Crypto; they import no Node scanner, filesystem or process modules.
 Reading makes no producer-authentication claim. Schema resources are JSON data.
 
 The host entry, retained V2 root library, `aih-scan` binary and scripts under
-`examples/` use Node `>=24.15.0 <25`. They perform explicit filesystem, process
+`examples/` use Node `>=24.15.0 <25 || >=26.12.1 <27`. They perform explicit filesystem, process
 or cryptographic work. Private `dist` paths are not public exports.
 
 Each detector execution profile carries its own platform gate in the published
@@ -236,7 +236,7 @@ are repository documentation and are not part of the published tarball.
 
 `aih-scan scan` assesses one local directory, or one exact commit of a Git
 repository, and reports what each detector observed and what it covered. It
-needs Node `>=24.15.0 <25` (and `git` on the `PATH` for Git sources) and no
+needs Node `>=24.15.0 <25 || >=26.12.1 <27` (and `git` on the `PATH` for Git sources) and no
 other setup. It produces evidence only: it does not approve, qualify, admit or
 install the directory or repository.
 
@@ -353,7 +353,9 @@ finding names its rule, file and key and never prints the secret value.
 
 ## Install and verify the package boundary
 
-Node.js `>=24.15.0 <25` is required for host operations and repository checks.
+The package runtime range is Node `>=24.15.0 <25 || >=26.12.1 <27` for host operations.
+Current repository checks and release verification run on Node 24; Node 26
+candidate verification is separate.
 
 ```sh
 npm ci --ignore-scripts
