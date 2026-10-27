@@ -582,9 +582,6 @@ test("Catalog 1.7 closure covers recipe maps and refuses unsupported, ambiguous 
         item.materials[0].packagePath = ".git/config";
       }),
       variant((item) => {
-        item.materials[0].packagePath = "release/items/project-basics.router/AIH-BEHAVIOUR.JSON";
-      }),
-      variant((item) => {
         item.materials[0].sha256 = "0".repeat(64);
       }),
       variant((item, inventory) => {
@@ -595,6 +592,15 @@ test("Catalog 1.7 closure covers recipe maps and refuses unsupported, ambiguous 
       }),
     ])
       expect(() => prepare(refused)).toThrow();
+    // Two declared spellings of one path refuse on every filesystem, before any read.
+    expect(() =>
+      prepare(
+        variant((item, inventory) => {
+          inventory.release.items[1].materials[0].packagePath =
+            item.materials[0].packagePath.toUpperCase();
+        }),
+      ),
+    ).toThrow(/ambiguous/i);
 
     // Exact canonical bytes and reviewed digest; changed staged material refuses.
     const canonical = Buffer.from(`${canonicalBytes(real)}\n`);

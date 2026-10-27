@@ -29,7 +29,8 @@ for(const [index,captureId] of identities.entries()) {
     captures.push({captureId,bytes,selector:{releaseId:String(11+index*2),assetId:String(12+index*2),sha256:sha256(bytes),byteLength:bytes.length,inventory:member(path,inventory)}});
     contents.push({contentBytes:readFileSync(new URL("project-basics.content.json",current)),inventory});
     continue;
-  }mkdirSync(join(root,"release","recipes"),{recursive:true});mkdirSync(join(root,"release","materials"));
+  }
+  mkdirSync(join(root,"release","recipes"),{recursive:true});mkdirSync(join(root,"release","materials"));
   const text=Buffer.from(`Independent ${captureId}\n`),material={id:"text",...member("release/materials/entry.txt",text)};
   const recipe={schema:"urn:aihq:core:recipe:1.0.0",id:"entry",description:"Place fixture material",inputs:{},materials:[{id:"text",sha256:material.sha256,byteLength:material.byteLength}],targets:["project"],prerequisites:[],operations:[{id:"write",kind:"file.write",purpose:"Place fixture text",scope:"project",target:{root:"project",segments:[{literal:"entry.txt"}]},material:"text",requires:[],checks:[]}],checks:[]};
   const recipeBytes=releaseBytes(recipe),recipeDescriptor={id:"entry",schema:recipe.schema,...member("release/recipes/entry.json",recipeBytes)};
