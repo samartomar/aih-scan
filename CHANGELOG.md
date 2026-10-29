@@ -16,8 +16,8 @@
   - Item descriptors carry their behaviour fields. Scan recomputes
     `contentSha256`, `behaviourSha256` and the behaviour file in the contract's
     canonical-JSON encoding, and refuses any difference.
-  - A capture without executable bits cannot be `matched` for a material that
-    declares one.
+  - A capture without executable bits is never `matched`. A `matched` record
+    holds the exact bits the capture holds.
   - `verifyItemRecord(record, artifact, item, severityProfile)` compares all
     three. `readItemRecord` refuses an unknown record schema as
     `SCHEMA_UNSUPPORTED` and an unknown field at its JSON path.

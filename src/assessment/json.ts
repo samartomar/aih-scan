@@ -18,7 +18,10 @@ export class ContractError extends TypeError {
       | "npm-containment-failed"
       | "git-commit-unreachable"
       | "git-acquisition-failed"
-      | "git-containment-failed",
+      | "git-containment-failed"
+      | "behaviour-mismatch"
+      | "item-identity-mismatch"
+      | "severity-profile-mismatch",
     message: string,
   ) {
     super(message);

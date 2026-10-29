@@ -83,14 +83,14 @@ server definition or a hook command.
 | --- | --- |
 | Not captured at its capture path, or other bytes or length | `mismatched` |
 | Declared `true`/`false`, captured as the other bit | `mismatched` |
-| Declared `true`/`false`, capture holds no bit (profile 1, Windows) | `unavailable` |
-| Declared `unknown` | no bit checked |
+| Capture holds no bit (profile 1, Windows) | `unavailable` |
+| Declared `unknown`, capture holds a bit | that bit is recorded |
 | Every material and `#payload` match | `matched` |
 
-`captured` says whether the capture holds the material's exact bytes.
-`executable` is the bit the capture holds. Without one, it is the declared bit,
-or `false` when no bit was declared; in that case the coverage says what was not
-established. A record is never `matched` for an item without materials.
+`captured` says whether the capture holds the material's exact bytes. A `matched`
+record's `executable` is always the bit the capture holds. Otherwise it is the
+declared bit, or `false` when none is declared, and the coverage says that no bit
+was established. A record is never `matched` for an item without materials.
 
 Each requested detector appears with its `id` and with `version` from its
 observation inputs (`unavailable` without observations). Its `coverage` is:

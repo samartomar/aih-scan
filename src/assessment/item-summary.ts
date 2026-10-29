@@ -9,9 +9,10 @@ import {
   readItemRecord,
   verifyItemRecord,
 } from "./item-record.js";
-import { errorDiagnostic, fail } from "./json.js";
+import { ContractError, errorDiagnostic, fail } from "./json.js";
 import { associationResultShape } from "./selection.js";
 import {
+  formatProfileRef,
   type SeverityProfile,
   severityProfileRef,
   severityProfileShape,
@@ -219,17 +220,11 @@ async function complete(admitted: ReturnType<typeof admit>): Promise<Admitted> {
     if (profiles.has(ref)) fail("Severity profiles must be distinct");
     profiles.set(ref, profile);
   }
-  const policyProfile = [...profiles.keys()].find(
-    (ref) =>
-      ref ===
-      `${admitted.policy.severityProfile.id}@sha256:${admitted.policy.severityProfile.sha256}`,
-  );
-  if (!policyProfile)
-    throw Object.assign(
-      new Error("The policy's severity profile is not among the supplied profiles."),
-      {
-        diagnostic: "severity-profile-mismatch",
-      },
+  const policyProfile = formatProfileRef(admitted.policy.severityProfile);
+  if (!profiles.has(policyProfile))
+    throw new ContractError(
+      "severity-profile-mismatch",
+      "The policy's severity profile is not among the supplied profiles.",
     );
   return { ...admitted, policyProfile, profiles };
 }
@@ -348,11 +343,7 @@ async function pick(input: Admitted): Promise<PickRecordResult> {
 }
 const refusal = (error: unknown) => ({
   status: "invalid" as const,
-  diagnostics: [
-    error instanceof Error && "diagnostic" in error
-      ? { code: String(error.diagnostic), detail: error.message }
-      : errorDiagnostic(error),
-  ],
+  diagnostics: [errorDiagnostic(error)],
 });
 
 /** The one record that counts for an item: only records that pass `verifyItemRecord`, ranked by the contract's keys. */

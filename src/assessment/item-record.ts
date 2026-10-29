@@ -7,7 +7,15 @@ import {
   readContentCoverageBatch,
   snapshotQueries,
 } from "./content-coverage.js";
-import { bound, canonicalBytes, equalBytes, errorDiagnostic, fail, sha256 } from "./json.js";
+import {
+  bound,
+  ContractError,
+  canonicalBytes,
+  equalBytes,
+  errorDiagnostic,
+  fail,
+  sha256,
+} from "./json.js";
 import {
   classifyFindings,
   type SeverityProfile,
@@ -273,29 +281,20 @@ async function checkIdentity(item: ItemDescriptor): Promise<Uint8Array> {
     behaviour.sha256 !== (await sha256(identity.behaviourFile)) ||
     behaviour.byteLength !== identity.behaviourFile.length
   )
-    throw Object.assign(
-      new Error("The behaviour material differs from the item's behaviour fields"),
-      {
-        diagnostic: "behaviour-mismatch",
-      },
+    throw new ContractError(
+      "behaviour-mismatch",
+      "The behaviour material differs from the item's behaviour fields",
     );
   if (
     item.contentSha256 !== identity.contentSha256 ||
     item.behaviourSha256 !== identity.behaviourSha256
   )
-    throw Object.assign(new Error("The item's hashes differ from its materials and behaviour"), {
-      diagnostic: "item-identity-mismatch",
-    });
+    throw new ContractError(
+      "item-identity-mismatch",
+      "The item's hashes differ from its materials and behaviour",
+    );
   return canonicalBytes(item.payload);
 }
-const identityRefusal = (error: unknown): ItemRecordRefusal => ({
-  coverage: "invalid",
-  diagnostics: [
-    error instanceof Error && "diagnostic" in error
-      ? { code: String(error.diagnostic), detail: error.message }
-      : errorDiagnostic(error),
-  ],
-});
 
 type MaterialState =
   | "match"
@@ -371,7 +370,7 @@ export async function recordItems(input: {
       try {
         items.push({ item: entry.item, payload: await checkIdentity(entry.item) });
       } catch (error) {
-        items.push({ invalid: identityRefusal(error) });
+        items.push({ invalid: { coverage: "invalid", diagnostics: [errorDiagnostic(error)] } });
       }
     }
     const references = items.reduce((n, entry) => n + (entry.item?.materials.length ?? 0), 0);
@@ -503,13 +502,11 @@ export async function recordItems(input: {
           ? "material-missing"
           : file.sha256 !== material.sha256 || file.byteLength !== material.byteLength
             ? "bytes-differ"
-            : material.executable === "unknown"
-              ? "match"
-              : captured === "unknown"
-                ? "executable-unknown"
-                : captured === material.executable
-                  ? "match"
-                  : "executable-differs";
+            : captured === "unknown"
+              ? "executable-unknown"
+              : material.executable === "unknown" || captured === material.executable
+                ? "match"
+                : "executable-differs";
         return { id: material.materialId, material, captured, state };
       });
       const behaviour = states.find((s) => s.material.role === "behaviour")!;

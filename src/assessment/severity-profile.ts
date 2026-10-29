@@ -39,9 +39,12 @@ export type SeverityProfile = z.infer<typeof severityProfileShape>;
 export type SeverityCounts = { error: number; warning: number; note: number; unavailable: number };
 export type SuppressedCount = { rule: string; count: number; reason: string };
 
-/** The record's `severityProfile`: the profile id and the SHA-256 of its canonical JSON. */
+/** The record's `severityProfile` text for a profile id and the SHA-256 of its canonical JSON. */
+export const formatProfileRef = ({ id, sha256 }: { id: string; sha256: string }) =>
+  `${id}@sha256:${sha256}`;
+/** The record's `severityProfile` for a profile document. */
 export async function severityProfileRef(profile: SeverityProfile): Promise<string> {
-  return `${profile.id}@sha256:${await sha256(canonicalBytes(profile))}`;
+  return formatProfileRef({ id: profile.id, sha256: await sha256(canonicalBytes(profile)) });
 }
 
 /** Counts one detector's item-attributed findings. Suppressed findings are counted with their reason, never dropped. */

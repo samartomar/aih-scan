@@ -1234,7 +1234,7 @@
                   "outcome": "succeeded",
                   "coverage": "unavailable",
                   "exclusions": [
-                    "executable-unknown: behaviour, #payload"
+                    "executable-unknown: asset-1, asset-2, behaviour, license, #payload"
                   ],
                   "findings": {
                     "error": 0,
@@ -12377,7 +12377,7 @@
                   "outcome": "succeeded",
                   "coverage": "unavailable",
                   "exclusions": [
-                    "executable-unknown: behaviour, #payload"
+                    "executable-unknown: asset-1, asset-2, behaviour, license, #payload"
                   ],
                   "findings": {
                     "error": 0,
