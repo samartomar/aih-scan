@@ -18,7 +18,10 @@ export class ContractError extends TypeError {
       | "npm-containment-failed"
       | "git-commit-unreachable"
       | "git-acquisition-failed"
-      | "git-containment-failed",
+      | "git-containment-failed"
+      | "behaviour-mismatch"
+      | "item-identity-mismatch"
+      | "severity-profile-mismatch",
     message: string,
   ) {
     super(message);
@@ -166,7 +169,7 @@ export function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, at) => byte === right[at]);
 }
 export class UnsupportedFormatError extends TypeError {
-  readonly code = "unsupported-format";
+  readonly code = "SCHEMA_UNSUPPORTED";
   constructor(
     readonly path: string,
     readonly encountered: string,
@@ -181,7 +184,7 @@ export function formatDiagnostic(
   supported: string[],
 ): import("./types.js").Diagnostic {
   return {
-    code: "unsupported-format",
+    code: "SCHEMA_UNSUPPORTED",
     path,
     encountered,
     supported,

@@ -42,13 +42,13 @@ For many independent content queries, `readContentCoverageBatch` validates one
 report snapshot and returns bounded rows with a shared observation table; see
 [independent coverage queries](docs/assessment-api.md#independent-coverage-queries).
 
-For exact per-item evidence, use the policy-independent `recordItem`,
-`recordItemBatch` and `verifyItemRecord` from `@aihq/scan/read`; see
+For exact per-item evidence, use `recordItems`, `verifyItemRecord` and
+`readItemRecord` from `@aihq/scan/read`; see
 [item records and behaviour coverage](docs/item-records.md).
 
-For one policy-aware item state, use `summariseItem` from `@aihq/scan/read`. It
-preserves newest-matching selection and exposes full selection details beside the
-summary. See [the 17-row table, evidence policy and severity profile](docs/item-summaries.md).
+For one policy-aware item state, use `pickRecord` and `summariseItem` from
+`@aihq/scan/read`. They read an item's stored records with their artifacts. See
+[the 13-row decision table, evidence policy and severity profile](docs/item-summaries.md).
 
 See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
 [summary and latest matching selection](docs/summary-selection.md),
@@ -1111,7 +1111,7 @@ The new closed identifiers are `urn:aihq:scan:request:2.0.0`,
 `urn:aihq:scan:run-result:2.0.0` and `urn:aihq:scan:report:2.0.0`.
 The artifact container and signed statement are unchanged: they bind the declared
 report schema and exact report bytes. Unsupported schemas, capture profiles and
-observation formats carry a diagnostic with `code: "unsupported-format"`, `path`,
+observation formats carry a diagnostic with `code: "SCHEMA_UNSUPPORTED"`, `path`,
 `encountered` and `supported`; unknown reports retain status `unsupported-report`.
 
 Request 2.0.0 accepts exact npm coordinates:

@@ -87,8 +87,8 @@ They make no OIDC or signing-service request and establish no production trust.
 
 `authenticateArtifact` returns `unverifiable` for an unselected identity; supplying
 that host result for the selected assessment to `summariseItem` produces
-`not-verified` / `not-authenticated` (row 15). A host reporting selected trust data
-as `expired` or `unavailable` produces `not-verified` / `offline` (row 14), including
+`not-verified` / `not-authenticated` (row 10). A host reporting selected trust data
+as `expired` or `unavailable` produces `not-verified` / `offline` (row 9), including
 when authentication was skipped. A historically authenticated bundle can remain
 authentic after its leaf certificate expires; current trust-data availability is
 a separate host input. Static caller-selected trust remains the default. Any

@@ -7,11 +7,24 @@ import {
   readContentCoverageBatch,
   snapshotQueries,
 } from "./content-coverage.js";
-import { bound, canonicalBytes, equalBytes, errorDiagnostic, fail, sha256 } from "./json.js";
+import {
+  bound,
+  ContractError,
+  canonicalBytes,
+  equalBytes,
+  errorDiagnostic,
+  fail,
+  sha256,
+} from "./json.js";
+import {
+  classifyFindings,
+  type SeverityProfile,
+  severityProfileRef,
+  severityProfileShape,
+} from "./severity-profile.js";
 import {
   diagnosticShape,
   digestShape,
-  findingShape,
   integerShape,
   labelShape,
   pathShape,
@@ -26,12 +39,20 @@ import type {
   Finding,
   ObservationInput,
   ReadReportResult,
-  ScanId,
 } from "./types.js";
 
 export const itemRecordSchema = "urn:aihq:scan:item-record:1.0.0";
+/** The payload pseudo-material: the canonical JSON of the item's payload. */
+export const payloadMaterialId = "#payload";
+const coverageStates = ["matched", "mismatched", "unavailable", "invalid"] as const;
+type Coverage = (typeof coverageStates)[number];
+
 export interface ItemMaterial {
-  path: string;
+  materialId: string;
+  /** POSIX path relative to the item; the path the item's `contentSha256` lines name. */
+  relPath: string;
+  /** Path in the assessment's capture namespace; defaults to `relPath`. */
+  capturePath?: string;
   sha256: string;
   byteLength: number;
   executable: ExecutableState;
@@ -43,48 +64,61 @@ export interface ItemSubject {
   contentSha256: string;
   behaviourSha256: string;
 }
+/** The item as its release declares it: subject, behaviour fields and exact materials. */
 export interface ItemDescriptor extends ItemSubject {
+  kind: string;
+  payload: unknown;
+  requirements: unknown;
+  dependencies: unknown;
   materials: ItemMaterial[];
 }
+/** `urn:aihq:scan:item-record:1.0.0`, exactly as the contract publishes it. */
 export interface ItemRecord {
-  schema: typeof itemRecordSchema;
-  scanId: ScanId;
+  scanId: string;
   createdAt: string;
+  evidenceKey: string;
   subject: ItemSubject;
-  materials: (ItemMaterial & {
+  authenticity: "unchecked";
+  materials: {
+    materialId: string;
+    relPath: string;
+    sha256: string;
+    byteLength: number;
+    executable: boolean;
     captured: boolean;
-    digestMatch: boolean;
-    lengthMatch: boolean;
-    executableComparison: "equal" | "differs" | "unknown";
-  })[];
-  coverage: "matched" | "mismatched";
-  detectors: {
-    detectorId: string;
-    outcome: "succeeded" | "failed" | "refused" | "cancelled";
-    requestedProfileId: string | null;
-    effectiveProfileId: string | null;
-    itemCoverage: "covered" | "partial" | "uncovered";
-    findings: Finding[];
-    inputSha256s: string[];
   }[];
   completion: "complete" | "partial";
-  evidenceKey: string;
-  authenticity: "unchecked";
+  coverage: Coverage;
+  severityProfile: string;
+  detectors: {
+    id: string;
+    version: string;
+    outcome: "succeeded" | "failed" | "refused" | "cancelled";
+    coverage: Coverage;
+    exclusions: string[];
+    findings: { error: number; warning: number; note: number; unavailable: number };
+    suppressed: { rule: string; count: number; reason: string }[];
+    findingRefs?: string[];
+  }[];
 }
-export type ItemRecordResult =
-  | ItemRecord
-  | { coverage: "invalid" | "unavailable"; diagnostics: Diagnostic[] };
+export type ItemRecordRefusal = { coverage: "invalid" | "unavailable"; diagnostics: Diagnostic[] };
+export type ItemRecordResult = ItemRecord | ItemRecordRefusal;
+/** A `readArtifact` or `readReport` result. */
 export type ItemAssessment = ReadReportResult | ReadArtifactResult;
 export type ItemRecordBatchResult =
   | { status: "complete"; results: ItemRecordResult[] }
   | { status: "invalid"; diagnostics: Diagnostic[] };
-const executable = z.union([z.boolean(), z.literal("unknown")]);
+export type ItemRecordVerification = "same" | "differs" | "not-covered";
+
+const json = z.custom<unknown>((value) => value !== undefined);
 const materialShape = z
   .object({
-    path: pathShape,
+    materialId: labelShape.refine((id) => id !== payloadMaterialId, "#payload is reserved"),
+    relPath: pathShape,
+    capturePath: pathShape.optional(),
     sha256: digestShape,
     byteLength: integerShape,
-    executable,
+    executable: z.union([z.boolean(), z.literal("unknown")]),
     role: z.enum(["content", "behaviour"]),
   })
   .strict();
@@ -94,43 +128,76 @@ const itemShape = z
     itemId: labelShape,
     contentSha256: digestShape,
     behaviourSha256: digestShape,
+    kind: labelShape,
+    payload: json,
+    requirements: json,
+    dependencies: json,
     materials: z.array(materialShape).min(1).max(maxContentDescriptors),
+  })
+  .strict();
+const subjectShape = z
+  .object({
+    frameworkId: labelShape,
+    itemId: labelShape,
+    contentSha256: digestShape,
+    behaviourSha256: digestShape,
+  })
+  .strict();
+const counted = z
+  .object({
+    error: integerShape,
+    warning: integerShape,
+    note: integerShape,
+    unavailable: integerShape,
   })
   .strict();
 export const itemRecordShape = z
   .object({
-    schema: z.literal(itemRecordSchema),
     scanId: scanIdShape,
     createdAt: timestampShape,
-    subject: itemShape.omit({ materials: true }),
+    evidenceKey: digestShape,
+    subject: subjectShape,
+    authenticity: z.literal("unchecked"),
     materials: z
       .array(
-        materialShape.extend({
-          captured: z.boolean(),
-          digestMatch: z.boolean(),
-          lengthMatch: z.boolean(),
-          executableComparison: z.enum(["equal", "differs", "unknown"]),
-        }),
+        z
+          .object({
+            materialId: labelShape,
+            relPath: z.union([pathShape, z.literal(payloadMaterialId)]),
+            sha256: digestShape,
+            byteLength: integerShape,
+            executable: z.boolean(),
+            captured: z.boolean(),
+          })
+          .strict(),
       )
       .min(1)
-      .max(maxContentDescriptors),
-    coverage: z.enum(["matched", "mismatched"]),
-    detectors: z.array(
-      z
-        .object({
-          detectorId: labelShape,
-          outcome: z.enum(["succeeded", "failed", "refused", "cancelled"]),
-          requestedProfileId: labelShape.nullable(),
-          effectiveProfileId: labelShape.nullable(),
-          itemCoverage: z.enum(["covered", "partial", "uncovered"]),
-          findings: z.array(findingShape),
-          inputSha256s: z.array(digestShape),
-        })
-        .strict(),
-    ),
+      .max(maxContentDescriptors + 1),
     completion: z.enum(["complete", "partial"]),
-    evidenceKey: digestShape,
-    authenticity: z.literal("unchecked"),
+    coverage: z.enum(coverageStates),
+    severityProfile: z.string().min(1).max(256),
+    detectors: z
+      .array(
+        z
+          .object({
+            id: labelShape,
+            version: z.string().min(1).max(128),
+            outcome: z.enum(["succeeded", "failed", "refused", "cancelled"]),
+            coverage: z.enum(coverageStates),
+            exclusions: z.array(z.string().min(1).max(1024)).max(256),
+            findings: counted,
+            suppressed: z
+              .array(
+                z
+                  .object({ rule: labelShape, count: integerShape.min(1), reason: labelShape })
+                  .strict(),
+              )
+              .max(1024),
+            findingRefs: z.array(z.string().min(1).max(512)).max(4096).optional(),
+          })
+          .strict(),
+      )
+      .max(256),
   })
   .strict();
 /** Public result schema includes truthful refusals when no record can be derived. */
@@ -140,84 +207,179 @@ export const itemRecordResultShape = z.union([
     .object({ coverage: z.enum(["invalid", "unavailable"]), diagnostics: z.array(diagnosticShape) })
     .strict(),
 ]);
+
+const encoder = new TextEncoder();
+const bytewise = (left: string, right: string) => {
+  const a = encoder.encode(left),
+    b = encoder.encode(right);
+  for (let at = 0; at < Math.min(a.length, b.length); at++)
+    if (a[at] !== b[at]) return a[at]! - b[at]!;
+  return a.length - b.length;
+};
+/** The exact text `contentSha256` hashes: one `relPath\tsha256\n` line per content material, sorted bytewise. */
+export function contentIdentityText(
+  content: readonly { relPath: string; sha256: string }[],
+): string {
+  return content
+    .map(({ relPath, sha256 }) => `${relPath}\t${sha256}\n`)
+    .sort(bytewise)
+    .join("");
+}
+/**
+ * The contract's two item hashes and the behaviour file bytes. `behaviourSha256` is SHA-256 over the canonical JSON
+ * of `{ kind, payload, requirements, dependencies, materials: <content lines>, executable }`; the behaviour file holds
+ * the canonical JSON of the same value without `materials`, plus LF.
+ */
+export async function itemIdentity(value: {
+  kind: unknown;
+  payload: unknown;
+  requirements: unknown;
+  dependencies: unknown;
+  materials: readonly { relPath: string; sha256: string }[];
+  executable: Record<string, ExecutableState>;
+}): Promise<{ contentSha256: string; behaviourSha256: string; behaviourFile: Uint8Array }> {
+  const { kind, payload, requirements, dependencies, executable } = value;
+  const lines = contentIdentityText(value.materials);
+  const behaviour = { kind, payload, requirements, dependencies, executable };
+  const file = canonicalBytes(behaviour);
+  const behaviourFile = new Uint8Array(file.length + 1);
+  behaviourFile.set(file);
+  behaviourFile[file.length] = 0x0a;
+  return {
+    contentSha256: await sha256(encoder.encode(lines)),
+    behaviourSha256: await sha256(canonicalBytes({ ...behaviour, materials: lines })),
+    behaviourFile,
+  };
+}
+
 export function parseItemDescriptor(value: unknown): ItemDescriptor {
   const parsed = itemShape.safeParse(value);
-  if (!parsed.success)
-    fail("An item requires its subject and exact materials, including one behaviour file");
-  if (parsed.data.materials.filter((m) => m.role === "behaviour").length !== 1)
+  if (!parsed.success) fail("An item requires its subject, behaviour fields and exact materials");
+  const item = parsed.data as ItemDescriptor;
+  if (item.materials.filter((m) => m.role === "behaviour").length !== 1)
     fail("An item requires exactly one behaviour material");
-  if (new Set(parsed.data.materials.map((m) => m.path)).size !== parsed.data.materials.length)
-    fail("Item material paths must be unique");
-  return parsed.data;
+  for (const key of ["materialId", "relPath"] as const)
+    if (new Set(item.materials.map((m) => m[key])).size !== item.materials.length)
+      fail(`Item material ${key} values must be unique`);
+  if (new Set(item.materials.map(capturePath)).size !== item.materials.length)
+    fail("Item material capture paths must be unique");
+  canonicalBytes({ payload: item.payload, r: item.requirements, d: item.dependencies });
+  return item;
 }
-const subjectOf = ({
-  frameworkId,
-  itemId,
-  contentSha256,
-  behaviourSha256,
-}: ItemDescriptor): ItemSubject => ({ frameworkId, itemId, contentSha256, behaviourSha256 });
-const comparison = (declared: ExecutableState, captured: ExecutableState) =>
-  declared === "unknown" || captured === "unknown"
-    ? ("unknown" as const)
-    : declared === captured
-      ? ("equal" as const)
-      : ("differs" as const);
+const capturePath = (material: ItemMaterial) => material.capturePath ?? material.relPath;
 
-/** Pure derivation. The assessment is a revalidated public read result, never a trusted cache. */
-export async function recordItem(
-  assessment: ItemAssessment,
-  item: ItemDescriptor,
-): Promise<ItemRecordResult> {
-  const batch = await recordItemBatch({ assessment, items: [item] });
-  return batch.status === "complete"
-    ? batch.results[0]!
-    : { coverage: "invalid", diagnostics: batch.diagnostics };
+/** Recomputes both subject hashes and the behaviour file from the item's own fields; any difference refuses. */
+async function checkIdentity(item: ItemDescriptor): Promise<Uint8Array> {
+  const content = item.materials.filter((m) => m.role === "content");
+  const identity = await itemIdentity({
+    ...item,
+    materials: content,
+    executable: Object.fromEntries(content.map((m) => [m.relPath, m.executable])),
+  });
+  const behaviour = item.materials.find((m) => m.role === "behaviour")!;
+  if (
+    behaviour.sha256 !== (await sha256(identity.behaviourFile)) ||
+    behaviour.byteLength !== identity.behaviourFile.length
+  )
+    throw new ContractError(
+      "behaviour-mismatch",
+      "The behaviour material differs from the item's behaviour fields",
+    );
+  if (
+    item.contentSha256 !== identity.contentSha256 ||
+    item.behaviourSha256 !== identity.behaviourSha256
+  )
+    throw new ContractError(
+      "item-identity-mismatch",
+      "The item's hashes differ from its materials and behaviour",
+    );
+  return canonicalBytes(item.payload);
 }
 
-/** Independent item rows; all byte/length and successful-observation checks use the batch coverage reader. */
-export async function recordItemBatch(input: {
-  assessment: ItemAssessment;
+type MaterialState =
+  | "match"
+  | "material-missing"
+  | "bytes-differ"
+  | "executable-differs"
+  | "executable-unknown";
+const exclusionText = (reason: string, ids: string[]) => {
+  const text = `${reason}: ${ids.join(", ")}`;
+  return text.length <= 1024 ? text : `${text.slice(0, 1000)}… (${ids.length} materials)`;
+};
+function exclusions(
+  states: readonly { id: string; state: MaterialState }[],
+  only?: MaterialState[],
+) {
+  const groups = new Map<string, string[]>();
+  for (const { id, state } of states)
+    if (state !== "match" && (!only || only.includes(state)))
+      groups.set(state, [...(groups.get(state) ?? []), id]);
+  return [...groups.entries()].map(([reason, ids]) => exclusionText(reason, ids));
+}
+
+/**
+ * Derives one contract item record per item from a revalidated assessment. Pure: the assessment is a public read
+ * result, never a trusted cache. Findings are attributed only by exact capture path and file hash.
+ */
+export async function recordItems(input: {
+  artifact: ItemAssessment;
   items: ItemDescriptor[];
+  severityProfile: SeverityProfile;
 }): Promise<ItemRecordBatchResult> {
   try {
     if (
       !input ||
       typeof input !== "object" ||
-      Reflect.ownKeys(input).length !== 2 ||
-      Object.keys(input).sort().join(",") !== "assessment,items"
+      Reflect.ownKeys(input).length !== 3 ||
+      Object.keys(input).sort().join(",") !== "artifact,items,severityProfile"
     )
-      fail("Item batch requires assessment and items");
+      fail("Item records require artifact, items and severityProfile");
     if (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)
-      fail("Item batch requires a plain object");
-    const itemsProperty = Object.getOwnPropertyDescriptor(input, "items");
-    const assessmentProperty = Object.getOwnPropertyDescriptor(input, "assessment");
-    if (
-      !itemsProperty ||
-      !("value" in itemsProperty) ||
-      !assessmentProperty ||
-      !("value" in assessmentProperty)
-    )
-      fail("Item batch requires own data properties");
-    const items = snapshotQueries(itemsProperty.value).map((value) => {
+      fail("Item records require a plain object");
+    const property = (key: string) => {
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      if (!descriptor || !("value" in descriptor)) fail("Item records require own data properties");
+      return descriptor.value as unknown;
+    };
+    // Every input is snapshotted before the first await, so later caller mutation cannot change the result.
+    const profile = severityProfileShape.parse(
+      snapshotQueries([property("severityProfile")], {
+        ...coverageBatchLimits,
+        maxRequestDepth: 32,
+      })[0],
+    );
+    const parsed = snapshotQueries(property("items"), {
+      ...coverageBatchLimits,
+      maxRequestDepth: 64,
+    }).map((value) => {
       try {
         return { item: parseItemDescriptor(value) };
       } catch (error) {
         return { invalid: { coverage: "invalid" as const, diagnostics: [errorDiagnostic(error)] } };
       }
     });
-    const references = items.reduce(
-      (count, entry) => count + (entry.item?.materials.length ?? 0),
-      0,
-    );
+    const admission = admitCoverageRead({ read: property("artifact") });
+    const profileRef = await severityProfileRef(profile);
+    const items: { item?: ItemDescriptor; payload?: Uint8Array; invalid?: ItemRecordRefusal }[] =
+      [];
+    for (const entry of parsed) {
+      if (!entry.item) {
+        items.push(entry);
+        continue;
+      }
+      try {
+        items.push({ item: entry.item, payload: await checkIdentity(entry.item) });
+      } catch (error) {
+        items.push({ invalid: { coverage: "invalid", diagnostics: [errorDiagnostic(error)] } });
+      }
+    }
+    const references = items.reduce((n, entry) => n + (entry.item?.materials.length ?? 0), 0);
     bound(
       references <= coverageBatchLimits.maxDescriptorReferences,
       "descriptor references",
       coverageBatchLimits.maxDescriptorReferences,
     );
-    // The existing batch reader bounds one conjunctive query per material, so one
-    // successful observation need not span independent units to cover the item.
-
-    const admitted = await admitCoverageRead({ read: assessmentProperty.value });
+    const admitted = await admission;
     if (admitted.status !== "admitted")
       return {
         status: "complete",
@@ -227,10 +389,17 @@ export async function recordItemBatch(input: {
         ),
       };
     const { report, scanId } = admitted;
+    // One conjunctive query per material, so one observation need not span independent units to cover the item.
     const queries = items.flatMap(
       (entry) =>
-        entry.item?.materials.map(({ path, sha256, byteLength }) => ({
-          descriptors: [{ path, sha256, byteLength }],
+        entry.item?.materials.map((material) => ({
+          descriptors: [
+            {
+              path: capturePath(material),
+              sha256: material.sha256,
+              byteLength: material.byteLength,
+            },
+          ],
         })) ?? [],
     );
     if (!queries.length)
@@ -291,29 +460,20 @@ export async function recordItemBatch(input: {
       }
     }
     const entries = new Map(report.source.capture.entries.map((entry) => [entry.path, entry]));
-    const observations = new Map(
-      report.results.flatMap((result) =>
-        result.observations.map((observation) => [observation.observationId, observation] as const),
-      ),
-    );
     const resultIndex = new Map(report.results.map((result) => [result.detectorId, result]));
     const findingIndex = new Map(
       report.results.map((result) => {
-        const byPath = new Map<string, { finding: Finding; order: number }[]>();
-        let order = 0;
+        const byPath = new Map<string, Finding[]>();
         for (const observation of result.observations)
-          for (const finding of observation.body.findings) {
+          for (const finding of observation.body.findings)
             if (finding.location.state === "present") {
               const bucket = byPath.get(finding.location.value.path) ?? [];
-              bucket.push({ finding, order });
+              bucket.push(finding);
               byPath.set(finding.location.value.path, bucket);
             }
-            order++;
-          }
         return [result.detectorId, byPath];
       }),
     );
-    const digests = new Map<string, string>();
     let at = 0;
     let responseBytes = canonicalBytes({ status: "complete", results: [] }).byteLength;
     const results: ItemRecordResult[] = [];
@@ -334,120 +494,130 @@ export async function recordItemBatch(input: {
       const item = entry.item!;
       const rows = covered.results.slice(at, at + item.materials.length);
       at += item.materials.length;
-      const materials = item.materials.map((material) => {
-        const captured = entries.get(material.path);
-        const file =
-          captured?.kind === "file" || captured?.kind === "file-link" ? captured : undefined;
-        return {
-          ...material,
-          captured: file !== undefined,
-          digestMatch: file?.sha256 === material.sha256,
-          lengthMatch: file?.byteLength === material.byteLength,
-          executableComparison: comparison(material.executable, file?.executable ?? "unknown"),
-        };
+      const states = item.materials.map((material) => {
+        const found = entries.get(capturePath(material));
+        const file = found?.kind === "file" || found?.kind === "file-link" ? found : undefined;
+        const captured = file?.executable ?? "unknown";
+        const state: MaterialState = !file
+          ? "material-missing"
+          : file.sha256 !== material.sha256 || file.byteLength !== material.byteLength
+            ? "bytes-differ"
+            : captured === "unknown"
+              ? "executable-unknown"
+              : material.executable === "unknown" || captured === material.executable
+                ? "match"
+                : "executable-differs";
+        return { id: material.materialId, material, captured, state };
       });
+      const behaviour = states.find((s) => s.material.role === "behaviour")!;
+      // The behaviour file's bytes embed the payload's canonical JSON (checked above), so the payload is captured and
+      // scanned exactly when the behaviour file is.
+      const payloadState = { id: payloadMaterialId, state: behaviour.state };
+      const allStates = [...states, payloadState];
+      const coverage: Coverage = allStates.some((s) =>
+        ["material-missing", "bytes-differ", "executable-differs"].includes(s.state),
+      )
+        ? "mismatched"
+        : allStates.some((s) => s.state === "executable-unknown")
+          ? "unavailable"
+          : "matched";
+      const materials: ItemRecord["materials"] = [
+        ...states.map(({ material, captured, state }) => ({
+          materialId: material.materialId,
+          relPath: material.relPath,
+          sha256: material.sha256,
+          byteLength: material.byteLength,
+          // The bit the capture holds; else the declared bit; false when neither knows one (coverage then says so).
+          executable:
+            typeof captured === "boolean"
+              ? captured
+              : typeof material.executable === "boolean"
+                ? material.executable
+                : false,
+          captured: state !== "material-missing" && state !== "bytes-differ",
+        })),
+        {
+          materialId: payloadMaterialId,
+          relPath: payloadMaterialId,
+          sha256: await sha256(entry.payload!),
+          byteLength: entry.payload!.length,
+          executable: false,
+          captured: behaviour.state !== "material-missing" && behaviour.state !== "bytes-differ",
+        },
+      ];
       const detectors: ItemRecord["detectors"] = [];
       const keyDetectors = [];
       for (const requested of report.requestedDetectors) {
         const result = resultIndex.get(requested.detectorId)!;
-        const indexes = new Set(
-          rows.flatMap((row, index) =>
-            materials[index]!.executableComparison !== "differs" && row.status === "matched"
-              ? [...row.observationIndexes].filter(
-                  (index) =>
-                    covered.observations[index]!.detector.detectorId === requested.detectorId,
-                )
-              : [],
+        const identity: ObservationInput | undefined = result.observations[0]?.body.input;
+        const coveredBy = (index: number) =>
+          rows[index]!.status === "matched" &&
+          (
+            rows[index] as Extract<ContentCoverageBatchRow, { status: "matched" }>
+          ).observationIndexes.some(
+            (i) => covered.observations[i]!.detector.detectorId === requested.detectorId,
+          );
+        let detectorCoverage: Coverage, reasons: string[];
+        if (result.outcome !== "succeeded") {
+          detectorCoverage = "unavailable";
+          reasons = [`detector-${result.outcome}`];
+        } else if (coverage !== "matched") {
+          detectorCoverage = coverage;
+          reasons = exclusions(allStates);
+        } else {
+          const uncovered = states.flatMap((s, index) => (coveredBy(index) ? [] : [s.id]));
+          if (uncovered.includes(behaviour.id)) uncovered.push(payloadMaterialId);
+          detectorCoverage = uncovered.length ? "unavailable" : "matched";
+          reasons = uncovered.length ? [exclusionText("not-covered", uncovered)] : [];
+        }
+        const attributed = item.materials.flatMap((material) =>
+          (findingIndex.get(requested.detectorId)?.get(capturePath(material)) ?? []).filter(
+            (finding) =>
+              finding.location.state === "present" &&
+              finding.location.value.fileSha256 === material.sha256,
           ),
         );
-        const covering = [...indexes].map(
-          (index) => observations.get(covered.observations[index]!.observationId)!,
-        );
-        const modesMatch = materials.map((m) => m.executableComparison !== "differs");
-        const count = rows.filter(
-          (row, index) =>
-            modesMatch[index] &&
-            row.status === "matched" &&
-            row.observationIndexes.some(
-              (i) => covered.observations[i]!.detector.detectorId === requested.detectorId,
-            ),
-        ).length;
-        const inputSha256s = [];
-        for (const observation of covering) {
-          let digest = digests.get(observation.observationId);
-          if (!digest) {
-            digest = await sha256(canonicalBytes(observation.body.input));
-            digests.set(observation.observationId, digest);
-          }
-          inputSha256s.push(digest);
-        }
-        inputSha256s.sort();
-        const identity: ObservationInput | undefined = result.observations[0]?.body.input;
         detectors.push({
-          detectorId: requested.detectorId,
+          id: requested.detectorId,
+          version: identity?.detectorVersion ?? "unavailable",
           outcome: result.outcome,
-          requestedProfileId: requested.profileId,
-          effectiveProfileId: identity?.profileId ?? null,
-          itemCoverage:
-            count === item.materials.length ? "covered" : count ? "partial" : "uncovered",
-          findings: item.materials
-            .flatMap((material) =>
-              (findingIndex.get(requested.detectorId)?.get(material.path) ?? []).filter(
-                ({ finding }) =>
-                  finding.location.state === "present" &&
-                  finding.location.value.fileSha256 === material.sha256,
-              ),
-            )
-            .sort((a, b) => a.order - b.order)
-            .map(({ finding }) => finding),
-          inputSha256s,
+          coverage: detectorCoverage,
+          exclusions: reasons,
+          ...classifyFindings(requested.detectorId, attributed, profile),
         });
         keyDetectors.push({
-          detectorId: requested.detectorId,
-          detectorVersion: identity?.detectorVersion ?? null,
-          adapterSha256: identity?.adapterSha256 ?? null,
+          id: requested.detectorId,
+          version: identity?.detectorVersion ?? "unavailable",
           rulesSha256: identity?.rulesSha256 ?? null,
-          configurationSha256: identity?.configurationSha256 ?? null,
-          profileId: identity?.profileId ?? null,
           profileSha256: identity?.profileSha256 ?? null,
-          platform: identity?.platform ?? null,
-          inputSha256s,
         });
       }
-      keyDetectors.sort((a, b) =>
-        a.detectorId < b.detectorId ? -1 : a.detectorId > b.detectorId ? 1 : 0,
-      );
-      const subject = subjectOf(item);
-      const evidenceKey = await sha256(
-        canonicalBytes({
-          subject,
-          materials: item.materials.map(({ path, sha256, byteLength, executable }) => ({
-            path,
-            sha256,
-            byteLength,
-            executable,
-          })),
-          detectors: keyDetectors,
-        }),
-      );
-      const record: ItemRecord = {
-        schema: itemRecordSchema,
+      const byId = (a: { id: string }, b: { id: string }) =>
+        a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      keyDetectors.sort(byId);
+      retain({
         scanId,
         createdAt: report.createdAt,
-        subject,
-        materials,
-        coverage: materials.every(
-          (m) =>
-            m.captured && m.digestMatch && m.lengthMatch && m.executableComparison !== "differs",
-        )
-          ? "matched"
-          : "mismatched",
-        detectors,
-        completion: report.completion,
-        evidenceKey,
+        evidenceKey: await sha256(
+          canonicalBytes({
+            contentSha256: item.contentSha256,
+            behaviourSha256: item.behaviourSha256,
+            detectors: keyDetectors,
+          }),
+        ),
+        subject: {
+          frameworkId: item.frameworkId,
+          itemId: item.itemId,
+          contentSha256: item.contentSha256,
+          behaviourSha256: item.behaviourSha256,
+        },
         authenticity: "unchecked",
-      };
-      retain(record);
+        materials,
+        completion: report.completion,
+        coverage,
+        severityProfile: profileRef,
+        detectors,
+      });
     }
     return { status: "complete", results };
   } catch (error) {
@@ -455,32 +625,97 @@ export async function recordItemBatch(input: {
   }
 }
 
-/** Stored records are caches. Re-derive every field before comparing. */
-export async function verifyItemRecord(
-  record: ItemRecord,
-  assessment: ItemAssessment,
-  item: ItemDescriptor,
-): Promise<"same" | "differs" | "not-covered"> {
-  let snapshot: ItemRecord | undefined;
+const jsonPath = (path: readonly PropertyKey[]) =>
+  path.reduce<string>(
+    (text, key) =>
+      typeof key === "number"
+        ? `${text}[${key}]`
+        : /^[A-Za-z_$][\w$]*$/.test(String(key))
+          ? `${text}.${String(key)}`
+          : `${text}[${JSON.stringify(String(key))}]`,
+    "$",
+  );
+/**
+ * Reads a stored item record. A record may name its schema; any other schema is `SCHEMA_UNSUPPORTED`, and a field the
+ * contract does not define is refused at its JSON path.
+ */
+export function readItemRecord(
+  value: unknown,
+): { status: "read"; record: ItemRecord } | { status: "refused"; diagnostics: Diagnostic[] } {
   try {
-    snapshot = snapshotQueries([record], {
+    const [copy] = snapshotQueries([value], {
       ...coverageBatchLimits,
       maxRequestBytes: coverageBatchLimits.maxResponseBytes,
       maxRequestNodes: coverageBatchLimits.maxResponseBytes,
-    })[0] as ItemRecord;
-  } catch {
-    // A malformed cache is refused after resolving capture's not-covered precedence.
-    snapshot = undefined;
+    });
+    if (copy && typeof copy === "object" && !Array.isArray(copy) && "schema" in copy) {
+      const { schema, ...rest } = copy as Record<string, unknown>;
+      if (schema !== itemRecordSchema)
+        return {
+          status: "refused",
+          diagnostics: [
+            {
+              code: "SCHEMA_UNSUPPORTED",
+              path: "$.schema",
+              encountered: typeof schema === "string" ? schema.slice(0, 256) : typeof schema,
+              supported: [itemRecordSchema],
+              detail: "Unsupported item record schema at $.schema",
+            },
+          ],
+        };
+      return readItemRecord(rest);
+    }
+    const parsed = itemRecordShape.safeParse(copy);
+    if (parsed.success) return { status: "read", record: parsed.data as ItemRecord };
+    const unknown = parsed.error.issues.find((issue) => issue.code === "unrecognized_keys");
+    if (unknown && unknown.code === "unrecognized_keys") {
+      const path = jsonPath([...unknown.path, unknown.keys[0]!]);
+      return {
+        status: "refused",
+        diagnostics: [{ code: "unknown-field", path, detail: `Unknown field at ${path}` }],
+      };
+    }
+    const path = jsonPath(parsed.error.issues[0]!.path);
+    return {
+      status: "refused",
+      diagnostics: [{ code: "invalid-record", path, detail: `Invalid item record at ${path}` }],
+    };
+  } catch (error) {
+    return { status: "refused", diagnostics: [errorDiagnostic(error)] };
   }
-  const derived = await recordItem(assessment, item);
+}
+
+/**
+ * Checks a stored record against the artifact it names and the item's own materials, re-deriving every field. A
+ * record of other bytes, a relabelled subject or a different `behaviourSha256` is `not-covered`; a record whose bytes
+ * match but whose other fields do not is `differs`.
+ */
+export async function verifyItemRecord(
+  record: unknown,
+  artifact: ItemAssessment,
+  item: ItemDescriptor,
+  severityProfile: SeverityProfile,
+): Promise<ItemRecordVerification> {
+  // Snapshot every input before the first await; a malformed cache never runs accessors.
+  const read = readItemRecord(record);
+  const snapshot = read.status === "read" ? read.record : undefined;
+  const batch = await recordItems({ artifact, items: [item], severityProfile });
+  if (batch.status === "invalid") return "differs";
+  const derived = batch.results[0]!;
   if (!("subject" in derived))
     return derived.coverage === "unavailable" ? "not-covered" : "differs";
-  if (derived.materials.some((m) => !m.captured || !m.digestMatch || !m.lengthMatch))
-    return "not-covered";
+  if (derived.materials.some((m) => !m.captured)) return "not-covered";
   if (!snapshot) return "differs";
   try {
     if (!equalBytes(canonicalBytes(snapshot.subject), canonicalBytes(derived.subject)))
       return "not-covered";
+    const bytesOf = (materials: ItemRecord["materials"]) =>
+      canonicalBytes(
+        materials
+          .map(({ materialId, sha256, byteLength }) => ({ materialId, sha256, byteLength }))
+          .sort((a, b) => (a.materialId < b.materialId ? -1 : a.materialId > b.materialId ? 1 : 0)),
+      );
+    if (!equalBytes(bytesOf(snapshot.materials), bytesOf(derived.materials))) return "not-covered";
     return equalBytes(canonicalBytes(snapshot), canonicalBytes(derived)) ? "same" : "differs";
   } catch {
     return "differs";

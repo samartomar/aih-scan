@@ -2,28 +2,38 @@
   "contractId": "urn:aihq:scan:evidence-policy:1.0.0",
   "contractVersion": "1.0.0",
   "provenance": {
-    "note": "Controlled decision-table specimens over the published real Catalog/stress-bundle item-record fixtures. No native execution or authenticity claim.",
     "sourceContract": "urn:aihq:scan:item-record:1.0.0",
     "sourceItems": [
       {
-        "name": "grill-me",
-        "frameworkId": "matt-skills",
+        "name": "extensions.matt.grill-me",
+        "frameworkId": "extensions",
         "itemId": "extensions.matt.grill-me",
-        "contentSha256": "6ee0029f38d824134da468094a79737a77e70ee89bda963bbf07eed446c5b02c"
+        "contentSha256": "6ee0029f38d824134da468094a79737a77e70ee89bda963bbf07eed446c5b02c",
+        "behaviourSha256": "804f0eb755247b213511969b256b4da003847afad99a75f782f4557cc0b62533"
       },
       {
-        "name": "hook-git-guard",
+        "name": "extensions.hook.git-guard",
         "frameworkId": "extensions",
         "itemId": "extensions.hook.git-guard",
-        "contentSha256": "1c2bdab914b3c12868832c98540fde73519f953617d65c868256cd1032033630"
+        "contentSha256": "842b7572f2f4c92d51445d79d6d368df7f851207e6e73893d0dac80feb09bedf",
+        "behaviourSha256": "0f6b8364b0b8a1ae562649c410f7b5dd0ec11f968f076a475c28764414b0600e"
       },
       {
-        "name": "mcp-github",
+        "name": "ecc.mcp.clickhouse",
         "frameworkId": "ecc",
-        "itemId": "ecc.claude.mcp.github",
-        "contentSha256": "ee0aa33d6fc4fbb4bfd666879f92f4ae4a9744976a242045ba889a246ea9e13d"
+        "itemId": "ecc.mcp.clickhouse",
+        "contentSha256": "1ead8c2cdd5edfcc644fe9cf967e129b982dd4f6e3516cec2d6b0686f014c581",
+        "behaviourSha256": "f09f00869dd9f189caddf49c4769535cf531e5175dd4a8e4377b4a18357acb8c"
+      },
+      {
+        "name": "ecc.mcp.cloudflare-docs",
+        "frameworkId": "ecc",
+        "itemId": "ecc.mcp.cloudflare-docs",
+        "contentSha256": "1ead8c2cdd5edfcc644fe9cf967e129b982dd4f6e3516cec2d6b0686f014c581",
+        "behaviourSha256": "887c543121743f6796f2014de79525d5886684bef77e3680fd2a370b08605db1"
       }
-    ]
+    ],
+    "note": "Decision-table specimens over the published real Catalog item-record fixtures. Each candidate carries its stored record, the report document it names and a host authentication result. No native execution or authenticity claim."
   },
   "cases": [
     {
@@ -34,12 +44,13 @@
         "schema": "urn:aihq:scan:evidence-policy:1.0.0",
         "id": "organization",
         "version": "1",
-        "requiredDetectors": [],
+        "requiredDetectors": [
+          "detector.aih-native"
+        ],
         "severityProfile": {
-          "id": "organization",
-          "sha256": "dbd081e4f99c5590330cf1d8327325e4d0c12736fb76ea1e0b5c92359a6a1829"
-        },
-        "suppressions": []
+          "id": "aih-default",
+          "sha256": "adf0ea5828b39435474c6872e320f2980b9077c6eb330d7b6d3669fef9c94dd2"
+        }
       }
     },
     {
@@ -52,11 +63,9 @@
         "version": "1",
         "requiredDetectors": [],
         "severityProfile": {
-          "id": "organization",
-          "sha256": "dbd081e4f99c5590330cf1d8327325e4d0c12736fb76ea1e0b5c92359a6a1829"
-        },
-        "suppressions": [],
-        "signers": []
+          "id": "aih-default",
+          "sha256": "adf0ea5828b39435474c6872e320f2980b9077c6eb330d7b6d3669fef9c94dd2"
+        }
       }
     }
   ]

@@ -292,16 +292,23 @@ export type {
   ItemMaterial,
   ItemRecord,
   ItemRecordBatchResult,
+  ItemRecordRefusal,
   ItemRecordResult,
+  ItemRecordVerification,
   ItemSubject,
 } from "../assessment/item-record.js";
 
 export type {
+  CandidateDiagnostic,
   EvidencePolicy,
   ItemAuthentication,
+  ItemRecordCandidate,
   ItemSummary,
   ItemTrustStatus,
-  SeverityProfile,
+  PickReason,
+  PickRecordInput,
+  PickRecordResult,
   SummariseItemInput,
   SummariseItemResult,
 } from "../assessment/item-summary.js";
+export type { SeverityProfile } from "../assessment/severity-profile.js";

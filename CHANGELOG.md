@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Make item records, record choice and card summaries follow the finalized
+  contracts. The changed contracts (`item-record`, `item-summary`,
+  `evidence-policy` and `severity-profile`, all 1.0.0) have not been released yet.
+  - Rename `recordItem` and `recordItemBatch` to `recordItems({ artifact, items,
+    severityProfile })`.
+  - The record has the contract's exact shape. It includes `materialId`, a
+    `#payload` pseudo-material for the payload's canonical JSON, recorded
+    executable bits, a per-detector `coverage` with `exclusions`, severity
+    counts and recorded suppressions.
+  - The `severityProfile` field names `<id>@sha256:<digest>`. The `evidenceKey`
+    is computed over the contract's preimage.
+  - Item descriptors carry their behaviour fields. Scan recomputes
+    `contentSha256`, `behaviourSha256` and the behaviour file in the contract's
+    canonical-JSON encoding, and refuses any difference.
+  - A capture without executable bits is never `matched`. A `matched` record
+    holds the exact bits the capture holds.
+  - `verifyItemRecord(record, artifact, item, severityProfile)` compares all
+    three. `readItemRecord` refuses an unknown record schema as
+    `SCHEMA_UNSUPPORTED` and an unknown field at its JSON path.
+  - The new `pickRecord` ranks only records that pass verification: by coverage,
+    authentication, required detectors, policy profile and completion before
+    time.
+  - `summariseItem` now reads stored records and follows the contract's 13-row
+    decision table, with its closed `why` list. Its summary has the contract's
+    exact shape.
+  - Severity profiles carry the suppressions. Evidence policies require at least
+    one detector by ID.
+  - Format refusals use the code `SCHEMA_UNSUPPORTED`.
+
 - Add an explicit maintained producer input for immutable frozen Catalog captures,
   binding the inventory and all declared recipe/material bytes in their original
   relative namespace. The maintainer tooling reuses the four-detector Linux profile,

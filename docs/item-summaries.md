@@ -1,139 +1,129 @@
-# Item summaries and consumer evidence policy
+# Item summaries, record choice and evidence policy
 
-`summariseItem` from `@aihq/scan/read` presents one item state using the table
-below. It delegates ranking to `selectAssessments`: the newest readable matching
-assessment wins, including a newer partial assessment. Earlier evidence,
-acquisitions, authentication, gaps, checks and failures remain in `selection`.
+`pickRecord` and `summariseItem` from `@aihq/scan/read` read an item's stored
+[item records](item-records.md), from Catalog `scan[]` or from supplements.
+Each record is passed with the artifact it names and the host's authentication
+of that artifact. Every reader applies the decision table below unchanged.
 
 ```ts
 const result = await summariseItem({
-  assessmentsInput: {
-    assessments, // existing EvidenceCandidate[]: exact report/artifact bytes
-    context: { sourceIds, selection }, // optional git and providers filters
-    checks,
-  },
-  item, // the exact ItemDescriptor, including its behaviour material
-  evidencePolicy,
-  severityProfile,
-  authentication, // host result for the selected assessment
+  records: [{ record, artifact, authentication }], // artifact: readArtifact/readReport result
+  item,                 // the item descriptor, as for recordItems
+  policy,               // urn:aihq:scan:evidence-policy:1.0.0
+  severityProfiles,     // the profile documents records may name; the policy's must be one
   trustStatus: "available",
-  evaluationTime: "2026-10-26T00:00:00.000Z",
+  evaluationTime: "2026-10-30T00:00:00.000Z",
 });
 if (result.status === "summarised") {
-  const { summary, selection } = result;
+  const { summary, picked, diagnostics } = result;
   // summary is the closed urn:aihq:scan:item-summary:1.0.0 document.
-  // selection is the full, unchanged selector result, or null with no sources.
+  // picked is { index, scanId, why } or null; diagnostics say why each other record did not count.
 }
 ```
 
-`assessmentsInput` uses the existing selector's `assessments`, `checks` and optional
-`detectorIds`. Its `context` omits `descriptors`, which Scan projects from the
-item's materials to `{ path, sha256, byteLength }`. `evaluationTime` is supplied
-once, at the top level. Source, scope and provider filters retain their existing
-selector meaning. Policy detector requirements do not filter out newer evidence.
-Malformed inputs return `{ status: "invalid", diagnostics }`; selector invalid
-results propagate. No configured sources gives row 1 without calling selection.
+`authentication` is the `AssociationResult` from `authenticateArtifact`, or
+`{ status: "revoked" }`:
 
-The host supplies the selected assessment's `AssociationResult` from
-`authenticateArtifact`, or `{ status: "revoked" }`. The existing statuses are
-`authenticated`, `skipped` and `unverifiable`; the last two become `unchecked` and
-`not-authenticated`. A supplied authentication `scanId` must name the selected
-assessment. Scan does not authenticate inside this operation.
+| `status` | Summary reason |
+| --- | --- |
+| `authenticated` | none |
+| `skipped` | `unchecked` |
+| `unverifiable` | `not-authenticated` |
+| `revoked` | `revoked` |
 
-`trustStatus` is `available | unavailable | expired | revoked`. It describes the
-host's selected current trust data. Both unavailable and expired data give
-`offline`. Revocation can be reported separately from an `authenticated` historical
-result: it changes the summary without changing or deleting authentic bytes. Trust
-acquisition and any TUF client remain host responsibilities.
+A supplied authentication `scanId` must name the record's artifact.
+
+`trustStatus` is the host's trust-metadata state. `unavailable` and `expired`
+give `offline`. `revoked` withholds `verified` from authentic historical bytes,
+but does not change their authentication.
+
+Malformed inputs return `{ status: "invalid", diagnostics }`. If the policy's
+severity profile is not among the supplied profiles, the result is
+`severity-profile-mismatch`.
+
+## Summary
+
+```ts
+{
+  state: "verified" | "not-verified" | "partial" | "not-covered" | "not-scanned" | "unreadable",
+  why?: "not-authenticated" | "unchecked" | "offline" | "revoked" | "detector-missing"
+      | "profile-not-allowed" | "future-dated" | "older-than-policy",
+  findings: { error, warning, note, unavailable },
+  suppressed: number,
+  scannedAt: string | null
+}
+```
+
+`why` appears only for `not-verified`. `findings` and `suppressed` are the picked
+record's counts, summed over its detectors. Rows 1 to 3 have zero counts and a
+null `scannedAt`. No output uses "safe", "clean", "passed" or "approved";
+`verified` is the only positive state.
 
 ## Decision table
 
-The first applicable row wins. Rows 2–7 apply only without a selected Scan ID;
-rows 8–17 apply to the selected assessment's re-derived and verified item record.
+The first row that applies wins.
 
-| Row | Situation | state | why |
-| --- | --- | --- | --- |
-| 1 | No configured evidence source | `not-scanned` | `no-sources` |
-| 2 | No assessment and no acquisition/read failure | `not-scanned` | `not-found` |
-| 3 | No readable assessment and an acquisition/read failure | `unreadable` | omitted |
-| 4 | Every readable assessment is excluded only as future-dated | `not-verified` | `future-dated` |
-| 5 | No readable assessment captures the item's materials | `not-covered` | `content-mismatch` |
-| 6 | Capturing assessments are excluded by scope, Git source, provider or identity conflict | `not-covered` | `scope-mismatch`, `source-mismatch`, `provider-mismatch`, `identity-conflict`, in that eligibility order |
-| 7 | Any remaining case without selection | `not-scanned` | `not-found` |
-| 8 | Record verification fails or item coverage is not matched | `not-covered` | `content-mismatch` |
-| 9 | Report completion is partial | `partial` | omitted |
-| 10 | A checked detector was not requested, did not succeed, has no effective profile, or did not cover the item | `not-verified` | `detector-missing`, then `detector-not-covering` |
-| 11 | A declared executable material has unknown captured state | `not-verified` | `executable-unknown` |
-| 12 | A checked detector's effective profile is outside its nonempty allowlist | `not-verified` | `profile-not-allowed` |
-| 13 | Host authentication or current trust is revoked | `not-verified` | `revoked` |
-| 14 | Selected trust data is unavailable or expired | `not-verified` | `offline` |
-| 15 | Host authentication was skipped or failed | `not-verified` | `unchecked` or `not-authenticated` |
-| 16 | A configured maxAge is exceeded at evaluationTime | `not-verified` | `older-than-policy` |
-| 17 | None of the above | `verified` | omitted |
+| # | Situation | `state` | `why` |
+|---|---|---|---|
+| 1 | No record for the item | `not-scanned` | — |
+| 2 | Records exist but none can be read | `unreadable` | — |
+| 3 | No record passes `verifyItemRecord` against the item's own materials | `not-covered` | — |
+| 4 | The picked record's coverage is not `matched` | `not-covered` | — |
+| 5 | The picked record's `completion` is `partial` | `partial` | — |
+| 6 | A required detector is absent, did not succeed, or did not cover the item | `not-verified` | `detector-missing` |
+| 7 | The record's severity profile is not the policy's | `not-verified` | `profile-not-allowed` |
+| 8 | Authentication or trust is `revoked` | `not-verified` | `revoked` |
+| 9 | Trust metadata is unavailable or expired | `not-verified` | `offline` |
+| 10 | Authentication was skipped or refused | `not-verified` | `unchecked` / `not-authenticated` |
+| 11 | `scannedAt` is later than `evaluationTime` | `not-verified` | `future-dated` |
+| 12 | Older than the policy's `maxAge` | `not-verified` | `older-than-policy` |
+| 13 | None of the above | `verified` | — |
 
-Row 2's absence of failure is established before row 3. Failed/offline source
-checks count as acquisition failures when no readable assessment exists. Missing
-or invalid report `createdAt` is a read failure. The selector's freshness is
-preserved exactly (`checked` or `last-known`); it is `null` only for no sources.
-`scanId` and `scannedAt` identify the selected report, or are `null` without one.
-Verified describes the evidence under the consumer's rules; findings remain visible.
+A record cannot be read (row 2) when any of these holds:
 
-## Policy, severity and suppression
+- its schema or a field is refused (`SCHEMA_UNSUPPORTED`, `unknown-field`,
+  `invalid-record`);
+- its artifact is not a `read` result, or is not the one the record names
+  (`artifact-mismatch`);
+- its severity profile was not supplied (`severity-profile-unavailable`).
 
-The closed `urn:aihq:scan:evidence-policy:1.0.0` document contains:
+Other records that do not pass `verifyItemRecord` are `record-not-covering` or
+`record-differs`. Each of these diagnostics carries the record's `index`.
 
-```ts
-{ schema, id, version,
-  requiredDetectors: { detectorId, allowedProfileIds: string[] }[],
-  severityProfile: { id, sha256 },
-  suppressions: { detectorId, nativeRuleId, path?: string, reason: string }[],
-  maxAge?: string }
-```
+## Picking one record
 
-Required detector IDs are unique. When the list is empty, every requested detector
-is checked. Empty profile allowlists allow any effective profile; nonempty lists
-are enforced. An absent observation input never supplies an effective profile.
-Signer identities stay in the host's selected keys and publishers.
+`pickRecord({ records, item, policy, severityProfiles })` ranks only records
+that pass `verifyItemRecord`. Earlier keys decide first:
 
-The closed `urn:aihq:scan:severity-profile:1.0.0` is:
+1. matched coverage;
+2. authentication: authenticated, then skipped or refused, then revoked;
+3. every required detector succeeded and covered the item;
+4. the policy's severity profile;
+5. complete before partial;
+6. the newest `createdAt`;
+7. the Scan ID, as a final tie-break.
+
+The result is the record's `index` and `why`: the key that separated it from the
+runner-up, or `only-record`. Time decides only after every other key.
+
+## Evidence policy and severity profile
 
 ```ts
-{ schema, id, version,
-  rules: { detectorId: string | "*", level: string,
-           maps: "error" | "warning" | "note" | "unavailable" }[] }
+{ schema: "urn:aihq:scan:evidence-policy:1.0.0", id, version,
+  requiredDetectors: string[],            // at least one, unique
+  severityProfile: { id, sha256 },        // SHA-256 of the profile's canonical JSON
+  maxAge?: "P30D" }                       // ISO 8601 duration
+{ schema: "urn:aihq:scan:severity-profile:1.0.0", id, version,
+  rules: { detectorId | "*", level, maps: "error" | "warning" | "note" | "unavailable" }[],
+  suppressions: { detectorId, nativeRuleId, path?, reason }[] }
 ```
 
-The first detector/level match wins, including a wildcard before a more specific
-rule. An unmatched or unavailable level counts as `unavailable`. The profile ID
-and SHA-256 of its canonical JSON bytes must match the policy; otherwise the
-result is invalid with `severity-profile-mismatch`. Canonical JSON sorts object
-keys recursively, retains array order and has no whitespace, matching the report
-contract's canonical JSON rules.
+A record names the profile it was recorded with as `<id>@sha256:<digest>`. The
+profile's suppressions are applied when the record is derived and are recorded
+with their reasons. In `maxAge`, calendar components use UTC and clamp to the
+end of a month; weeks and smaller units are elapsed time.
 
-Counts use occurrence multiplicity, not the number of finding records. Only
-findings attributed by the item record to the item's exact paths and digests
-contribute. Suppressions match detector, native rule and optional exact path.
-The first matching suppression supplies the reason. Occurrences move from the
-severity counts into `suppressed.count` and grouped `{ detectorId, nativeRuleId,
-reason, count }` reasons. Original records, severities, evidence and policy remain
-unchanged. Counts outside JavaScript's safe integer range are refused rather than
-rounded; classification work is bounded.
-
-An absent `maxAge` never gates age. Supported ISO 8601 duration components are
-integer years, months, weeks, days, hours and minutes, and seconds with an optional
-decimal fraction, for example `P30D`, `PT1H` or `P1M`. Calendar components use UTC
-and clamp end-of-month days; weeks and smaller components use elapsed time. An
-assessment exactly at the age boundary is within the policy. Negative, malformed
-or unrepresentable durations are invalid. Evaluation time never comes from a
-clock inside the summary.
-
-## Schemas and fixtures
-
-The three contracts publish schemas at `@aihq/scan/schemas/<name>/1.0.0.json` and
-golden fixtures at the adjacent `1.0.0.fixtures.json` exports. Package support
-retains its closed 1.0.0 declaration. Each decision-table fixture carries its row,
-input and independently specified expected summary; candidate `document` values
-are canonically encoded into `bytes` before calling the public API. These are
-controlled specimens over real item-record fixture data, with no native execution
-or production authentication claim. The installed consumer replays the same
-matrix in a realm without Node globals or built-ins.
+Fixtures for the summary, policy and profile are exported beside their schemas
+under `@aihq/scan/schemas/`. The summary fixtures cover every row and the ranking
+variants. Each expected value is written from this table, not produced by
+`summariseItem`.

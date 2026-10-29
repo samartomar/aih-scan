@@ -231,7 +231,7 @@ describe("local independent organization authentication", () => {
       reportSchema: "urn:example:report:2.0.0",
       diagnostics: [
         {
-          code: "unsupported-format",
+          code: "SCHEMA_UNSUPPORTED",
           path: "$.schema",
           encountered: "urn:example:report:2.0.0",
           supported: ["urn:aihq:scan:report:1.0.0", "urn:aihq:scan:report:2.0.0"],

@@ -19,33 +19,14 @@
       "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
     },
     "requiredDetectors": {
-      "maxItems": 10000,
+      "minItems": 1,
+      "maxItems": 256,
       "type": "array",
       "items": {
-        "type": "object",
-        "properties": {
-          "detectorId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-          },
-          "allowedProfileIds": {
-            "maxItems": 10000,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256,
-              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-            }
-          }
-        },
-        "required": [
-          "detectorId",
-          "allowedProfileIds"
-        ],
-        "additionalProperties": false
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
       }
     },
     "severityProfile": {
@@ -68,45 +49,6 @@
       ],
       "additionalProperties": false
     },
-    "suppressions": {
-      "maxItems": 10000,
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "detectorId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-          },
-          "nativeRuleId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-          },
-          "path": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 4096,
-            "pattern": "^(?!\\/)(?!.*(?:^|\\/)\\.{1,2}(?:\\/|$))(?!.*\\/\\/)[^\\\\%?#:\\u0000-\\u001f\\u007f]+(?<!\\/)$"
-          },
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-          }
-        },
-        "required": [
-          "detectorId",
-          "nativeRuleId",
-          "reason"
-        ],
-        "additionalProperties": false
-      }
-    },
     "maxAge": {
       "type": "string",
       "maxLength": 256,
@@ -118,8 +60,7 @@
     "id",
     "version",
     "requiredDetectors",
-    "severityProfile",
-    "suppressions"
+    "severityProfile"
   ],
   "additionalProperties": false,
   "$id": "urn:aihq:scan:evidence-policy:1.0.0"
