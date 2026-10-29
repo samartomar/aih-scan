@@ -1,0 +1,178 @@
+{
+  "description": "Catalog release 1.7.0 item identities, computed from the contract text (contracts v3.2.1, Catalog: \"The two hashes, exactly\") by an implementation independent of Core and Catalog. contentSha256: SHA-256 of one relPath TAB sha256 LF line per content material, sorted bytewise. behaviourSha256: SHA-256 of the canonical JSON (keys sorted, no whitespace) of { kind, payload, requirements, dependencies, materials: <the contentSha256 lines>, executable }.",
+  "cases": [
+    {
+      "name": "base",
+      "input": {
+        "kind": "hook",
+        "payload": {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "protocol": "claude-code-hooks",
+          "command": {
+            "interpreter": "node",
+            "script": "m0"
+          }
+        },
+        "requirements": {
+          "inputs": {}
+        },
+        "dependencies": {
+          "requires": [],
+          "optional": [],
+          "conflicts": []
+        },
+        "materials": [
+          {
+            "relPath": "hooks/guard.mjs",
+            "sha256": "d0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6"
+          },
+          {
+            "relPath": "LICENSE",
+            "sha256": "adc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2"
+          }
+        ],
+        "executable": {
+          "hooks/guard.mjs": false,
+          "LICENSE": false
+        }
+      },
+      "expect": {
+        "contentSha256": "84b72ec7c9f855d78a4c12805d701d4ca959ae12af748c839971745580949a48",
+        "behaviourSha256": "513beb09d8c8bfa3b96d5de456f10abad43c72c44b112e7c669a4f40c121fa2d"
+      },
+      "canonical": "{\"dependencies\":{\"conflicts\":[],\"optional\":[],\"requires\":[]},\"executable\":{\"LICENSE\":false,\"hooks/guard.mjs\":false},\"kind\":\"hook\",\"materials\":\"LICENSE\\tadc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2\\nhooks/guard.mjs\\td0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6\\n\",\"payload\":{\"command\":{\"interpreter\":\"node\",\"script\":\"m0\"},\"event\":\"PreToolUse\",\"matcher\":\"Bash\",\"protocol\":\"claude-code-hooks\"},\"requirements\":{\"inputs\":{}}}"
+    },
+    {
+      "name": "payload-only",
+      "input": {
+        "kind": "hook",
+        "payload": {
+          "event": "PreToolUse",
+          "matcher": "Bash|PowerShell",
+          "protocol": "claude-code-hooks",
+          "command": {
+            "interpreter": "node",
+            "script": "m0"
+          }
+        },
+        "requirements": {
+          "inputs": {}
+        },
+        "dependencies": {
+          "requires": [],
+          "optional": [],
+          "conflicts": []
+        },
+        "materials": [
+          {
+            "relPath": "hooks/guard.mjs",
+            "sha256": "d0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6"
+          },
+          {
+            "relPath": "LICENSE",
+            "sha256": "adc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2"
+          }
+        ],
+        "executable": {
+          "hooks/guard.mjs": false,
+          "LICENSE": false
+        }
+      },
+      "expect": {
+        "contentSha256": "84b72ec7c9f855d78a4c12805d701d4ca959ae12af748c839971745580949a48",
+        "behaviourSha256": "0c06a16372e63d934911132ccb7fd70a0ea4472200e67f0f86eaef4ae1dc7989"
+      },
+      "canonical": "{\"dependencies\":{\"conflicts\":[],\"optional\":[],\"requires\":[]},\"executable\":{\"LICENSE\":false,\"hooks/guard.mjs\":false},\"kind\":\"hook\",\"materials\":\"LICENSE\\tadc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2\\nhooks/guard.mjs\\td0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6\\n\",\"payload\":{\"command\":{\"interpreter\":\"node\",\"script\":\"m0\"},\"event\":\"PreToolUse\",\"matcher\":\"Bash|PowerShell\",\"protocol\":\"claude-code-hooks\"},\"requirements\":{\"inputs\":{}}}"
+    },
+    {
+      "name": "dependency-only",
+      "input": {
+        "kind": "hook",
+        "payload": {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "protocol": "claude-code-hooks",
+          "command": {
+            "interpreter": "node",
+            "script": "m0"
+          }
+        },
+        "requirements": {
+          "inputs": {}
+        },
+        "dependencies": {
+          "requires": [
+            {
+              "framework": "example-framework",
+              "itemId": "notices"
+            }
+          ],
+          "optional": [],
+          "conflicts": []
+        },
+        "materials": [
+          {
+            "relPath": "hooks/guard.mjs",
+            "sha256": "d0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6"
+          },
+          {
+            "relPath": "LICENSE",
+            "sha256": "adc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2"
+          }
+        ],
+        "executable": {
+          "hooks/guard.mjs": false,
+          "LICENSE": false
+        }
+      },
+      "expect": {
+        "contentSha256": "84b72ec7c9f855d78a4c12805d701d4ca959ae12af748c839971745580949a48",
+        "behaviourSha256": "27a9cbfdff4ee9cca5651a81267f3edc7a505defa16e1cb59b3e4be6d92f29da"
+      },
+      "canonical": "{\"dependencies\":{\"conflicts\":[],\"optional\":[],\"requires\":[{\"framework\":\"example-framework\",\"itemId\":\"notices\"}]},\"executable\":{\"LICENSE\":false,\"hooks/guard.mjs\":false},\"kind\":\"hook\",\"materials\":\"LICENSE\\tadc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2\\nhooks/guard.mjs\\td0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6\\n\",\"payload\":{\"command\":{\"interpreter\":\"node\",\"script\":\"m0\"},\"event\":\"PreToolUse\",\"matcher\":\"Bash\",\"protocol\":\"claude-code-hooks\"},\"requirements\":{\"inputs\":{}}}"
+    },
+    {
+      "name": "executable-bit",
+      "input": {
+        "kind": "hook",
+        "payload": {
+          "event": "PreToolUse",
+          "matcher": "Bash",
+          "protocol": "claude-code-hooks",
+          "command": {
+            "interpreter": "node",
+            "script": "m0"
+          }
+        },
+        "requirements": {
+          "inputs": {}
+        },
+        "dependencies": {
+          "requires": [],
+          "optional": [],
+          "conflicts": []
+        },
+        "materials": [
+          {
+            "relPath": "hooks/guard.mjs",
+            "sha256": "d0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6"
+          },
+          {
+            "relPath": "LICENSE",
+            "sha256": "adc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2"
+          }
+        ],
+        "executable": {
+          "hooks/guard.mjs": true,
+          "LICENSE": false
+        }
+      },
+      "expect": {
+        "contentSha256": "84b72ec7c9f855d78a4c12805d701d4ca959ae12af748c839971745580949a48",
+        "behaviourSha256": "201c8a9f9477ee16b6fa3e966c5184fbc135ffc44fe7d81405f81ef497d29d40"
+      },
+      "canonical": "{\"dependencies\":{\"conflicts\":[],\"optional\":[],\"requires\":[]},\"executable\":{\"LICENSE\":false,\"hooks/guard.mjs\":true},\"kind\":\"hook\",\"materials\":\"LICENSE\\tadc37366f403835c1470ab2df93d3837d4719372fc1ef8593d922e06f033f8b2\\nhooks/guard.mjs\\td0e3ce4bea39a0d7b1339dd6ef613fd3b34a1a31daec21a854acf34ac01a29e6\\n\",\"payload\":{\"command\":{\"interpreter\":\"node\",\"script\":\"m0\"},\"event\":\"PreToolUse\",\"matcher\":\"Bash\",\"protocol\":\"claude-code-hooks\"},\"requirements\":{\"inputs\":{}}}"
+    }
+  ]
+}

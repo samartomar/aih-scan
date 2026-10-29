@@ -712,9 +712,9 @@ describe("published V2 package installation", () => {
       readFileSync(join(root, "schemas/item-summary/1.0.0.fixtures.json"), "utf8"),
     );
     const summaryInput = summaryFixtures.cases.find(
-      (entry: { name: string }) => entry.name === "verified-no-age-limit",
+      (entry: { name: string }) => entry.name === "verified",
     ).input;
-    const report = summaryInput.assessmentsInput.assessments[0].document;
+    const report = summaryInput.records[0].report;
     const annexBytes = Buffer.from("TEST ONLY offline publisher summary annex\n");
     const annexId = report.annexes[0].id;
     report.annexes = [
@@ -790,19 +790,19 @@ describe("published V2 package installation", () => {
     });
     expect(assessmentConsumer.summarySelection.cases).toBeGreaterThan(40);
     expect(assessmentConsumer.itemSummaries.rows).toEqual(
-      Array.from({ length: 17 }, (_, i) => i + 1),
+      Array.from({ length: 13 }, (_, i) => i + 1),
     );
-    expect(assessmentConsumer.goldenFixtures).toHaveLength(40);
+    expect(assessmentConsumer.goldenFixtures).toHaveLength(38);
     expect(
       assessmentConsumer.goldenFixtures.filter(
         (entry: { expectation: string }) => entry.expectation === "accept",
       ),
-    ).toHaveLength(29);
+    ).toHaveLength(26);
     expect(
       assessmentConsumer.goldenFixtures.filter(
         (entry: { expectation: string }) => entry.expectation === "refuse",
       ),
-    ).toHaveLength(11);
+    ).toHaveLength(12);
     expect(assessmentConsumer.summarySelection.summaryBytes).toBeLessThan(
       assessmentConsumer.summarySelection.reportBytes,
     );

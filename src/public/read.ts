@@ -12,32 +12,42 @@ export type {
   ItemMaterial,
   ItemRecord,
   ItemRecordBatchResult,
+  ItemRecordRefusal,
   ItemRecordResult,
+  ItemRecordVerification,
   ItemSubject,
 } from "../assessment/item-record.js";
 export {
+  itemIdentity,
   itemRecordSchema,
-  recordItem,
-  recordItemBatch,
+  payloadMaterialId,
+  readItemRecord,
+  recordItems,
   verifyItemRecord,
 } from "../assessment/item-record.js";
 export type {
+  CandidateDiagnostic,
   EvidencePolicy,
   ItemAuthentication,
+  ItemRecordCandidate,
   ItemSummary,
   ItemTrustStatus,
-  SeverityProfile,
+  PickReason,
+  PickRecordInput,
+  PickRecordResult,
   SummariseItemInput,
   SummariseItemResult,
 } from "../assessment/item-summary.js";
 export {
   evidencePolicySchema,
   itemSummarySchema,
-  severityProfileSchema,
+  pickRecord,
   summariseItem,
 } from "../assessment/item-summary.js";
 export { readReport } from "../assessment/report.js";
 export { maxAssessments, selectAssessments } from "../assessment/selection.js";
+export type { SeverityProfile } from "../assessment/severity-profile.js";
+export { severityProfileRef, severityProfileSchema } from "../assessment/severity-profile.js";
 export { maxAssessmentBytes, readSummary } from "../assessment/summary.js";
 export type * from "../assessment/summary-types.js";
 export type {

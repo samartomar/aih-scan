@@ -6,7 +6,7 @@ format and make no authentication, native execution or production claims.
 
 | Contract ID (`urn:aihq:scan:` prefix) | Version | Fixture export (`@aihq/scan/schemas/` prefix) | Accept | Refuse code |
 | --- | --- | --- | --- | --- |
-| `item-record:1.0.0` | 1.0.0 | `item-record/1.0.0.fixtures.json` | grill-me, MCP definition and hook command | schema rejection; `verifyItemRecord` returns `differs` |
+| `item-record:1.0.0` | 1.0.0 | `item-record/1.0.0.fixtures.json` | Catalog 1.7 grill-me, git-guard hook and two ECC MCP servers | `invalid-record`, `unknown-field` |
 | `request:1.0.0` | 1.0.0 | `request/1.0.0.fixtures.json` | grill-me request | `invalid-input` |
 | `run-result:1.0.0` | 1.0.0 | `run-result/1.0.0.fixtures.json` | recorded assessment | `schema-invalid` |
 | `report:1.0.0` | 1.0.0 | `report/1.0.0.fixtures.json` | recorded report | `invalid-input` |
@@ -111,34 +111,43 @@ at the process boundary, without contacting a remote repository.
 ## Item record fixtures (1.0.0)
 
 The item-record fixture exports complete `item`, `report` and derived `value`
-triples. Its `sourceItems` also preserve the original material bytes for replay:
-real grill-me/stress-bundle content, the Extensions git-guard hook script closure
-at `79f016c25c454937d67dcf49c3cf3070e0339832`, and the ECC GitHub MCP registration
-at `5064474d4d762dc9640234a41617cccb79185cec`. Behaviour declarations are explicit
-fixture projections of these items' kind, payload, requirements, dependencies and
-executable states. They do not claim to be output from a Catalog descriptor API.
-Scan treats these bytes as opaque files.
+triples, and the `severityProfile` they were recorded with. Its `sourceItems`
+preserve real Catalog release 1.7 items with their exact material bytes, package
+paths and declarations, from `samartomar/aih-catalog` commit
+`3c44983144574af2b0a288beb8556884e87611a5`:
+
+- Extensions `extensions.matt.grill-me`;
+- the `extensions.hook.git-guard` hook script closure;
+- the ECC `ecc.mcp.clickhouse` and `ecc.mcp.cloudflare-docs` servers.
+
+Both ECC servers ship identical files and differ only by payload. Scan recomputes
+both item hashes in the contract encoding, which also reproduces Core's
+independent identity vectors.
 
 `tools/generate-item-record-schema.mjs` owns the item-record schema;
 `tools/generate-item-record-fixtures.mjs` regenerates its specimens from only the
 public `sourceItems` after a build. The observations have fixed times and mode
 facts for portable comparison, and include an explicitly unavailable detector.
 This is contract evidence, not native runtime, Git reachability or authentication
-proof. The packed consumer checks the complete executable truth table, full cached
-record tampering, changed behaviour bytes, recipe-only MCP capture, identical bytes
-at different paths, original finding attribution and batch/singleton equality.
+proof. The tests check the following:
+
+- executable bits;
+- tampering with every field of a stored record;
+- a relabelled record and a payload-only sibling;
+- recipe-only MCP capture without the payload;
+- precise refusals.
 The published-format merge also requires current-head cross-package contract
 verification; local Scan checks alone do not satisfy that separate gate.
 
 ## Item summary fixtures (1.0.0)
 
 The `item-summary`, `evidence-policy` and `severity-profile` exports document the
-[17-row item summary contract](item-summaries.md). Summary specimens derive from
+[13-row item summary contract](item-summaries.md). Summary specimens derive from
 the real published item-record fixtures. Their expected values are literal table
 outcomes; the generator does not call `summariseItem` to create expectations.
 `tools/generate-item-summary-fixtures.mjs` owns the controlled specimens, and
 `tools/generate-item-summary-schemas.mjs` owns only their three schemas (build
 first). Every row is replayed through the exact installed archive, including in a
-realm without Node globals. Variants cover detector coverage, age, trust, severity
-occurrences and suppression. Historical authenticity is separately exercised with
+realm without Node globals. Variants cover record ranking, unreadable and relabelled records, age, trust,
+severity occurrences and suppression. Historical authenticity is separately exercised with
 an ephemeral local key, without production signing or trust changes.

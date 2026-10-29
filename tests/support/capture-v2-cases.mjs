@@ -42,7 +42,7 @@ export async function exerciseCaptureV2() {
   }
   const unsupported = await readReport(new TextEncoder().encode('{"schema":"urn:aihq:scan:report:99.0.0"}'));
   assert.deepEqual(unsupported.diagnostics?.[0], {
-    code: 'unsupported-format', path: '$.schema', encountered: 'urn:aihq:scan:report:99.0.0',
+    code: 'SCHEMA_UNSUPPORTED', path: '$.schema', encountered: 'urn:aihq:scan:report:99.0.0',
     supported: ['urn:aihq:scan:report:1.0.0', 'urn:aihq:scan:report:2.0.0'],
     detail: 'Unsupported format at $.schema',
   });
@@ -66,13 +66,13 @@ export async function exerciseCaptureV2() {
   for (const unknown of [unknownContainer, { ...unknownContainer, newGenerationField: true }, { schema: unknownContainer.schema }]) {
     const refused = await readArtifact(bytes(unknown));
     assert.equal(refused.status, 'invalid');
-    assert.deepEqual(refused.diagnostics[0], { code: 'unsupported-format', path: '$.schema', encountered: unknownContainer.schema,
+    assert.deepEqual(refused.diagnostics[0], { code: 'SCHEMA_UNSUPPORTED', path: '$.schema', encountered: unknownContainer.schema,
       supported: ['urn:aihq:scan:artifact:1.0.0'], detail: 'Unsupported format at $.schema' });
   }
   const knownWithExtra = await readArtifact(bytes({ ...packed.artifact, newGenerationField: true }));
   assert.equal(knownWithExtra.status, 'invalid');
   assert.equal(knownWithExtra.diagnostics[0].code, 'invalid-artifact');
-  assert.equal((await runScan({ ...request, schema: 'urn:aihq:scan:request:99.0.0' })).diagnostics[0].code, 'unsupported-format');
+  assert.equal((await runScan({ ...request, schema: 'urn:aihq:scan:request:99.0.0' })).diagnostics[0].code, 'SCHEMA_UNSUPPORTED');
   const retainedLegacy = createRetainedObservationsV1();
   const legacy = await runScan({ ...request, schema: 'urn:aihq:scan:request:1.0.0' }, { retained: retainedLegacy });
   const afterLegacy = await runScan(request, { retained: retainedLegacy });
@@ -157,7 +157,7 @@ export async function exerciseCaptureV2() {
   const unsupportedBody = structuredClone(first.report);
   unsupportedBody.results[0].observations[0].body.format = 'aih-observation-v99';
   const bodyRefusal = await readReport(bytes(unsupportedBody));
-  assert.equal(bodyRefusal.diagnostics[0].code, 'unsupported-format');
+  assert.equal(bodyRefusal.diagnostics[0].code, 'SCHEMA_UNSUPPORTED');
   assert.equal(bodyRefusal.diagnostics[0].path, '$.results[0].observations[0].body.format');
   return { status: 'tested' };
 }

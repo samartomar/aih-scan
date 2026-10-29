@@ -132,6 +132,7 @@ newest member in the same change.
 `urn:aihq:scan:item-summary:1.0.0`, `urn:aihq:scan:evidence-policy:1.0.0` and
 `urn:aihq:scan:severity-profile:1.0.0` are closed public contracts. The portable
 `summariseItem` reader applies the [published decision table](docs/item-summaries.md)
-without changing selection or item-record identities. Its result keeps the full
-selection beside the summary. Host authentication, current trust and evaluation
-time are explicit inputs. Schemas, golden fixtures and types are package exports.
+to an item's stored records, each checked with `verifyItemRecord` against the
+artifact it names. Its result names the picked record and why the others did not
+count. Host authentication, current trust and evaluation time are explicit
+inputs. Schemas, golden fixtures and types are package exports.

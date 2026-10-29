@@ -4,10 +4,6 @@
     {
       "type": "object",
       "properties": {
-        "schema": {
-          "type": "string",
-          "const": "urn:aihq:scan:item-summary:1.0.0"
-        },
         "state": {
           "type": "string",
           "enum": [
@@ -22,37 +18,14 @@
         "why": {
           "type": "string",
           "enum": [
-            "no-sources",
-            "not-found",
-            "content-mismatch",
-            "scope-mismatch",
-            "source-mismatch",
-            "provider-mismatch",
-            "identity-conflict",
-            "future-dated",
-            "detector-missing",
-            "detector-not-covering",
-            "profile-not-allowed",
-            "executable-unknown",
-            "revoked",
-            "offline",
-            "unchecked",
             "not-authenticated",
+            "unchecked",
+            "offline",
+            "revoked",
+            "detector-missing",
+            "profile-not-allowed",
+            "future-dated",
             "older-than-policy"
-          ]
-        },
-        "freshness": {
-          "anyOf": [
-            {
-              "type": "string",
-              "enum": [
-                "checked",
-                "last-known"
-              ]
-            },
-            {
-              "type": "null"
-            }
           ]
         },
         "findings": {
@@ -88,57 +61,9 @@
           "additionalProperties": false
         },
         "suppressed": {
-          "type": "object",
-          "properties": {
-            "count": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "reasons": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "detectorId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                  },
-                  "nativeRuleId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                  },
-                  "reason": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256,
-                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
-                  },
-                  "count": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 9007199254740991
-                  }
-                },
-                "required": [
-                  "detectorId",
-                  "nativeRuleId",
-                  "reason",
-                  "count"
-                ],
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": [
-            "count",
-            "reasons"
-          ],
-          "additionalProperties": false
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "scannedAt": {
           "anyOf": [
@@ -150,27 +75,13 @@
               "type": "null"
             }
           ]
-        },
-        "scanId": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^scan:sha256:[0-9a-f]{64}$"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
-        "schema",
         "state",
-        "freshness",
         "findings",
         "suppressed",
-        "scannedAt",
-        "scanId"
+        "scannedAt"
       ],
       "additionalProperties": false
     },

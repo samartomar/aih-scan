@@ -10,7 +10,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { syncBuiltinESMExports } from 'node:module';
 import { attachAttestation, authenticateArtifact, prepareArtifact, signArtifact } from '@aihq/scan/host';
-import { readArtifact, summariseItem } from '@aihq/scan/read';
+import { readArtifact, recordItems, summariseItem } from '@aihq/scan/read';
 
 const sort = v => Array.isArray(v) ? v.map(sort) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sort(v[k])])) : v;
 const bytes = v => Buffer.from(JSON.stringify(sort(v)));
@@ -53,32 +53,28 @@ export async function exercisePublisherSigning() {
     const selected = await authenticate([publisher]);
     assert.equal(selected.status, 'authenticated');
     assert.equal(selected.producerIdentity, 'TEST-ONLY-local-publisher');
-    summaryInput.assessmentsInput.assessments = [{ sourceId: 'fixture', location: 'offline-fixture', format: 'artifact', bytes: attached.bytes, authentication: selected }];
-    summaryInput.authentication = selected;
-    const summary = async () => {
-      const result = await summariseItem(summaryInput);
+    const record = (await recordItems({ artifact: read, items: [summaryInput.item], severityProfile: summaryInput.severityProfiles[0] })).results[0];
+    const summary = async (authentication, trustStatus = 'available') => {
+      const result = await summariseItem({ ...summaryInput, trustStatus, records: [{ record, artifact: read, authentication }] });
       assert.equal(result.status, 'summarised');
-      assert.equal(result.summary.scanId, attached.scanId);
+      assert.equal(result.picked.scanId, attached.scanId);
       return result.summary;
     };
-    assert.equal((await summary()).state, 'verified', 'test-only selected identity and exact item coverage');
+    assert.equal((await summary(selected)).state, 'verified', 'test-only selected identity and exact item coverage');
     const unselected = structuredClone(publisher);
     unselected.policy.subjectAlternativeName = 'https://test.invalid/workflows/unselected@refs/heads/test';
-    summaryInput.authentication = await authenticate([unselected]);
-    assert.equal(summaryInput.authentication.status, 'unverifiable');
-    assert.equal((await summary()).why, 'not-authenticated');
-    assert.equal((await summary()).state, 'not-verified');
+    const refused = await authenticate([unselected]);
+    assert.equal(refused.status, 'unverifiable');
+    assert.equal((await summary(refused)).why, 'not-authenticated');
+    assert.equal((await summary(refused)).state, 'not-verified');
     assert.equal((await authenticate([])).status, 'unverifiable');
     // Host trust availability is independent of historical crypto authentication.
     // The public summary receives the same explicit statuses a host/TUF client supplies.
-    for (const trustStatus of ['expired', 'unavailable']) {
-      summaryInput.trustStatus = trustStatus;
+    for (const trustStatus of ['expired', 'unavailable'])
       for (const authentication of [selected, { status: 'skipped', reason: 'not-requested' }]) {
-        summaryInput.authentication = authentication;
-        assert.equal((await summary()).state, 'not-verified');
-        assert.equal((await summary()).why, 'offline', `row 14: ${trustStatus} precedes unchecked`);
+        assert.equal((await summary(authentication, trustStatus)).state, 'not-verified');
+        assert.equal((await summary(authentication, trustStatus)).why, 'offline', `row 9: ${trustStatus} precedes unchecked`);
       }
-    }
     assert.equal((await authenticate([publisher])).status, 'authenticated', 'trust freshness does not rewrite historical authenticity');
     // A public key beside the evidence is merely untrusted data. Only the
     // independently supplied trust argument can select it.

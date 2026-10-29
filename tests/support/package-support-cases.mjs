@@ -38,7 +38,7 @@ export function packageSupportAdapters() {
           const context = entry.report ? entry : suite.cases.find(candidate => candidate.expectation === 'accept');
           const assessment = await readReport(bytes(context.report));
           assert.equal(assessment.status, 'read');
-          assert.equal(await verifyItemRecord(entry.value, assessment, context.item), entry.expectation === 'accept' ? 'same' : 'differs');
+          assert.equal(await verifyItemRecord(entry.value, assessment, context.item, suite.severityProfile), entry.expectation === 'accept' ? 'same' : 'differs');
         }
         if (contract.id.includes(':material-change:')) {
           if (entry.expectation === 'accept') {
