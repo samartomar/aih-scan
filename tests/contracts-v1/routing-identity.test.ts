@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { routeFile, scanKeyOf, sha256Hex } from "../../src/public/contracts.js";
+import { sha256Hex } from "../../src/contracts/git-tree.js";
+import { routeFile, scanKeyOf } from "../../src/public/contracts.js";
 
 const keyOf = async (...args: Parameters<typeof scanKeyOf>): Promise<string> => {
   const result = await scanKeyOf(...args);

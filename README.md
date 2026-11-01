@@ -52,6 +52,15 @@ aih-scan sign <summary.json>                               sign with your own id
 Optional: --fail-at CAUTION | DO_NOT_INSTALL               exit 1 at or above that label
 ```
 
+Beyond that summary, the commands also accept: several `scan` targets in one run (one
+`--out` folder); `--origin` defaulting to `local` (pass `--origin published` for a public
+source you publish results for); `--json` on `advisories`, `read`, `findings`, `verify`
+and `sign`; `--ref` on `advisories` for a Git target; `--fail-at` on `read`;
+`--signers`, `--trusted-root` and repeatable `--withdrawn <file> --withdrawn-bundle <file>`
+on `verify`; and `--bundle`, `--trusted-root`, `--fulcio-url` and `--rekor-url` on `sign`.
+`aih-scan <command> --help` prints each command's options; `aih-scan --help` lists every
+command's usage line.
+
 | Exit | Meaning |
 |---|---|
 | 0 | Finished, complete or partial (partial is shown, never a failure) |
@@ -140,7 +149,8 @@ returns one result per folder. JSON Schemas are exported as
   `dependencies`. It holds no source, Catalog name, framework or item id.
 - **SARIF 2.1.0**: one run per tool; every result carries `scanKey`, `part`, `code`
   (`aih-codes/1`), `severity` and `confidence`.
-- **Scoring** (`aih-risk/1`): CRITICAL 50, HIGH 25, MEDIUM 10, LOW 5 points, cross-tool
+- **Scoring** (`aih-risk/1`): CRITICAL 50, HIGH 25, MEDIUM 10, LOW 5 points (INFO is
+  informational: listed in SARIF and counts, zero points), cross-tool
   deduplication, per-rule diminishing weights, confidence, ×1.3 for code, rounded and
   capped at 100. SAFE 0–20, CAUTION 21–50, DO NOT INSTALL 51–100; a partial SAFE result is
   stored as CAUTION and shown as `CAUTION (partial)`; nothing routable is NOT ASSESSED.

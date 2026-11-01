@@ -17,13 +17,12 @@ export {
 } from "../contracts/codes.js";
 export { formats, type Problem, type ResultStatus } from "../contracts/formats.js";
 export {
-  algorithmOfKey,
   type FileMode,
   type GitAlgorithm,
   keyFolderName,
   SCAN_KEY_PATTERN,
+  type ScanKeyResult,
   scanKeyOf,
-  sha256Hex,
   type TreeFile,
 } from "../contracts/git-tree.js";
 export { type Limits, limits } from "../contracts/limits.js";
@@ -59,7 +58,7 @@ export {
 } from "../contracts/routing.js";
 export { schemas } from "../contracts/schemas.js";
 export { sigstoreTrustedRootText } from "../contracts/sigstore-trusted-root.js";
-export { pathProblem, sanitizeText } from "../contracts/text.js";
+export { sanitizeText } from "../contracts/text.js";
 export {
   type Origin,
   type RequestItem,

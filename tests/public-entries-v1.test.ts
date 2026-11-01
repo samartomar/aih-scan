@@ -20,7 +20,6 @@ describe("replacement public entries", () => {
     expect(Object.keys(contracts).sort()).toEqual([
       "SCAN_KEY_PATTERN",
       "advisoryCodes",
-      "algorithmOfKey",
       "codeForRule",
       "codes",
       "defaultSigners",
@@ -33,7 +32,6 @@ describe("replacement public entries", () => {
       "limits",
       "optionalTools",
       "packageIdentity",
-      "pathProblem",
       "riskLabelForScore",
       "routeFile",
       "routing",
@@ -44,7 +42,6 @@ describe("replacement public entries", () => {
       "scoreFindings",
       "scoring",
       "severityOf",
-      "sha256Hex",
       "sigstoreTrustedRootText",
       "storedLabel",
       "toolCategoryCodes",
@@ -88,7 +85,14 @@ describe("replacement public entries", () => {
       "selectAssessments",
     ])
       expect(read).not.toHaveProperty(name);
-    for (const name of ["contractSupport", "contractSupport11", "entrySupport"])
+    for (const name of [
+      "contractSupport",
+      "contractSupport11",
+      "entrySupport",
+      "algorithmOfKey",
+      "sha256Hex",
+      "pathProblem",
+    ])
       expect(contracts).not.toHaveProperty(name);
   });
 });

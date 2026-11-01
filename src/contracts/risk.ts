@@ -29,6 +29,7 @@ export interface CountedFinding extends ScoredFinding {
   readonly contribution: number;
 }
 
+/** Points per severity. `INFO` is informational: it is listed and counted but scores zero. */
 const POINTS: Readonly<Record<Severity, number>> = Object.freeze({
   CRITICAL: 50,
   HIGH: 25,

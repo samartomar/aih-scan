@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sha256Hex } from "../../src/public/contracts.js";
+import { sha256Hex } from "../../src/contracts/git-tree.js";
 import {
   FINDINGS_MISMATCH_MESSAGE,
   matchScan,
