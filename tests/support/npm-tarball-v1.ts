@@ -8,13 +8,17 @@ export interface TarEntry {
   /** ustar type flag: 0 file, 1 hard link, 2 symbolic link, 3 character device, 5 folder. */
   readonly type?: string;
   readonly link?: string;
+  /** A header size that differs from the data actually stored after it. */
+  readonly headerSize?: number;
+  /** Bytes appended verbatim instead of an entry (an inner end-of-archive block, for example). */
+  readonly raw?: Uint8Array;
 }
 
 /** A gzipped ustar archive built byte by byte, so hostile entries can be expressed. */
 export function npmTarball(entries: readonly TarEntry[]): Uint8Array {
   const expanded: TarEntry[] = [];
   for (const entry of entries) {
-    if (Buffer.byteLength(entry.path) > 99) {
+    if (entry.raw === undefined && Buffer.byteLength(entry.path) > 99) {
       // A PAX extended header carries a long path; the ustar name field holds a placeholder.
       const body = ` path=${entry.path}\n`;
       let length = body.length + 1;
@@ -24,7 +28,19 @@ export function npmTarball(entries: readonly TarEntry[]): Uint8Array {
     } else expanded.push(entry);
   }
   const blocks: Buffer[] = [];
-  for (const { path, text = "", mode = 0o644, type = "0", link = "" } of expanded) {
+  for (const {
+    path,
+    text = "",
+    mode = 0o644,
+    type = "0",
+    link = "",
+    headerSize,
+    raw,
+  } of expanded) {
+    if (raw !== undefined) {
+      blocks.push(Buffer.from(raw));
+      continue;
+    }
     const data = Buffer.from(text);
     const header = Buffer.alloc(512);
     header.write(path, 0, 100, "utf8");
@@ -32,7 +48,7 @@ export function npmTarball(entries: readonly TarEntry[]): Uint8Array {
       [100, 8, mode],
       [108, 8, 0],
       [116, 8, 0],
-      [124, 12, type === "0" || type === "x" ? data.length : 0],
+      [124, 12, headerSize ?? (["0", "x", "g"].includes(type) ? data.length : 0)],
       [136, 12, 0],
     ] as const)
       header.write(`${value.toString(8).padStart(length - 1, "0")}\0`, offset, length, "ascii");
@@ -44,10 +60,18 @@ export function npmTarball(entries: readonly TarEntry[]): Uint8Array {
     const checksum = header.reduce((sum, byte) => sum + byte, 0);
     header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8);
     blocks.push(header);
-    if (type === "0" || type === "x")
+    if (["0", "x", "g"].includes(type))
       blocks.push(data, Buffer.alloc((512 - (data.length % 512)) % 512));
   }
   return new Uint8Array(gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)])));
+}
+
+/** One PAX extended header record, `<length> <key>=<value>\n`, with its length in bytes. */
+export function paxRecord(key: string, value: string): string {
+  const body = ` ${key}=${value}\n`;
+  let length = Buffer.byteLength(body) + 1;
+  while (Buffer.byteLength(`${length}${body}`) !== length) length += 1;
+  return `${length}${body}`;
 }
 
 export const integrityOf = (bytes: Uint8Array) =>

