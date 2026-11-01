@@ -197,6 +197,34 @@ describe("public Git repositories", () => {
     expect(kindOnly.status).toBe("invalid");
   });
 
+  it("leaves .git metadata out of a Git tree, as a folder source does", async () => {
+    const blob = repo.git(["hash-object", "-w", "--stdin"], "[core]\n").trim();
+    const readme = repo.git(["hash-object", "-w", "--stdin"], "# Fixture\n").trim();
+    const metadata = repo.git(["mktree"], `100644 blob ${blob}\tconfig\n`).trim();
+    const tree = repo
+      .git(["mktree"], `040000 tree ${metadata}\t.git\n100644 blob ${readme}\tREADME.md\n`)
+      .trim();
+    const commit = repo
+      .git([
+        "-c",
+        "user.name=Scan fixture",
+        "-c",
+        "user.email=scan-fixture@example.invalid",
+        "commit-tree",
+        tree,
+        "-m",
+        "metadata",
+      ])
+      .trim();
+    repo.git(["update-ref", "refs/heads/metadata", commit]);
+    serveGit(repo);
+    const result = await scan(request({ ref: "metadata" }), { outDir: fixture.path("out") });
+    expect(result.status).toBe("ok");
+    const [only] = result.results;
+    if (result.results.length !== 1 || only?.status !== "ok") throw new Error("expected one scan");
+    expect(summaryOf(only.summaryPath).files.map((file) => file.path)).toEqual(["README.md"]);
+  });
+
   it("refuses unreachable commits, links, submodules, missing paths and unavailable repositories without echoing the URL", async () => {
     serveGit(repo);
     const unreachable = await scan(request({ ref: commits.dangling }), {

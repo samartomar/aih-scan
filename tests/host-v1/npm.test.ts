@@ -129,6 +129,30 @@ describe("npm MCP packages", () => {
     expect(readdirSync(sentinels)).toEqual([]);
   });
 
+  it("leaves .git metadata out of an archive, as a folder source does", async () => {
+    const plain = fixture.path("plain.tgz");
+    writeFileSync(plain, npmTarball(packageEntries()));
+    const withGit = fixture.path("with-git.tgz");
+    writeFileSync(
+      withGit,
+      npmTarball([
+        ...packageEntries(),
+        { path: "package/.git/config", text: "[core]\n" },
+        { path: "package/lib/.git/HEAD", text: "ref: refs/heads/main\n" },
+      ]),
+    );
+    const a = await scan(request({ type: "npm-file", path: plain }), {
+      outDir: fixture.path("out-plain"),
+    });
+    const b = await scan(request({ type: "npm-file", path: withGit }), {
+      outDir: fixture.path("out-with-git"),
+    });
+    const [first, second] = [a.results[0], b.results[0]];
+    if (first?.status !== "ok" || second?.status !== "ok") throw new Error("expected scans");
+    expect(second.scanKey).toBe(first.scanKey);
+    expect(readFileSync(second.summaryPath, "utf8")).not.toContain(".git/");
+  });
+
   it("refuses hostile archives and failed acquisition before anything is scanned", async () => {
     const base = packageEntries();
     const cases: [string, TarEntry[], string][] = [
@@ -142,7 +166,6 @@ describe("npm MCP packages", () => {
       ["traversal", [...base, { path: "package/../escape.txt", text: "x" }], "invalid-name"],
       ["absolute", [...base, { path: "/etc/escape.txt", text: "x" }], "escaping-path"],
       ["second root", [...base, { path: "other/file.txt", text: "x" }], "escaping-path"],
-      ["git metadata", [...base, { path: "package/.git/config", text: "x" }], "invalid-name"],
       ["depth", [...base, { path: `package/${"d/".repeat(65)}f.txt`, text: "x" }], "depth"],
       ["no package.json", [{ path: "package/README.md", text: "x" }], "not-a-package"],
     ];

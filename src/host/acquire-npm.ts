@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "
 import { gunzipSync } from "node:zlib";
 import { limits } from "../contracts/limits.js";
 import type { AcquisitionReason } from "./acquire-git.js";
-import { inventoryProblem } from "./inventory.js";
+import { inventoryProblem, isGitMetadata } from "./inventory.js";
 import type { SnapshotFile } from "./snapshot.js";
 
 export type NpmAcquisition =
@@ -197,7 +197,7 @@ function unpack(archive: Uint8Array, signal: AbortSignal): Member[] {
 }
 
 function fromArchive(archive: Uint8Array, signal: AbortSignal) {
-  const members = unpack(archive, signal);
+  const members = unpack(archive, signal).filter((member) => !isGitMetadata(member.path));
   const problem = inventoryProblem(
     members.map((member) => ({ path: member.path, size: member.bytes.length })),
   );

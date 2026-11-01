@@ -7,7 +7,7 @@ import { limits } from "../contracts/limits.js";
 import { ContractError } from "../shared/json.js";
 import { gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
 import { GitContainmentError, runPinnedGit } from "./git-runner.js";
-import { inventoryProblem } from "./inventory.js";
+import { inventoryProblem, isGitMetadata } from "./inventory.js";
 import type { FolderRefusalReason, SnapshotFile } from "./snapshot.js";
 
 export interface GitSourceRequest {
@@ -190,7 +190,7 @@ export async function acquireGit(
     if (decoder.decode(await git(["rev-parse", `${commit}^{commit}`])).trim() !== commit)
       throw new Refused("source-integrity", "Git did not produce the requested commit");
     const rows = treeRows(await git(["ls-tree", "-r", "-l", "-z", commit]));
-    const selected = rows.filter((row) => within(row.path, source.path));
+    const selected = rows.filter((row) => within(row.path, source.path) && !isGitMetadata(row.path));
     if (source.path !== undefined && selected.length === 0)
       throw new Refused("path-not-found", "the path does not exist at that commit");
     for (const row of selected) {

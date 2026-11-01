@@ -15,9 +15,18 @@ export type InventoryProblem = Readonly<{ reason: FolderRefusalReason; detail: s
 const shown = (path: string) => JSON.stringify(path).slice(0, 200);
 
 /**
+ * True for a path with a `.git` segment. Like a folder source, a Git or npm inventory leaves
+ * Git metadata out (it is never read, hashed or scanned) instead of refusing the source.
+ */
+export function isGitMetadata(path: string): boolean {
+  return path.split("/").includes(".git");
+}
+
+/**
  * The same path and size constraints `readFolder` applies, for inventories that do not come
  * from a folder (a Git tree, an npm archive): file count, path length, folder depth, valid
  * names, one file's size and the source size. A path that is both a file and a folder is refused.
+ * Callers remove Git metadata (`isGitMetadata`) first.
  */
 export function inventoryProblem(entries: readonly InventoryEntry[]): InventoryProblem | undefined {
   if (entries.length > limits.input.files)
@@ -36,8 +45,6 @@ export function inventoryProblem(entries: readonly InventoryEntry[]): InventoryP
       return { reason: "depth", detail: `a path exceeds folder depth ${limits.input.depth}` };
     if (problem !== undefined)
       return { reason: "invalid-name", detail: `${shown(entry.path)}: ${problem}` };
-    if (entry.path === ".git" || entry.path.startsWith(".git/") || entry.path.includes("/.git/"))
-      return { reason: "invalid-name", detail: `${shown(entry.path)} is reserved Git metadata` };
     if (entry.size > limits.input.fileBytes)
       return {
         reason: "file-size",
