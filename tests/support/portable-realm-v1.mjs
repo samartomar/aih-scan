@@ -93,6 +93,25 @@ assert.equal(read.readSummary(bytesIn(Buffer.from(JSON.stringify(unsupported))))
 const clean = read.readSummary(bytesIn(file("clean", "summary.json"))).summary;
 const mismatch = await read.readFindings(clean, bytesIn(file("risky", "sarif", readFileSync(join(corpus, "risky", "summary.json"), "utf8").match(/sarif\/([0-9a-f]{64})\.sarif/)[0].slice(6))), clean.scanKey);
 assert.equal(mismatch.message, "Findings don't match this scan");
+// A URL-like location is refused even when a summary lists it as a file.
+{
+  const riskySummary = JSON.parse(file("risky", "summary.json").toString("utf8"));
+  const sarif = JSON.parse(file("risky", riskySummary.sarif[0].path).toString("utf8"));
+  for (const uri of ["javascript:alert(1)", "data:text/html,x", "mailto:a@b"]) {
+    sarif.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri = uri;
+    const sarifBytes = Buffer.from(JSON.stringify(sarif));
+    const sha256 = Buffer.from(await webcrypto.subtle.digest("SHA-256", sarifBytes)).toString("hex");
+    const listed = {
+      ...riskySummary,
+      files: [...riskySummary.files, { ...riskySummary.files[0], path: uri }],
+      sarif: [{ path: `sarif/${sha256}.sarif`, sha256 }],
+    };
+    const summary = read.readSummary(bytesIn(Buffer.from(JSON.stringify(listed))));
+    assert.equal(summary.status, "ok", uri);
+    const refused = await read.readFindings(summary.summary, bytesIn(sarifBytes), summary.summary.scanKey);
+    assert.equal(refused.reason, "findings-mismatch", uri);
+  }
+}
 // Contracts data and functions run in the realm.
 assert.equal(contracts.formats.summary, "aih-scan-summary/1");
 assert.equal(contracts.scoreFindings([{ tool: "t", ruleId: "r", code: "trust.malicious-code", severity: "HIGH", confidence: 0.9, part: "code", path: "a", line: 1 }]).score, 29);

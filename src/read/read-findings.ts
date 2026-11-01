@@ -73,7 +73,8 @@ function locationOf(result: Obj): { uri: string; line: number } {
 /**
  * Reads one SARIF 2.1.0 document pinned by a summary into one line per finding. The SARIF's
  * sha256 must be listed by the summary, `scanKey` must be the summary's key and every result's,
- * and every location must be a file of the summary (absolute, `..` and URL paths never are).
+ * and every location must be a file of the summary shown under the display path rule
+ * (absolute, `..`, URL and scheme-prefixed paths such as `javascript:` or `notes:1.md` never are).
  * Otherwise only "Findings don't match this scan" is returned. Text, tool and rule ids are
  * untrusted: control, bidirectional and zero-width characters are removed and lengths are
  * held to `limits.output`. Resolves asynchronously (WebCrypto digest).

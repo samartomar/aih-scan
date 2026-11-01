@@ -98,6 +98,13 @@ without C0/C1 or bidirectional control characters, without a backslash (a path
 separator on Windows) and not a URL or drive-letter path; other characters, such as a
 zero-width joiner or a colon inside a name, are allowed.
 
+Readers are stricter about the paths they show. `readFindings` refuses a finding
+whose location contains a format character (such as a zero-width joiner), a line or
+paragraph separator, or a URL-like scheme prefix (`javascript:`, `data:`, `mailto:`,
+`https:`). It returns "Findings don't match this scan" instead. A file named
+`notes:1.md` at the top of an item is scanned, but its findings are not shown by a
+reader; `docs/notes:1.md` is shown.
+
 ## Names a host cannot write
 
 Each item is copied into a read-only working copy before it is scanned. When the

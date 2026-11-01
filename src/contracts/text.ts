@@ -61,9 +61,15 @@ export function pathProblem(
   return undefined;
 }
 
+/** A URL-like scheme prefix (`javascript:`, `data:`, `mailto:`, `https:`); two or more letters. */
+const SCHEME_PREFIX = /^[A-Za-z][A-Za-z0-9+.-]+:/;
+
 /**
  * The stricter rule for paths a reader shows (`readFindings`): `pathProblem` plus no format
- * characters at all (zero-width, tags) and no line or paragraph separators.
+ * characters at all (zero-width, tags), no line or paragraph separators and no URL-like scheme
+ * prefix (`javascript:alert(1)`, `data:text/html,x`, `mailto:a@b`). A one-letter prefix is a
+ * drive letter and is already refused. A top-level name such as `notes:1.md` is therefore valid
+ * in a scan but is not shown by a reader; a colon after the first `/` (`docs/notes:1.md`) is.
  */
 export function displayPathProblem(
   path: unknown,
@@ -72,6 +78,7 @@ export function displayPathProblem(
 ): string | undefined {
   const problem = pathProblem(path, maxLength, maxDepth);
   if (problem !== undefined) return problem;
+  if (SCHEME_PREFIX.test(path as string)) return "path must not be a URL";
   return hasUnsafeCharacters(path as string)
     ? "path contains format or separator characters"
     : undefined;

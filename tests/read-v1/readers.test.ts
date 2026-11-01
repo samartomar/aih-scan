@@ -158,6 +158,26 @@ describe("readFindings", () => {
     expect(result).toMatchObject({ status: "refused", reason: "findings-mismatch" });
   });
 
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "mailto:a@b",
+  ])("refuses a URL-like location %s even when the summary lists it", async (uri) => {
+    const sarif = JSON.parse(new TextDecoder().decode(risky.sarif[0]!.bytes));
+    firstResult(sarif).locations[0].physicalLocation.artifactLocation.uri = uri;
+    const bytes = bytesOf(sarif);
+    const sha256 = await sha256Hex(bytes);
+    const object = riskyObject();
+    object.files = [...object.files, { ...object.files[0], path: uri }];
+    object.sarif = [{ path: `sarif/${sha256}.sarif`, sha256 }];
+    const summary = summaryOf(bytesOf(object));
+    expect(summary.files.map((file) => file.path)).toContain(uri);
+    expect(await readFindings(summary, bytes, summary.scanKey)).toMatchObject({
+      status: "refused",
+      reason: "findings-mismatch",
+    });
+  });
+
   it("removes control, bidirectional and zero-width characters and cuts text to the published limit", async () => {
     const result = await pinned((sarif) => {
       firstResult(sarif).message.text = `a\u0007b\u202Ec\u200Bd\n${"x".repeat(2000)}`;
