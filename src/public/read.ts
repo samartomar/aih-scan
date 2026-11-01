@@ -1,8 +1,19 @@
 /**
  * `@aihq/scan/read` — portable readers (browser-safe: no Node globals or built-ins).
  * `readSummary` is synchronous; `readFindings`, `matchScan` and `verifySummary` resolve
- * asynchronously because they use WebCrypto.
+ * asynchronously because they use WebCrypto. `checkAdvisories` asks a live advisory service
+ * (OSV) through `fetch`; it is separate from every scan and never signed.
  */
+export {
+  type Advisory,
+  type AdvisoryDependency,
+  type AdvisoryFetch,
+  type AdvisoryResult,
+  type CheckAdvisoriesOptions,
+  type CheckAdvisoriesResult,
+  checkAdvisories,
+  type NotCheckedReason,
+} from "../read/check-advisories.js";
 export {
   type MatchDifferences,
   type MatchFile,

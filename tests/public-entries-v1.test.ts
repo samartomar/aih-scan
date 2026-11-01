@@ -8,6 +8,7 @@ describe("replacement public entries", () => {
     expect(Object.keys(host).sort()).toEqual(["matchScan", "scan"]);
     expect(Object.keys(read).sort()).toEqual([
       "FINDINGS_MISMATCH_MESSAGE",
+      "checkAdvisories",
       "matchScan",
       "readFindings",
       "readSummary",

@@ -80,6 +80,27 @@ assert.equal(
 );
 assert.equal(contracts.validateRequest({ format: "aih-scan-request/9" }).status, "unsupported-version");
 
+// checkAdvisories runs in the realm with only an injected fetch (the realm has none): exact
+// versions are sent, internal scopes and ranges are not, and no fetch means not-checked.
+{
+  const sent = [];
+  context.record = (body) => sent.push(body);
+  const fetcher = runInContext(
+    "(url, init) => { record(String(init.body)); return Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ results: [{}] })) }); }",
+    context,
+  );
+  const deps = runInContext(
+    "[{ ecosystem: 'npm', name: 'ws', version: '8.18.0' }, { ecosystem: 'npm', name: '@acme/x', version: '1.0.0' }, { ecosystem: 'npm', name: 'r', version: '^1.0.0' }]",
+    context,
+  );
+  const checked = await read.checkAdvisories(deps, { internalScopes: ["@acme"], fetch: fetcher, now: () => new Date("2026-11-01T09:00:00Z") });
+  assert.equal(checked.status, "ok");
+  assert.equal(JSON.stringify(checked.results.map((r) => r.state)), JSON.stringify(["none-known", "not-checked", "not-checked"]));
+  assert.deepEqual(sent.map((b) => JSON.parse(b)), [{ queries: [{ package: { name: "ws", ecosystem: "npm" }, version: "8.18.0" }] }]);
+  const offline = await read.checkAdvisories(deps, { internalScopes: ["@acme"] });
+  assert.equal(offline.results[0].reason, "advisory service unreachable");
+}
+
 // Offline aih-sigstore-keyless/1 verification of the shared fixture set inside the realm:
 // valid and tampered summaries, withdrawals, wrong root/log/SCT keys, invalid proofs and
 // signing-time boundaries, with the realm's own WebCrypto and no network.
