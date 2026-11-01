@@ -2,6 +2,7 @@ import { advisoryCodes } from "../contracts/codes.js";
 import type { Problem } from "../contracts/formats.js";
 import { limits } from "../contracts/limits.js";
 import { sanitizeText } from "../contracts/text.js";
+import { readBoundedText } from "../shared/bounded-response.js";
 
 /** One dependency to check, as listed in a summary's `dependencies` (`file` is optional). */
 export interface AdvisoryDependency {
@@ -70,7 +71,8 @@ const ECOSYSTEMS = Object.freeze({ npm: "npm", pypi: "PyPI" } as const);
 const BATCH = 1000;
 const MAX_PAGES = 16;
 const REQUEST_TIMEOUT_MS = 60_000;
-const MAX_RESPONSE_CHARS = 32 * 1024 * 1024;
+/** Bytes read from one advisory-service response (streamed; the read stops past it). */
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
 const ADVISORY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const NPM_EXACT =
@@ -152,9 +154,12 @@ async function request(
           ? { signal }
           : {}),
     });
-    if (!response.ok) throw new Unreachable();
-    const text = await response.text();
-    if (text.length > MAX_RESPONSE_CHARS) throw new Unreachable();
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Unreachable();
+    }
+    const text = await readBoundedText(response, MAX_RESPONSE_BYTES);
+    if (text === undefined) throw new Unreachable();
     return JSON.parse(text);
   } catch (error) {
     if (signal?.aborted) throw new Cancelled();

@@ -117,7 +117,8 @@ assert.equal(contracts.validateRequest({ format: "aih-scan-request/9" }).status,
   const sent = [];
   context.record = (body) => sent.push(body);
   const fetcher = runInContext(
-    "(url, init) => { record(String(init.body)); return Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ results: [{}] })) }); }",
+    // A browser-shaped response whose body is a byte stream (read with a bound, never text()).
+    "(url, init) => { record(String(init.body)); let sent = false; return Promise.resolve({ ok: true, text: () => { throw new Error('unbounded text() read'); }, body: { getReader: () => ({ read: () => Promise.resolve(sent ? { done: true } : ((sent = true), { done: false, value: new TextEncoder().encode(JSON.stringify({ results: [{}] })) })), cancel: () => Promise.resolve() }) } }); }",
     context,
   );
   const deps = runInContext(

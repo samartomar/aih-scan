@@ -13,6 +13,7 @@ import { BUNDLE_MEDIA_TYPE, parseBundle } from "../read/sigstore/bundle.js";
 import { base64Encode, hexDecode, pemCertificate } from "../read/sigstore/bytes.js";
 import { verifyKeyless } from "../read/sigstore/evidence.js";
 import { parseTrustedRoot, type TrustMaterial } from "../read/sigstore/trust.js";
+import { readBoundedText } from "../shared/bounded-response.js";
 
 export const DEFAULT_FULCIO_URL = "https://fulcio.sigstore.dev";
 export const DEFAULT_REKOR_URL = "https://rekor.sigstore.dev";
@@ -26,7 +27,10 @@ export interface SigningServices {
 
 export class SigningError extends Error {}
 
+/** Bytes read from one Fulcio or Rekor response (streamed; the read stops past it). */
 const MAX_RESPONSE = 1024 * 1024;
+/** Bytes read from the GitHub Actions identity-token response. */
+const MAX_TOKEN_RESPONSE = 64 * 1024;
 
 async function postJson(
   services: SigningServices,
@@ -47,10 +51,12 @@ async function postJson(
   } catch {
     throw new SigningError(`${label} could not be reached`);
   }
-  const text = await response.text();
-  if (text.length > MAX_RESPONSE) throw new SigningError(`${label} returned too much data`);
-  if (!response.ok)
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
     throw new SigningError(`${label} refused the request (HTTP ${response.status})`);
+  }
+  const text = await readBoundedText(response, MAX_RESPONSE);
+  if (text === undefined) throw new SigningError(`${label} returned too much or unreadable data`);
   try {
     return JSON.parse(text);
   } catch {
@@ -245,9 +251,14 @@ export async function identityToken(
   } catch {
     throw new SigningError("the GitHub Actions identity token could not be obtained");
   }
-  const value = response.ok
-    ? field(await response.json().catch(() => undefined), "value")
-    : undefined;
+  const text = response.ok ? await readBoundedText(response, MAX_TOKEN_RESPONSE) : undefined;
+  if (!response.ok) await response.body?.cancel().catch(() => {});
+  let value: unknown;
+  try {
+    value = text === undefined ? undefined : field(JSON.parse(text), "value");
+  } catch {
+    value = undefined;
+  }
   if (typeof value !== "string")
     throw new SigningError("the GitHub Actions identity token could not be obtained");
   return value;
