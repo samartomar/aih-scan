@@ -39,7 +39,18 @@ if (process.env.AIH_SCAN_TEST_GIT_FIXTURE !== undefined) {
       basename(args[0]) === "git-command.js" &&
       basename(dirname(args[0])) === "host"
     )
-      return spawn.call(this, command, [answer, ...args.slice(1)], options);
+      // Scan gives Git only an allowlisted environment, so the stand-in's own settings are
+      // added here, in the test process, rather than inherited.
+      return spawn.call(this, command, [answer, ...args.slice(1)], {
+        ...options,
+        env: {
+          ...options?.env,
+          AIH_SCAN_TEST_GIT_FIXTURE: process.env.AIH_SCAN_TEST_GIT_FIXTURE,
+          ...(process.env.AIH_SCAN_TEST_GIT_LOG === undefined
+            ? {}
+            : { AIH_SCAN_TEST_GIT_LOG: process.env.AIH_SCAN_TEST_GIT_LOG }),
+        },
+      });
     return spawn.call(this, command, args, options);
   };
   syncBuiltinESMExports();

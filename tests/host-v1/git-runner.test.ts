@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:https";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,11 +9,13 @@ import { GitContainmentError, runPinnedGit } from "../../src/host/git-runner.js"
 
 /**
  * The hardened Git runner with real Git: the bounded process-tree runner starts the Git helper,
- * which runs `git` with argument arrays only, a scrubbed environment (no inherited GIT_* or
- * proxy variables, no system or global configuration, no askpass, no prompts) and an empty
- * hooks directory. Only local repositories are used; nothing is fetched.
+ * which runs `git` with argument arrays only, an allowlisted environment (no inherited GIT_*,
+ * proxy or credential variables, a private HOME, no system or global configuration, no askpass,
+ * no prompts) and an empty hooks directory. Only local repositories and a local HTTPS answerer
+ * are used; nothing is fetched from a live service.
  */
 const hasGit = spawnSync("git", ["--version"]).status === 0;
+const hasOpenssl = spawnSync("openssl", ["version"]).status === 0;
 const roots: string[] = [];
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -82,5 +86,68 @@ describe.runIf(hasGit)("runPinnedGit (real Git)", () => {
       runPinnedGit(["config", "--list"], work, { signal: AbortSignal.abort() }, hooks),
     ).rejects.toThrow("cancelled");
     expect(new GitContainmentError().code).toBe("git-containment-failed");
+  });
+});
+
+describe.runIf(hasGit && hasOpenssl)("runPinnedGit credentials (local HTTPS answerer)", () => {
+  it("never sends the operator's .netrc or inherited secrets to a Git host that answers 401", async () => {
+    // A local HTTPS "repository" answers 401 Basic and records any Authorization header. The
+    // operator's HOME holds a fake .netrc with a matching machine entry and a default entry.
+    const { root, hooks, work } = stage();
+    execFileSync(
+      "openssl",
+      [
+        ...["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes"],
+        ...["-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+        ...["-keyout", join(root, "key.pem"), "-out", join(root, "cert.pem")],
+      ],
+      { stdio: "ignore" },
+    );
+    const seen: (string | null)[] = [];
+    const server = createServer(
+      { key: readFileSync(join(root, "key.pem")), cert: readFileSync(join(root, "cert.pem")) },
+      (request, response) => {
+        seen.push(request.headers.authorization ?? null);
+        response.writeHead(401, { "WWW-Authenticate": 'Basic realm="fixture"' }).end();
+      },
+    );
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const home = join(root, "operator-home");
+      mkdirSync(join(home, ".config", "git"), { recursive: true });
+      writeFileSync(
+        join(home, ".netrc"),
+        "machine 127.0.0.1 login fixture-user password fixture-secret-NOT-REAL\n" +
+          "default login any-user password any-secret-NOT-REAL\n",
+        { mode: 0o600 },
+      );
+      writeFileSync(
+        join(home, ".config", "git", "config"),
+        "[http]\n\textraHeader = X-Leak: yes\n",
+      );
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", join(home, ".config"));
+      vi.stubEnv("NETRC", join(home, ".netrc"));
+      vi.stubEnv("CURL_HOME", home);
+      await runPinnedGit(["init", "--quiet", `--template=${hooks}`], work, {}, hooks);
+      await expect(
+        runPinnedGit(
+          [
+            ...["-c", `http.sslCAInfo=${join(root, "cert.pem")}`, "-c", "credential.helper="],
+            ...["ls-remote", `https://127.0.0.1:${port}/owner/repo.git`, "HEAD"],
+          ],
+          work,
+          {},
+          hooks,
+          1 << 20,
+        ),
+      ).rejects.toMatchObject({ code: "git-acquisition-failed" });
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen).toEqual(seen.map(() => null));
+    } finally {
+      server.close();
+    }
   });
 });

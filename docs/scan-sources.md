@@ -27,7 +27,8 @@ from `.git` as data; its remote address is never read or recorded.
 
 - **Public repositories and packages**: name them directly. Git runs HTTPS only,
   with credential helpers, askpass programs, prompts, hooks, redirects and ambient
-  Git configuration disabled; a repository that needs credentials is refused as
+  Git configuration disabled, and with only an allowlisted environment and a private
+  empty home folder, so no `~/.netrc` or user configuration is read; a repository that needs credentials is refused as
   `source-unavailable`. A full commit given as `--ref` must be reachable from an
   advertised branch or tag. npm packages are fetched by exact version, checked
   against the registry's sha512 integrity and read as files: no npm client,

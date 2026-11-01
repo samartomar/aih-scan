@@ -6,9 +6,9 @@ import { base64Decode, bound, ContractError, fail, strictParse } from "../shared
 /**
  * The hardened Git runner shared by pinned acquisition and remote ref resolution.
  * Git always runs through `git-command` under Scan's bounded process-tree runner, with
- * argument arrays only (never a shell), a scrubbed environment (no inherited GIT_* or
- * proxy variables, no askpass program, no system or global configuration, no terminal
- * prompt), HTTPS as the only transport, no redirects, verified TLS and an empty hooks
+ * argument arrays only (never a shell), an allowlisted environment (no inherited GIT_*,
+ * proxy or credential variables, a private empty HOME so no ~/.netrc or user configuration is
+ * read, no askpass program, no system or global configuration, no terminal prompt), HTTPS as the only transport, no redirects, verified TLS and an empty hooks
  * directory.
  */
 export interface PinnedGitOptions {
@@ -22,6 +22,20 @@ export class GitContainmentError extends ContractError {
     );
   }
 }
+/** Variables (compared in upper case) that locate executables, temporary space and the OS. */
+const INHERITED = new Set([
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+]);
 export async function runPinnedGit(
   argv: string[],
   cwd: string,
@@ -29,16 +43,17 @@ export async function runPinnedGit(
   hooks: string,
   maxBytes = 16 * 1024 * 1024,
 ): Promise<Uint8Array> {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env))
-    if (
-      key.toUpperCase().startsWith("GIT_") ||
-      ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSH_ASKPASS"].includes(
-        key.toUpperCase(),
-      )
-    )
-      delete env[key];
+  // Only what Git needs to start is inherited; everything else (credentials, GIT_*, proxies,
+  // NODE_OPTIONS, curl and netrc settings) is left behind. HOME and its platform equivalents
+  // point at the empty, Scan-owned hooks folder, so libcurl finds no ~/.netrc to answer a 401
+  // with and Git finds no user configuration.
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env))
+    if (value !== undefined && INHERITED.has(key.toUpperCase())) env[key] = value;
   Object.assign(env, {
+    HOME: hooks,
+    USERPROFILE: hooks,
+    XDG_CONFIG_HOME: hooks,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
@@ -47,8 +62,6 @@ export async function runPinnedGit(
     GIT_ASKPASS: "",
     GIT_NO_REPLACE_OBJECTS: "1",
   });
-  const strings: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) if (value !== undefined) strings[key] = value;
   const moduleFile = fileURLToPath(import.meta.url),
     helper = join(dirname(moduleFile), `git-command${extname(moduleFile)}`);
   const gitArgs = [
@@ -70,7 +83,7 @@ export async function runPinnedGit(
     [process.execPath, helper, JSON.stringify(gitArgs), String(maxBytes)],
     {
       cwd,
-      env: strings,
+      env,
       signal: options.signal,
       timeoutMs: 600000,
       maxStdoutBytes: Math.ceil(maxBytes / 3) * 4 + 64,
