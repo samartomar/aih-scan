@@ -1,3 +1,7 @@
+import type { Problem } from "./formats.js";
+import { limits } from "./limits.js";
+import { isBytes, pathProblem } from "./text.js";
+
 /**
  * Portable Git object hashing for scan keys (WebCrypto only). A scan key is the Git tree
  * hash of one folder, prefixed with its algorithm: `git-sha1:<40 hex>` or `git-sha256:<64 hex>`.
@@ -94,11 +98,10 @@ async function treeHash(algorithm: GitAlgorithm, directory: Directory): Promise<
 }
 
 /**
- * The scan key of a file inventory: Git's tree hash of the folder holding exactly these
- * regular files and modes (empty folders do not exist in Git). Paths are validated
- * item-relative POSIX paths; a path that is both a file and a folder is refused by the caller.
+ * The tree key of an inventory already checked by `checkTreeFiles` (or produced by Scan
+ * itself). Throws only when WebCrypto is unavailable.
  */
-export async function scanKeyOf(
+export async function treeKeyOf(
   files: readonly TreeFile[],
   algorithm: GitAlgorithm = "sha1",
 ): Promise<string> {
@@ -118,6 +121,78 @@ export async function scanKeyOf(
     directory.files.set(name, { mode: file.mode, bytes: file.bytes });
   }
   return `git-${algorithm}:${hex(await treeHash(algorithm, root))}`;
+}
+
+const invalid = (reason: string, detail: string): Problem =>
+  Object.freeze({ status: "invalid", reason, detail });
+const refused = (reason: string, detail: string): Problem =>
+  Object.freeze({ status: "refused", reason, detail });
+
+/**
+ * Checks a caller-supplied `{ path, mode, bytes }` inventory by the identity rules: an array
+ * within the file and size limits, safe item-relative POSIX paths (`unsafe-path`, or the limit's
+ * name, `refused`), modes `100644`/`100755`, `Uint8Array` bytes, no repeated path and no path
+ * that is both a file and a folder (`invalid`).
+ */
+export function checkTreeFiles(files: unknown): TreeFile[] | Problem {
+  if (!Array.isArray(files))
+    return invalid("files", "files must be an array of { path, mode, bytes }");
+  if (files.length > limits.input.files)
+    return refused("files", `more than ${limits.input.files} files`);
+  const seen = new Set<string>();
+  let total = 0;
+  const out: TreeFile[] = [];
+  for (const [index, entry] of files.entries()) {
+    if (typeof entry !== "object" || entry === null)
+      return invalid("files", `files[${index}] must be an object`);
+    const { path, mode, bytes } = entry as Record<string, unknown>;
+    const problem = pathProblem(path, limits.input.pathLength, limits.input.depth);
+    if (problem !== undefined)
+      return problem === "path-length" || problem === "depth"
+        ? refused(problem, `files[${index}] exceeds the ${problem} limit`)
+        : refused("unsafe-path", `files[${index}]: ${problem}`);
+    if (mode !== "100644" && mode !== "100755")
+      return invalid("mode", `files[${index}].mode must be 100644 or 100755`);
+    if (!isBytes(bytes)) return invalid("bytes", `files[${index}].bytes must be a Uint8Array`);
+    if (bytes.length > limits.input.fileBytes)
+      return refused("file-size", `files[${index}] exceeds the file size limit`);
+    total += bytes.length;
+    if (total > limits.input.sourceBytes)
+      return refused("source-size", "files exceed the source size limit");
+    if (seen.has(path as string)) return invalid("files", `files[${index}] repeats a path`);
+    seen.add(path as string);
+    out.push({ path: path as string, mode, bytes });
+  }
+  for (const path of seen) {
+    const segments = path.split("/");
+    for (let depth = 1; depth < segments.length; depth += 1)
+      if (seen.has(segments.slice(0, depth).join("/")))
+        return invalid("files", "a path is both a file and a folder");
+  }
+  return out;
+}
+
+export type ScanKeyResult = Readonly<{ status: "ok"; scanKey: string }> | Problem;
+
+/**
+ * The scan key of a file inventory: Git's tree hash of the folder holding exactly these
+ * regular files and modes (empty folders do not exist in Git). The inventory is checked by
+ * `checkTreeFiles` first. Never throws: bad input is `invalid`/`refused`, an unknown algorithm
+ * is `invalid` and a realm without WebCrypto is `refused` (`crypto-unavailable`).
+ */
+export async function scanKeyOf(
+  files: readonly TreeFile[],
+  algorithm: GitAlgorithm = "sha1",
+): Promise<ScanKeyResult> {
+  if (algorithm !== "sha1" && algorithm !== "sha256")
+    return invalid("algorithm", "algorithm must be sha1 or sha256");
+  const checked = checkTreeFiles(files);
+  if (!Array.isArray(checked)) return checked;
+  try {
+    return Object.freeze({ status: "ok" as const, scanKey: await treeKeyOf(checked, algorithm) });
+  } catch {
+    return refused("crypto-unavailable", "WebCrypto is unavailable");
+  }
 }
 
 export function algorithmOfKey(key: string): GitAlgorithm | undefined {

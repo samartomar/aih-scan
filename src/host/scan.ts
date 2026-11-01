@@ -8,7 +8,7 @@ import {
   writeNewSafeOutput,
 } from "../cli/exclusive-output.js";
 import type { Problem } from "../contracts/formats.js";
-import { keyFolderName, scanKeyOf } from "../contracts/git-tree.js";
+import { keyFolderName, treeKeyOf } from "../contracts/git-tree.js";
 import { limits } from "../contracts/limits.js";
 import { remoteMcpFile } from "../contracts/remote-mcp.js";
 import { type Coverage, type SummaryLabel, scoring } from "../contracts/risk.js";
@@ -258,7 +258,7 @@ async function prepareItems(valid: ScanRequest, signal: AbortSignal): Promise<Ph
       path: entry.path,
       ...labelOf(entry.label),
       files: read.files,
-      scanKey: await scanKeyOf(read.files),
+      scanKey: await treeKeyOf(read.files),
       source: pinOf(entry.path),
     });
   }
@@ -461,7 +461,7 @@ async function prepareSource(
       path: item.path,
       kind: item.kind,
       files: item.files,
-      scanKey: await scanKeyOf(item.files),
+      scanKey: await treeKeyOf(item.files),
       source: acquired.pin(item.path),
     });
   }
@@ -472,7 +472,7 @@ async function prepareSource(
         path: ".",
         kind: "remaining-files",
         files: remaining,
-        scanKey: await scanKeyOf(remaining),
+        scanKey: await treeKeyOf(remaining),
         source: acquired.pin("."),
       });
   }

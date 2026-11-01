@@ -75,7 +75,7 @@ assert.equal(mismatch.message, "Findings don't match this scan");
 assert.equal(contracts.formats.summary, "aih-scan-summary/1");
 assert.equal(contracts.scoreFindings([{ tool: "t", ruleId: "r", code: "trust.malicious-code", severity: "HIGH", confidence: 0.9, part: "code", path: "a", line: 1 }]).score, 29);
 assert.equal(
-  await contracts.scanKeyOf([{ path: ".mcp.json", mode: "100644", bytes: runInContext("new TextEncoder().encode('{\"mcpServers\":{\"remote\":{\"url\":\"https://mcp.example.com/sse\"}}}\\n')", context) }]),
+  (await contracts.scanKeyOf([{ path: ".mcp.json", mode: "100644", bytes: runInContext("new TextEncoder().encode('{\"mcpServers\":{\"remote\":{\"url\":\"https://mcp.example.com/sse\"}}}\\n')", context) }])).scanKey,
   "git-sha1:23f948e8a00fa0cb22c78c7c51eeb6f0a6f7cb44",
 );
 assert.equal(contracts.validateRequest({ format: "aih-scan-request/9" }).status, "unsupported-version");

@@ -1,8 +1,13 @@
 import type { Problem } from "../contracts/formats.js";
-import { algorithmOfKey, type FileMode, scanKeyOf, sha256Hex } from "../contracts/git-tree.js";
-import { limits } from "../contracts/limits.js";
+import {
+  algorithmOfKey,
+  checkTreeFiles,
+  type FileMode,
+  type GitAlgorithm,
+  sha256Hex,
+  treeKeyOf,
+} from "../contracts/git-tree.js";
 import type { Coverage } from "../contracts/risk.js";
-import { isBytes, pathProblem } from "../contracts/text.js";
 import { type Summary, validateSummary } from "../contracts/validate.js";
 
 export interface MatchFile {
@@ -81,44 +86,6 @@ function resolveSummary(
   return invalid("summary", "expected a summary or a verifySummary result");
 }
 
-function checkFiles(files: unknown): MatchFile[] | Problem {
-  if (!Array.isArray(files))
-    return invalid("files", "files must be an array of { path, mode, bytes }");
-  if (files.length > limits.input.files)
-    return refused("files", `more than ${limits.input.files} files`);
-  const seen = new Set<string>();
-  let total = 0;
-  const out: MatchFile[] = [];
-  for (const [index, entry] of files.entries()) {
-    if (typeof entry !== "object" || entry === null)
-      return invalid("files", `files[${index}] must be an object`);
-    const { path, mode, bytes } = entry as Record<string, unknown>;
-    const problem = pathProblem(path, limits.input.pathLength, limits.input.depth);
-    if (problem !== undefined)
-      return problem === "path-length" || problem === "depth"
-        ? refused(problem, `files[${index}] exceeds the ${problem} limit`)
-        : refused("unsafe-path", `files[${index}]: ${problem}`);
-    if (mode !== "100644" && mode !== "100755")
-      return invalid("mode", `files[${index}].mode must be 100644 or 100755`);
-    if (!isBytes(bytes)) return invalid("bytes", `files[${index}].bytes must be a Uint8Array`);
-    if (bytes.length > limits.input.fileBytes)
-      return refused("file-size", `files[${index}] exceeds the file size limit`);
-    total += bytes.length;
-    if (total > limits.input.sourceBytes)
-      return refused("source-size", "files exceed the source size limit");
-    if (seen.has(path as string)) return invalid("files", `files[${index}] repeats a path`);
-    seen.add(path as string);
-    out.push({ path: path as string, mode, bytes });
-  }
-  for (const path of seen) {
-    const segments = path.split("/");
-    for (let depth = 1; depth < segments.length; depth += 1)
-      if (seen.has(segments.slice(0, depth).join("/")))
-        return invalid("files", "a path is both a file and a folder");
-  }
-  return out;
-}
-
 /**
  * Matches a summary (or a `verifySummary` result) to exact content in one call: the supplied
  * inventory must reproduce the scan key AND every file's sha256 and mode. A summary alone gives
@@ -131,12 +98,25 @@ export async function matchScan(
 ): Promise<MatchScanResult> {
   const resolved = resolveSummary(summaryOrVerified);
   if ("status" in resolved) return resolved;
-  const checked = checkFiles(files);
+  const checked = checkTreeFiles(files);
   if (!Array.isArray(checked)) return checked;
   const { summary, signer } = resolved;
   const algorithm = algorithmOfKey(summary.scanKey);
   if (algorithm === undefined) return invalid("scanKey", "unsupported scan key algorithm");
-  const scanKey = await scanKeyOf(checked, algorithm);
+  try {
+    return await compare(summary, signer, checked, algorithm);
+  } catch {
+    return refused("crypto-unavailable", "WebCrypto is unavailable");
+  }
+}
+
+async function compare(
+  summary: Summary,
+  signer: MatchSigner | null,
+  checked: readonly MatchFile[],
+  algorithm: GitAlgorithm,
+): Promise<MatchScanResult> {
+  const scanKey = await treeKeyOf(checked, algorithm);
   const listed = new Map(summary.files.map((file) => [file.path, file]));
   const supplied = new Set(checked.map((file) => file.path));
   const missing = summary.files.map((file) => file.path).filter((path) => !supplied.has(path));

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { routeFile, scanKeyOf, sha256Hex } from "../../src/public/contracts.js";
 
+const keyOf = async (...args: Parameters<typeof scanKeyOf>): Promise<string> => {
+  const result = await scanKeyOf(...args);
+  if (result.status !== "ok") throw new Error(JSON.stringify(result));
+  return result.scanKey;
+};
+
 const bytes = (text: string) => new TextEncoder().encode(text);
 
 describe("aih-scan-routing/1", () => {
@@ -97,29 +103,66 @@ describe("scan keys", () => {
     expect(await sha256Hex(file)).toBe(
       "bf2d2ae9946586d179642cc13dc709ad9ec1627752dd6de67924f61842f9f3dd",
     );
-    expect(await scanKeyOf([{ path: ".mcp.json", mode: "100644", bytes: file }])).toBe(
+    expect(await keyOf([{ path: ".mcp.json", mode: "100644", bytes: file }])).toBe(
       "git-sha1:23f948e8a00fa0cb22c78c7c51eeb6f0a6f7cb44",
     );
   });
 
   it("matches Git's own tree hashes, including nesting, modes and ordering", async () => {
     // Expected values computed independently with `git mktree`/`git write-tree`.
-    expect(await scanKeyOf([])).toBe("git-sha1:4b825dc642cb6eb9a060e54bf8d69288fbee4904");
-    const key = await scanKeyOf([
+    expect(await keyOf([])).toBe("git-sha1:4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+    const key = await keyOf([
       { path: "a.b", mode: "100644", bytes: bytes("x\n") },
       { path: "a/c", mode: "100755", bytes: bytes("y\n") },
     ]);
     expect(key).toBe(GIT_NESTED_KEY);
-    const reordered = await scanKeyOf([
+    const reordered = await keyOf([
       { path: "a/c", mode: "100755", bytes: bytes("y\n") },
       { path: "a.b", mode: "100644", bytes: bytes("x\n") },
     ]);
     expect(reordered).toBe(key);
-    const modeChanged = await scanKeyOf([
+    const modeChanged = await keyOf([
       { path: "a.b", mode: "100644", bytes: bytes("x\n") },
       { path: "a/c", mode: "100644", bytes: bytes("y\n") },
     ]);
     expect(modeChanged).not.toBe(key);
+  });
+});
+
+describe("scanKeyOf", () => {
+  const file = (path: string) => ({ path, mode: "100644" as const, bytes: bytes("x\n") });
+
+  it.each([
+    ["an empty path", [file("")], "refused", "unsafe-path"],
+    ["an empty segment", [file("a//b")], "refused", "unsafe-path"],
+    ["a dot segment", [file("a/./b")], "refused", "unsafe-path"],
+    ["an escaping path", [file("../b")], "refused", "unsafe-path"],
+    ["a file that is also a folder", [file("a"), file("a/b")], "invalid", "files"],
+    ["a repeated path", [file("a"), file("a")], "invalid", "files"],
+    ["a bad mode", [{ ...file("a"), mode: "120000" }], "invalid", "mode"],
+    ["missing bytes", [{ path: "a", mode: "100644" }], "invalid", "bytes"],
+    ["not an array", "a", "invalid", "files"],
+  ])("returns a result, never throws, for %s", async (_name, files, status, reason) => {
+    expect(await scanKeyOf(files as never)).toMatchObject({ status, reason });
+  });
+
+  it("rejects an unknown algorithm and a realm without WebCrypto as results", async () => {
+    expect(await scanKeyOf([file("a")], "md5" as never)).toMatchObject({
+      status: "invalid",
+      reason: "algorithm",
+    });
+    const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+    try {
+      expect(await scanKeyOf([file("a")])).toEqual({
+        status: "refused",
+        reason: "crypto-unavailable",
+        detail: "WebCrypto is unavailable",
+      });
+    } finally {
+      if (original) Object.defineProperty(globalThis, "crypto", original);
+    }
+    expect((await scanKeyOf([file("a")])).status).toBe("ok");
   });
 });
 

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { gitBlobHex, scanKeyOf, sha256Hex } from "../../src/contracts/git-tree.js";
+import { gitBlobHex, sha256Hex, treeKeyOf } from "../../src/contracts/git-tree.js";
 import { remoteMcpFile } from "../../src/contracts/remote-mcp.js";
 import { matchScan as hostMatchScan, scan } from "../../src/public/host.js";
 import { matchScan, readSummary } from "../../src/public/read.js";
@@ -37,7 +37,7 @@ describe("remote MCP configuration", () => {
     expect(file.bytes.at(-2)).not.toBe(0x0a);
     expect(await sha256Hex(file.bytes)).toBe(golden.file.sha256);
     expect(await gitBlobHex("sha1", file.bytes)).toBe(golden.file.gitBlobSha1);
-    expect(await scanKeyOf([file])).toBe(golden.scanKey);
+    expect(await treeKeyOf([file])).toBe(golden.scanKey);
   });
 
   it("scans the descriptor as configuration only, and host and portable matching agree on the golden file", async () => {
@@ -94,7 +94,7 @@ describe("remote MCP configuration", () => {
       });
       const entry = result.results[0];
       if (entry?.status !== "ok") throw new Error(JSON.stringify(result));
-      expect(entry.scanKey).toBe(await scanKeyOf([remoteMcpFile(url)]));
+      expect(entry.scanKey).toBe(await treeKeyOf([remoteMcpFile(url)]));
       expect(new TextDecoder().decode(remoteMcpFile(url).bytes)).toBe(
         `{"mcpServers":{"remote":{"url":"${url}"}}}\n`,
       );

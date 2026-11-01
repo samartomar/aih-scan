@@ -31,7 +31,7 @@ them approves or blocks an installation.
 | `aih-codes/1` | `codes`, `scanCodes`, `advisoryCodes`, `toolRuleCodes`, `toolCategoryCodes`, `codeForRule` | `src/contracts/codes.ts` | Every tool rule maps to one code; an unmapped rule is `trust.unmapped-rule` and still scored; `trust.known-vulnerability` appears only in advisory results |
 | `aih-scan-limits/1` | `limits` | `src/contracts/limits.ts` | Input limits (refused, exit 2), the per-tool time limit (`not-run`, `timeout`) and output bounds of the readers |
 | `aih-sigstore-keyless/1` | `verification`, `defaultSigners`, `sigstoreTrustedRootText` | `src/contracts/verification.ts`, `src/contracts/sigstore-trusted-root.ts` | The only accepted signature profile, its encodings and algorithms, the default trusted publisher and the pinned Sigstore trust snapshot (also shipped as `trust/sigstore-trusted-root.json`) |
-| Scan key `git-sha1:` / `git-sha256:` | `scanKeyOf`, `SCAN_KEY_PATTERN`, `keyFolderName` | `src/contracts/git-tree.ts` | The Git tree hash of the folder handed over; storage folders write the colon as a hyphen |
+| Scan key `git-sha1:` / `git-sha256:` | `scanKeyOf`, `SCAN_KEY_PATTERN`, `keyFolderName` | `src/contracts/git-tree.ts` | The Git tree hash of the folder handed over (`scanKeyOf` resolves to `{ status: "ok", scanKey }` or a problem: unsafe paths `refused`, repeated paths, file-and-folder clashes and bad modes `invalid`, no WebCrypto `refused` `crypto-unavailable`); storage folders write the colon as a hyphen |
 
 ## Entry points
 
