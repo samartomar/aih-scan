@@ -112,8 +112,27 @@ describe("aih-scan scan", () => {
     const json = capture();
     expect(await runScanCommandV1([risky, "--out", "out2", "--json"], json.io)).toBe(0);
     const result = JSON.parse(json.out());
-    expect(result).toMatchObject({ status: "ok", results: [{ status: "ok", path: risky }] });
-    const entry = result.results[0];
+    // A folder is the source route: the root SKILL.md makes the whole folder one skill.
+    expect(result).toMatchObject({
+      status: "ok",
+      targets: [
+        {
+          target: risky,
+          status: "ok",
+          acquisition: { type: "folder", fetched: false },
+          results: [
+            {
+              status: "ok",
+              kind: "skill",
+              path: ".",
+              source: { type: "folder", path: risky, item: "." },
+            },
+          ],
+          rollup: { label: "CAUTION", items: 1 },
+        },
+      ],
+    });
+    const entry = result.targets[0].results[0];
     const findings = capture();
     expect(await runFindingsCommand([entry.summaryPath, "--key", entry.scanKey], findings.io)).toBe(
       0,
@@ -150,7 +169,7 @@ describe("aih-scan scan", () => {
       exitCodes.input,
     );
     expect(
-      JSON.parse(several.out()).results.map((entry: { status: string }) => entry.status),
+      JSON.parse(several.out()).targets.map((entry: { status: string }) => entry.status),
     ).toEqual(["refused", "ok"]);
     // Bad usage.
     expect(await runScanCommandV1([clean], capture().io)).toBe(exitCodes.input);

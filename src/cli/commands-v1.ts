@@ -11,9 +11,17 @@ import {
 import { kinds, optionalTools } from "../contracts/routing.js";
 import { pathProblem, sanitizeText } from "../contracts/text.js";
 import type { Summary } from "../contracts/validate.js";
-import { type ScanResult, scan } from "../host/scan.js";
+import {
+  type Rollup,
+  type ScanInternals,
+  type ScanItemResult,
+  type ScanResult,
+  type SharedOutput,
+  scanWith,
+} from "../host/scan.js";
 import { FINDINGS_MISMATCH_MESSAGE, type Finding, readFindings } from "../read/read-findings.js";
 import { readSummary } from "../read/read-summary.js";
+import { TargetError, targetSource } from "./targets-v1.js";
 
 /** 0 finished (complete or partial); 1 only with --fail-at; 2 could not scan or read; 130 cancelled. */
 export const exitCodes = Object.freeze({ ok: 0, failAt: 1, input: 2, cancelled: 130 });
@@ -23,16 +31,29 @@ export interface CommandIo {
   readonly stderr: (text: string) => void;
   readonly cancellation?: AbortSignal;
   readonly cwd?: string;
+  /** Internal seams passed to the host scan (an npm registry stub, a fixed clock, adapters). */
+  readonly internals?: Omit<ScanInternals, "sharedOutput">;
 }
 
 export const scanUsage = `${[
-  "Usage: aih-scan scan <folder> [<folder>...] --out <new-folder> [options]",
+  "Usage: aih-scan scan <target> [<target>...] --out <new-folder> [options]",
   "",
-  "Scans each folder as handed over: one result per folder, keyed by its Git tree hash.",
-  "Supplied content is never executed; static mode makes no network calls.",
+  "Targets:",
+  "  <folder>                    a folder or a local clone (private repositories stay local)",
+  "  <owner/repo | https-url>    a public Git repository, with --ref <name>",
+  "  <github item link>          https://github.com/<owner>/<repo>/tree/<ref>/<path>",
+  "  npm:<package>@<version>     a public npm MCP package (exact version)",
+  "  npm-file:<package.tgz>      a downloaded npm package tarball",
+  "  mcp-url:<url>               remote MCP configuration only; the endpoint is never contacted",
+  "",
+  "Finds skills, agents, commands, rules, hooks and MCP configs: one result per item, one for",
+  "the remaining files and a roll-up. Each item is keyed by its Git tree hash. Git and npm",
+  "sources are fetched before scanning; supplied content is never executed and static mode",
+  "makes no network calls.",
   "",
   "Options:",
   "  --out <new-folder>          required; must not exist",
+  "  --ref <name>                branch, tag or full commit of a Git target",
   "  --tools <list>              skillspector,aih-trust-lint[,cisco]; aih-trust-lint always runs",
   "  --mode static|ai            default static",
   "  --origin published|local    default local",
@@ -163,23 +184,60 @@ function summaryLines(summary: Summary): string {
   return `${lines.join("\n")}\n`;
 }
 
-/** `aih-scan scan <folder...> --out <new-folder>`: each folder is one item as handed over. */
+function resultLine(entry: ScanItemResult, summary: Summary | undefined): string {
+  const name = `${entry.kind === undefined ? "" : `${entry.kind} `}${safe(entry.path)}`;
+  if (entry.status !== "ok")
+    return `${name}: ${entry.status} (${safe(entry.reason, 200)})${entry.detail ? ` ${safe(entry.detail, 300)}` : ""}\n`;
+  if (summary === undefined) return `${name}: summary unreadable\n`;
+  return `${name}\n  ${summaryLines(summary).trimEnd().split("\n").join("\n  ")}\n  summary ${safe(entry.summaryPath, 4096)}\n`;
+}
+
+function rollupLine(rollup: Rollup): string {
+  const counts = (record: Readonly<Record<string, number | undefined>>) =>
+    Object.entries(record)
+      .map(([kind, count]) => `${kind} ${count}`)
+      .join(", ");
+  const parts = [
+    `${displayLabel(rollup)}${rollup.reason ? ` (${safe(rollup.reason, 200)})` : ""}`,
+    `${rollup.items} scanned, ${rollup.partial} partial, ${rollup.notAssessed} NOT ASSESSED`,
+    `found ${counts(rollup.found) || "no items"}`,
+    `remaining files ${rollup.remainingFiles}`,
+  ];
+  if (Object.keys(rollup.notSelected).length > 0)
+    parts.push(`not selected ${counts(rollup.notSelected)}`);
+  return `Roll-up: ${parts.join("; ")}\n`;
+}
+
+/**
+ * `aih-scan scan <target...> --out <new-folder>`: each target is a source (folder, Git
+ * repository or item link, npm package or tarball, remote MCP configuration) scanned by
+ * discovery into one shared new output folder.
+ */
 export async function runScanCommandV1(args: readonly string[], io: CommandIo): Promise<number> {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     io.stdout(scanUsage);
     return exitCodes.ok;
   }
-  let result: ScanResult;
+  const outcomes: { target: string; result: ScanResult }[] = [];
   let failAt: RiskLabel | undefined;
   let json = false;
   let quiet = false;
   try {
     const parsed = parse(
       args,
-      ["--out", "--tools", "--mode", "--origin", "--kinds", "--internal-scope", "--fail-at"],
+      [
+        "--out",
+        "--ref",
+        "--tools",
+        "--mode",
+        "--origin",
+        "--kinds",
+        "--internal-scope",
+        "--fail-at",
+      ],
       ["--json", "--quiet"],
     );
-    if (parsed.positional.length === 0) throw new UsageError("name at least one folder");
+    if (parsed.positional.length === 0) throw new UsageError("name at least one target");
     const out = single(parsed, "--out");
     if (out === undefined) throw new UsageError("--out <new-folder> is required");
     json = parsed.flags.has("--json");
@@ -190,24 +248,47 @@ export async function runScanCommandV1(args: readonly string[], io: CommandIo): 
     const selectedKinds = list(single(parsed, "--kinds"), kinds, "--kinds");
     const mode = single(parsed, "--mode");
     const origin = single(parsed, "--origin") ?? "local";
+    const ref = single(parsed, "--ref");
     const scopes = parsed.values.get("--internal-scope") ?? [];
     for (const scope of scopes)
       if (!/^@[a-z0-9][a-z0-9._~-]*$/.test(scope))
         throw new UsageError("--internal-scope takes @scope");
     const cwd = io.cwd ?? process.cwd();
-    const request = {
-      format: formats.request,
-      origin,
-      items: parsed.positional.map((path) => ({ path: resolve(cwd, path) })),
-      ...(selectedKinds === undefined ? {} : { kinds: selectedKinds }),
-      ...(tools === undefined ? {} : { tools }),
-      ...(mode === undefined ? {} : { mode }),
-    };
-    result = await scan(request, {
-      outDir: resolve(cwd, out),
-      ...(io.cancellation === undefined ? {} : { signal: io.cancellation }),
-      internalScopes: [...new Set(scopes)].sort(),
+    const sources = parsed.positional.map((target) => {
+      try {
+        return targetSource(target, cwd, ref);
+      } catch (error) {
+        throw new UsageError(error instanceof TargetError ? error.message : "unreadable target");
+      }
     });
+    const shared: SharedOutput = { outDir: resolve(cwd, out), written: new Map() };
+    for (const [index, source] of sources.entries()) {
+      const request = {
+        format: formats.request,
+        origin,
+        source,
+        ...(selectedKinds === undefined ? {} : { kinds: selectedKinds }),
+        ...(tools === undefined ? {} : { tools }),
+        ...(mode === undefined ? {} : { mode }),
+      };
+      const result = await scanWith(
+        request,
+        {
+          outDir: shared.outDir,
+          ...(io.cancellation === undefined ? {} : { signal: io.cancellation }),
+          internalScopes: [...new Set(scopes)].sort(),
+        },
+        { ...io.internals, sharedOutput: shared },
+      );
+      outcomes.push({ target: parsed.positional[index] as string, result });
+      if (result.status === "cancelled") break;
+      // An existing or unusable output folder stops every target.
+      if (
+        "reason" in result &&
+        (result.reason === "output-exists" || result.reason === "output-unavailable")
+      )
+        break;
+    }
   } catch (error) {
     if (error instanceof UsageError) {
       io.stderr(`aih-scan: ${error.message}\n${scanUsage}`);
@@ -217,38 +298,50 @@ export async function runScanCommandV1(args: readonly string[], io: CommandIo): 
     return exitCodes.input;
   }
   const summaries = new Map<string, Summary>();
-  for (const entry of result.results) {
-    if (entry.status !== "ok" || summaries.has(entry.summaryPath)) continue;
-    const read = readSummaryFile(entry.summaryPath);
-    if ("summary" in read) summaries.set(entry.summaryPath, read.summary);
-  }
-  if (json) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
-  else if (!quiet) {
+  for (const { result } of outcomes)
     for (const entry of result.results) {
-      if (entry.status === "ok") {
-        const summary = summaries.get(entry.summaryPath);
+      if (entry.status !== "ok" || summaries.has(entry.summaryPath)) continue;
+      const read = readSummaryFile(entry.summaryPath);
+      if ("summary" in read) summaries.set(entry.summaryPath, read.summary);
+    }
+  const cancelled = outcomes.some(({ result }) => result.status === "cancelled");
+  const failed = outcomes.some(
+    ({ result }) => result.status !== "ok" && result.status !== "cancelled",
+  );
+  if (json)
+    io.stdout(
+      `${JSON.stringify(
+        {
+          status: cancelled ? "cancelled" : failed ? "refused" : "ok",
+          targets: outcomes.map(({ target, result }) => ({ target, ...result })),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  else if (!quiet)
+    for (const { target, result } of outcomes) {
+      if (outcomes.length > 1) io.stdout(`== ${safe(target)}\n`);
+      if (result.acquisition?.fetched)
         io.stdout(
-          summary === undefined
-            ? `${safe(entry.path)}: summary unreadable\n`
-            : `${safe(entry.path)}\n  ${summaryLines(summary).trimEnd().split("\n").join("\n  ")}\n  summary ${safe(entry.summaryPath, 4096)}\n`,
+          `Fetched the ${result.acquisition.type} source before scanning; the scan itself is offline in static mode.\n`,
         );
-      } else
+      for (const entry of result.results)
         io.stdout(
-          `${safe(entry.path)}: ${entry.status} (${safe(entry.reason, 200)})${entry.detail ? ` ${safe(entry.detail, 300)}` : ""}\n`,
+          resultLine(entry, entry.status === "ok" ? summaries.get(entry.summaryPath) : undefined),
+        );
+      if (result.rollup !== undefined && result.status !== "invalid")
+        io.stdout(rollupLine(result.rollup));
+      if (result.results.length === 0 && "detail" in result)
+        io.stderr(
+          `aih-scan: ${safe(target)}: ${result.status} (${safe(result.reason, 200)}): ${safe(String(result.detail ?? ""), 300)}\n`,
         );
     }
-  }
-  if (result.status === "cancelled") {
+  if (cancelled) {
     io.stderr("aih-scan: cancelled; finished results were kept\n");
     return exitCodes.cancelled;
   }
-  if (result.status !== "ok") {
-    if (result.results.length === 0 && "detail" in result)
-      io.stderr(
-        `aih-scan: ${result.status} (${safe(result.reason, 200)}): ${safe(String(result.detail ?? ""), 300)}\n`,
-      );
-    return exitCodes.input;
-  }
+  if (failed) return exitCodes.input;
   if (
     failAt !== undefined &&
     [...summaries.values()].some((summary) => failAtReached(summary.label as SummaryLabel, failAt))
