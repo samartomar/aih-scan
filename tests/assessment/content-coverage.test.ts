@@ -4,14 +4,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { canonicalBytes, observationIdFor } from "../../src/assessment/json.js";
 import type { ContentDescriptor, ReportBody } from "../../src/assessment/types.js";
-import { runScan } from "../../src/public/host.js";
+import { runScan } from "../../src/legacy-public/host.js";
 import {
   maxContentDescriptors,
   readArtifact,
   readContentCoverageBatch,
   readReport,
   readContentCoverage as singletonCoverage,
-} from "../../src/public/read.js";
+} from "../../src/legacy-public/read.js";
 
 const examples = (
   JSON.parse(readFileSync("schemas/examples/1.0.0.json", "utf8")) as {

@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { deliverMaterialChange, type MaterialChange } from "../../src/public/host.js";
+import { deliverMaterialChange, type MaterialChange } from "../../src/legacy-public/host.js";
 
 afterEach(() => vi.unstubAllGlobals());
 const summary: MaterialChange = {

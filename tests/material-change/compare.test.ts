@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { compareMaterialInventories } from "../../src/public/host.js";
+import { compareMaterialInventories } from "../../src/legacy-public/host.js";
 import { inventory, item, scanA, scanB, sourceId } from "./fixtures.js";
 
 async function compare(

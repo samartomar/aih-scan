@@ -3,7 +3,7 @@ import { connect, createServer, type Socket } from "node:net";
 import { afterEach, expect, test, vi } from "vitest";
 import { startGitFetchRelay } from "../../src/assessment/git-fetch-relay.js";
 import * as processBoundary from "../../src/cli/process-runner.js";
-import { runScan } from "../../src/public/host.js";
+import { runScan } from "../../src/legacy-public/host.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {

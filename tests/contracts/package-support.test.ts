@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import * as contracts from "../../src/public/contracts.js";
-import { contractSupport, entrySupport } from "../../src/public/contracts.js";
+import * as contracts from "../../src/legacy-public/contracts.js";
+import { contractSupport, entrySupport } from "../../src/legacy-public/contracts.js";
 
 // Verbatim copy of the @aihq/core schema export schemas/package-support/1.0.0.json.
 // Scan takes no runtime dependency on Core; this fixture pins the published shape.

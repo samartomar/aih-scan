@@ -6,8 +6,8 @@ import { afterEach, expect, test, vi } from "vitest";
 import { canonicalBytes } from "../../src/assessment/json.js";
 import { SEMGREP_VERSION_V1 } from "../../src/baseline/runtime-v1.js";
 import * as processBoundary from "../../src/cli/process-runner.js";
-import { runScan } from "../../src/public/host.js";
-import { readReport } from "../../src/public/read.js";
+import { runScan } from "../../src/legacy-public/host.js";
+import { readReport } from "../../src/legacy-public/read.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),

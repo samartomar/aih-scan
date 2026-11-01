@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "vitest";
 import { runDetectorV1 } from "../../src/index.js";
-import { runScan } from "../../src/public/host.js";
+import { runScan } from "../../src/legacy-public/host.js";
 import { assemblePublicConsumerFixture } from "../support/public-consumer-fixture.js";
 
 test("the assessment native adapter preserves the public runner's original annex, including supported file links", async () => {
@@ -78,7 +78,7 @@ test("changing unrelated installed trust rules preserves native and binding obse
       script,
       `
 import { appendFileSync } from 'node:fs';
-import { runScan, createRetainedObservationsV1 } from ${JSON.stringify(pathToFileURL(join(installed, "dist/public/host.js")).href)};
+import { runScan, createRetainedObservationsV1 } from ${JSON.stringify(pathToFileURL(join(installed, "dist/legacy-public/host.js")).href)};
 const retained = createRetainedObservationsV1();
 const request = {
   schema: 'urn:aihq:scan:request:1.0.0', source: {kind: 'local', path: ${JSON.stringify(source)}},

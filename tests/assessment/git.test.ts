@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import * as processBoundary from "../../src/cli/process-runner.js";
-import { runScan } from "../../src/public/host.js";
+import { runScan } from "../../src/legacy-public/host.js";
 
 const roots: string[] = [];
 afterEach(() => {

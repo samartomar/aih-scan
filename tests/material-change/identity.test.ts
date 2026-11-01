@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import type { MaterialChange } from "../../src/public/contracts.js";
-import { deliverMaterialChange } from "../../src/public/host.js";
+import type { MaterialChange } from "../../src/legacy-public/contracts.js";
+import { deliverMaterialChange } from "../../src/legacy-public/host.js";
 import { scanA, scanB, sourceId } from "./fixtures.js";
 
 test("uses the contract change identity independently of scan context", async () => {

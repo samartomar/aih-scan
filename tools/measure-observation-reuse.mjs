@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { createRetainedObservationsV1, runScan } from "../dist/public/host.js";
+import { createRetainedObservationsV1, runScan } from "../dist/legacy-public/host.js";
 
 // A reproducible detector-work delta, measured only against an owned temporary source.
 // Build first. This is deliberately not a customer-scale or cold-filesystem benchmark.

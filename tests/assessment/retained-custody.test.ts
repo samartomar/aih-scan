@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { createRetainedObservationsV1, runScan } from "../../src/public/host.js";
+import { createRetainedObservationsV1, runScan } from "../../src/legacy-public/host.js";
 
 test("returned report mutation cannot change retained bytes and a cloned handle cannot claim custody", async () => {
   const root = mkdtempSync(join(tmpdir(), "aih-reuse-custody-"));

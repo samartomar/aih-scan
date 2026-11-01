@@ -9,14 +9,14 @@ import type {
   ReadContentCoverageResult,
   ReportBody,
 } from "../../src/assessment/types.js";
-import { runScan } from "../../src/public/host.js";
+import { runScan } from "../../src/legacy-public/host.js";
 import {
   coverageBatchLimits,
   maxContentDescriptors,
   readContentCoverage,
   readContentCoverageBatch,
   readReport,
-} from "../../src/public/read.js";
+} from "../../src/legacy-public/read.js";
 
 const report: ReportBody = JSON.parse(
   readFileSync("schemas/examples/1.0.0.json", "utf8"),

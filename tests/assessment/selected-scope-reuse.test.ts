@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { createRetainedObservationsV1, runScan } from "../../src/public/host.js";
+import { createRetainedObservationsV1, runScan } from "../../src/legacy-public/host.js";
 
 const roots: string[] = [];
 afterEach(() => {

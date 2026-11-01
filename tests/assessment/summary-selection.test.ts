@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { canonicalBytes, sha256 } from "../../src/assessment/json.js";
 import { listDetectorCapabilitiesV1 } from "../../src/index.js";
-import type { ReportBody } from "../../src/public/contracts.js";
-import { signArtifact } from "../../src/public/host.js";
-import * as readApi from "../../src/public/read.js";
-import { readSummary, selectAssessments } from "../../src/public/read.js";
+import type { ReportBody } from "../../src/legacy-public/contracts.js";
+import { signArtifact } from "../../src/legacy-public/host.js";
+import * as readApi from "../../src/legacy-public/read.js";
+import { readSummary, selectAssessments } from "../../src/legacy-public/read.js";
 import { canonical, exerciseSummarySelection } from "../support/summary-selection-cases.mjs";
 
 test("distinct valid envelopes retain per-artifact facts without report conflicts", async () => {

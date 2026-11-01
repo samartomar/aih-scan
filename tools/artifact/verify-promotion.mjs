@@ -1,7 +1,7 @@
 // Trusted final assembly, independently selected trust, and promotion only after
 // offline consumer authentication. This tool never signs or makes network calls.
 import { writeFileSync } from "node:fs";
-import { attachAttestation, authenticateArtifact } from "../../dist/public/host.js";
+import { attachAttestation, authenticateArtifact } from "../../dist/legacy-public/host.js";
 import { strictParse } from "../../dist/assessment/json.js";
 import { readRegular } from "./check-statement.mjs";
 

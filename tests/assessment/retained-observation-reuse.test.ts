@@ -6,7 +6,7 @@ import {
   createRetainedObservationsV1,
   type RetainedObservationsV1,
   runScan,
-} from "../../src/public/host.js";
+} from "../../src/legacy-public/host.js";
 
 const roots: string[] = [];
 afterEach(() => {

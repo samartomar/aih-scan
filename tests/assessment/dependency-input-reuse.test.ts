@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import type { ScanRunResult } from "../../src/public/host.js";
+import type { ScanRunResult } from "../../src/legacy-public/host.js";
 import { assemblePublicConsumerFixture, npmCliPath } from "../support/public-consumer-fixture.js";
 
 type Assessment = Extract<ScanRunResult, { status: "assessment" }> & { preloadMarker?: string };
@@ -120,7 +120,7 @@ function installedFixture(
       `
 import {createHash, generateKeyPairSync} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
-import {runScan, signArtifact} from ${JSON.stringify(pathToFileURL(join(first, "dist/public/host.js")).href)};
+import {runScan, signArtifact} from ${JSON.stringify(pathToFileURL(join(first, "dist/legacy-public/host.js")).href)};
 await globalThis.__aihPreloadReady;
 const result = await runScan(${JSON.stringify(request)});
 if(result.status !== 'assessment') throw new Error('Fixture assessment required');
@@ -146,7 +146,7 @@ process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPr
       currentScript,
       `
 import {readFileSync} from 'node:fs';
-import {runScan} from ${JSON.stringify(pathToFileURL(join(second, "dist/public/host.js")).href)};
+import {runScan} from ${JSON.stringify(pathToFileURL(join(second, "dist/legacy-public/host.js")).href)};
 await globalThis.__aihPreloadReady;
 const result = await runScan({...${JSON.stringify(request)}, priorArtifacts:[{scanId:${JSON.stringify(original.scanId)},location:{kind:'file',path:${JSON.stringify(priorPath)}}}]}, {reuseTrust:JSON.parse(readFileSync(${JSON.stringify(trustPath)},'utf8'))});
 process.stdout.write(JSON.stringify({...result, preloadMarker:globalThis.__aihPreloadMarker}));

@@ -6,7 +6,7 @@ import type {
   SigstoreBundle,
   VerificationPublisher,
 } from "../../src/artifact/types.js";
-import { attachAttestation, prepareArtifact } from "../../src/public/host.js";
+import { attachAttestation, prepareArtifact } from "../../src/legacy-public/host.js";
 import { emptyReport } from "../assessment/fixtures.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest();

@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync, linkSync, unlinkSync, lstatSync, rmSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
-import { prepareArtifact } from "../../dist/public/host.js";
+import { prepareArtifact } from "../../dist/legacy-public/host.js";
 import { base64Decode, canonicalBytes, strictParse } from "../../dist/assessment/json.js";
 import { object, array } from "../../dist/artifact/validation.js";
 import { readRegular } from "./check-statement.mjs";

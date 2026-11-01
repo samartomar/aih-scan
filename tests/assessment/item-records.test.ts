@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { runScan } from "../../src/public/host.js";
-import * as api from "../../src/public/read.js";
+import { runScan } from "../../src/legacy-public/host.js";
+import * as api from "../../src/legacy-public/read.js";
 import { replayItemSummaries } from "../support/item-summary-replay.mjs";
 
 const json = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));

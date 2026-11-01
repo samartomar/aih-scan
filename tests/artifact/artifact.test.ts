@@ -5,8 +5,8 @@ import {
   authenticateArtifact,
   prepareArtifact,
   signArtifact,
-} from "../../src/public/host.js";
-import { readArtifact, readReport } from "../../src/public/read.js";
+} from "../../src/legacy-public/host.js";
+import { readArtifact, readReport } from "../../src/legacy-public/read.js";
 import { emptyReport } from "../assessment/fixtures.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");

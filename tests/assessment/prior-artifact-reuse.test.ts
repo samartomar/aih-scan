@@ -12,8 +12,8 @@ import {
   runScan,
   type ScanRequest,
   signArtifact,
-} from "../../src/public/host.js";
-import { readArtifact } from "../../src/public/read.js";
+} from "../../src/legacy-public/host.js";
+import { readArtifact } from "../../src/legacy-public/read.js";
 
 const roots: string[] = [];
 vi.mock("node:fs", async (importOriginal) => ({

@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
-import { prepareArtifact, signArtifact } from "../../src/public/host.js";
-import { readArtifact } from "../../src/public/read.js";
+import { prepareArtifact, signArtifact } from "../../src/legacy-public/host.js";
+import { readArtifact } from "../../src/legacy-public/read.js";
 import { emptyReport } from "../assessment/fixtures.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { canonicalBytes } from "../../src/assessment/json.js";
-import { readReport } from "../../src/public/read.js";
+import { readReport } from "../../src/legacy-public/read.js";
 import { emptyReport } from "./fixtures.js";
 
 describe("portable report reader", () => {

@@ -8,8 +8,8 @@ import tls from "node:tls";
 import { expect, test, vi } from "vitest";
 import type { VerificationPublisher } from "../../src/artifact/types.js";
 import { canonicalBytes } from "../../src/assessment/json.js";
-import { authenticateArtifact } from "../../src/public/host.js";
-import { readArtifact } from "../../src/public/read.js";
+import { authenticateArtifact } from "../../src/legacy-public/host.js";
+import { readArtifact } from "../../src/legacy-public/read.js";
 import { syntheticKeyless, utf8Der } from "./synthetic-keyless.js";
 
 type Fixture = Awaited<ReturnType<typeof syntheticKeyless>>;

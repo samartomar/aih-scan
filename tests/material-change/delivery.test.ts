@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test, vi } from "vitest";
-import type { GitHubTransport, MaterialChange } from "../../src/public/host.js";
-import * as host from "../../src/public/host.js";
+import type { GitHubTransport, MaterialChange } from "../../src/legacy-public/host.js";
+import * as host from "../../src/legacy-public/host.js";
 
 const summary: MaterialChange = {
   schema: "urn:aihq:scan:material-change:1.0.0",

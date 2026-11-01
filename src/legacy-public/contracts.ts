@@ -1,5 +1,5 @@
 import { schemas, schemasV2 } from "../assessment/types.js";
-import { packageIdentity } from "./package-identity.js";
+import { packageIdentity } from "../public/package-identity.js";
 
 export type {
   Artifact,

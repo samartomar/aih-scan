@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
-import { contractSupport } from "../../src/public/contracts.js";
-import { compareMaterialInventories, deliverMaterialChange } from "../../src/public/host.js";
+import { contractSupport } from "../../src/legacy-public/contracts.js";
+import { compareMaterialInventories, deliverMaterialChange } from "../../src/legacy-public/host.js";
 import { inventory, item, scanB, sourceId } from "./fixtures.js";
 
 test("refuses an unknown projection before declaring changes", async () => {

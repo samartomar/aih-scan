@@ -5,8 +5,12 @@ import * as attestationV1 from "../src/baseline/attestation-v1.js";
 import * as batchV1 from "../src/baseline/batch-v1.js";
 import * as publicationV1 from "../src/baseline/publication-v1.js";
 import * as publicApi from "../src/index.js";
+import {
+  contractSupport,
+  contractSupport11,
+  entrySupport,
+} from "../src/legacy-public/contracts.js";
 import * as attestationV2 from "../src/observation/scan-attestation-v2.js";
-import { contractSupport, contractSupport11, entrySupport } from "../src/public/contracts.js";
 import * as registrationV1 from "../src/registration/detector-registration-v1.js";
 
 const legacyImplementations: Record<string, unknown> = {

@@ -12,7 +12,11 @@ import { toSignedEntity, toTrustMaterial, Verifier } from "@sigstore/verify";
 import { describe, expect, test, vi } from "vitest";
 import type { Artifact, SigstoreBundle, VerificationPublisher } from "../../src/artifact/types.js";
 import { canonicalBytes } from "../../src/assessment/json.js";
-import { attachAttestation, authenticateArtifact, prepareArtifact } from "../../src/public/host.js";
+import {
+  attachAttestation,
+  authenticateArtifact,
+  prepareArtifact,
+} from "../../src/legacy-public/host.js";
 import { emptyReport } from "../assessment/fixtures.js";
 
 const fixture = (name: string) =>

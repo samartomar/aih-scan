@@ -8,7 +8,7 @@ import {
   type SuppliedDetectorDefinitionV1,
 } from "../../src/assessment/detector-definition.js";
 import { sha256 } from "../../src/assessment/json.js";
-import { createRetainedObservationsV1, runScan } from "../../src/public/host.js";
+import { createRetainedObservationsV1, runScan } from "../../src/legacy-public/host.js";
 import * as runner from "../../src/runner/run-detector-v1.js";
 
 vi.mock("../../src/runner/run-detector-v1.js", async (original) => ({

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
-import { prepareArtifact, runScan } from "../../src/public/host.js";
-import { readArtifact } from "../../src/public/read.js";
+import { prepareArtifact, runScan } from "../../src/legacy-public/host.js";
+import { readArtifact } from "../../src/legacy-public/read.js";
 import { emptyReport } from "./fixtures.js";
 
 test("reads a complete artifact at the supported 16 MiB annex boundary", async () => {
