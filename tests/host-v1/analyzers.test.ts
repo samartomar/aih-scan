@@ -415,10 +415,18 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
   it("keeps a configured AI pass that did not run or did not complete as a failed, partial result", async () => {
     const folder = fixture.folder("item", skill);
     const env = { SKILLSPECTOR_PROVIDER: "ollama" };
-    const notRunAtAll = skillspector(skillSpectorReport([], { llm: false }));
-    expect((await run(folder, notRunAtAll, { extra: { mode: "ai" }, env })).summary).toMatchObject({
-      coverage: "partial",
-      reason: "failed",
+    const notRunAtAll = skillspector(
+      skillSpectorReport([skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8)], { llm: false }),
+    );
+    const skipped = await run(folder, notRunAtAll, { extra: { mode: "ai" }, env });
+    // The AI pass never ran: SkillSpector's static findings and counts are still kept.
+    expect(skipped.summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(toolOf(skipped.summary, "skillspector")).toMatchObject({
+      result: "fail",
+      counts: { high: 1 },
+    });
+    expect(skipped.entry).toMatchObject({
+      notes: expect.arrayContaining(["skillspector: SkillSpector's AI pass did not run"]),
     });
     const degraded = skillspector(
       skillSpectorReport([skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8)], {

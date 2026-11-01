@@ -329,8 +329,6 @@ export function skillSpectorRun(
     completeness.status === "failed"
   )
     return notRun("failed", mode, SKILLSPECTOR_VERSION, "SkillSpector reported a failed analysis");
-  if (mode === "ai" && (metadata.llm_requested !== true || metadata.llm_available !== true))
-    return notRun("failed", mode, SKILLSPECTOR_VERSION, "SkillSpector's AI pass did not run");
   const findings: ToolFinding[] = [];
   const rules: Record<string, string> = {};
   for (const raw of document.issues) {
@@ -367,6 +365,12 @@ export function skillSpectorRun(
   const suppressedCount =
     typeof document.suppressed_count === "number" ? document.suppressed_count : 0;
   const inspected = completenessOf(completeness, metadata, item, mode);
+  // An AI pass that did not run or did not complete keeps the static findings and counts; the
+  // missing AI analysis is a failed part (the item is partial with reason `failed`).
+  const aiFailure =
+    mode === "ai" && (metadata.llm_requested !== true || metadata.llm_available !== true)
+      ? "SkillSpector's AI pass did not run"
+      : inspected.aiFailure;
   return Object.freeze({
     status: "ran" as const,
     version: SKILLSPECTOR_VERSION,
@@ -377,7 +381,7 @@ export function skillSpectorRun(
     ...(Number.isSafeInteger(suppressedCount) && suppressedCount > 0
       ? { suppressed: Object.freeze([{ count: suppressedCount, reason: "SkillSpector baseline" }]) }
       : {}),
-    ...(inspected.aiFailure === undefined ? {} : { failedPart: inspected.aiFailure }),
+    ...(aiFailure === undefined ? {} : { failedPart: aiFailure }),
     ...(inspected.note === undefined ? {} : { notes: Object.freeze([inspected.note]) }),
   });
 }
