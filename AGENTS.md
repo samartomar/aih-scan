@@ -1,13 +1,16 @@
 # aih-scan
 
-This repository builds the `@aihq/scan` V2 API and CLI. Scan produces evidence; it does not qualify, approve, admit, install, or activate a subject.
+This repository builds the `@aihq/scan` content-assessment package (`/host`, `/read`,
+`/contracts` and the `aih-scan` CLI). Scan reads supplied content without running it and
+returns results that inform; it never qualifies, approves, admits, installs, activates or
+blocks a subject.
 
 [README.md](README.md) owns public usage and contract navigation.
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) owns contributor checks and helper setup;
 [RELEASING.md](RELEASING.md) owns release requirements.
-Before changing or operating the report publisher workflows, read
-[docs/production-publisher.md](docs/production-publisher.md) and
-[docs/production-refresh.md](docs/production-refresh.md).
+Before changing or operating the report workflows, read
+[docs/production-publisher.md](docs/production-publisher.md); the publisher workflow's
+path is part of the default trusted signer identity.
 
 ## Safety boundaries
 

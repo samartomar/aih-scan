@@ -29,7 +29,8 @@ network calls.
 
 The package ships a pinned snapshot of the Sigstore public-good `trusted_root.json`, obtained
 through an authenticated TUF update from `https://tuf-repo-cdn.sigstore.dev`. `/contracts`
-exports its exact text (`sigstoreTrustedRootText`) and its provenance and SHA-256
+exports its exact text (`sigstoreTrustedRootText`; the same bytes ship as
+`trust/sigstore-trusted-root.json`) and its provenance and SHA-256
 (`verification.trustSnapshot`). A snapshot authenticates evidence under that material only; it
 does not check revocation or freshness and does not discover withdrawals. Package updates may
 carry a newer snapshot. `tools/write-sigstore-trust-snapshot.mjs` embeds an independently

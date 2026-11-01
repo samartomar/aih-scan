@@ -1,1137 +1,195 @@
-# AIH Scanner (`@aihq/scan`)
+# AIH Scan (`@aihq/scan`)
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+Scan assesses AI agent content — skills, agents, commands, rules, hooks and MCP
+configurations — from the exact bytes it is given. It reads the content without running
+it, sends each file to the standard tools that cover it, and returns standard results:
+SARIF 2.1.0 findings, a short summary and a risk score.
 
-`@aihq/scan` captures and verifies bounded scanner evidence without deciding
-whether an organization should approve, install, or activate the scanned
-subject. The V2 path has one code-owned execution capability,
-`cisco-oci-v1`, which can run either the built-in Cisco identity or an
-organization-defined exact detector registration in a pinned Linux `amd64`
-OCI image against an explicitly selected source closure. Registration does not
-load organization code into the Scanner process or grant governance authority.
+- **Anyone can bring their own content**: a folder, a public repository or one item in
+  it, a local clone of a private repository, an npm MCP package (public, or a tarball you
+  downloaded) or remote MCP configuration.
+- **Scan informs; it never blocks.** No function, command or exit code refuses an
+  installation because of a score. `--fail-at` is the caller explicitly asking for a
+  failing exit at a risk threshold. Input, integrity and resource-limit refusals still
+  apply.
+- **Supplied content never runs.** Scan never runs a supplied file, command, hook or
+  package script and never installs packages; an npm tarball is unpacked only as files to
+  read. Remote MCP servers are never contacted.
+- **Results are addressed by content.** Each item's scan key is the Git tree hash of its
+  folder, so identical bytes and modes share a key wherever they appear.
 
-> Core governs. Scan produces evidence. Catalog provides AIH qualification.
-> The organization provides authority.
+`0.1.0` is the replacement package and the sole unreleased target. It does not read or
+produce the formats of earlier `@aihq/scan` versions (see [CHANGELOG.md](CHANGELOG.md)).
 
-## Status
-
-### Unreleased assessment APIs
-
-Hosts can supply organization Semgrep rules as portable, hash-bound detector
-definitions through `runScan`. See [supplied detector definitions](docs/DETECTOR-DEFINITIONS.md)
-for the supported adapter, runtime limits, JSON/YAML example, and reuse boundary.
-
-The new assessment surface has three explicit entry points:
-
-| Entry | Purpose | Runtime |
-| --- | --- | --- |
-| `@aihq/scan/contracts` | Contract support, public types and schema identities | Portable JavaScript |
-| `@aihq/scan/read` | Read reports/artifacts, summarize provider facts, match exact content and select latest matching evidence; authenticity remains unchecked | Portable JavaScript |
-| `@aihq/scan/host` | Run a scan, prepare/attach/sign/authenticate an artifact, compare material, and explicitly deliver changes | Node `>=24.15.0 <25 \|\| >=26.12.1 <27` |
-
-`runScan` captures exact npm, pinned Git or local input and accounts for every requested detector.
-Its Git API requires a credential-free HTTPS URL and a full lowercase 40-hex
-commit; see [accepted forms, default bounds and actionable failure diagnostics](docs/assessment-api.md#git-request-forms-limits-and-diagnostics).
-Reliable results survive failed or refused sibling work in a partial assessment.
-`prepareArtifact` and local Ed25519 `signArtifact` preserve the same Scan ID for
-unchanged report bytes. `attachAttestation` checks bindings; callers separately
-authenticate against their selected keys or publisher policies. Scanning, signing
-and publication are separate explicit operations.
-
-For many independent content queries, `readContentCoverageBatch` validates one
-report snapshot and returns bounded rows with a shared observation table; see
-[independent coverage queries](docs/assessment-api.md#independent-coverage-queries).
-
-For exact per-item evidence, use `recordItems`, `verifyItemRecord` and
-`readItemRecord` from `@aihq/scan/read`; see
-[item records and behaviour coverage](docs/item-records.md).
-
-For one policy-aware item state, use `pickRecord` and `summariseItem` from
-`@aihq/scan/read`. They read an item's stored records with their artifacts. See
-[the 13-row decision table, evidence policy and severity profile](docs/item-summaries.md).
-
-See [assessment usage](docs/assessment-api.md), [artifact authentication](docs/artifact-authentication.md),
-[summary and latest matching selection](docs/summary-selection.md),
-[maintainer refresh](docs/production-refresh.md) and the
-[protected production publisher](docs/production-publisher.md). The
-`aih-scan scan` command runs an assessment against a local directory or an exact
-Git commit without writing code; see [Assess a local directory or Git repository](#assess-a-local-directory-or-git-repository).
-
-Compare declared installation material with `compareMaterialInventories` from
-`@aihq/scan/host`; see [material comparison](docs/material-change-comparison.md)
-and [explicit GitHub handoff](docs/material-change-handoff.md). These Unreleased
-software APIs keep findings, report publication and issue delivery independent.
-
-Schemas are exported at `@aihq/scan/schemas/<name>/1.0.0.json` for `request`,
-`run-result`, `report`, `artifact`, `evidence-association`, `material-change`,
-`detector-definition`, `item-record`, `item-summary`, `evidence-policy` and
-`severity-profile`.
-The package also contains [static valid/invalid examples](schemas/examples/1.0.0.json);
-byte bindings and cross-field semantics require the corresponding reader.
-
-Golden contract fixtures are exported beside all supported schemas as
-`@aihq/scan/schemas/<name>/1.0.0.fixtures.json`, including `detector-definition`.
-See [the fixture manifest and replay guide](docs/contract-fixtures.md). Public CI
-replays these exports from an exact packed archive installed in a temporary
-consumer outside the source workspace. `contractSupport11` from
-`@aihq/scan/contracts` publishes package-support 1.1.0 with each contract's
-version and golden suite export. `contractSupport` retains the closed 1.0.0
-shape for existing readers. Fixture references identify case suites; host adapters
-replay their cases, including refusals, rather than treating wrappers as documents.
-
-These changes are unreleased. Manual report workflows refuse admission without
-the exact reviewed main commit and independently selected upload custody. Protected
-publisher settings and an authorized production signing/conformance run remain
-separate acceptance gates. Package publication remains separately authorized.
-
-### Explicit maintainer refresh
-
-Maintainers freeze one reviewed seven-source batch, then run the independent
-assessment producer with the exact packed scanner. The production profile names
-native identity, trust lint, binding gate and Semgrep; it records source commits,
-scope, configuration, every detector outcome and original annexes. Cisco and
-SkillSpector coverage is unavailable in this profile; Snyk is outside it.
-This operation runs full assessments of the pinned sources; it does not load prior
-reports for unchanged-observation reuse.
-
-The explicit [frozen Catalog capture mode](docs/catalog-capture.md) accepts one
-immutable input data asset containing the inventory and all declared recipe/material
-bytes. It uses the same four-detector profile, candidate checks and protected
-publisher. Its input publication and actual execution/signing require their own
-authorization; fixture authentication does not establish a production baseline.
-
-Read-only production, protected detached signing and independent final assembly
-have separate permissions. The sole maintainer `samartomar` initiates the manual
-workflows and approves protected signing, including their own initiated run;
-this is not independent human review. Authenticated artifacts and their verified
-inventory use immutable report releases, independent of scanner package releases
-and Actions artifact retention. Final publication uses the normal maintainer's authenticated
-GitHub CLI after checking the selected publisher output and authenticating its exact
-bytes independently. Unsigned candidates remain explicitly unsigned. Follow the
-[refresh runbook](docs/production-refresh.md) for exact input and output custody,
-installed-consumer acceptance. New baseline production is retired; historical
-reports, readers and shared detector implementation remain available.
-Catalog preparation continues independently of Scan.
-
-### Historical package custody
-
-The promoted `@aihq/scan` stable train contains the V2 library, `aih-scan` CLI,
-strict detector-registration grammar, detached bundle format, Ed25519 DSSE
-signing, Linux `amd64` OCI CI chain, Core organization-evidence projection, and
-bounded baseline-vet execution. The fixed `aih-baseline-v1` profile emits
-canonical receipt and annex records and separates `baseline-vet`,
-`baseline-sign`, and `baseline-verify`. Projection and baseline evidence are
-transport only; neither qualifies, approves, admits, observes, installs, or
-activates a subject. Source state alone never proves publication; the live checks
-below establish exact custody. Public package custody is not organization evidence
-custody. Candidate versions are first published under npm `next`; only public
-installed acceptance plus separate authorization can promote the same bytes to
-`latest`.
-
-`@aihq/scan@0.3.0` adds immutable request-addressed publication through
-`baseline-pack`, `baseline-inspect`, and the protected manual baseline-publication
-workflow. Publication custody is established only when the live registry, Release,
-and artifact-attestation checks succeed.
-
-`@aihq/scan@0.4.0` advances the bundled Cisco analyzer to `2.0.14+uvlock.aaba1f326049`
-with fail-closed coverage accounting and direct/OCI equivalence evidence. Source state does
-not prove this candidate is published or promoted; use the live custody checks below.
-
-`@aihq/scan@0.5.0` admits Semgrep and Cisco through the explicitly named
-`host-process-uv-v1` profile on Linux `amd64` and `arm64`, macOS `arm64` and Windows `amd64`:
-uv from `PATH`, a uv-discovered Python 3.12 with no downloads, a persistent lock-addressed uv
-cache, an `--offline` scan stage, and a process group or a Windows Job Object that ends the
-whole analyzer tree on timeout or `signal` abort. SARIF artifact URIs are relative to the
-declared source root, SARIF observations carry a `ScanFindingsV1` projection, and an empty
-source root completes for Semgrep. The profile is unisolated and does not enforce the
-network; it is never a default (see [Runtime boundaries](#runtime-boundaries) for each
-profile's platforms and evidence limits). The `0.5.0` candidate bundles Cisco `2.1.0+uvlock.1e98c5679994` as one lock
-shared by the host profile, the namespace profile and the Linux OCI candidate image recipe.
-Source state does not prove this candidate is published.
-
-The one-use bootstrap source and GitHub environment secret are absent. The
-protected environment is tag-only and secret-free. npm Trusted Publishing is
-bound to `samartomar/aih-scan`, workflow `release.yml`, environment
-`npm-publish`, and allows only `npm publish`; bypass tokens are disallowed and
-the old bootstrap token is revoked. The current workflow rejects npm token
-credentials and publishes through GitHub OIDC only. The one-use recovery
-workflow was removed after success; its terminal run and the original failed
-publication runs remain durable audit evidence. See
-[VERSIONING.md](VERSIONING.md), [RELEASING.md](RELEASING.md), and
-[CONTRIBUTING.md](CONTRIBUTING.md).
-The new package line starts at `0.1.0` to describe its current maturity; it does
-not inherit the frozen Core legacy package's historical major version.
-
-The GitHub Actions example signs with a generated `test-ephemeral` key and
-uploads that public root beside the evidence. It proves the capture, signing,
-and verification mechanics. It is not an organization trust root or public
-qualification authority.
-
-## Runtime boundaries
-
-The package is ESM only. The assessment `contracts` and `read` entries use portable
-data and Web Crypto; they import no Node scanner, filesystem or process modules.
-Reading makes no producer-authentication claim. Schema resources are JSON data.
-
-The host entry, retained V2 root library, `aih-scan` binary and scripts under
-`examples/` use Node `>=24.15.0 <25 || >=26.12.1 <27`. They perform explicit filesystem, process
-or cryptographic work. Private `dist` paths are not public exports.
-
-Each detector execution profile carries its own platform gate in the published
-`DetectorCapabilityV1` record; a host outside the selected profile's
-`supportedPlatforms` is refused `unsupported-platform` before any probe or spawn.
-Host profiles run only when a caller names them by `executionProfileId`; they are
-never a default or a fallback. See [CONTRACTS.md](CONTRACTS.md) for the full records.
-
-| Profile | Detectors | Platforms admitted | Isolation and network |
-| --- | --- | --- | --- |
-| `in-process-native-v1`, `in-process-trust-lint-v1`, `in-process-binding-gate-v1` | `detector.aih-native`, `detector.aih-trust-lint`, `detector.aih-binding-gate` | Linux, macOS and Windows on `amd64` and `arm64` | None; nothing is spawned |
-| `linux-namespace-uv-v1` (default) | `detector.semgrep`, `detector.cisco` | Linux `amd64` | Linux namespaces; network for uv acquisition only |
-| `oci-hardened-cisco-v1` | `detector.cisco` | Linux `amd64` | Container; no network |
-| `docker-hardened-skillspector-v1` (default) | `detector.skillspector` | Linux `amd64` | Container; no network |
-| `host-process-uv-v1` | `detector.semgrep`, `detector.cisco`, `detector.snyk-agent-scan` | Linux `amd64` and `arm64`, macOS `arm64`, Windows `amd64` | None; network unenforced |
-| `host-process-uv-v1` | `detector.cisco-mcp-scanner` | Linux `amd64` and `arm64` | None; network unenforced |
-| `docker-host-local-skillspector-v1` | `detector.skillspector` | Linux `amd64`, macOS `amd64` and `arm64`, Windows `amd64` | Container; no network; never pulls |
-
-What these gates do and do not establish:
-
-- The `host-process-uv-v1` platform sets are where every exact-pinned analyzer
-  dependency publishes a binary wheel (Linux needs glibc 2.34 or later; Cisco on
-  macOS needs macOS 14 or later). macOS `amd64` and Windows `arm64` lack those
-  wheels and Scan never builds analyzer dependencies from source, so they are
-  refused. `detector.cisco-mcp-scanner` is Linux-only because its lock pins a
-  manylinux-only litellm. `detector.snyk-agent-scan` follows the platform set
-  recorded for its pinned version (0.6.4).
-- `host-process-uv-v1` contains each analyzer tree in a POSIX process group or a
-  Windows Job Object and fails a run that leaves processes naming its private
-  directories. It does not contain a hostile analyzer: on Linux and macOS a
-  descendant that leaves the session and also drops every link to the run can
-  outlive it. `linux-namespace-uv-v1` is the containment option on Linux.
-- A platform gate is not a proof run. The installed host-profile proof lane in
-  [`installed-semgrep-parity.yml`](.github/workflows/installed-semgrep-parity.yml)
-  runs Semgrep and Cisco under `host-process-uv-v1` through the installed public
-  API on hosted Linux `amd64`, Windows `amd64` and macOS `arm64` runners.
-  Evidence for a host exists only from a green run of its row; source state does
-  not record one, and no local test substitutes for it. No lane covers Linux
-  `arm64`, `detector.cisco-mcp-scanner` or `detector.snyk-agent-scan`.
-- `docker-host-local-skillspector-v1` runs a `linux/amd64` image; on `arm64`
-  hosts it depends on the Docker engine's `amd64` emulation.
-
-Runnable examples live in [`examples/`](examples). They reach the package
-through its public entry point only:
+## Install
 
 ```sh
-node examples/run-detector.mjs
-node examples/verify-capture-bundle.mjs --help
+npm install --save-exact @aihq/scan@0.1.0
 ```
 
-`run-detector.mjs` prints the published detector capabilities, shows the typed
-refusal a hardened detector produces before anything is spawned, and runs the
-in-process analyzer for real against a throwaway fixture.
-`verify-capture-bundle.mjs` verifies a capture bundle you supply, under trust
-roots and an expected-claims policy you supply, and ships neither. Both scripts
-are repository documentation and are not part of the published tarball.
+Node `>=24.15.0 <25 || >=26.12.1 <27`. The built-in aih-trust-lint baseline needs nothing
+else. SkillSpector 2.13.2 (primary) and the optional Cisco skill-scanner 2.3.2 run as
+installed native CLIs; [docs/analyzers.md](docs/analyzers.md) has the pinned installs.
+Without SkillSpector a scan still completes, reports SkillSpector as `not-run`
+(`unavailable`) and its coverage as `partial`.
 
-## Assess a local directory or Git repository
+## Command line
 
-`aih-scan scan` assesses one local directory, or one exact commit of a Git
-repository, and reports what each detector observed and what it covered. It
-needs Node `>=24.15.0 <25 || >=26.12.1 <27` (and `git` on the `PATH` for Git sources) and no
-other setup. It produces evidence only: it does not approve, qualify, admit or
-install the directory or repository.
+```text
+aih-scan scan <folder> [options]
+aih-scan scan <owner/repo | https-url | item-link> [--ref <name>] [options]
+aih-scan scan npm:<package>@<version> [options]
+aih-scan scan npm-file:<package.tgz> [options]
+aih-scan scan mcp-url:<url> [options]                      config only
+     options: [--tools skillspector,aih-trust-lint[,cisco]] [--mode static|ai] [--origin published|local]
+              [--kinds hook,skill] [--internal-scope @scope] [--json] [--quiet] --out <new-folder>
+aih-scan advisories <folder | summary.json | owner/repo | https-url | npm:package@version | npm-file:package.tgz>
+              [--internal-scope @scope] [--private] [--include-private]
+aih-scan read <summary.json>                               print the summary
+aih-scan findings <summary.json> --key <scanKey>           print one key's one-liners
+aih-scan verify <summary.json> --bundle <file>             check a published result's signature
+aih-scan sign <summary.json>                               sign with your own identity
+Optional: --fail-at CAUTION | DO_NOT_INSTALL               exit 1 at or above that label
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | Finished, complete or partial (partial is shown, never a failure) |
+| 1 | Only with `--fail-at`, when the stored label reached it |
+| 2 | Could not scan or read: bad input, unreadable source, a limit exceeded, no output |
+| 130 | Cancelled (SIGINT/SIGTERM); finished results are kept |
 
 ```sh
-npx aih-scan scan ./skills
-npx aih-scan scan ./skills --fail-on-findings
-npx aih-scan scan ./skills --json --artifact ./skills-assessment.json
-npx aih-scan scan ./skills --detector detector.aih-native
-npx aih-scan scan --help
-npx aih-scan scan https://github.com/owner/repo
-npx aih-scan scan owner/repo --ref v1.2.0 --json
+aih-scan scan ./team-skills --out ./scan-out
+aih-scan scan obra/superpowers --ref main --kinds skill,hook --out ./scan-out
+aih-scan read ./scan-out/git-sha1-<hex>/summary.json
+aih-scan findings ./scan-out/git-sha1-<hex>/summary.json --key git-sha1:<hex>
 ```
 
-We recommend saving an artifact outside the directory you scan: a later scan of
-that directory would otherwise count the artifact file as part of its content.
-The command does not enforce this.
+A source scan returns one result per item found, one for the remaining files and a
+roll-up. [docs/scan-sources.md](docs/scan-sources.md) covers every source form, what is
+fetched, item discovery, pins and refusals. `scan` writes into a new `--out` folder, one
+folder per scan key (`git-sha1-<hex>/summary.json` and `sarif/<sha256>.sarif`).
 
-**Git sources.** An `https://` URL or a GitHub `owner/repo` is a Git source.
-The command first resolves it to one full commit with `git ls-remote`, then
-assesses exactly that commit through the assessment API's pinned Git
-acquisition, which verifies the commit object.
+Static mode (the default) makes no network call during the scan; the only fetches are a
+source route's public Git clone or npm tarball, before the scan. `--mode ai` adds
+SkillSpector's AI pass with the AI you already set up, says where the content goes before
+scanning, and falls back to static with "AI not available here" when nothing is set up.
 
-- Without `--ref`, the repository's default `HEAD` is used and the summary
-  names the branch it points to, as the server advertises it.
-  `--ref <name>` selects a branch, a tag (an annotated tag is peeled to its
-  commit), `refs/heads/<name>`, `refs/tags/<name>`, or a full 40-character
-  commit, which is used as given. A
-  name that is both a branch and a tag is refused; qualify it. Ref names are
-  validated before any network access, and `--ref` with a local directory is
-  refused.
-- `owner/repo` (with an optional `.git`) means
-  `https://github.com/owner/repo.git` only when no local path has that
-  spelling; an existing path is assessed as a local directory, exactly as
-  before. Spell `https://github.com/owner/repo` to force Git.
-- Only repositories that need no credentials can be assessed. A URL with a
-  user, password or token, a query or a fragment is refused, as are `http://`,
-  `ssh://`, `git://`, `file://` and `user@host:path` sources; refusals never
-  repeat the URL. An unavailable repository, one that asks for credentials and
-  SHA-256 repositories are refused with exit code `2`; Git's own messages are
-  not printed.
-- The human summary prints the repository as the target and a `Commit:` line
-  with the commit and the ref it was resolved from. With `--json`, stdout stays
-  the canonical run result, which names the repository and commit in
-  `report.source`; the resolved commit is also written to stderr, so it is
-  available even when no assessment is produced. Detector defaults,
-  `--artifact`, `--fail-on-findings` and the exit codes are the same as for a
-  local directory.
-- MCP configuration is discovered in the pinned commit exactly as in a local
-  directory, and `--mcp-config <path>` names files inside it; the path must be
-  relative to the repository and is checked against the captured snapshot. A host
-  absolute path is refused before Git runs, and a path that is outside the
-  repository, missing or repeated is refused with no assessment. A repository
-  with no MCP configuration is not partial; the summary says none was found.
-  `--internal-scope` applies unchanged.
-- Git runs without a shell, with system and global Git configuration, hooks,
-  credential helpers, askpass programs, prompts and redirects disabled, through
-  a bounded relay. Temporary directories are private and removed on success,
-  failure and cancellation; if one cannot be removed, no assessment runs.
+## Library
 
-**Detectors.** Without `--detector`, the command runs `detector.aih-native` and
-`detector.aih-trust-lint`. `--detector <id>` runs exactly the detectors you name;
-repeat it for several. A registered detector is not a working integration: a
-selected detector that cannot run here, for example `detector.skillspector`
-without its rules material, is reported as `refused` or `failed` with a
-diagnostic and leaves the assessment incomplete. It is never skipped silently.
+Three entry points, six functions. No function throws on bad input: every result has a
+`status` (`ok`, `refused` with a reason, `invalid`, `unsupported-version`). `readable`,
+`trusted` and `coverage` are always kept apart.
 
-**Trust-lint inputs.** `detector.aih-trust-lint` reads MCP configuration and
-declared internal package scopes.
+```text
+@aihq/scan/host        (Node)
+  scan(request, { outDir, signal?, internalScopes? })  → Promise<{ status, results, rollup? }>
+  matchScan(summaryOrVerified, folderPath)             → Promise<{ status, matches, coverage, signer }>
 
-- Without `--mcp-config`, the command discovers configuration inside the target
-  only: at its root and in each directory that holds a `SKILL.md`. Discovery never
-  follows links and skips the root `.git` directory; a nested `.git` is ordinary
-  content.
-- `--mcp-config <path>` replaces discovery with the files you name; repeat it for
-  several. A relative path is read relative to the target and an absolute path
-  must lead into it; an absolute path may be spelled through a link in an
-  ancestor of the target or a link to the target itself. Below the target, every
-  directory must be a real directory. A path outside the target, through a linked parent, missing
-  or repeated is refused. It also needs a selected detector that reads MCP
-  configuration (`detector.aih-trust-lint` or `detector.cisco-mcp-scanner`).
-- `--internal-scope <@scope>` declares an internal package scope for trust-lint;
-  repeat it for several. Values are trimmed, lowercased, `@`-prefixed,
-  deduplicated and sorted before validation.
+@aihq/scan/read        (browser-safe: no Node globals or built-ins)
+  readSummary(bytes)                                   → { status, summary }
+  readFindings(summary, sarifBytes, scanKey)           → Promise<{ status, findings }>
+  verifySummary(bytes, bundle, allowedSigners?, { trustedRoot, withdrawn, withdrawnBundle }?)
+                                                       → Promise<{ status, verified, withdrawn, signer, summary }>
+  matchScan(summaryOrVerified, files)                  → Promise<{ status, matches, coverage, signer }>
+  checkAdvisories(dependencies, { internalScopes })    → Promise<{ status, checkedAt, results }>
 
-**Output.** The default output is a human summary: the Scan ID, the target, the
-completion state, one line per detector (outcome, origin, findings, coverage),
-the findings (the first 20; the rest are counted), the evidence annexes, the
-trust-lint inputs the command resolved and any diagnostics. A hardcoded-secret
-finding names its rule, file and key and never prints the secret value.
-
-- `--json` writes the complete run result as canonical JSON to stdout, the same
-  document `runScan` returns, with every annex included as base64. Progress and
-  notes go to stderr.
-- `--artifact <new-file>` also saves an unsigned portable artifact. The file must
-  not exist yet, and its parent directories must be real directories, not links.
-  A linked parent is refused even when the link is a system convention: on macOS
-  `/tmp` is a link to `/private/tmp`, so name `/private/tmp/...` instead.
-  The saved bytes are read back through the portable reader (`@aihq/scan/read`)
-  before the command reports success. The artifact has no attestation and its
-  authenticity stays unchecked until a caller authenticates it.
-- Each detector's evidence stays in its own annex, for example the SARIF
-  document of a detector that produces one. Scan never merges detector outputs
-  into one combined SARIF file.
-- `--fail-on-findings` makes any finding a failing exit code.
-
-**Exit codes.**
-
-| Code | Meaning |
-| --- | --- |
-| `0` | The assessment is complete. Findings alone do not fail the command. |
-| `1` | The assessment is incomplete (a detector refused, failed or covered only part of the target), or it found something and you passed `--fail-on-findings`. |
-| `2` | The input was invalid, no assessment was produced, or the artifact could not be saved. Invalid input is refused before any scanning. |
-| `130` | The command was cancelled. The first `SIGINT` or `SIGTERM` stops the assessment, reports and saves what finished, then exits. A second signal exits immediately with `130` and reports nothing more. |
-
-## Install and verify the package boundary
-
-The package runtime range is Node `>=24.15.0 <25 || >=26.12.1 <27` for host operations.
-Current repository checks and release verification run on Node 24; Node 26
-candidate verification is separate.
-
-```sh
-npm ci --ignore-scripts
-npm run typecheck
-npm run lint
-npm test
-npm run test:cov
-npm run build
-npm pack
+@aihq/scan/contracts   (portable data and validators)
+  formats, schemas, routing (aih-scan-routing/1), scoring (aih-risk/1), codes (aih-codes/1),
+  limits, verification (aih-sigstore-keyless/1), defaultSigners, sigstoreTrustedRootText
 ```
 
-Install the resulting tarball into a disposable consumer:
+`readFindings`, `matchScan`, `verifySummary` and `checkAdvisories` return Promises
+because they use WebCrypto or `fetch`; `readSummary` is synchronous.
 
-```sh
-npm install --save-dev /path/to/aihq-scan-X.Y.Z.tgz
-npx aih-scan --help
+```js
+import { scan } from "@aihq/scan/host";
+import { matchScan, readFindings, readSummary, verifySummary } from "@aihq/scan/read";
+
+const run = await scan(
+  { format: "aih-scan-request/1", origin: "local", source: { format: "aih-scan-source/1", type: "folder", path: "./team-skills" } },
+  { outDir: "./scan-out" },
+);
+for (const result of run.results) console.log(result.kind, result.path, result.scanKey, result.status);
+
+const read = readSummary(summaryBytes);              // { status: "ok", summary }
+const findings = await readFindings(read.summary, sarifBytes, read.summary.scanKey);
+const verified = await verifySummary(summaryBytes, bundleBytes);   // default trusted publisher
+const match = await matchScan(verified, files);       // files: [{ path, mode, bytes }]
+// { status: "ok", matches: true, coverage: "complete", signer: { identity, trusted } }
 ```
 
-New assessment consumers use the explicit `contracts`, `read` and `host` entries
-above. The root `@aihq/scan` entry is a compatibility surface; see
-[Legacy root](#legacy-root-aihqscan). Internal modules are implementation details
-and are not package export paths.
-
-For an exact candidate, publication custody is proven only when every live
-registry and Release check below succeeds. Until full custody exists, at least
-one leg fails; after publication every leg must succeed. Source never decides
-the result:
-
-```sh
-version=X.Y.Z
-npm view "@aihq/scan@$version" name version dist --json
-npm install --save-exact "@aihq/scan@$version"
-npm audit signatures
-release_root="$(mktemp -d)"
-gh release download "v-scan-$version" --repo samartomar/aih-scan --dir "$release_root"
-release_sha="$(gh api "repos/samartomar/aih-scan/git/ref/tags/v-scan-$version" --jq .object.sha)"
-(cd "$release_root" && sha256sum --strict --check SHA256SUMS.txt)
-cosign verify-blob "$release_root/SHA256SUMS.txt" --bundle "$release_root/SHA256SUMS.txt.sigstore.json" --certificate-identity "https://github.com/samartomar/aih-scan/.github/workflows/release.yml@refs/tags/v-scan-$version" --certificate-oidc-issuer https://token.actions.githubusercontent.com
-gh attestation verify "$release_root/aihq-scan-$version.tgz" --repo samartomar/aih-scan --bundle "$release_root/provenance.intoto.jsonl" --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref "refs/tags/v-scan-$version" --source-digest "$release_sha" --deny-self-hosted-runners
-npx --no-install aih-scan --help
-```
-
-The release workflow builds and smoke-installs the candidate in a read-only job.
-Its protected job verifies the workflow-artifact digest, original tarball digest,
-and packed identity without executing Scanner package code. It then binds
-npm provenance, a GitHub build attestation, an SPDX SBOM, the tarball checksum, and a keyless
-cosign checksum bundle to the exact tagged source. `npm view
-"@aihq/scan@$version"` is the live registry check; source review or a local
-tarball is not publication evidence. Exact historical release `0.1.1` required a bounded recovery
-after npm publication, so its checksum bundle has the historical
-`recover-v-scan-0.1.1.yml@refs/heads/main` identity while its provenance bundle
-remains the original tag-run build attestation. Do not use that recovery
-identity for a normal release or describe either signature as the other.
-
-## Recommended workflow
-
-New work uses the three current entries. Each step is a separate, explicit call:
-
-1. **Check support.** Read `contractSupport11` from `@aihq/scan/contracts` to confirm
-   the installed package version, the schema IDs it accepts or produces and the
-   runtime of each entry. Read `entrySupport` from the same entry for each entry's
-   status.
-2. **Assess.** Call `runScan` from `@aihq/scan/host` (or the `aih-scan scan`
-   command) with a closed request. Every requested detector is accounted for, and a
-   partial assessment keeps the reliable results.
-3. **Package.** Call `prepareArtifact` to build a portable artifact. Sign it with
-   `signArtifact` or attach an external signature with `attachAttestation`.
-4. **Read.** Anywhere, including a browser, read reports and artifacts with
-   `readReport` and `readArtifact` from `@aihq/scan/read`. Their authenticity stays
-   unchecked.
-5. **Authenticate.** On a host, call `authenticateArtifact` with keys or publisher
-   policies the caller selected.
-6. **Compare and deliver** (optional). Call `compareMaterialInventories`, then
-   `deliverMaterialChange` only when you explicitly want to post the change.
-
-This path carries no Core commit or schema lock, no report TTL, no success-only
-projection and no qualification gate. See [assessment usage](docs/assessment-api.md).
-
-## Legacy root (`@aihq/scan`)
-
-The root entry keeps earlier evidence interpretable and existing callers working.
-It is not the recommended way to start new work. Its status is also published as
-the `@aihq/scan` entry of `entrySupport.entries` from `@aihq/scan/contracts`, with
-one status, replacement and export list per operation group in `groups`.
-`entrySupport` shares its package identity with `contractSupport`, which keeps the
-exact `urn:aihq:package-support:1.0.0` shape and carries no status. The statuses
-are:
-
-- **current**: none. Current operations live in `contracts`, `read` and `host`.
-- **compatibility-only**: kept so existing evidence stays readable and existing
-  callers keep working. No new capability is added here.
-- **deprecated**: retired baseline production and low-level serialization helpers.
-  These names carry `@deprecated` in their declarations, so editors and linters
-  flag them. They still work and are not removed until the legacy root's
-  compatibility window is decided.
-
-| Group | Status | Root exports | Use instead for new work |
-| --- | --- | --- | --- |
-| `v2-evidence-readers` | compatibility-only | `parseScanAttestationEnvelopeV2Json`, `verifyScanAttestationV2`, `readScanCaptureBundleV2`, `readScanFindingsV1`, `parseScanResultRecordV1`, `readScanResultRecordV1`, `readScanResultSubjectBindingV1`, `SCAN_RESULT_RECORD_FORMAT_V1`, `SCAN_RESULT_RECORD_VERSION_V1`, `SCAN_RESULT_SUBJECT_NAME_V1`; types `ScanTrustRootV2`, `SignedScanAttestationV2`, `VerifiedScanAttestationV2`, `FindingFieldV1`, `ReadScanFindingsV1Request`, `ScanFindingV1`, `ScanFindingsV1`, `ScanFindingsReadV1` and the `ScanResult*` / `ReadScanResult*` record types | `readReport` and `readArtifact` (`@aihq/scan/read`), then `authenticateArtifact` (`@aihq/scan/host`) |
-| `baseline-evidence-readers` | compatibility-only | `parseBaselineVetRequestV1Json`, `parseBaselineVetReceiptV1Json`, `readBaselineVetBundleV1`, `parseBaselineVetAttestationEnvelopeV1Json`, `verifyBaselineVetAttestationV1`, `parseBaselineVetPublicationV1Json`, `baselineVetPublicationResultV1`, `parseBaselineVetDiscoveryV1Json`, `resolveBaselineVetDiscoveryV1`; types `BaselineAnalyzerV1`, `BaselineVetRequestV1`, `BaselineVetReceiptV1`, `BaselineVetAnnexArtifactV1`, `BaselineVetBatchResultV1`, `BaselineVetTrustRootV1`, `SignedBaselineVetAttestationV1`, `VerifiedBaselineVetAttestationV1`, `BaselineVetPublicationV1`, `BaselineVetDiscoveryV1` | Nothing replaces them: they read historical baseline evidence |
-| `detector-execution` | compatibility-only | `listDetectorCapabilitiesV1`, `resolveDetectorCapabilityV1`, `resolveDetectorExecutionProfileDocumentV1`, `probeDetectorAvailabilityV1`, `runDetectorV1`, `runCiscoShardV1`; types `Detector*V1` capability and profile types, `DetectorOptionsV1`, `CiscoDetectorOptionsV1`, `CiscoMcpScannerDetectorOptionsV1`, `TrustLintDetectorOptionsV1`, `DetectorAvailabilityV1Result`, `DetectorPrerequisiteStateV1`, `RunDetector*V1`, `RunCiscoShard*V1`, `CiscoShardJobV1`, `CiscoShardJobSarifOutputV1`, `ScanCoverageV1`, `BaselineAnalyzerObservationV1`, `SkillspectorImageMatchV1` | `runScan` (`@aihq/scan/host`) |
-| `v2-capture-and-signing` | compatibility-only | `captureCiscoOciCandidateV2`, `captureRegisteredDetectorCandidateV2`, `createDetectorRegistrationV1`, `parseDetectorRegistrationV1Json`, `sealSourceV2`, `createScanCandidateV2`, `parseScanCandidateV2Json`, `signScanCandidateV2`, `writeScanCaptureBundleV2`; types `CiscoCaptureV2`, `DetectorRegistrationV1`, `DetectorRegistrationEntryV1`, `SourceSealV2`, `ScanCandidateV2` | `runScan`, then `prepareArtifact` with `signArtifact` or `attachAttestation` (`@aihq/scan/host`) |
-| `legacy-core-evidence` | compatibility-only | `AI_HARNESS_CORE_CONTRACTS_ACCEPTED`, `AI_HARNESS_STRICT_V2_COMMIT`, `AI_HARNESS_STRICT_V2_COMMIT_ACCEPTED`, `AI_HARNESS_DECISION_V2_SCHEMA_SHA256`, `AI_HARNESS_DECISION_V2_SCHEMA_SHA256_ACCEPTED`, `AI_HARNESS_ORGANIZATION_EVIDENCE_ENVELOPE_V1_SCHEMA_SHA256`, `verifyAiHarnessStrictV2Contract`, `verifyAiHarnessCoreEvidenceContractV1`, `verifyCoreOrganizationEvidenceEnvelopeSchemaLockV1`, `projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1`, `coreOrganizationEvidenceEnvelopeDigestV1`, `canonicalCoreOrganizationEvidenceEnvelopeV1Bytes`; type `CoreOrganizationEvidenceEnvelopeV1` | Nothing replaces them: current assessments carry no Core lock |
-| `baseline-production` | **deprecated** | `BASELINE_ANALYZERS_V1`, `createBaselineVetRequestV1`, `canonicalBaselineVetRequestV1Bytes`, `canonicalBaselineVetReceiptV1Bytes`, `signBaselineVetBundleV1`, `canonicalBaselineVetAttestationEnvelopeV1Bytes`, `createBaselineVetPublicationV1`, `canonicalBaselineVetPublicationV1Bytes`, `createBaselineVetDiscoveryV1`, `canonicalBaselineVetDiscoveryV1Bytes` | `runScan`, `prepareArtifact` and `signArtifact` (`@aihq/scan/host`) |
-| `v2-internal-helpers` | **deprecated** | `assertCompleteScanAnnexArtifactsV2`, `canonicalDssePaeV2`, `canonicalScanAttestationEnvelopeBytesV2`, `canonicalScanCandidateBytesV2`, `canonicalSourceSealsV2Bytes`, `ed25519KeyIdV2`, `isVerifiedScanAttestationV2`, `canonicalDetectorRegistrationV1Bytes` | Nothing: these are internal serialization details with no supported use outside Scan. The readers, verifiers, signers and `aih-scan` CLI apply them for you |
-
-The legacy Core locks exist only to keep evidence produced against those Core
-commits verifiable. They are not part of the recommended workflow, and a current
-report never tracks Core releases.
-
-## Evidence flow
-
-The sections from here to [What the evidence means](#what-the-evidence-means)
-describe the legacy root and its CLI commands: `aih-scan capture`, `sign`,
-`verify`, `project-core-evidence`, `baseline-vet`, `baseline-sign`,
-`baseline-verify`, `baseline-pack` and `baseline-inspect`. The current command is
-`aih-scan scan`; see [Assess a local directory or Git repository](#assess-a-local-directory-or-git-repository).
-New work follows the [recommended workflow](#recommended-workflow).
-
-Keep capture, signing, verification, and governance as separate phases:
-
-1. A candidate job builds or obtains the exact registered scanner runtime and
-   runs `aih-scan capture` against a disposable target. The selected
-   registration names one code-owned adapter capability and binds the exact
-   runtime, adapter, configuration, execution profile, platform, SBOM,
-   provenance, and broker identities. It has no signing or repository-write
-   authority.
-2. A signing job reads the completed detached bundle and signs its exact
-   candidate and annex identities. It does not run Docker or the candidate
-   scanner.
-3. An administrator verifies the DSSE signature, detached bundle, expected
-   source and CI claims, validity window, replay state, and signer identity
-   against roots supplied outside the evidence bundle.
-4. For an organization signer and successful scan, the administrator may
-   project those already verified facts into Core's exact canonical
-   `OrganizationEvidenceEnvelopeV1` contract.
-5. An administrator uses Core's structured Workbench UI to generate and protect
-   a PolicyBundle V2 file that binds the exact evidence and decision; an
-   optional GitHub-attested V3 workflow remains available. Scanner output does
-   not approve findings or grant installation, runtime projection, or activation
-   authority.
-
-### Core baseline-vet boundary
-
-Scanner owns the bounded analyzer-execution half of baseline vetting. Core still
-owns catalog selection, reuse, interpretation, finding dispositions, vendor-lock
-and ECC-preview assembly, qualification, and organization policy. Maintainer
-analyzer-offload runners provide execution capacity only; they grant no approval
-authority. The manually dispatched immutable publication workflow accepts a
-data-only `BaselinePublicationRequestSetV1` JSON object containing `protocol`
-and a nonempty `requests` array of canonical `BaselineVetRequestV1` objects.
-Supply `candidate` (the exact source id), `source_repository`, `source_ref`,
-`request_set_url`, and `request_set_sha256`. The URL must name a JSON file on
-`raw.githubusercontent.com` at an exact 40-character commit. Scanner checks the
-16 MiB input limit, exact SHA-256, closed schema, each canonical request digest,
-source identity, duplicate components, and overlapping paths before writing any
-batch. Overlap is checked in `disjoint` mode by default (no path shared or nested
-across components); a set listed in `.github/baseline-request-sets/overlap-modes.json`
-is verified, and dispatched with the input `request_set_overlap: compiler-catalog`,
-in `compiler-catalog` mode, which allows overlap across components and still
-refuses it inside one. This route never checks out Core, installs Core dependencies,
-or executes request-author code. It accepts independently prepared provider data
-without adding a source-specific switch to Scanner or changing Core inventories.
-Reviewed inputs for this delivery are isolated by provider and source commit in
-`.github/baseline-request-sets/`; they are data, not an allowlist in the producer.
-Dispatch their raw URL at the reviewed Scanner commit and hash the exact file
-bytes. A changed source revision requires a newly reviewed request set, not a
-package version change.
-
-The optional Core request-client route accepts five
-sealed Core candidates: `aih-core` only for `samartomar/ai-harness`,
-`anthropics-skills` only for `anthropics/skills`, `ecc` only for `affaan-m/ECC`,
-`mattpocock-skills` only for `mattpocock/skills`, and `superpowers` only for
-`obra/Superpowers`. It reads
-the selected candidate inventory from the same exact Core commit that supplies
-the request authoring code. Legacy dispatch callers may still use `catalog=ecc`
-or `catalog=superpowers` with `core_ref` and the exact source tuple to author the
-active Core catalog requests. `catalog` and `candidate` are mutually exclusive;
-data-only input cannot be mixed with `core_ref` or `catalog`. Neither route
-reuses a locally produced unsigned bundle.
-After Core authors its request batch and before any analyzer runs, Scanner requires a closed,
-nonempty sequence of regular request files whose `source.id`,
-`source.owner + "/" + source.repository`, and `source.pinnedCommit` exactly match the
-dispatched catalog, repository, and commit. A fork is not interchangeable merely
-because it resolves to the same commit.
-
-Core creates one canonical `BaselineVetRequestV1` for an exact source and at
-most 100 components. The fixed `aih-baseline-v1` profile requires native,
-SkillSpector, and Semgrep observations for every component and Cisco for every
-component declared as Skill content. Callers cannot weaken that floor or supply
-commands, image names, runtime paths, adapters, targets, approvals, or effects.
-Scanner acquires each required analyzer once per exact source, verifies the
-pinned SkillSpector image and bundled uv locks/versions, uses hardened Docker and
-lock-backed uv execution against the canonical PyPI index, re-observes every
-source/component digest after the run, and writes one canonical
-content-addressed receipt with detached annexes. A request set of one source
-runs each analyzer once for all of its requests, over one sealed snapshot. Every
-request's receipt carries that one execution's annex bytes, so all batches of a
-source hold the same whole-tree annex per detector. The execution host needs Docker,
-Bubblewrap, `uv`, and root-provisioned Python 3.13 on Linux. The fixed Python
-runtime is rooted at `/usr/local`, with its standard library at
-`/usr/local/lib/python3.13` and its executable exposed as
-`/usr/bin/python3.13`.
-The private analyzer snapshot preserves an exact relative source symlink only
-when every raw path segment resolves inside the source root to an already
-validated regular file or directory. Absolute, drive-relative, UNC, backslash,
-escaping, dangling, chained, excluded `.git`, and cyclic targets fail closed.
-Component hashing remains stricter: any symlink inside a selected component is
-rejected before analyzer execution.
-The Scanner runtime invokes the root-provisioned `/usr/bin/docker`,
-`/usr/bin/bwrap`, `/usr/local/bin/uv`, and
-`/usr/bin/python3.13` paths directly; after clearing the host environment it
-adds only the fixed read-only standard-library directories to `PYTHONPATH`, so
-the isolated analyzer virtual environment remains active. It does not discover
-Python through the ambient `PATH`, `HOME`, `PYTHONPATH`, or uv environment
-variables. It
-uses Docker's local `default` context, and terminates analyzer process groups as
-one unit. Semgrep and Cisco run as PID 1 inside Bubblewrap user/PID/mount namespaces
-with an empty explicit environment, no host user-manager socket, nested user
-namespaces disabled, and a Scanner-owned runtime ceiling. Network is enabled only
-for locked, no-build wheel acquisition, where the hostile source is not mounted,
-the working directory is the bundled project, and `PYTHONSAFEPATH=1`; analyzer
-execution receives the source only inside a private network namespace. Scanner acquires the exact
-digest-addressed public SkillSpector image with an isolated empty Docker client
-configuration and allows `uv` to acquire only the distributions selected and
-hashed by the bundled lock; neither route accepts caller-provided registries,
-images, commands, or configuration. Cisco recursively discovers every
-`SKILL.md` in the sealed source and emits JSON coverage accounting beside its
-SARIF. Scanner rejects any skipped skill or discovered/scanned count mismatch;
-an exit-zero partial report is not evidence. Analyzer failures retain a bounded,
-single-line encoded head and tail so the terminal cause remains visible without
-allowing source-controlled diagnostics to inject terminal or CI log controls.
-
-```sh
-npx aih-scan baseline-vet \
-  --request /path/to/canonical-baseline-request.json \
-  --source /path/to/exact-pinned-source \
-  --output /path/to/new-baseline-observation-bundle
-```
-
-For several requests of one source, the set form reads every
-`batch-NNN.request.json` of a directory that holds nothing else (1 to 1000
-files). It runs each analyzer once for the whole set and, only if every request
-succeeded, writes `<output-root>/batch-NNN.bundle` for each:
-
-```sh
-npx aih-scan baseline-vet \
-  --request-set /path/to/canonical-request-directory \
-  --source /path/to/exact-pinned-source \
-  --output-root /path/to/new-bundle-directory
-```
-
-That first command produces an unsigned observation bundle, not portable trusted
-evidence. Keep the organization evidence key out of the analyzer process. In a
-separate protected step, sign the exact canonical request and bundle, then verify
-the signature, trust root, freshness, annexes, request binding, and replay state:
-
-```sh
-npx aih-scan baseline-sign \
-  --request /path/to/canonical-baseline-request.json \
-  --bundle /path/to/baseline-observation-bundle \
-  --signer /protected/signer.json \
-  --private-key /protected/ed25519-private.pem \
-  --claims /protected/claims.json \
-  --output /path/to/new-baseline-attestation.json
-
-npx aih-scan baseline-verify \
-  --evidence /path/to/baseline-attestation.json \
-  --request /path/to/canonical-baseline-request.json \
-  --bundle /path/to/baseline-observation-bundle \
-  --roots /protected/trust-roots.json \
-  --expected /protected/expected-signer-and-time.json \
-  --seen /protected/seen-evidence-digests.json
-```
-
-To transfer a verified result across runs or repositories, pack the exact request,
-receipt, annex bytes, signature envelope, and its verification context into one
-canonical publication. The discovery record maps the request digest to those exact
-publication bytes; the release address additionally binds the protected Scanner publisher
-commit so analyzer rotations cannot collide at an existing request address. The record
-declares `authority: "none"` and is never an approval
-or mutable channel pointer.
-
-```sh
-npx aih-scan baseline-pack \
-  --evidence /path/to/baseline-attestation.json \
-  --request /path/to/canonical-baseline-request.json \
-  --bundle /path/to/baseline-observation-bundle \
-  --roots /protected/trust-roots.json \
-  --expected /protected/expected-signer-and-time.json \
-  --locator https://github.com/owner/repo/releases/download/baseline-v1-PUBLISHER_COMMIT-REQUEST_SHA/publication.json \
-  --publication /path/to/new-publication.json \
-  --discovery /path/to/new-discovery.json
-
-npx aih-scan baseline-inspect \
-  --discovery /path/to/new-discovery.json \
-  --publication /path/to/new-publication.json \
-  --request-sha256 REQUEST_SHA
-```
-
-`baseline-pack` verifies before it writes and refuses existing output files.
-`baseline-inspect` rechecks the discovery digest, canonical wire, request and
-receipt bindings, every annex, and the embedded custody signature. The embedded
-ephemeral public key makes the file portable but does not make that key trusted;
-publisher provenance is a separate verification boundary.
-
-`.github/workflows/baseline-publication.yml` is retained as a historical producer
-after accepted replacement publication; it is not a current production path.
-It was manual-dispatch only. It accepted either the digest-bound request-set inputs
-above or the optional exact Core request-client inputs, built publications in a
-read-only job, transferred them by artifact digest, and gave write/OIDC permissions
-only to the protected publication job, which attested the exact publication files.
-Before analyzer setup, the build job checked for a
-completed publisher-and-request-addressed GitHub Release. Reuse required the exact four-file
-closure, checksums, independent inspection, and GitHub attestation binding this
-workflow, `refs/heads/main`, and the then-current publisher commit. Only an absent
-release and tag was pending work; lookup, network, authentication, incomplete-release,
-or verification failures stopped the run. Only pending requests reached analyzers, and
-they ran as one set: each analyzer ran once for all of them. So a set was published
-whole or not at all. When only some of its requests already had completed
-publications, the run stopped. A fresh `publication_generation` was dispatched to
-publish the whole set again.
-
-The rest of this section records that historical workflow's reuse and release
-rules as they stood.
-
-Reuse checks the 90-day public-report freshness policy against the original
-authenticated report signing date and the verified publication timestamp.
-The verified publication timestamp must also fall inside the report's original
-short signature-verification window. Draft releases cannot be reused.
-Downloading, re-verifying, or republishing old bytes cannot restart report age.
-An expired publication fails explicitly instead of silently rescanning its tag.
-For a fresh scan, select a new opaque eight-digit `publication_generation` identifier
-(for example, `20261207`). The initial publication keeps its existing address;
-renewals append `-r<identifier>`. Each address is immutable. A missing renewal
-runs the analyzers before signing; retrying the same completed renewal reuses it
-only after all verification checks pass. Core pins the exact resulting locator.
-
-Matt Pocock request batches may carry a closed Core-derived source-file
-coverage map through the same artifact. When present, the map must match every
-request and component; current request-only producers remain supported. The map is not Scanner evidence,
-authority, or a release asset; Core must re-derive it from its exact pinned
-checkout before consumption. The workflow serializes identical inputs while
-distinct sources remain independent. It creates a release only when neither
-the release nor tag exists, and never publishes an npm package. A consumer must verify the
-GitHub artifact attestation against this repository, workflow, source ref, and
-source digest before treating the embedded key as the custody key for those
-bytes. Each candidate inventory and its request author are checked out from the
-same commit.
-
-For Core's generated delivery materials, dispatch `candidate: aih` with
-`source_repository: samartomar/ai-harness` and identical exact `core_ref` and
-`source_ref` commits. This route cannot use a raw request-set override. The Core
-helper runs from its own clean pinned checkout and materializes delivery bytes
-outside that checkout. Scanner independently checks the canonical manifest,
-request identities, contained real source directory, whole-tree digest, and
-every component digest before scanning that generated tree. The broader
-`aih-core` repository-inventory route is separate and is not delivery coverage.
-
-The output directory must not exist. It contains only `receipt.json` and the
-exact `annex/*.json` files named and hashed by the receipt. Duplicate, missing,
-substituted, malformed, truncated, stale, drifted, unknown-profile, and
-replay-conflicting states fail closed. A single bundle therefore scales to 100
-requested components without importing 100 evidence files or rerunning the same
-analyzer 100 times. Core must independently verify the request, receipt, annexes,
-source identity, analyzer floor, and replay state before normalizing facts.
-An unsigned receipt cannot satisfy the public completion contract. Scanner
-evidence remains preflight evidence throughout even after organization-key
-authentication; it never qualifies, approves, installs, or activates a
-component.
-
-Organization-class `baseline-sign` custody is Linux-only. It opens the bundle
-and annex directories through protected `/proc/self/fd` descriptors, requires
-them to be owned by the signer account and not group/world-writable, and copies
-the bounded canonical bytes into process-private memory before signing. The
-optional baseline replay file has the exact shape
-`{"digests":["<accepted-evidence-sha256>"],"receipts":[{"requestSha256":"<request-sha256>","receiptSha256":"<accepted-receipt-sha256>"}]}`;
-both envelope replay and conflicting receipts for one request fail closed.
-
-The repository workflow at
-`.github/workflows/cisco-oci-equivalence.yml` is the complete current capture
-example. It builds the pinned Cisco runtime twice for OCI-layout and local
-Docker identity equivalence, scans a generated public fixture offline, creates
-a complete bundle, signs it in a separate job, and verifies it in a third job.
-
-## Capture
-
-```sh
-npx aih-scan capture \
-  --request /path/to/capture-request.json \
-  --output /path/to/new-capture-bundle
-```
-
-`--output` must not already exist. A built-in Cisco request binds:
-
-- the canonical Cisco OCI layout and exact image/config digests;
-- the source root and selected relative closure paths;
-- analyzer, adapter, runtime, configuration, and execution-profile identities;
-- digest-bound SBOM and provenance annex files;
-- the broker identity.
-
-An organization-defined request replaces the top-level `runtime` and `broker`
-fields with `registration` and `detectorId`. `registration` has the strict
-authoring shape below; every digest is 64 lowercase hexadecimal characters and
-the OCI reference must end in the same manifest digest:
-
-```json
-{
-  "protocol": "DetectorRegistrationV1",
-  "registrations": [
-    {
-      "detector": {
-        "detectorId": "detector.example.policy",
-        "analyzerIdentity": "native.0123456789ab",
-        "ociImage": {
-          "reference": "local.invalid/aih-scan/cisco@sha256:<manifest-sha256>",
-          "sha256": "<manifest-sha256>"
-        },
-        "adapter": {
-          "identity": "adapter.0123456789ab",
-          "sha256": "<adapter-sha256>"
-        },
-        "observationConfigurationSha256": "<configuration-sha256>",
-        "executionProfileSha256": "<execution-profile-sha256>",
-        "supportedPlatforms": [{ "os": "linux", "architecture": "amd64" }],
-        "sbom": { "mediaType": "application/spdx+json", "sha256": "<sbom-sha256>" },
-        "provenance": {
-          "mediaType": "application/vnd.in-toto+json",
-          "sha256": "<provenance-sha256>"
-        }
-      },
-      "runtime": {
-        "sourceReference": "local.invalid/aih-scan/cisco@sha256:<manifest-sha256>",
-        "sourceSha256": "<manifest-sha256>",
-        "configSha256": "<image-config-sha256>"
-      },
-      "adapterCapability": "cisco-oci-v1",
-      "broker": { "identity": "broker.0123456789ab", "capability": "cisco-oci-v1" }
-    }
-  ]
-}
-```
-
-The selected `detectorId` need not appear in an AIH-maintained catalog. The
-code-owned `detector.cisco` identity is reserved for the direct built-in path
-and cannot be claimed by an organization registration. The current adapter
-requires the selected image to be loaded under the canonical
-local execution alias shown above; the registration, OCI layout, loaded image,
-SBOM, and provenance still bind its exact organization-chosen bytes. Scanner
-does not fetch or execute an arbitrary registry reference. The registration is
-strict, canonically hashed, deterministically ordered, capped at 128 entries
-and 512 KiB, and rejects duplicate IDs, mutable OCI references, unsupported
-platforms, unknown fields, digest mismatches, and unknown adapter capabilities.
-The V2 candidate records the selected identity under the neutral
-`scanner.detector` field and binds the complete registration digest. It does
-not claim that every registered entry ran.
-
-The only executable capability is the checked-in `cisco-oci-v1` adapter. An
-organization may select its own exact compatible OCI detector runtime and
-evidence identities, but cannot supply JavaScript, a command line, a host path,
-or another adapter implementation for Scanner to execute. A new execution
-capability requires reviewed Scanner code and tests.
-
-The capture command seals the source before and after execution and refuses a
-changed source, link/reparse escape, hard link, oversized input or output,
-timeout, truncated process output, nonzero scanner result, or incomplete
-container cleanup. It also safely re-reads the capture request after execution
-and before bundle creation, refusing changed canonical request bytes. Docker
-runs with no network, a read-only root filesystem,
-no added capabilities, `no-new-privileges`, a non-root user, bounded CPU,
-memory, process count, temporary storage, and output.
-
-## Sign
-
-Signing requires a completed bundle, an Ed25519 private key, a public signer
-projection, and exact claims:
-
-```sh
-npx aih-scan sign \
-  --bundle /path/to/capture-bundle \
-  --signer /path/to/signer.json \
-  --private-key /protected/path/to/ed25519-private.pem \
-  --claims /path/to/claims.json \
-  --output /path/to/new-evidence.json
-```
-
-`signer.json`:
-
-```json
-{"class":"organization","identity":"example-admin","keyId":"ed25519:<sha256-of-SPKI-DER>"}
-```
-
-`claims.json` has the following closed shape:
-
-```json
-{
-  "repository": "owner/repository",
-  "workflow": ".github/workflows/evidence.yml",
-  "issuer": "https://token.actions.githubusercontent.com",
-  "sourceRef": "refs/heads/main",
-  "commit": "0123456789abcdef0123456789abcdef01234567",
-  "environment": "evidence-signing",
-  "runId": "123456789",
-  "runAttempt": 1,
-  "signedAt": "2026-08-22T17:00:00.000Z",
-  "expiresAt": "2026-08-22T18:00:00.000Z"
-}
-```
-
-The validity window must be positive and no longer than 24 hours. On POSIX,
-the CLI refuses a private-key file accessible by group or other users. Do not
-commit private keys. Windows ACL enforcement and hardware-backed/HSM signing
-are outside the current CLI contract.
-
-## Verify
-
-```sh
-npx aih-scan verify \
-  --evidence /path/to/evidence.json \
-  --bundle /path/to/capture-bundle \
-  --roots /path/to/admin-roots.json \
-  --expected /path/to/expected-policy.json \
-  --seen /path/to/replay-identities.json
-```
-
-`admin-roots.json` is supplied independently by the administrator:
-
-```json
-{
-  "roots": [
-    {
-      "identity": "example-admin",
-      "class": "organization",
-      "keyId": "ed25519:<sha256-of-SPKI-DER>",
-      "publicKeySpkiBase64": "<canonical-base64-SPKI-DER>"
-    }
-  ]
-}
-```
-
-`expected-policy.json` repeats every signed claim exactly and adds:
-
-```json
-{
-  "now": "2026-08-22T17:30:00.000Z",
-  "subjectSha256": "<exact-source-tree-sha256>",
-  "signer": {
-    "identity": "example-admin",
-    "class": "organization",
-    "keyId": "ed25519:<sha256-of-SPKI-DER>"
-  }
-}
-```
-
-The full file also contains all fields from `claims.json`; extra or missing
-fields are rejected. The optional replay file has the shape
-`{"identities":["<previous-replay-identity>"]}`. Persist an accepted
-`replayIdentity` in administrator-owned state before accepting another copy.
-
-Successful verification prints canonical JSON facts. It does not print
-`PASS`, approval, a finding disposition, or an activation decision.
-
-## Project verified evidence for Core
-
-After successful verification, write one canonical Core evidence envelope:
-
-```sh
-npx aih-scan project-core-evidence \
-  --evidence /path/to/evidence.json \
-  --bundle /path/to/capture-bundle \
-  --roots /path/to/admin-roots.json \
-  --expected /path/to/expected-policy.json \
-  --seen /path/to/replay-identities.json \
-  --subject-digest sha256:<exact-core-subject-digest> \
-  --output /path/to/new-core-evidence.json
-```
-
-The packed `@aihq/scan` package exposes the same command surface through
-`aih-scan project-core-evidence --help`.
-
-`--seen` is optional; all other options are required exactly once. The command
-repeats the complete V2 verification before writing anything. It accepts only
-an organization-class signer and a successful scan, and it refuses an existing
-output, linked output parent, malformed or mismatched evidence, stale validity,
-replay, incomplete annex custody, changed source, failed cleanup, or a failed or
-refused scan.
-
-The caller supplies the exact canonical Core subject digest. Scanner binds that
-digest to the verified evidence, candidate, payload, source-seal, and annex
-identities, but it neither derives the Core subject nor decides whether the
-organization should associate that evidence with it. The output validity comes
-only from the signed scan claims. Its deterministic attestor binds the verified
-organization signer identity and key id. The stdout reports
-`envelopeSha256`, the raw output-file hash, and `organizationEvidenceDigest`, Core's domain-separated
-qualification digest. Enter `organizationEvidenceDigest`—not
-`envelopeSha256`—in Policy Workbench's organization-evidence digest field. The
-must-not-exist output file is the evidence handoff, and the caller must preserve
-its custody until a separate authorized Core decision binds that exact
-qualification digest.
-
-Core still requires exact organization authority and an exact decision before
-the envelope can qualify anything. The default Enterprise path is the protected
-PolicyBundle V2 file generated by Core's Workbench and supplied through an
-absolute `AIH_ORG_POLICY` path outside the governed target. The administrator's
-OS or MDM must make that file read-only to the AIH process; optional
-GitHub-attested V3 authority remains available. A matching live observation or
-registered AIH-managed effect is a further boundary. Evidence projection alone
-is never effective state.
-
-## What the evidence means
-
-Verification establishes that:
-
-- the DSSE signature is valid for the exact canonical in-toto payload under an
-  administrator-supplied Ed25519 root;
-- the payload binds the detached candidate, source seals, selected detector,
-  registration and code-owned adapter capability, runtime and configuration
-  identities, platform, raw facts, coverage, annex digests, cleanup result,
-  signer, and expected claims;
-- the detached candidate and all annex bytes are present and match their
-  descriptors;
-- the evidence is current at the caller-supplied time and has not appeared in
-  the supplied replay state.
-
-Current SBOM and provenance annexes are labeled `digest-bound-unverified`.
-Broker enforcement is labeled `unverified`. GitHub claims are
-`signer-asserted` with provenance `none`; this package does not verify an OIDC
-token or GitHub certificate. An administrator must obtain signer roots and
-expected claims through an independent trusted process.
+The request (`aih-scan-request/1`) carries either a `source` (`aih-scan-source/1`) or
+caller-prepared `items` (`[{ path, executable?, label? }]`), plus `origin`, and optional
+`kinds`, `tools` and `mode`. With `items` Scan hashes each folder exactly as given and
+returns one result per folder. JSON Schemas are exported as
+`@aihq/scan/schemas/aih-scan-request-1.json`, `…/aih-scan-source-1.json`,
+`…/aih-scan-summary-1.json` and `…/aih-scan-withdrawn-1.json`, and as `schemas` from
+`/contracts`.
+
+## Results
+
+- **Summary** (`aih-scan-summary/1`): one scan key, its revision and origin, the scanner,
+  routing and scoring versions, `score`, `label`, `coverage` (with `reason` when partial),
+  every file's path, mode, part and SHA-256, each tool's version, mode, result and counts,
+  `notAnalysed` files (with `secretsChecked`), the SARIF files by SHA-256 and the declared
+  `dependencies`. It holds no source, Catalog name, framework or item id.
+- **SARIF 2.1.0**: one run per tool; every result carries `scanKey`, `part`, `code`
+  (`aih-codes/1`), `severity` and `confidence`.
+- **Scoring** (`aih-risk/1`): CRITICAL 50, HIGH 25, MEDIUM 10, LOW 5 points, cross-tool
+  deduplication, per-rule diminishing weights, confidence, ×1.3 for code, rounded and
+  capped at 100. SAFE 0–20, CAUTION 21–50, DO NOT INSTALL 51–100; a partial SAFE result is
+  stored as CAUTION and shown as `CAUTION (partial)`; nothing routable is NOT ASSESSED.
+- **Coverage** is measured against the tools routed for each part: `complete` when every
+  routed tool ran, `partial` with a reason when one failed, timed out, was unavailable or
+  was not selected. Cisco never counts toward coverage.
+
+The routing table, scoring rules, codes and limits are exported from `/contracts` and
+listed in [CONTRACTS.md](CONTRACTS.md).
+
+## Signing and verification
+
+`aih-scan sign` signs a summary (or a withdrawal, `aih-scan-withdrawn/1`) with your own
+keyless Sigstore identity and writes a `messageSignature` bundle. `verifySummary` checks a
+summary and its bundle offline against the pinned Sigstore public-good trust snapshot
+(shipped as `trust/sigstore-trusted-root.json` and `sigstoreTrustedRootText`) or a
+`trustedRoot` you supply. Signers you list in `allowedSigners` are trusted; the default
+list holds AIHQ's publishing workflow (`defaultSigners`). Any other valid signature is
+"signed, not by a trusted publisher". A withdrawal covers that signer's revisions 1 to
+`throughRevision`; a withdrawn result is never trusted. See
+[docs/verification.md](docs/verification.md).
+
+## Advisories
+
+`checkAdvisories` (and `aih-scan advisories`) ask OSV live about declared dependencies.
+They are never signed, never part of a scan and never change a score. Internal scopes and
+version ranges are never sent; the CLI treats folders, `npm-file:` and summaries as
+private unless `--include-private`. See [docs/advisories.md](docs/advisories.md).
 
 ## Limits
 
-- Registered execution capability: `cisco-oci-v1` only. Organizations can bind
-  their own exact compatible detector identities and OCI bytes; Scanner does
-  not dynamically load arbitrary adapters.
-- Qualified capture platform: Linux `amd64` only.
-- Source tree: at most 4,096 entries, 16 MiB per file, and 256 MiB total.
-  The canonical `SourceSealV2` record is also capped at 512 KiB. Selected
-  files appear in both the complete file inventory and the selected-closure
-  binding, so long paths or large selected closures can reach the canonical
-  record cap before the entry or aggregate-byte limits.
-- Detached annex: at most 16 MiB per annex; the Cisco bundle requires raw,
-  SBOM, and provenance annexes.
-- Scanner process: 120-second command timeout, 64 KiB per stdout/stderr stream,
-  16 MiB SARIF output, then bounded termination and cleanup.
-- The package emits evidence facts only. It does not provide catalog promotion,
-  organization approval, installation, runtime/effect projection, revocation
-  custody, or publication authority.
-- Exact public `0.2.1` has an immutable tag, npm registry signatures and
-  provenance, a verified five-asset Release, a passing disposable install, and
-  an independently observed least-privilege Trusted Publisher. The protected
-  environment is tag-only and secret-free, bypass tokens are disallowed, and
-  the old bootstrap token is revoked.
+Published in `/contracts` (`limits`): source size 500 MB, 50,000 files, 50 MB per file,
+path length 1,024, folder depth 64, 20,000 items found — over any of them the scan is
+`refused`, writes nothing and exits 2. One tool on one item has 10 minutes; past that the
+tool is `not-run` (`timeout`) and the item `partial`. A limit is never SAFE and never an
+empty clean result.
 
-Organizations are not required to use an AIH-maintained catalog entry. The
-Core Strict V2 contract can bind organization-qualified evidence for an exact
-tool, skill, MCP server, package, or profile; catalog membership remains an
-optional qualification source rather than admission authority.
+## Boundaries
 
-## Development verification
+Scan knows nothing about Catalog items, policies, people or the Workbench. Callers build
+item folders and extracted entries, choose which summaries and coverage they accept and
+which signers they allow, keep withdrawal and revision knowledge, and own
+acknowledgements and presentation. Store operators assign revisions and isolate the
+scanning host. Whether to install belongs to the person or organization.
 
-```sh
-npm run typecheck
-npm run lint
-npm test
-npm run build
-npm run verify:workflow-action-pins -- --online
-npm audit --omit=dev
-git diff --check
-```
+## Development and releases
 
-The packed compatibility proof additionally requires
-`AIH_SCAN_CORE_SOURCE` to be the filesystem path of a clean Core checkout whose
-HEAD is exactly `6130dd837b8e8bd41e999fb40733e0e460e69720`. Its manifest still
-identifies as `@aihq/core@0.1.1`, but it is a post-`0.1.1` compatibility fixture
-rather than the public package. Public `@aihq/core@0.2.0` and immutable tag
-`v-core-0.2.0` carry the released Workbench handoff from later source
-`0d63a9853bd51072a5108eee21013d5fb8a8472b`; the cold lock preserves the exact
-schema bytes Scanner targets:
-
-```sh
-AIH_SCAN_CORE_SOURCE=/path/to/exact-clean-core-checkout \
-  npm run verify:cold-core-evidence
-```
-
-The proof builds and packs that exact locked Core source, packs the current
-`@aihq/scan` source, installs both tarballs in
-disposable roots, captures a catalog-absent organization detector through the
-registered adapter boundary, signs and independently verifies the resulting V2
-bundle, projects the evidence, validates the exact packaged Core schema, and
-uses the packed Core Workbench form to generate a protected policy file, and
-invokes packed Core's real `policy resolve` command. Without the protected file
-the same request refuses `authority-unverified`; with it, Core verifies the
-authority, accepts the exact envelope as `organization-qualified`, and stops
-honestly at `observation-missing` without an effect. The deterministic runner,
-generated organization-class key, and generated policy are disposable test
-mechanics—not human approval, public attestation, production authority, or a
-production effect.
-
-Historical clean-machine acceptance used exact npm packages in a disposable
-installed root. The promoted `@aihq/scan` stable train carries bounded baseline-vet execution, safely preserves
-validated in-root relative source symlinks in private analyzer snapshots, and
-independently passes its release-custody checks. The complete cross-package
-acceptance is repeated after the corresponding Core release; it is not
-publication authority.
-
-Never run AIH product behavior against this repository checkout. Tests exercise
-scanner behavior only against disposable fixture roots.
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) covers local checks and analyzer setup;
+[RELEASING.md](RELEASING.md) and [VERSIONING.md](VERSIONING.md) cover releases. The
+manual report workflows are described in
+[docs/production-publisher.md](docs/production-publisher.md).
 
 ## License
 
-[Apache-2.0](LICENSE). Scanner evidence and software are provided on an "AS IS"
-basis without organization approval, qualification, warranty, support, or effect
-authority.
-
-## Public organization evidence digest
-
-`coreOrganizationEvidenceEnvelopeDigestV1` is exported from `@aihq/scan`.
-Call it on the envelope returned by
-`projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1`, after verifying the
-attestation. It returns the domain-separated `sha256:...` binding used by Core;
-this differs from hashing the serialized file. The helper preserves projection
-custody: a parsed or copied envelope is rejected. To import a saved envelope, use
-Core's public canonical-byte parser and digest helper, then run the normal Core
-evidence and authority checks. Neither digest establishes approval or authority.
-
-### Executable capture and format 2.0.0
-
-Use `schema: "urn:aihq:scan:request:2.0.0"` with `runScan` for capture profile
-`aih-source-capture-2`. The CLI uses this request generation. File and file-link
-entries include `executable: true | false | "unknown"`. Git uses the pinned tree
-modes (`100755`/`100644`), local capture uses execute bits on platforms that expose
-them, and local Windows capture records `unknown`. A file link takes its target's
-state. Containment and source resource limits apply as before.
-
-The profile participates in the capture digest. Fresh observations use
-`aih-observation-v2`; their input and identity include executable state. An
-executable-only change invalidates the affected observation inputs. A selected
-closure can still reuse work when only an unrelated file's mode changed.
-
-Request `1.0.0` remains accepted and produces its original report generation;
-old reports and observation bodies retain their bytes and identities. Request
-1.0.0 retains its original mode-normalized detector snapshot; use profile 2 when
-analysis must observe executable state. A legacy
-observation can be reused in profile 2 only when every relevant file's current
-executable state is `unknown`. It remains an `aih-observation-v1` body.
-`readReport` and `readArtifact` return the original wire report plus a separate
-`capture` read view whose file entries expose absent legacy modes as `unknown`.
-That view is informational: serialize the original `report` for identity and
-artifact construction, rather than rehashing the projected entries.
-
-The new closed identifiers are `urn:aihq:scan:request:2.0.0`,
-`urn:aihq:scan:run-result:2.0.0` and `urn:aihq:scan:report:2.0.0`.
-The artifact container and signed statement are unchanged: they bind the declared
-report schema and exact report bytes. Unsupported schemas, capture profiles and
-observation formats carry a diagnostic with `code: "SCHEMA_UNSUPPORTED"`, `path`,
-`encountered` and `supported`; unknown reports retain status `unsupported-report`.
-
-Request 2.0.0 accepts exact npm coordinates:
-
-```json
-{ "kind": "npm", "package": "@example/server", "version": "1.2.3" }
-```
-
-or `{ "kind": "npm", "archive": { "url": "https://example.invalid/server.tgz",
-"integrity": "sha512-<base64 digest>" } }`. Exact package coordinates may also
-include `archive`. Mutable versions are refused before acquisition with
-`npm-version-not-exact`. Scan verifies the compressed archive's SHA-512 pin and
-records that archive in the report, captures inert package contents with each tar
-entry's executable state, and reports ordinary detector coverage and findings.
-It runs no package lifecycle scripts. See [npm sources and bounds](docs/assessment-api.md#npm-sources).
-
-Report and assessment run-result `2.0.0` require `reachability`, with `null` for
-non-Git sources and `"reachable" | "unchecked"` for Git. Before capture, Scan checks
-full branch/tag ancestry from the named repository. A commit present only in its
-fork network is refused with `git-commit-unreachable` and diagnostic run-result
-`reachability: "unreachable"`. An unavailable or incomplete check records
-`unchecked` in both the run result and report, with a `git-reachability-unchecked`
-diagnostic. No outcome is guessed. See [reachability and its bounds](docs/assessment-api.md#repository-reachability).
+[Apache-2.0](LICENSE)

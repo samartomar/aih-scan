@@ -1,6 +1,6 @@
-# Releasing AIH Scanner
+# Releasing AIH Scan
 
-`@aihq/scan` is the Apache-2.0 Scanner package. A `v-scan-X.Y.Z` tag on the
+`@aihq/scan` is the Apache-2.0 Scan package. A `v-scan-X.Y.Z` tag on the
 exact current `main` commit starts `.github/workflows/release.yml`. The workflow
 uses a read-only `verify-and-pack` job to re-run repository verification, pack
 once, record the tarball SHA256 digest, smoke-install the exact tarball in a
@@ -12,29 +12,35 @@ a checksum reconstructed from the trusted digest, re-observes current `main`
 and the tag, publishes the same tarball with npm provenance under `next`, and
 creates a prerelease GitHub Release. It never changes `latest`.
 
-Scanner evidence is not organization authority. A release makes Scanner bytes
-publicly obtainable with provenance; it does not approve a subject, create a
-Core decision, establish an organization trust root, or prove successful Core
-custody.
+Scan results are not organization authority. A release makes Scan bytes publicly
+obtainable with provenance; it does not approve or block any content, and its results
+inform the person or organization that decides whether to install.
 
-The Unreleased immutable assessment API has a separate report-signing path.
-Evidence release signing reuses the accepted `sigstore-public` manual publisher;
-its public visibility guard keeps the pinned attestation action on public Sigstore
-with transparency-log inclusion and no long-lived signing key. The documented
-[signer tuple and caller-selected trust](docs/production-publisher.md#prepared-signing-path-and-caller-selected-identity)
-distinguish the historical publisher, illustrative identities and a future
-owner-selected production identity. Workflow preparation and an ordinary source
-merge do not perform signing or populate maintained trust.
-The manual [report publisher](docs/production-publisher.md) admits only the
-reviewed main commit, sole maintainer `samartomar` and selected immutable upload
-custody. The same owner initiates the run and supplies required protected human
-signing approval, including approval of their own run; this does not establish
-independent human review. Source integration does not establish protected settings or authorize
-signing. Review the exact production protection/trust tuple, authorize the bounded
-operation and retain independent offline verification of its production-format
-bundle, including verification after actual leaf expiry. Local signing tests and
-research fixtures do not satisfy that production gate. Report signing does not
-publish this package.
+## The 0.1.0 replacement package
+
+`0.1.0` is the replacement content-assessment package and the sole unreleased target. Its
+local candidate is one exact `npm pack` tarball whose SHA-256 and source commit are
+recorded with the installed-package test (`tests/package-install.test.ts`) run against
+that tarball. Building, testing and recording a local tarball does not publish it.
+
+Before the first public `0.1.0` cut the owner must decide its release tag: the immutable
+historical tag `v-scan-0.1.0` already exists (see below) and is never moved or reused, while
+`release.yml` accepts only `v-scan-<package version>`. Publication, the tag, npm and GitHub
+Release state remain owner-controlled, separately authorized operations.
+
+## Report signing
+
+Report signing is separate from package release. The manual
+[report workflows](docs/production-publisher.md) scan reviewed pinned sources with the
+packed CLI (`scan-report-candidate-upload.yml`) and sign the reviewed summaries with
+`aih-scan sign` (`scan-report-publisher.yml`). The signer job runs in
+`.github/workflows/scan-report-publisher.yml` on `main`, so its keyless certificate carries
+the default trusted publisher identity (`defaultSigners`). Both workflows admit only the
+reviewed main commit, sole maintainer `samartomar`, the first run attempt and selected
+immutable candidate custody; the signer also requires protected human approval in the
+`scan-report-signing-prod` environment. Source integration does not run either workflow,
+establish protected settings or authorize signing. Report signing does not publish this
+package.
 
 ## Historical release custody
 
@@ -116,6 +122,7 @@ checksum signature.
    npm run build
    npm test
    npm run test:cov
+   npx vitest run tests/host-v1/real-analyzers.test.ts tests/package-install.test.ts  # with the locked analyzer runtimes provisioned (docs/DEVELOPMENT.md)
    npm run verify:workflow-action-pins -- --online
    npm audit --audit-level=high
    npm pack --ignore-scripts --dry-run --json
@@ -156,29 +163,13 @@ checksum signature.
 Compare `release_sha` to the separately authorized full SHA. Also download the
 GitHub Release's `SHA256SUMS.txt`, cosign bundle, provenance bundle, and SBOM;
 verify the checksum, keyless signature, and SBOM subject before claiming the
-candidate publication complete. Then run the exact public installed Scanner/Core/
-Catalog acceptance. Source checkout or local tarball execution cannot satisfy this gate.
+candidate publication complete. Then run the installed-package test against the
+registry tarball (`AIH_SCAN_PACKED_TARBALL=<downloaded tarball> npx vitest run
+tests/package-install.test.ts`) from a checkout of the tagged commit. Source checkout or
+local tarball execution cannot satisfy this gate. Consumer applications' acceptance is
+separate and theirs.
 
-8. After acceptance, dispatch `promotion-readiness.yml` with the candidate version and
-   the Core `sibling-compatibility` run id and attempt that tested it, and require a green
-   `promotion-readiness / authorize` run. That read-only job refuses unless Core's
-   version 2 compatibility evidence names exactly one `scan-candidate` combination for
-   this candidate: Scan at `next` installed with the supported `@aihq/core` and
-   `@aihq/catalog` at `latest`, with every Scan-required contract check present once and
-   passed and its execution environment recorded. The published tarball bytes and
-   registry integrity must still equal the bytes that run tested, `dist-tags.next` must
-   still be this candidate, and the Core and Catalog it names must still be `latest` with
-   the same registry integrity, re-observed live. Evidence from an `all-next`, `baseline`
-   or `branch` combination never qualifies; if the supported Core or Catalog moved,
-   rerun Core's `sibling-compatibility` instead of reusing the old run. It prints the
-   promotion commands and executes none of them.
-   A green run is evidence, not authorization.
-   The first cutover goes Core first: packages published before this
-   evidence predate its checks, so their `baseline` combination records failed or
-   unavailable checks. Once the new Core is `latest`, a Scan candidate can become ready
-   against it and against whichever Catalog is then `latest`, because the gate requires
-   only Scan's and Core's checks. No step treats `all-next` evidence as independent
-   compatibility. Then obtain separate promotion authorization, quoting that run id:
+8. After that acceptance, obtain separate promotion authorization:
 
    ```text
    Authorize promoting @aihq/scan@X.Y.Z from next to latest after installed acceptance of <full-main-SHA>.
@@ -202,7 +193,7 @@ Once a tag or npm version exists, never delete, move, or reuse the tag or
 version. Preserve the failed run as audit evidence, correct the defect on a new
 reviewed commit/version, and fix forward. Never promote a candidate that fails public
 installed acceptance. A green tag workflow is not evidence
-of organization authority, evidence acceptance, or a successful Core effect.
+of organization authority or of any consumer's acceptance.
 
 If npm publication succeeds before a later workflow step fails, npm package
 existence is the cleanup trigger. Remove the bootstrap credential and source

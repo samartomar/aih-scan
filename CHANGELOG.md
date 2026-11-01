@@ -1,149 +1,53 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 (unreleased)
 
-- Make item records, record choice and card summaries follow the finalized
-  contracts. The changed contracts (`item-record`, `item-summary`,
-  `evidence-policy` and `severity-profile`, all 1.0.0) have not been released yet.
-  - Rename `recordItem` and `recordItemBatch` to `recordItems({ artifact, items,
-    severityProfile })`.
-  - The record has the contract's exact shape. It includes `materialId`, a
-    `#payload` pseudo-material for the payload's canonical JSON, recorded
-    executable bits, a per-detector `coverage` with `exclusions`, severity
-    counts and recorded suppressions.
-  - The `severityProfile` field names `<id>@sha256:<digest>`. The `evidenceKey`
-    is computed over the contract's preimage.
-  - Item descriptors carry their behaviour fields. Scan recomputes
-    `contentSha256`, `behaviourSha256` and the behaviour file in the contract's
-    canonical-JSON encoding, and refuses any difference.
-  - A capture without executable bits is never `matched`. A `matched` record
-    holds the exact bits the capture holds.
-  - `verifyItemRecord(record, artifact, item, severityProfile)` compares all
-    three. `readItemRecord` refuses an unknown record schema as
-    `SCHEMA_UNSUPPORTED` and an unknown field at its JSON path.
-  - The new `pickRecord` ranks only records that pass verification: by coverage,
-    authentication, required detectors, policy profile and completion before
-    time.
-  - `summariseItem` now reads stored records and follows the contract's 13-row
-    decision table, with its closed `why` list. Its summary has the contract's
-    exact shape.
-  - Severity profiles carry the suppressions. Evidence policies require at least
-    one detector by ID.
-  - Format refusals use the code `SCHEMA_UNSUPPORTED`.
+`0.1.0` replaces the earlier `@aihq/scan` package with one content-assessment contract. It
+is not a compatibility extension of the historical `0.5.0` and earlier packages: nothing
+they read or wrote is accepted, and no compatibility reader is shipped.
 
-- Add an explicit maintained producer input for immutable frozen Catalog captures,
-  binding the inventory and all declared recipe/material bytes in their original
-  relative namespace. The maintainer tooling reuses the four-detector Linux profile,
-  candidate/artifact checks and protected signing path, retaining actual failures
-  and coverage gaps. Existing seven-source input and package APIs remain unchanged;
-  input publication, production execution/signing and npm publication are separate
-  operations (samartomar/aih-scan#114).
+### Added
 
-- Add `readContentCoverage` to the portable `@aihq/scan/read` entry. Given a
-  `readReport` or `readArtifact` result and exact `{ path, sha256, byteLength }`
-  descriptors, it reports whether the captured source matches them and returns
-  the observations that cover every descriptor, with detector and input identity,
-  coverage, findings and resolved annex descriptors. Excluded observations are
-  counted by reason (unsuccessful detector, input missing a descriptor or
-  incomplete coverage). Unsupported or invalid reads are `unavailable`;
-  out-of-bound descriptors are `invalid`. The read result is revalidated; the
-  operation performs no host access and does not authenticate the producer
-  (samartomar/aih-scan#106).
-- Bound the legacy root (samartomar/aih-scan#107). The README documents the
-  recommended `contracts`, `read` and `host` workflow and classifies every root
-  export as compatibility-only or deprecated. `contractSupport.entries` adds the
-  `@aihq/scan` root entry. The new `entrySupport` export of `@aihq/scan/contracts`
-  gives each entry a `status`; its root entry lists in `groups` one status,
-  replacement and export list per operation group.
-  - **Deprecated, still exported:** `BASELINE_ANALYZERS_V1`,
-    `createBaselineVetRequestV1`, `canonicalBaselineVetRequestV1Bytes`,
-    `canonicalBaselineVetReceiptV1Bytes`, `signBaselineVetBundleV1`,
-    `canonicalBaselineVetAttestationEnvelopeV1Bytes`, `createBaselineVetPublicationV1`,
-    `canonicalBaselineVetPublicationV1Bytes`, `createBaselineVetDiscoveryV1` and
-    `canonicalBaselineVetDiscoveryV1Bytes` now carry `@deprecated`. Their behavior
-    is unchanged.
-  - **Deprecated, still exported:** the low-level serialization helpers
-    `assertCompleteScanAnnexArtifactsV2`, `canonicalDssePaeV2`,
-    `canonicalScanAttestationEnvelopeBytesV2`, `canonicalScanCandidateBytesV2`,
-    `canonicalSourceSealsV2Bytes`, `ed25519KeyIdV2`, `isVerifiedScanAttestationV2` and
-    `canonicalDetectorRegistrationV1Bytes` now carry `@deprecated`. They are
-    internal details with no supported use outside Scan, and are scheduled for
-    removal with the legacy root window. Their behavior is unchanged.
-- Keep `contractSupport` in exactly the `urn:aihq:package-support:1.0.0` shape,
-  which admits no other fields: entries carry only `export`, `runtime` and
-  `nodeRange`, and roles and runtimes are typed as the schema's literals. Entry and
-  group statuses live only in the sibling `entrySupport`, which shares the same
-  package identity object (samartomar/aih-scan#110).
+- Three entry points: `@aihq/scan/host` (`scan`, `matchScan`), `@aihq/scan/read`
+  (`readSummary`, `readFindings`, `verifySummary`, `matchScan`, `checkAdvisories`; browser
+  safe) and `@aihq/scan/contracts` (formats, JSON Schemas, routing, scoring, codes, limits,
+  the verification profile, the default trusted signer and the pinned Sigstore trust
+  snapshot). JSON Schemas are also exported as `@aihq/scan/schemas/<format>-1.json`.
+- Formats `aih-scan-request/1`, `aih-scan-source/1`, `aih-scan-summary/1` and
+  `aih-scan-withdrawn/1`; SARIF 2.1.0 with one run per tool; rules
+  `aih-scan-routing/1`, `aih-risk/1`, `aih-codes/1` and `aih-scan-limits/1`.
+- Content-addressed scan keys: the Git tree hash (`git-sha1:` / `git-sha256:`) of each
+  item folder, read from a read-only working copy; every file's SHA-256 is checked before
+  a result is matched to content.
+- Sources: folders and local clones, public Git repositories and items in them, npm
+  packages by exact version, downloaded npm tarballs and remote MCP configuration (never
+  contacted). Item discovery for skills, agents, commands, rules (steering included),
+  hooks and MCP configs, with remaining files and a roll-up.
+- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.2 as the
+  primary analyzer (static by default, optional AI pass through the caller's own setup)
+  and the optional Cisco skill-scanner 2.3.2 second opinion; locked runtimes in
+  `tools/analyzers`.
+- Signing and verification profile `aih-sigstore-keyless/1`: `aih-scan sign` writes a
+  Sigstore `messageSignature` bundle; `verifySummary` verifies offline, separates
+  signature validity from signer trust and applies withdrawals through `throughRevision`.
+- Live OSV advisories through `checkAdvisories` and `aih-scan advisories`, with
+  privacy-aware defaults; never signed and never part of a score.
+- CLI: `scan`, `advisories`, `read`, `findings`, `verify` and `sign`, with exits 0
+  (finished, complete or partial), 1 (only with `--fail-at`), 2 (could not scan or read)
+  and 130 (cancelled).
 
-- Add a maintainer refresh operation for the seven active sources using frozen
-  commits and an exact packed scanner. Record complete source and detector
-  accounting, resource measurements, partial results and original annexes.
-- Replace the fixed report proof with reusable protected detached publication and
-  durable immutable report discovery through independently verified maintainer
-  publication. Preserve publisher trust and historical APIs. The first production batch
-  is accepted and new baseline production is retired; historical reports, readers
-  and shared detector implementation remain available.
-- Admit only the sole maintainer `samartomar` to active manual refresh and final
-  custody; retain required human signing approval, allowing the owner to approve
-  their own run. Preserve historical fixed-proof actor policy and signing trust.
-- Patch the development dependency source-map-js to 1.2.2 in the lockfile.
+### Removed
 
-- Add `aih-scan scan <directory>` to assess a local directory from the command line.
-  It runs the native and trust-lint detectors by default or the detectors you name,
-  discovers MCP configuration inside the target or reads `--mcp-config` and
-  `--internal-scope` inputs, and prints a human summary or `--json` run result.
-  `--artifact` saves an unsigned portable artifact that is read back before success;
-  detector annexes stay separate and a selected detector that cannot run is reported
-  as refused. Exit codes are 0, 1, 2 and 130; a first `SIGINT` or `SIGTERM` cancels
-  and reports, a second exits immediately.
-- `aih-scan scan` also accepts an `https://` Git URL or a GitHub `owner/repo`
-  (a local path with that spelling still wins). The default `HEAD`, or a branch,
-  tag or full commit named with `--ref`, is resolved to one full commit through
-  the hardened Git runner, then assessed through the existing pinned Git
-  acquisition. The summary and stderr report the commit; the JSON result and
-  artifact carry it in `report.source` without a schema change. URLs with
-  credentials, queries or fragments, other Git transports, ambiguous or invalid
-  refs and SHA-256 repositories are refused with exit 2 without echoing the URL.
-  MCP configuration is discovered in the pinned commit as for a local directory,
-  and `--mcp-config` accepts repository-relative paths checked against the
-  captured snapshot; host absolute paths are refused.
-- Git never inherits an askpass program: the hardened Git runner used by pinned
-  Git acquisition and ref resolution removes `SSH_ASKPASS` and sets an empty
-  `GIT_ASKPASS`, so a repository that asks for credentials fails without a
-  credential dialog.
+- The root `@aihq/scan` entry and every legacy export; the V2 assessment, artifact,
+  report, run-result, item-record, item-summary, material-change, detector-definition,
+  evidence-policy and severity-profile formats and schemas.
+- The identity-only `aih-native` detector; attestation V1 and V2; baseline-vet
+  publication; Cisco shards and OCI capture; Semgrep, Snyk agent-scan, the Cisco MCP
+  scanner and the binding gate; Docker and Bubblewrap analyzer runtimes.
+- The `capture`, old `sign`/`verify`, `baseline-*` and `project-core-evidence` commands;
+  `--detector`, `--mcp-config`, `--artifact` and `--fail-on-findings` (replaced by
+  `--tools`, discovery, `--out` and the opt-in `--fail-at`).
+- The `@sigstore/*` and `zod` runtime dependencies.
 
-- Add strict material inventory comparison, portable `MaterialChange` contracts
-  and a versioned schema. Compare published content and declared installation
-  metadata independently of findings; partial inventory never proves removal.
-  Add an explicitly enabled GitHub handoff that preserves human text, closed
-  dispositions and retry data independently of artifact operations.
-
-- Reuse complete unchanged detector observations through Scan-managed retained
-  handles or independently authenticated supported prior artifacts. Preserve
-  original evidence and observed times while rebuilding current partial reports.
-  Binding-gate uses selected-closure inputs; native and trust-lint retain whole-tree
-  scope. Changed inputs rerun the complete affected unit.
-- Require complete installed adapter identity for fresh and reused observations.
-  Startup contexts with unsupported preload or loader hooks now explicitly refuse
-  detector work; see the assessment API and observation reuse migration notes.
-- Add Scan-owned assessment contracts and versioned JSON Schema resources, portable
-  report/artifact readers, and explicit Node host APIs for scanning, preparation,
-  attachment, local signing and offline authentication.
-- `@aihq/scan/host` exports an explicit list of artifact types: those its
-  preparation, attachment, signing and authentication operations accept or
-  return. The internal validated-artifact record is not exported.
-- Correct the README platform guidance to match each execution profile's
-  published platform gate and state the recorded proof limits.
-- Preserve reliable partial outcomes and bind complete report/annex bytes to an
-  immutable Scan ID. Producer authentication is separate from detailed reading.
-- Adopt bounded Sigstore v0.3 bundles with independent keyless publisher and
-  organization Ed25519 trust paths. Prepare an inactive production publisher;
-  production protection, signing and conformance remain activation requirements.
-- Set the host runtime to Node `>=24.15.0 <25`. Existing consumers upgrading package
-  bytes must meet this range. Assessment clients import `@aihq/scan/host` and
-  `@aihq/scan/read`; the retained root V2 entry is outside the new assessment flow.
-- Verify the packed assessment consumer independently of a Core installation.
-  Legacy exact-Core checkout gates are removed from default Scan CI; retained
-  runner containment and artifact custody checks continue.
-
-No package version or authenticated report publication is implied by these entries.
+Historical published versions and tags are kept unchanged as release history; see
+[RELEASING.md](RELEASING.md).
