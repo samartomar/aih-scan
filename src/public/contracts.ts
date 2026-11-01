@@ -18,7 +18,7 @@ export {
 export { formats, type Problem, type ResultStatus } from "../contracts/formats.js";
 export {
   algorithmOfKey,
-  type FileMode as TreeFileMode,
+  type FileMode,
   type GitAlgorithm,
   keyFolderName,
   SCAN_KEY_PATTERN,
@@ -61,7 +61,6 @@ export { schemas } from "../contracts/schemas.js";
 export { sigstoreTrustedRootText } from "../contracts/sigstore-trusted-root.js";
 export { pathProblem, sanitizeText } from "../contracts/text.js";
 export {
-  type FileMode,
   type Origin,
   type RequestItem,
   type ScanMode,

@@ -1,6 +1,7 @@
 import { lstatSync } from "node:fs";
 import { resolve } from "node:path";
 import { limits } from "../contracts/limits.js";
+import { NPM_SCOPE_PATTERN } from "../contracts/npm.js";
 import type { Dependency } from "../contracts/routing.js";
 import { sanitizeText } from "../contracts/text.js";
 import { sourceDependencies } from "../host/scan.js";
@@ -133,8 +134,7 @@ export async function runAdvisoriesCommand(
     json = parsed.flags.has("--json");
     scopes = [...new Set(parsed.values.get("--internal-scope") ?? [])].sort();
     for (const scope of scopes)
-      if (!/^@[a-z0-9][a-z0-9._~-]*$/.test(scope))
-        throw new UsageError("--internal-scope takes @scope");
+      if (!NPM_SCOPE_PATTERN.test(scope)) throw new UsageError("--internal-scope takes @scope");
     target = targetOf(
       parsed.positional[0] as string,
       io.cwd ?? process.cwd(),

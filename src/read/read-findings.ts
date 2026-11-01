@@ -6,6 +6,7 @@ import type { FindingPart, Severity } from "../contracts/risk.js";
 import { severityOf } from "../contracts/risk.js";
 import { displayPathProblem, isBytes, sanitizeText } from "../contracts/text.js";
 import type { Summary } from "../contracts/validate.js";
+import { isRecord } from "../shared/values.js";
 import { parseJsonBytes } from "./read-summary.js";
 
 export interface Finding {
@@ -43,8 +44,7 @@ class Mismatch extends Error {}
 class Bad extends Error {}
 
 type Obj = Record<string, unknown>;
-const isObject = (value: unknown): value is Obj =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const isObject = isRecord;
 function need(condition: unknown, error: new () => Error = Bad): asserts condition {
   if (!condition) throw new error();
 }

@@ -1,4 +1,5 @@
 import { parseDocument } from "yaml";
+import { isRecord } from "../shared/values.js";
 import type { TrustLintFindingV1 } from "./findings.js";
 import { contentFindingFingerprintV1 } from "./fingerprint.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
@@ -49,10 +50,6 @@ function lineForNeedle(source: string, needle: string): number {
   const lines = linesOf(source);
   const found = lines.findIndex((line) => line.includes(needle));
   return found >= 0 ? found + 1 : 1;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isFrontmatterDoc(rel: string): boolean {

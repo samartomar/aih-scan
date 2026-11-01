@@ -1,3 +1,4 @@
+import { isRecord } from "../shared/values.js";
 import type { TrustLintFindingV1 } from "./findings.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
 import { scanTrustDocumentV1 } from "./lint.js";
@@ -23,10 +24,6 @@ import { scanTrustDocumentV1 } from "./lint.js";
  * The MCP POLICY checks (`mcp.policy-denied`, skills-provider evidence) are
  * not detection and are not ported.
  */
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;

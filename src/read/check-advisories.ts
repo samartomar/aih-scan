@@ -1,8 +1,10 @@
 import { advisoryCodes } from "../contracts/codes.js";
 import type { Problem } from "../contracts/formats.js";
 import { limits } from "../contracts/limits.js";
+import { NPM_SCOPE_PATTERN } from "../contracts/npm.js";
 import { sanitizeText } from "../contracts/text.js";
 import { readBoundedText } from "../shared/bounded-response.js";
+import { isRecord, type Json } from "../shared/values.js";
 
 /** One dependency to check, as listed in a summary's `dependencies` (`file` is optional). */
 export interface AdvisoryDependency {
@@ -73,7 +75,6 @@ const MAX_PAGES = 16;
 const REQUEST_TIMEOUT_MS = 60_000;
 /** Bytes read from one advisory-service response (streamed; the read stops past it). */
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
-const SCOPE = /^@[a-z0-9][a-z0-9._~-]*$/;
 const ADVISORY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const NPM_EXACT =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -122,9 +123,7 @@ function validDependencies(value: unknown): readonly AdvisoryDependency[] | Prob
 class Unreachable extends Error {}
 class Cancelled extends Error {}
 
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-const isObject = (value: unknown): value is Record<string, Json> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const isObject = isRecord<Json>;
 
 async function request(
   fetcher: AdvisoryFetch,
@@ -319,7 +318,7 @@ export async function checkAdvisories(
   const scopes = options.internalScopes ?? [];
   if (
     !Array.isArray(scopes) ||
-    scopes.some((scope) => typeof scope !== "string" || !SCOPE.test(scope))
+    scopes.some((scope) => typeof scope !== "string" || !NPM_SCOPE_PATTERN.test(scope))
   )
     return invalid("internalScopes must be npm scopes such as @acme");
   let base = osvEndpoint;

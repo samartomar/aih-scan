@@ -5,6 +5,8 @@
  * signed bytes is further restricted to P-256 with SHA-256 by the profile. Anything else is
  * refused as an unsupported algorithm.
  */
+
+import { webCryptoSubtle } from "../../shared/values.js";
 import { EvidenceError, fail } from "./bytes.js";
 import { bitStringBytes, expectTag, integerBytes, oidOf, parseDer, TAG } from "./der.js";
 
@@ -33,11 +35,7 @@ const unsupported = (detail: string): never => {
   throw new EvidenceError("unsupported-algorithm", detail);
 };
 
-const subtle = (): SubtleCrypto => {
-  const value = (globalThis as { crypto?: Crypto }).crypto?.subtle;
-  if (value === undefined) throw new TypeError("WebCrypto is unavailable");
-  return value;
-};
+const subtle = webCryptoSubtle;
 
 const view = (bytes: Uint8Array) => bytes as Uint8Array<ArrayBuffer>;
 

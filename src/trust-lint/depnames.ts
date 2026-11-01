@@ -1,3 +1,4 @@
+import { isRecord } from "../shared/values.js";
 import type { TrustLintFindingV1 } from "./findings.js";
 import { contentFindingFingerprintV1 } from "./fingerprint.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
@@ -121,10 +122,6 @@ function dependencyCheck(
       `${lineTextValue}\0${detail}`,
     ),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function packageBaseName(rel: string): string {

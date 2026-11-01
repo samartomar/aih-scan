@@ -1,3 +1,4 @@
+import { webCryptoSubtle } from "../shared/values.js";
 import type { Problem } from "./formats.js";
 import { limits } from "./limits.js";
 import { isBytes, pathProblem } from "./text.js";
@@ -18,11 +19,6 @@ export interface TreeFile {
 export const SCAN_KEY_PATTERN = /^git-(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$/;
 
 const encoder = new TextEncoder();
-const subtle = () => {
-  const value = (globalThis as { crypto?: Crypto }).crypto?.subtle;
-  if (value === undefined) throw new TypeError("WebCrypto is unavailable");
-  return value;
-};
 
 function concat(parts: readonly Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -41,7 +37,9 @@ export function hex(bytes: Uint8Array): string {
 }
 
 async function digest(algorithm: "SHA-1" | "SHA-256", bytes: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await subtle().digest(algorithm, bytes as Uint8Array<ArrayBuffer>));
+  return new Uint8Array(
+    await webCryptoSubtle().digest(algorithm, bytes as Uint8Array<ArrayBuffer>),
+  );
 }
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {

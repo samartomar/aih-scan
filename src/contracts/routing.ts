@@ -1,4 +1,5 @@
 import { parse as parseToml } from "smol-toml";
+import { isRecord, type Json } from "../shared/values.js";
 import { formats } from "./formats.js";
 
 export type Part = "config" | "dependencies" | "code" | "text";
@@ -142,9 +143,7 @@ function extension(path: string): string {
   return dot > 0 ? name.slice(dot + 1) : "";
 }
 
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-const isObject = (value: unknown): value is Record<string, Json> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+const isObject = isRecord<Json>;
 
 function parseJson(text: string): Json | undefined {
   try {

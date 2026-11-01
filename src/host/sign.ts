@@ -165,7 +165,7 @@ export async function signDocument(
     typeof entryResponse === "object" && entryResponse !== null ? Object.values(entryResponse) : [];
   const entry = entries[0];
   const proof = field(entry, "verification", "inclusionProof");
-  const hex = (value: unknown) => {
+  const hexToBase64 = (value: unknown) => {
     const decoded = hexDecode(value);
     if (decoded === undefined)
       throw new SigningError("the transparency log returned a malformed entry");
@@ -192,7 +192,7 @@ export async function signDocument(
       tlogEntries: [
         {
           logIndex: integer(field(entry, "logIndex")),
-          logId: { keyId: hex(field(entry, "logID")) },
+          logId: { keyId: hexToBase64(field(entry, "logID")) },
           kindVersion: { kind: "hashedrekord", version: "0.0.1" },
           integratedTime: integer(field(entry, "integratedTime")),
           inclusionPromise: {
@@ -200,9 +200,9 @@ export async function signDocument(
           },
           inclusionProof: {
             logIndex: integer(field(proof, "logIndex")),
-            rootHash: hex(field(proof, "rootHash")),
+            rootHash: hexToBase64(field(proof, "rootHash")),
             treeSize: integer(field(proof, "treeSize")),
-            hashes: hashes.map(hex),
+            hashes: hashes.map(hexToBase64),
             checkpoint: { envelope: checkpoint },
           },
           canonicalizedBody: field(entry, "body"),

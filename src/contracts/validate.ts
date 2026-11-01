@@ -1,6 +1,8 @@
 import { formatProblem, formats, type Problem } from "./formats.js";
+import type { FileMode } from "./git-tree.js";
 import { SCAN_KEY_PATTERN } from "./git-tree.js";
 import { limits } from "./limits.js";
+import { NPM_NAME_PATTERN } from "./npm.js";
 import { type Coverage, type FindingPart, type SummaryLabel, storedLabel } from "./risk.js";
 import { type Kind, kinds, optionalTools, type ToolId } from "./routing.js";
 import { codePointLength, hasUnsafeCharacters, isWellFormedText, pathProblem } from "./text.js";
@@ -49,7 +51,6 @@ export interface ScanRequest {
   readonly mode?: ScanMode;
 }
 
-export type FileMode = "100644" | "100755";
 export type ToolResult = "pass" | "warn" | "fail" | "not-run" | "not-applicable";
 export type SeverityCountKey = "critical" | "high" | "medium" | "low" | "info";
 
@@ -253,7 +254,6 @@ const SOURCE_FIELDS = {
   remote: { required: ["url"], optional: ["kind"] },
 } as const;
 
-const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const GIT_REF = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/@+-]{1,255}$/;
 
 function source(value: unknown, at: string): SourceDescriptor {
@@ -293,7 +293,7 @@ function source(value: unknown, at: string): SourceDescriptor {
     }
     case "npm": {
       const name = text(descriptor.package, `${at}.package`, 214);
-      if (!NPM_NAME.test(name)) invalid(`${at}.package is not an npm package name`);
+      if (!NPM_NAME_PATTERN.test(name)) invalid(`${at}.package is not an npm package name`);
       const version = text(descriptor.version, `${at}.version`, 256);
       if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version))
         invalid(`${at}.version must be an exact version`);

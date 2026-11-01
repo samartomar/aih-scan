@@ -2,6 +2,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { formats } from "../contracts/formats.js";
 import { limits } from "../contracts/limits.js";
+import { NPM_SCOPE_PATTERN } from "../contracts/npm.js";
 import {
   displayLabel,
   failAtReached,
@@ -255,8 +256,7 @@ export async function runScanCommandV1(args: readonly string[], io: CommandIo): 
     const ref = single(parsed, "--ref");
     const scopes = parsed.values.get("--internal-scope") ?? [];
     for (const scope of scopes)
-      if (!/^@[a-z0-9][a-z0-9._~-]*$/.test(scope))
-        throw new UsageError("--internal-scope takes @scope");
+      if (!NPM_SCOPE_PATTERN.test(scope)) throw new UsageError("--internal-scope takes @scope");
     const cwd = io.cwd ?? process.cwd();
     const sources = parsed.positional.map((target) => {
       try {
