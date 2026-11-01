@@ -283,9 +283,9 @@ describe("aih-scan sign and verify (aih-sigstore-keyless/1)", () => {
     const over = new Uint8Array(limits.output.bundleBytes + 1).fill(0x20);
     writeFileSync(fixture.path("big.sigstore"), over);
     const bundle = capture();
-    expect(
-      await runVerifyCommand(["summary.r1.json", "--bundle", "big.sigstore"], bundle.io),
-    ).toBe(exitCodes.input);
+    expect(await runVerifyCommand(["summary.r1.json", "--bundle", "big.sigstore"], bundle.io)).toBe(
+      exitCodes.input,
+    );
     expect(bundle.err()).toContain("the bundle exceeds the size limit");
     writeFileSync(fixture.path("big-root.json"), over);
     writeFileSync(fixture.path("small.sigstore"), "{}");
