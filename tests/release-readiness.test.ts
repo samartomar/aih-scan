@@ -303,7 +303,14 @@ describe("@aihq/scan release boundary (#12)", () => {
       "verify",
       "verify:workflow-action-pins",
     ]);
-    expect(Object.keys(manifest.dependencies as object).sort()).toEqual(["jsonc-parser", "yaml"]);
+    expect(Object.keys(manifest.dependencies as object).sort()).toEqual([
+      "jsonc-parser",
+      "smol-toml",
+      "yaml",
+    ]);
+    // Runtime dependencies are pinned exactly.
+    for (const version of Object.values(manifest.dependencies as Record<string, string>))
+      expect(version).toMatch(/^\d+\.\d+\.\d+$/);
     const lock = JSON.parse(read("package-lock.json")) as {
       version: string;
       packages: Record<string, { version?: string }>;
