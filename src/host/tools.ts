@@ -58,6 +58,8 @@ export type ToolRun =
       failedPart?: string;
       /** Unsigned notes for the caller (for example why AI was not used); never in the summary. */
       notes?: readonly string[];
+      /** Paths whose plaintext-secret check actually ran (aih-trust-lint). */
+      secretsChecked?: readonly string[];
     }>
   | Readonly<{
       status: "not-applicable";

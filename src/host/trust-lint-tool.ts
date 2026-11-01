@@ -137,6 +137,16 @@ const EXACT_NPM = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const EXACT_PYPI = /^===?\s*[0-9A-Za-z.!+-]+$/;
 
 /**
+ * The files the baseline reads as text: each gets the plaintext-secret check (Config files
+ * through the MCP/hook secret check, every other text file through the text secret check).
+ */
+export function secretCheckedPaths(item: AssessItem): string[] {
+  return item.files
+    .filter((file) => item.routed.get(file.path)?.text === true)
+    .map((file) => file.path);
+}
+
+/**
  * The always-on baseline. Every part goes to its checks: Text gets the full document lint,
  * Code and Config hidden-Unicode and malicious-code checks (inline config commands too, as
  * part `code`), Config the MCP secret and tool-poisoning checks, Dependencies the name and
@@ -151,9 +161,7 @@ export function trustLintFindings(
   const partOf = (path: string): FindingPart => item.routed.get(path)?.part ?? "none";
   const raw: { finding: TrustLintFindingV1; part?: FindingPart; ruleId?: string; path?: string }[] =
     [];
-  const textFiles = item.files
-    .filter((file) => item.routed.get(file.path)?.text === true)
-    .map((file) => file.path);
+  const textFiles = secretCheckedPaths(item);
   const inPart = (part: string) => textFiles.filter((path) => item.routed.get(path)?.part === part);
   const occurrences = new Map<string, number>();
   for (const path of inPart("text"))
@@ -258,6 +266,7 @@ export const trustLintAdapter: ToolAdapter = Object.freeze({
         version: TRUST_LINT_VERSION,
         mode: "static" as const,
         findings: Object.freeze(findings),
+        secretsChecked: Object.freeze(secretCheckedPaths(item)),
         rules: Object.fromEntries(
           Object.entries(RULES).map(([id, rule]) => [id, rule.description]),
         ),

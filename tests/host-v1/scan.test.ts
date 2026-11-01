@@ -331,6 +331,42 @@ describe("routing, coverage and labels", () => {
     ).toContainEqual(["trust.plaintext-secret", "Dockerfile", "none"]);
   });
 
+  it("marks secretsChecked only when trust-lint's secret check actually ran on the file", async () => {
+    const item = fixture.folder("item", {
+      "SKILL.md": "# Fine\n",
+      Dockerfile: "FROM scratch\n",
+    });
+    const failing: ToolAdapter = {
+      id: "aih-trust-lint",
+      version: "test",
+      async run() {
+        return { status: "not-run", version: "test", mode: "static", reason: "failed" };
+      },
+    };
+    const silent: ToolAdapter = {
+      id: "aih-trust-lint",
+      version: "test",
+      async run() {
+        return { status: "ran", version: "test", mode: "static", findings: [] };
+      },
+    };
+    for (const [name, adapter] of [
+      ["failed", failing],
+      ["ran without the check", silent],
+    ] as const) {
+      const result = await scanWith(
+        request([{ path: item }]),
+        { outDir: fixture.path(`out-${name.replaceAll(" ", "-")}`) },
+        { adapters: { "aih-trust-lint": adapter, skillspector: ranSkillSpector() } },
+      );
+      const summary = JSON.parse(readFileSync(okResults(result)[0]!.summaryPath, "utf8"));
+      expect([name, summary.notAnalysed]).toEqual([
+        name,
+        [{ path: "Dockerfile", secretsChecked: false }],
+      ]);
+    }
+  });
+
   it("gives NOT ASSESSED, never SAFE, when nothing is routable", async () => {
     const item = fixture.folder("item", {
       Dockerfile: "FROM scratch\n",

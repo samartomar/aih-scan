@@ -209,6 +209,8 @@ export async function assessItem(
   const tools: SummaryTool[] = [];
   const notRunReasons = new Set<string>();
   const notes: string[] = [];
+  /** Files whose secret check ran in this assessment (only a completed trust-lint run). */
+  const secretsChecked = new Set<string>();
   for (const tool of ["aih-trust-lint", "skillspector", "cisco"] as const) {
     const adapter = adapters.get(tool);
     const version = adapter?.version ?? "unknown";
@@ -277,6 +279,8 @@ export async function assessItem(
       );
       continue;
     }
+    if (tool === "aih-trust-lint")
+      for (const path of run.secretsChecked ?? []) secretsChecked.add(path);
     if (run.failedPart !== undefined) {
       if (counts) notRunReasons.add("failed");
       notes.push(`${tool}: ${run.failedPart}`);
@@ -351,7 +355,7 @@ export async function assessItem(
       item.files
         .filter((file) => (routed.get(file.path)?.part ?? null) === null)
         .map((file) =>
-          Object.freeze({ path: file.path, secretsChecked: routed.get(file.path)?.text === true }),
+          Object.freeze({ path: file.path, secretsChecked: secretsChecked.has(file.path) }),
         ),
     ),
     sarif: Object.freeze(
