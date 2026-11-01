@@ -1,5 +1,5 @@
-# Release only an exact v-scan-* tag on current main. Candidate verification,
-# pack, and smoke execution stay in a read-only job. The protected job receives
+# Release only an exact v-scan-* tag on current main. Candidate verification
+# (including the installed-package test), pack, and smoke execution stay in a read-only job. The protected job receives
 # one digest-bound tarball and runs no Scanner package code. npm authentication
 # is OIDC-only through Trusted Publishing; token credentials are rejected at the
 # final publication boundary.
@@ -86,6 +86,8 @@ jobs:
           consumer="$(mktemp -d)"
           npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund "$tarball"
           "$consumer/node_modules/.bin/aih-scan" --help
+          cd "$consumer"
+          node --input-type=module -e 'for (const entry of ["host", "read", "contracts"]) await import(`@aihq/scan/${entry}`);'
       - name: Upload immutable exact release candidate
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -299,7 +301,7 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --prerelease \
             --generate-notes \
-            --notes "AIH Scanner evidence producer. Scanner evidence is not organization authority." \
+            --notes "AIH Scan content assessment. Scan results inform; they never approve or block an installation." \
             "$TARBALL" \
             SHA256SUMS.txt \
             SHA256SUMS.txt.sigstore.json \

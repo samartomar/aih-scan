@@ -23,34 +23,36 @@ function route(changes: { status: string; path: string; previousPath?: string }[
 }
 
 test("documentation edits report applicable checks without real analyzer proofs", () => {
-  expect(route([{ status: "M", path: "docs/DETECTOR-DEFINITIONS.md" }])).toMatchObject({
+  expect(route([{ status: "M", path: "docs/analyzers.md" }])).toMatchObject({
     mode: "docs",
-    python: false,
-    refresh: false,
+    analyzers: false,
     tests: ["tests/ci"],
   });
 });
 
-test("artifact tooling runs its affected checks without Python or refresh proofs", () => {
-  expect(route([{ status: "M", path: "tools/artifact/check-statement.mjs" }])).toMatchObject({
+test("publisher tooling runs its own checks without the analyzer proofs", () => {
+  expect(route([{ status: "M", path: "tools/publisher/candidate.mjs" }])).toMatchObject({
     mode: "focused",
-    python: false,
-    refresh: false,
-    tests: ["tests/artifact", "tests/ci"],
+    analyzers: false,
+    tests: ["tests/ci", "tests/publisher"],
   });
 });
 
-test("source consumers widen through the installed host graph without unrelated Python work", () => {
-  expect(route([{ status: "M", path: "src/material-change/delivery.ts" }])).toMatchObject({
-    mode: "focused",
-    python: false,
-    refresh: true,
-  });
-  expect(route([{ status: "M", path: "src/baseline/runtime-v1.ts" }])).toMatchObject({
+test("source in the analyzer adapters' graph and analyzer locks select the real analyzer proofs", () => {
+  expect(route([{ status: "M", path: "src/cli/process-runner.ts" }])).toMatchObject({
     mode: "focused",
     coverage: true,
-    python: true,
-    refresh: true,
+    analyzers: true,
+  });
+  expect(route([{ status: "M", path: "src/trust-lint/lint.ts" }])).toMatchObject({
+    mode: "focused",
+    coverage: true,
+    analyzers: false,
+  });
+  expect(route([{ status: "M", path: "tools/analyzers/skillspector/uv.lock" }])).toMatchObject({
+    mode: "focused",
+    analyzers: true,
+    tests: ["tests/ci", "tests/host-v1/analyzer-pins.test.ts"],
   });
 });
 
@@ -58,35 +60,32 @@ test.each([
   "package.json",
   "package-lock.json",
   "src/public/contracts.ts",
+  "src/host/scan.ts",
+  "src/shared/json.ts",
   ".github/workflows/ci.yml",
   "tools/ci-route.mjs",
-  "tests/support/packed-assessment-consumer.mjs",
+  "tests/support/portable-realm-v1.mjs",
   "new-unknown.file",
 ])("shared, dependency, workflow or unknown impact retains all proofs: %s", (path) => {
-  expect(route([{ status: "M", path }])).toMatchObject({
-    coverage: true,
-    python: true,
-    refresh: true,
-  });
+  expect(route([{ status: "M", path }])).toMatchObject({ coverage: true, analyzers: true });
 });
 
 test.each([
-  { status: "D", path: "docs/DETECTOR-DEFINITIONS.md" },
-  { status: "R100", path: "README.md", previousPath: "src/baseline/runtime-v1.ts" },
+  { status: "D", path: "docs/analyzers.md" },
+  { status: "R100", path: "README.md", previousPath: "src/host/scan.ts" },
   { status: "A", path: "unmapped.ts" },
   { status: "?", path: "README.md" },
 ])("deleted, renamed, missing and ambiguous paths fail closed: $status", (change) => {
-  expect(route([change])).toMatchObject({ mode: "full", python: true, refresh: true });
+  expect(route([change])).toMatchObject({ mode: "full", analyzers: true });
 });
 
-test("empty change sets and explicit full validation retain coverage and both real proofs", () => {
-  expect(route([])).toMatchObject({ mode: "full", coverage: true, python: true, refresh: true });
+test("empty change sets and explicit full validation retain coverage and the real proofs", () => {
+  expect(route([])).toMatchObject({ mode: "full", coverage: true, analyzers: true });
   expect(route([{ status: "M", path: "README.md" }], true)).toMatchObject({
     mode: "full",
     reason: "explicit-full",
     coverage: true,
-    python: true,
-    refresh: true,
+    analyzers: true,
   });
 });
 
@@ -140,11 +139,22 @@ test("ordinary workflow preserves required verify, full dispatch and failure pro
   expect(selected.run).toBe("node tools/ci-route.mjs --run-tests ci-plan.json");
   expect(selected["continue-on-error"]).toBeUndefined();
   expect(selected.if).toBeUndefined();
-  expect(steps.find((step: { name?: string }) => step.name?.includes("fixed Python")).if).toBe(
-    "steps.route.outputs.python == 'true'",
+  const provision = steps.find((step: { name?: string }) =>
+    step.name?.includes("Provision the locked SkillSpector and Cisco runtimes"),
   );
-  // The packed seven-source refresh proof exercised the retired report format.
-  expect(
-    steps.find((step: { name?: string }) => step.name?.includes("seven-source")),
-  ).toBeUndefined();
+  expect(provision.if).toBe("steps.route.outputs.analyzers == 'true'");
+  expect(provision.run).toContain("uv sync --project tools/analyzers/skillspector --locked");
+  expect(provision.run).toContain("uv sync --project tools/analyzers/cisco-skill-scanner --locked");
+  for (const variable of [
+    "AIH_SCAN_TEST_SKILLSPECTOR",
+    "AIH_SCAN_TEST_SKILL_SCANNER",
+    "AIH_SCAN_REQUIRE_REAL_ANALYZERS=1",
+  ])
+    expect(provision.run).toContain(variable);
+  const proof = steps.find((step: { name?: string }) => step.name?.includes("real analyzers"));
+  expect(proof.if).toBe("steps.route.outputs.analyzers == 'true'");
+  expect(proof.run).toContain("tests/host-v1/real-analyzers.test.ts");
+  expect(proof.run).toContain("tests/package-install.test.ts");
+  // Retired runtimes: no Semgrep, Bubblewrap or Docker step remains.
+  expect(JSON.stringify(workflow)).not.toMatch(/semgrep|bubblewrap|bwrap|docker/i);
 });

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       full_validation:
-        description: Run coverage and both real runtime proofs
+        description: Run coverage, the installed-package test and the real analyzer proofs
         type: boolean
         default: true
   pull_request:
@@ -21,7 +21,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,13 +45,30 @@ jobs:
       - name: Report selected scope
         run: cat ci-plan.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: steps.route.outputs.python == 'true' || steps.route.outputs.refresh == 'true'
+        if: steps.route.outputs.analyzers == 'true'
         with:
           python-version: "3.13"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        if: steps.route.outputs.python == 'true' || steps.route.outputs.refresh == 'true'
+        if: steps.route.outputs.analyzers == 'true'
         with:
           version: "0.12.13"
+      - name: Provision the locked SkillSpector and Cisco runtimes outside PATH
+        if: steps.route.outputs.analyzers == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtimes="$RUNNER_TEMP/analyzers"
+          UV_PROJECT_ENVIRONMENT="$runtimes/skillspector" \
+            uv sync --project tools/analyzers/skillspector --locked --no-install-project --python 3.13
+          UV_PROJECT_ENVIRONMENT="$runtimes/cisco-skill-scanner" \
+            uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project --python 3.13
+          "$runtimes/skillspector/bin/skillspector" --version
+          "$runtimes/cisco-skill-scanner/bin/skill-scanner" --version
+          {
+            echo "AIH_SCAN_TEST_SKILLSPECTOR=$runtimes/skillspector/bin/skillspector"
+            echo "AIH_SCAN_TEST_SKILL_SCANNER=$runtimes/cisco-skill-scanner/bin/skill-scanner"
+            echo "AIH_SCAN_REQUIRE_REAL_ANALYZERS=1"
+          } >> "$GITHUB_ENV"
       - run: npm run typecheck
         if: steps.route.outputs.mode != 'docs'
       - run: npm run lint
@@ -60,135 +77,9 @@ jobs:
         if: steps.route.outputs.mode != 'docs'
       - name: Run selected checks (failure fails verify)
         run: node tools/ci-route.mjs --run-tests ci-plan.json
-      - name: Provision the fixed Linux runtime
-        if: steps.route.outputs.python == 'true' || steps.route.outputs.refresh == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
-          # AppArmor 5 (Ubuntu 26.04) ships this profile in /etc/apparmor.d instead of extra-profiles.
-          apparmor_profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
-          test -r "$apparmor_profile" || apparmor_profile=/etc/apparmor.d/bwrap-userns-restrict
-          test -r "$apparmor_profile"
-          sudo apparmor_parser --replace "$apparmor_profile"
-          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
-          case "$python_prefix" in
-            /usr|/usr/*)
-              echo "setup-python prefix unexpectedly visible through Scanner's /usr bind: $python_prefix" >&2
-              exit 1
-              ;;
-          esac
-          sudo cp -a "${python_prefix}/." /usr/local/
-          sudo install -m 0644 \
-            "${python_prefix}/lib/libpython3.13.so.1.0" \
-            /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
-          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
-          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
-      - name: Verify the fixed Python analyzer runtimes inside Bubblewrap
-        if: steps.route.outputs.python == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-          import { tmpdir } from "node:os";
-          import { join } from "node:path";
-          import { createBaselineAnalyzerExecutionV1 } from "./dist/baseline/runtime-v1.js";
-
-          const sourceRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-probe-"));
-          try {
-            mkdirSync(join(sourceRoot, "skills", "probe"), { recursive: true });
-            writeFileSync(
-              join(sourceRoot, "skills", "probe", "SKILL.md"),
-              "---\nname: probe\ndescription: Scanner CI fixture\n---\n\n# Probe\n",
-              "utf8",
-            );
-            const execute = createBaselineAnalyzerExecutionV1();
-            for (const analyzer of ["semgrep", "cisco"]) {
-              const result = await execute({
-                analyzer,
-                sourceRoot,
-                source: {
-                  id: "python-sandbox-probe",
-                  owner: "aih",
-                  repository: "scanner-ci-fixture",
-                  pinnedCommit: "a".repeat(40),
-                  treeSha256: "b".repeat(64),
-                },
-              });
-              if (result.mediaType !== "application/sarif+json" || result.bytes.byteLength === 0)
-                throw new Error(`${analyzer} sandbox probe emitted no SARIF`);
-            }
-            mkdirSync(join(sourceRoot, "skills", "broken"), { recursive: true });
-            writeFileSync(join(sourceRoot, "skills", "broken", "SKILL.md"), Buffer.from([0x23, 0x20, 0x42, 0xff, 0x0a]));
-            let rejectedPartialCoverage = false;
-            try {
-              await execute({
-                analyzer: "cisco",
-                sourceRoot,
-                source: {
-                  id: "python-sandbox-partial-coverage-probe",
-                  owner: "aih",
-                  repository: "scanner-ci-fixture",
-                  pinnedCommit: "a".repeat(40),
-                  treeSha256: "b".repeat(64),
-                },
-              });
-            } catch (error) {
-              if (!(error instanceof TypeError) || !error.message.includes("skipped 1 skill"))
-                throw error;
-              rejectedPartialCoverage = true;
-            }
-            if (!rejectedPartialCoverage)
-              throw new Error("Cisco sandbox probe accepted partial skill coverage");
-            // D45 leg 3: Cisco 2.1.0 scans a `# Broken\n` skill through its skill_loader fallback,
-            // which D30 accepts. In a fresh root the run completes and reports that fallback at
-            // the skill; the execution itself enforces the D28/D30 pairing of every result.
-            const fallbackRoot = mkdtempSync(join(tmpdir(), "aih-scan-python-fallback-probe-"));
-            try {
-              mkdirSync(join(fallbackRoot, "skills", "probe"), { recursive: true });
-              writeFileSync(
-                join(fallbackRoot, "skills", "probe", "SKILL.md"),
-                "---\nname: probe\ndescription: Scanner CI fixture\n---\n\n# Probe\n",
-                "utf8",
-              );
-              mkdirSync(join(fallbackRoot, "skills", "broken"), { recursive: true });
-              writeFileSync(join(fallbackRoot, "skills", "broken", "SKILL.md"), "# Broken\n", "utf8");
-              const fallback = await execute({
-                analyzer: "cisco",
-                sourceRoot: fallbackRoot,
-                source: {
-                  id: "python-sandbox-fallback-probe",
-                  owner: "aih",
-                  repository: "scanner-ci-fixture",
-                  pinnedCommit: "a".repeat(40),
-                  treeSha256: "b".repeat(64),
-                },
-              });
-              if (fallback.mediaType !== "application/sarif+json" || fallback.bytes.byteLength === 0)
-                throw new Error("Cisco fallback probe emitted no SARIF");
-              const results = JSON.parse(Buffer.from(fallback.bytes).toString("utf8")).runs.flatMap(
-                (run) => run.results ?? [],
-              );
-              const uri = (result) => result.locations?.[0]?.physicalLocation?.artifactLocation?.uri;
-              if (
-                !results.some(
-                  (result) =>
-                    result.ruleId === "SKILL_LOAD_FALLBACK_USED" &&
-                    uri(result) === "skills/broken/SKILL.md",
-                )
-              )
-                throw new Error("Cisco fallback probe reported no SKILL_LOAD_FALLBACK_USED at skills/broken/SKILL.md");
-              if (!results.every((result) => /^skills\/(?:probe|broken)\//u.test(uri(result) ?? "")))
-                throw new Error("Cisco fallback probe reported a result outside its two skills");
-            } finally {
-              rmSync(fallbackRoot, { recursive: true, force: true });
-            }
-          } finally {
-            rmSync(sourceRoot, { recursive: true, force: true });
-          }
-          NODE
+      - name: Prove the real analyzers from source and from the installed package
+        if: steps.route.outputs.analyzers == 'true'
+        run: npx vitest run tests/host-v1/real-analyzers.test.ts tests/package-install.test.ts
 
   actionlint:
     runs-on: ubuntu-latest
