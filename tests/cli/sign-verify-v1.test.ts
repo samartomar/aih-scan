@@ -297,6 +297,16 @@ describe("aih-scan sign and verify (aih-sigstore-keyless/1)", () => {
       ),
     ).toBe(exitCodes.input);
     expect(root.err()).toContain("the trusted root exceeds the size limit");
+    // A signers file is a short list of identities, held to its own 1 MiB limit.
+    writeFileSync(fixture.path("big-signers.json"), new Uint8Array(1024 * 1024 + 1).fill(0x20));
+    const signers = capture();
+    expect(
+      await runVerifyCommand(
+        ["summary.r1.json", "--bundle", "small.sigstore", "--signers", "big-signers.json"],
+        signers.io,
+      ),
+    ).toBe(exitCodes.input);
+    expect(signers.err()).toContain("the signers file exceeds the size limit");
     // The portable reader applies the same published limit to bundle and root bytes.
     const summaryBytes = new Uint8Array(readFileSync(fixture.path("summary.r1.json")));
     expect(await verifySummary(summaryBytes, over)).toMatchObject({

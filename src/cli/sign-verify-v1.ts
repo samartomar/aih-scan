@@ -44,7 +44,10 @@ export const verifyUsage = `${[
   "Exit: 0 verified (trusted or not), 2 not verified or bad input.",
 ].join("\n")}\n`;
 
-/** Summaries and withdrawals are held to the summary limit; bundles and roots to the bundle limit. */
+/**
+ * Summaries and withdrawals are held to the summary limit; bundles and roots to the bundle limit;
+ * a `--signers` file (a short list of identities) to `SIGNERS_FILE_BYTES`.
+ */
 function readFile(path: string, label: string, maximum: number): Uint8Array {
   let stat: ReturnType<typeof lstatSync>;
   try {
@@ -57,12 +60,13 @@ function readFile(path: string, label: string, maximum: number): Uint8Array {
   return new Uint8Array(readFileSync(path));
 }
 
-function readJson(path: string, label: string): unknown {
+/** Bytes of one `--signers` file; each entry is a few hundred bytes. */
+const SIGNERS_FILE_BYTES = 1024 * 1024;
+
+function readJson(path: string, label: string, maximum: number): unknown {
   try {
     return JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(
-        readFile(path, label, limits.output.bundleBytes),
-      ),
+      new TextDecoder("utf-8", { fatal: true }).decode(readFile(path, label, maximum)),
     );
   } catch (error) {
     if (error instanceof UsageError) throw error;
@@ -119,7 +123,9 @@ export async function runSignCommand(args: readonly string[], io: SigningIo): Pr
     let trust: ReturnType<typeof parseTrustedRoot> | undefined;
     if (rootPath !== undefined) {
       try {
-        trust = parseTrustedRoot(readJson(resolve(cwd, rootPath), "the trusted root"));
+        trust = parseTrustedRoot(
+          readJson(resolve(cwd, rootPath), "the trusted root", limits.output.bundleBytes),
+        );
       } catch (error) {
         if (error instanceof TrustProblem)
           throw new UsageError(`the trusted root: ${error.message}`);
@@ -193,7 +199,11 @@ export async function runVerifyCommand(args: readonly string[], io: CommandIo): 
     const signers =
       signersPath === undefined
         ? undefined
-        : (readJson(resolve(cwd, signersPath), "the signers file") as AllowedSigner[]);
+        : (readJson(
+            resolve(cwd, signersPath),
+            "the signers file",
+            SIGNERS_FILE_BYTES,
+          ) as AllowedSigner[]);
     const rootPath = single(parsed, "--trusted-root");
     const withdrawn = (parsed.values.get("--withdrawn") ?? []).map((path) =>
       readFile(resolve(cwd, path), "a withdrawal", limits.output.summaryBytes),
