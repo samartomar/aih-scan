@@ -26,7 +26,7 @@ import { ciscoAdapter } from "./cisco.js";
 import { discoverItems } from "./discover.js";
 import { cloneCommit } from "./inventory.js";
 import { type AiSetup, skillSpectorAdapter, skillSpectorAiSetup } from "./skillspector.js";
-import { readFolder, type SnapshotFile, writeSnapshot } from "./snapshot.js";
+import { hostNameProblem, readFolder, type SnapshotFile, writeSnapshot } from "./snapshot.js";
 import type { ToolAdapter } from "./tools.js";
 import { trustLintAdapter } from "./trust-lint-tool.js";
 
@@ -161,6 +161,8 @@ export interface ScanInternals {
   readonly sharedOutput?: SharedOutput;
   /** The environment analyzers are found in and AI settings are read from (default `process.env`). */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** The host platform for file names and modes (default `process.platform`). */
+  readonly platform?: NodeJS.Platform;
 }
 
 /** The AI availability `scan` reports for `mode: ai`, from the caller's SkillSpector settings. */
@@ -216,7 +218,11 @@ const labelOf = (label: string | undefined) => (label === undefined ? {} : { lab
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 /** Items route: each folder read as handed over, before anything is scanned. */
-async function prepareItems(valid: ScanRequest, signal: AbortSignal): Promise<Phase1> {
+async function prepareItems(
+  valid: ScanRequest,
+  signal: AbortSignal,
+  internals: ScanInternals,
+): Promise<Phase1> {
   const items = valid.items ?? [];
   if (items.length > limits.input.items)
     return problem("refused", "items", `more than ${limits.input.items} items`);
@@ -228,6 +234,7 @@ async function prepareItems(valid: ScanRequest, signal: AbortSignal): Promise<Ph
     if (signal.aborted) break;
     const read = readFolder(entry.path, {
       ...(entry.executable === undefined ? {} : { executable: entry.executable }),
+      ...(internals.platform === undefined ? {} : { platform: internals.platform }),
       signal,
     });
     if (read.status !== "ok") {
@@ -281,7 +288,10 @@ async function acquire(
   const acquisition = { acquisition: { type: source.type, fetched: false } };
   switch (source.type) {
     case "folder": {
-      const read = readFolder(source.path, { signal });
+      const read = readFolder(source.path, {
+        ...(internals.platform === undefined ? {} : { platform: internals.platform }),
+        signal,
+      });
       if (read.status !== "ok")
         return read.status === "refused" && read.reason === "cancelled"
           ? Object.freeze({ status: "cancelled" as const, results: none, ...acquisition })
@@ -549,7 +559,7 @@ export async function scanWith(
   const phase1 =
     valid.source !== undefined
       ? await prepareSource(valid, signal, internals)
-      : await prepareItems(valid, signal);
+      : await prepareItems(valid, signal, internals);
   if ("status" in phase1) return phase1;
   const env = internals.env ?? process.env;
   const mode = valid.mode ?? "static";
@@ -600,7 +610,25 @@ export async function scanWith(
         results.push(Object.freeze({ ...echo, status: "cancelled" as const, reason: "cancelled" }));
         continue;
       }
-      const snapshot = writeSnapshot(entry.files, internals.snapshotParent);
+      const unwritable = hostNameProblem(entry.files, internals.platform);
+      if (unwritable !== undefined) {
+        results.push(Object.freeze({ ...echo, status: "invalid" as const, ...unwritable }));
+        continue;
+      }
+      let snapshot: ReturnType<typeof writeSnapshot>;
+      try {
+        snapshot = writeSnapshot(entry.files, internals.snapshotParent);
+      } catch {
+        results.push(
+          Object.freeze({
+            ...echo,
+            status: "refused" as const,
+            reason: "snapshot-failed",
+            detail: "the files could not be written into a read-only working copy on this host",
+          }),
+        );
+        continue;
+      }
       try {
         const assessment = await assessItem(
           {

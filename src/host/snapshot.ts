@@ -22,6 +22,7 @@ import {
   readSourceEntryNamesV1,
   UnrepresentableSourcePathErrorV1,
 } from "../shared/source-entry-name.js";
+import { cloneIndexModes } from "./git-index.js";
 
 /** One regular file of a folder as Scan read it: these exact bytes are hashed and given to every tool. */
 export interface SnapshotFile {
@@ -58,6 +59,8 @@ export interface ReadFolderOptions {
   readonly signal?: AbortSignal;
   /** Bytes and files already used by earlier folders of the same request. */
   readonly used?: Readonly<{ bytes: number; files: number }>;
+  /** The host platform (default `process.platform`); tests simulate Windows with it. */
+  readonly platform?: NodeJS.Platform;
 }
 
 class Refusal extends Error {
@@ -112,8 +115,10 @@ const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest(
  * Reads a folder by the identity rules: every regular file byte for byte (ignored files
  * included; empty folders do not count), `.git` omitted at every depth, and refusal before
  * anything is scanned of symbolic links, junctions, hard links, other special files, names that
- * are not valid text and paths over the published limits. A file is `100755` when the disk marks
- * it executable or the caller lists it in `executable`; otherwise `100644`.
+ * are not valid text and paths over the published limits. Modes come from the disk; where the
+ * disk cannot say (Windows), from Git's index when the folder is a clone (a `.git` folder
+ * directly inside it, read as data), else from the caller's `executable` list, else `100644`.
+ * On a disk that records modes, a listed file is also `100755`.
  */
 export function readFolder(root: string, options: ReadFolderOptions = {}): ReadFolderResult {
   const used = options.used ?? { bytes: 0, files: 0 };
@@ -127,6 +132,8 @@ export function readFolder(root: string, options: ReadFolderOptions = {}): ReadF
     if (rootStat.isSymbolicLink()) throw new Refusal("link", "the folder itself is a link");
     if (!rootStat.isDirectory()) throw new Refusal("not-a-folder", "the path is not a folder");
     const listed = new Set(options.executable ?? []);
+    const diskModes = (options.platform ?? process.platform) !== "win32";
+    const indexed = diskModes ? undefined : cloneIndexModes(root);
     const files: SnapshotFile[] = [];
     let bytes = used.bytes;
     const visit = (directory: string, parent: string) => {
@@ -174,8 +181,12 @@ export function readFolder(root: string, options: ReadFolderOptions = {}): ReadF
           throw new Refusal("source-size", `the files exceed ${limits.input.sourceBytes} bytes`);
         const content = readStable(absolute, stat, path);
         bytes += content.length;
-        const executable =
-          (process.platform !== "win32" && (stat.mode & 0o111) !== 0) || listed.has(path);
+        const fromIndex = indexed?.get(path);
+        const executable = diskModes
+          ? (stat.mode & 0o111) !== 0 || listed.has(path)
+          : fromIndex !== undefined
+            ? fromIndex === "100755"
+            : listed.has(path);
         files.push(
           Object.freeze({
             path,
@@ -213,6 +224,65 @@ export function readFolder(root: string, options: ReadFolderOptions = {}): ReadF
       detail: "the folder could not be read",
     });
   }
+}
+
+const WINDOWS_RESERVED =
+  /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?$/i;
+const WINDOWS_INVALID = /[<>:"|?*]/;
+
+/**
+ * Why this host cannot write an item's files as their own names, checked before the working
+ * copy is made: on Windows, reserved device names (`CON`, `aux.txt`, `COM1`…), the characters
+ * `< > : " | ? *` and names ending in a dot or space; on Windows and macOS, paths that differ
+ * only by letter case (macOS also by Unicode normalisation) or a file whose folded name is also
+ * a folder. Undefined when every name can be written. The paths are already valid item paths.
+ */
+export function hostNameProblem(
+  files: readonly Pick<SnapshotFile, "path">[],
+  platform: NodeJS.Platform = process.platform,
+): Readonly<{ reason: "reserved-name" | "case-collision"; detail: string }> | undefined {
+  const windows = platform === "win32";
+  if (windows)
+    for (const file of files)
+      for (const segment of file.path.split("/"))
+        if (
+          WINDOWS_RESERVED.test(segment) ||
+          WINDOWS_INVALID.test(segment) ||
+          /[. ]$/.test(segment)
+        )
+          return {
+            reason: "reserved-name",
+            detail: `${shown(file.path)} cannot be written on Windows`,
+          };
+  if (!windows && platform !== "darwin") return undefined;
+  const fold = (path: string) =>
+    (platform === "darwin" ? path.normalize("NFC") : path).toLowerCase();
+  const seen = new Map<string, string>();
+  const folders = new Map<string, string>();
+  for (const file of files) {
+    const key = fold(file.path);
+    const other = seen.get(key);
+    if (other !== undefined && other !== file.path)
+      return {
+        reason: "case-collision",
+        detail: `${shown(file.path)} and ${shown(other)} differ only by letter case or normalisation`,
+      };
+    seen.set(key, file.path);
+    const parts = file.path.split("/");
+    for (let depth = 1; depth < parts.length; depth += 1) {
+      const folder = parts.slice(0, depth).join("/");
+      folders.set(fold(folder), folder);
+    }
+  }
+  for (const [key, path] of seen) {
+    const folder = folders.get(key);
+    if (folder !== undefined)
+      return {
+        reason: "case-collision",
+        detail: `${shown(path)} and the folder ${shown(folder)} differ only by letter case or normalisation`,
+      };
+  }
+  return undefined;
 }
 
 /** A Scan-owned read-only working copy. Tools read only this copy. */

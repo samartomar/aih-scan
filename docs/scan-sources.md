@@ -91,3 +91,26 @@ limits (files, one file's size, source size, path length, folder depth, items
 found). A refused source returns `status: "refused"` with the reason (for example
 `link`, `file-size`, `source-unavailable`, `source-integrity`,
 `commit-unreachable`, `path-not-found`, `not-a-package`), writes nothing and exits 2.
+
+`.git` is left out of every source at every depth (a folder, a Git tree or an npm
+archive); it is never read, hashed or scanned. A valid name is well-formed Unicode
+without C0/C1 or bidirectional control characters, without a backslash (a path
+separator on Windows) and not a URL or drive-letter path; other characters, such as a
+zero-width joiner or a colon inside a name, are allowed.
+
+## Names a host cannot write
+
+Each item is copied into a read-only working copy before it is scanned. When the
+host cannot write an item's names, that item's result is `invalid` and the other items
+are still scanned: on Windows `reserved-name` (device names such as `CON` or
+`aux.md`, the characters `< > : " | ? *`, a name ending in a dot or space); on
+Windows and macOS `case-collision` (paths that differ only by letter case, on macOS
+also by Unicode normalisation). Any other failure to write the working copy is
+`refused` with `snapshot-failed`.
+
+## Modes
+
+A file is executable (`100755`) or normal (`100644`). The disk decides where it
+records modes. Where it does not (Windows), a folder that is a clone (a `.git` folder
+directly inside it) takes each tracked file's mode from Git's index, read as data
+without running Git; otherwise an item's `executable` list, otherwise normal.

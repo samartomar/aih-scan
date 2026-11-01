@@ -190,7 +190,9 @@ export async function acquireGit(
     if (decoder.decode(await git(["rev-parse", `${commit}^{commit}`])).trim() !== commit)
       throw new Refused("source-integrity", "Git did not produce the requested commit");
     const rows = treeRows(await git(["ls-tree", "-r", "-l", "-z", commit]));
-    const selected = rows.filter((row) => within(row.path, source.path) && !isGitMetadata(row.path));
+    const selected = rows.filter(
+      (row) => within(row.path, source.path) && !isGitMetadata(row.path),
+    );
     if (source.path !== undefined && selected.length === 0)
       throw new Refused("path-not-found", "the path does not exist at that commit");
     for (const row of selected) {
