@@ -120,6 +120,9 @@ const match = await matchScan(verified, files);       // files: [{ path, mode, b
 // { status: "ok", matches: true, coverage: "complete", signer: { identity, trusted } }
 ```
 
+`matchScan` takes the signer only from the exact object `verifySummary` returned; a copy or
+a hand-built look-alike matches with `signer: null`.
+
 The request (`aih-scan-request/1`) carries either a `source` (`aih-scan-source/1`) or
 caller-prepared `items` (`[{ path, executable?, label? }]`), plus `origin`, and optional
 `kinds`, `tools` and `mode`. With `items` Scan hashes each folder exactly as given and

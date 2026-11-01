@@ -139,6 +139,8 @@ if (sigstoreVectors !== undefined) {
       assert.equal(match.status, "ok", entry.name);
       assert.equal(match.matches, true, entry.name);
       assert.deepEqual({ ...match.signer }, { identity: entry.expect.identity, trusted: entry.expect.trusted }, entry.name);
+      // A copy of the verified result is not the result: it carries no signer.
+      assert.equal((await read.matchScan({ ...result }, files)).signer, null, entry.name);
     } else {
       assert.equal(result.verified, false, entry.name);
       assert.equal(result.signer, null, entry.name);

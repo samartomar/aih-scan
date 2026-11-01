@@ -9,6 +9,7 @@ import {
 } from "../contracts/git-tree.js";
 import type { Coverage } from "../contracts/risk.js";
 import { type Summary, validateSummary } from "../contracts/validate.js";
+import { isVerifySummaryResult } from "./verify-summary.js";
 
 export interface MatchFile {
   readonly path: string;
@@ -67,7 +68,11 @@ function resolveSummary(
       return refused("not-verified", "the verifySummary result did not verify");
     const checked = validateSummary(value.summary);
     if (checked.status !== "ok") return checked;
-    const signer = value.signer as MatchSigner | null | undefined;
+    // The signer counts only on an object verifySummary itself returned; anything else is a
+    // summary without a signer.
+    const signer = isVerifySummaryResult(value)
+      ? (value.signer as MatchSigner | null | undefined)
+      : null;
     const ok =
       signer === null ||
       signer === undefined ||
@@ -89,7 +94,8 @@ function resolveSummary(
 /**
  * Matches a summary (or a `verifySummary` result) to exact content in one call: the supplied
  * inventory must reproduce the scan key AND every file's sha256 and mode. A summary alone gives
- * `signer: null`. When the recomputed key equals the summary's key but a listed sha256 or mode
+ * `signer: null`; so does any object other than the exact `verifySummary` result (signers
+ * cannot be supplied by hand). When the recomputed key equals the summary's key but a listed sha256 or mode
  * differs, the summary is refused as `collision-or-tampering`. Resolves asynchronously (WebCrypto).
  */
 export async function matchScan(

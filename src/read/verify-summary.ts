@@ -216,12 +216,36 @@ async function withdrawalOutcome(
  *   `unsupported-version`; another profile/algorithm → `refused` `unsupported-profile` /
  *   `unsupported-algorithm`; failed signature/chain/SCT/log/time proof → `refused`
  *   `invalid-signature`.
+ * - Pass the returned object itself to `matchScan`: only that object carries its signer (a copy
+ *   or a hand-built look-alike matches with `signer: null`).
  */
 export async function verifySummary(
   bytes: Uint8Array,
   bundle: JsonInput,
   allowedSigners?: readonly AllowedSigner[],
   options: VerifySummaryOptions = {},
+): Promise<VerifySummaryResult> {
+  const result = await verify(bytes, bundle, allowedSigners, options);
+  issued.add(result);
+  return result;
+}
+
+/**
+ * Results this module returned. `matchScan` takes a signer only from one of these exact (frozen)
+ * objects, so a look-alike `{ status: "ok", summary, signer }` cannot claim a trusted signer.
+ */
+const issued = new WeakSet<object>();
+
+/** True only for an object `verifySummary` returned, as returned (not copied or spread). */
+export function isVerifySummaryResult(value: unknown): boolean {
+  return typeof value === "object" && value !== null && issued.has(value);
+}
+
+async function verify(
+  bytes: Uint8Array,
+  bundle: JsonInput,
+  allowedSigners: readonly AllowedSigner[] | undefined,
+  options: VerifySummaryOptions,
 ): Promise<VerifySummaryResult> {
   try {
     const read = readSummary(bytes);

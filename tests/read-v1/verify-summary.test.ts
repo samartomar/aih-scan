@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   defaultSigners,
   sigstoreTrustedRootText,
   verification,
 } from "../../src/public/contracts.js";
+import { matchScan as hostMatchScan } from "../../src/public/host.js";
 import { matchScan, verifySummary } from "../../src/public/read.js";
 import { corpusCase } from "../support/scan-v1-corpus.js";
 import { buildVectors, loadVectors, vectorsPath } from "../support/sigstore-v1-vectors.js";
@@ -118,7 +120,36 @@ describe("verifySummary (aih-sigstore-keyless/1) over the shared fixture set", (
     expect(failed).toMatchObject({ status: "refused", reason: "not-verified" });
     const raw = JSON.parse(Buffer.from(vectors.cases[0]!.summary, "base64").toString("utf8"));
     expect((await matchScan(raw, files)) as object).toMatchObject({ signer: null });
-    // A hand-made "verified" object cannot be produced by readSummary; it is the caller's own claim.
+    // Copies and hand-built look-alikes of a verified result carry no signer, in /read and /host.
+    const original = (await run("valid-rekor-v1-set")) as Record<string, unknown>;
+    const forged = {
+      status: "ok",
+      verified: true,
+      withdrawn: false,
+      signer: { identity: "aihq-scan-production", trusted: true },
+      summary: original.summary,
+    };
+    for (const lookalike of [{ ...original }, forged]) {
+      expect(await matchScan(lookalike as never, files)).toMatchObject({
+        status: "ok",
+        matches: true,
+        signer: null,
+      });
+    }
+    const folder = mkdtempSync(join(tmpdir(), "aih-scan-match-signer-"));
+    try {
+      for (const file of files) {
+        const target = join(folder, ...file.path.split("/"));
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, file.bytes, { mode: file.mode === "100755" ? 0o755 : 0o644 });
+      }
+      expect(await hostMatchScan(forged as never, folder)).toMatchObject({ signer: null });
+      expect(await hostMatchScan(original as never, folder)).toMatchObject({
+        signer: { identity: "TEST-ONLY signer A", trusted: true },
+      });
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   it("ships the pinned public trust snapshot with its provenance and digest", () => {

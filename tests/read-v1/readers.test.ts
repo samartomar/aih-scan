@@ -196,7 +196,7 @@ describe("readFindings", () => {
 });
 
 describe("portable matchScan", () => {
-  it("requires the exact inventory, tree key and sha256 list; a raw summary has no signer", async () => {
+  it("requires the exact inventory, tree key and sha256 list; a raw summary or look-alike has no signer", async () => {
     const summary = summaryOf(risky.summary);
     const files = contentFiles(risky);
     expect(await matchScan(summary, files)).toMatchObject({
@@ -212,10 +212,8 @@ describe("portable matchScan", () => {
       signer: { identity: "example-signer", trusted: true },
       summary,
     };
-    expect(await matchScan(verified, files)).toMatchObject({
-      matches: true,
-      signer: { identity: "example-signer", trusted: true },
-    });
+    // A hand-built look-alike of a verifySummary result cannot supply a signer.
+    expect(await matchScan(verified, files)).toMatchObject({ matches: true, signer: null });
     expect(
       await matchScan({ status: "refused", summary: null, signer: null }, files),
     ).toMatchObject({ status: "refused" });

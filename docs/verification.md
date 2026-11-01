@@ -59,6 +59,11 @@ await matchScan(verified, files);
 `verifySummary` returns a promise (it uses WebCrypto) and never throws. It runs in browsers:
 no Node globals or built-ins.
 
+Pass the result object exactly as `verifySummary` returned it to `matchScan` (portable or
+`/host`). Only that object carries its signer: a copy, a spread or a hand-built
+`{ status: "ok", summary, signer }` matches with `signer: null`, like a bare summary. The
+result must come from the same installed `@aihq/scan` copy as the `matchScan` you call.
+
 - **Signer trust.** `allowedSigners` is a list of `{ identity, issuer, subject, extensions? }`.
   A signer is trusted only when the OIDC issuer and the exact certificate subject match, plus
   every listed Fulcio extension (dotted OID → exact text). `identity` is your label, reported
