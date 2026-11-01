@@ -4,6 +4,7 @@ import {
   checkTreeFiles,
   type FileMode,
   type GitAlgorithm,
+  hasWebCrypto,
   sha256Hex,
   treeKeyOf,
 } from "../contracts/git-tree.js";
@@ -96,7 +97,8 @@ function resolveSummary(
  * inventory must reproduce the scan key AND every file's sha256 and mode. A summary alone gives
  * `signer: null`; so does any object other than the exact `verifySummary` result (signers
  * cannot be supplied by hand). When the recomputed key equals the summary's key but a listed sha256 or mode
- * differs, the summary is refused as `collision-or-tampering`. Resolves asynchronously (WebCrypto).
+ * differs, the summary is refused as `collision-or-tampering`. Resolves asynchronously (WebCrypto);
+ * a realm without WebCrypto is refused as `crypto-unavailable` and a failing digest as `digest-failed`.
  */
 export async function matchScan(
   summaryOrVerified: Summary | VerifiedSummaryInput,
@@ -109,10 +111,11 @@ export async function matchScan(
   const { summary, signer } = resolved;
   const algorithm = algorithmOfKey(summary.scanKey);
   if (algorithm === undefined) return invalid("scanKey", "unsupported scan key algorithm");
+  if (!hasWebCrypto()) return refused("crypto-unavailable", "WebCrypto is unavailable");
   try {
     return await compare(summary, signer, checked, algorithm);
   } catch {
-    return refused("crypto-unavailable", "WebCrypto is unavailable");
+    return refused("digest-failed", "the scan key could not be computed");
   }
 }
 

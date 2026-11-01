@@ -288,6 +288,27 @@ describe("portable matchScan", () => {
     });
   });
 
+  it("tells a missing WebCrypto apart from a failing digest", async () => {
+    const summary = summaryOf(risky.summary);
+    const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    const swap = (value: unknown) =>
+      Object.defineProperty(globalThis, "crypto", { value, configurable: true });
+    try {
+      swap(undefined);
+      expect(await matchScan(summary, contentFiles(risky))).toMatchObject({
+        status: "refused",
+        reason: "crypto-unavailable",
+      });
+      swap({ subtle: { digest: () => Promise.reject(new Error("NotSupportedError")) } });
+      expect(await matchScan(summary, contentFiles(risky))).toMatchObject({
+        status: "refused",
+        reason: "digest-failed",
+      });
+    } finally {
+      if (original) Object.defineProperty(globalThis, "crypto", original);
+    }
+  });
+
   it("returns results for malformed file records", async () => {
     const summary = summaryOf(risky.summary);
     expect(

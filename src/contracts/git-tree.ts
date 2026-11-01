@@ -176,7 +176,8 @@ export type ScanKeyResult = Readonly<{ status: "ok"; scanKey: string }> | Proble
  * The scan key of a file inventory: Git's tree hash of the folder holding exactly these
  * regular files and modes (empty folders do not exist in Git). The inventory is checked by
  * `checkTreeFiles` first. Never throws: bad input is `invalid`/`refused`, an unknown algorithm
- * is `invalid` and a realm without WebCrypto is `refused` (`crypto-unavailable`).
+ * is `invalid`, a realm without WebCrypto is `refused` (`crypto-unavailable`) and a WebCrypto
+ * whose digest fails (for example one without SHA-1) is `refused` (`digest-failed`).
  */
 export async function scanKeyOf(
   files: readonly TreeFile[],
@@ -186,10 +187,21 @@ export async function scanKeyOf(
     return invalid("algorithm", "algorithm must be sha1 or sha256");
   const checked = checkTreeFiles(files);
   if (!Array.isArray(checked)) return checked;
+  if (!hasWebCrypto()) return refused("crypto-unavailable", "WebCrypto is unavailable");
   try {
     return Object.freeze({ status: "ok" as const, scanKey: await treeKeyOf(checked, algorithm) });
   } catch {
-    return refused("crypto-unavailable", "WebCrypto is unavailable");
+    return refused("digest-failed", "the scan key could not be computed");
+  }
+}
+
+/** True when this realm exposes `crypto.subtle` (the only case `crypto-unavailable` names). */
+export function hasWebCrypto(): boolean {
+  try {
+    webCryptoSubtle();
+    return true;
+  } catch {
+    return false;
   }
 }
 

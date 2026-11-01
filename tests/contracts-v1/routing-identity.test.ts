@@ -207,6 +207,25 @@ describe("scanKeyOf", () => {
     }
     expect((await scanKeyOf([file("a")])).status).toBe("ok");
   });
+
+  it("returns a distinct result, never a throw, when WebCrypto is present but hashing fails", async () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    const broken = {
+      subtle: {
+        digest: () => Promise.reject(new Error("NotSupportedError")),
+      },
+    };
+    Object.defineProperty(globalThis, "crypto", { value: broken, configurable: true });
+    try {
+      expect(await scanKeyOf([file("a")])).toEqual({
+        status: "refused",
+        reason: "digest-failed",
+        detail: "the scan key could not be computed",
+      });
+    } finally {
+      if (original) Object.defineProperty(globalThis, "crypto", original);
+    }
+  });
 });
 
 // git: printf 'x\n' > a.b; mkdir a; printf 'y\n' > a/c; chmod +x a/c; git add -A; git write-tree
