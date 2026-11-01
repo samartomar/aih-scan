@@ -189,11 +189,6 @@ jobs:
             rmSync(sourceRoot, { recursive: true, force: true });
           }
           NODE
-      - name: Prove the packed seven-source refresh with real Linux Semgrep
-        if: steps.route.outputs.refresh == 'true'
-        env:
-          AIH_SCAN_REFRESH_LINUX_PROOF: "1"
-        run: npx --no-install vitest run tests/refresh/operation.test.ts
 
   actionlint:
     runs-on: ubuntu-latest

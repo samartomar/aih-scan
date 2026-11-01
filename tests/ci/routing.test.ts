@@ -143,7 +143,8 @@ test("ordinary workflow preserves required verify, full dispatch and failure pro
   expect(steps.find((step: { name?: string }) => step.name?.includes("fixed Python")).if).toBe(
     "steps.route.outputs.python == 'true'",
   );
-  expect(steps.find((step: { name?: string }) => step.name?.includes("seven-source")).if).toBe(
-    "steps.route.outputs.refresh == 'true'",
-  );
+  // The packed seven-source refresh proof exercised the retired report format.
+  expect(
+    steps.find((step: { name?: string }) => step.name?.includes("seven-source")),
+  ).toBeUndefined();
 });

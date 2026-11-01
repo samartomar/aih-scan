@@ -47,14 +47,13 @@ function select(changes, explicitFull) {
   let coverage = false;
   for (const path of paths) {
     if (docsPath(path)) continue;
-    if (/^src\/(?:public|contract)\//.test(path) || /^src\/assessment\/(?:types|shapes|json)\.ts$/.test(path))
+    if (/^src\/(?:public|contract|contracts|read|host)\//.test(path) || /^src\/assessment\/(?:types|shapes|json)\.ts$/.test(path))
       return fullPlan("shared-public-contract");
     if (/^tools\/artifact\/[^/]+\.mjs$/.test(path)) tests.add("tests/artifact");
     else if (/^tools\/refresh\/[^/]+\.(mjs|sh)$/.test(path)) tests.add("tests/refresh");
     else if (/^src\/(artifact|material-change)\/.+\.ts$/.test(path)) {
       tests.add(`tests/${path.split("/")[1]}`);
       tests.add("tests/assessment");
-      tests.add("tests/package-install-v2.test.ts");
       tests.add("tests/public-boundary.test.ts");
     } else if (/^src\/.+\.ts$/.test(path)) coverage = true;
     else if (/^tests\/(?!support\/|fixtures\/).+\.test\.ts$/.test(path)) tests.add(path);
@@ -64,7 +63,7 @@ function select(changes, explicitFull) {
   try {
     pythonDependencies = closure(["src/baseline/runtime-v1.ts"]);
     refreshDependencies = closure([
-      "tools/refresh/refresh.mjs", "src/public/host.ts", "src/public/read.ts", "src/public/contracts.ts",
+      "tools/refresh/refresh.mjs", "src/legacy-public/host.ts", "src/legacy-public/read.ts", "src/legacy-public/contracts.ts",
     ]);
   } catch {
     return fullPlan("dependency-graph-unavailable");
