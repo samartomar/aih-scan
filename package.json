@@ -1,7 +1,7 @@
 {
   "name": "@aihq/scan",
-  "version": "0.5.0",
-  "description": "AIH Scanner evidence producer for AI Development Assurance.",
+  "version": "0.1.0",
+  "description": "Content assessment for AI agent content: scan exact bytes without running them, then read, match and verify the results.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/samartomar/aih-scan.git"
@@ -19,52 +19,23 @@
     "node": ">=24.15.0 <25 || >=26.12.1 <27"
   },
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./contracts": {
-      "types": "./dist/public/contracts.d.ts",
-      "import": "./dist/public/contracts.js"
+    "./host": {
+      "types": "./dist/public/host.d.ts",
+      "import": "./dist/public/host.js"
     },
     "./read": {
       "types": "./dist/public/read.d.ts",
       "import": "./dist/public/read.js"
     },
-    "./host": {
-      "types": "./dist/public/host.d.ts",
-      "import": "./dist/public/host.js"
+    "./contracts": {
+      "types": "./dist/public/contracts.d.ts",
+      "import": "./dist/public/contracts.js"
     },
-    "./schemas/request/1.0.0.json": "./schemas/request/1.0.0.json",
-    "./schemas/detector-definition/1.0.0.json": "./schemas/detector-definition/1.0.0.json",
-    "./schemas/run-result/1.0.0.json": "./schemas/run-result/1.0.0.json",
-    "./schemas/report/1.0.0.json": "./schemas/report/1.0.0.json",
-    "./schemas/artifact/1.0.0.json": "./schemas/artifact/1.0.0.json",
-    "./schemas/evidence-association/1.0.0.json": "./schemas/evidence-association/1.0.0.json",
-    "./schemas/material-change/1.0.0.json": "./schemas/material-change/1.0.0.json",
-    "./schemas/examples/1.0.0.json": "./schemas/examples/1.0.0.json",
-    "./package.json": "./package.json",
-    "./schemas/request/1.0.0.fixtures.json": "./schemas/request/1.0.0.fixtures.json",
-    "./schemas/run-result/1.0.0.fixtures.json": "./schemas/run-result/1.0.0.fixtures.json",
-    "./schemas/report/1.0.0.fixtures.json": "./schemas/report/1.0.0.fixtures.json",
-    "./schemas/artifact/1.0.0.fixtures.json": "./schemas/artifact/1.0.0.fixtures.json",
-    "./schemas/evidence-association/1.0.0.fixtures.json": "./schemas/evidence-association/1.0.0.fixtures.json",
-    "./schemas/material-change/1.0.0.fixtures.json": "./schemas/material-change/1.0.0.fixtures.json",
-    "./schemas/detector-definition/1.0.0.fixtures.json": "./schemas/detector-definition/1.0.0.fixtures.json",
-    "./schemas/request/2.0.0.json": "./schemas/request/2.0.0.json",
-    "./schemas/request/2.0.0.fixtures.json": "./schemas/request/2.0.0.fixtures.json",
-    "./schemas/run-result/2.0.0.json": "./schemas/run-result/2.0.0.json",
-    "./schemas/run-result/2.0.0.fixtures.json": "./schemas/run-result/2.0.0.fixtures.json",
-    "./schemas/report/2.0.0.json": "./schemas/report/2.0.0.json",
-    "./schemas/report/2.0.0.fixtures.json": "./schemas/report/2.0.0.fixtures.json",
-    "./schemas/item-record/1.0.0.json": "./schemas/item-record/1.0.0.json",
-    "./schemas/item-record/1.0.0.fixtures.json": "./schemas/item-record/1.0.0.fixtures.json",
-    "./schemas/evidence-policy/1.0.0.json": "./schemas/evidence-policy/1.0.0.json",
-    "./schemas/evidence-policy/1.0.0.fixtures.json": "./schemas/evidence-policy/1.0.0.fixtures.json",
-    "./schemas/severity-profile/1.0.0.json": "./schemas/severity-profile/1.0.0.json",
-    "./schemas/severity-profile/1.0.0.fixtures.json": "./schemas/severity-profile/1.0.0.fixtures.json",
-    "./schemas/item-summary/1.0.0.json": "./schemas/item-summary/1.0.0.json",
-    "./schemas/item-summary/1.0.0.fixtures.json": "./schemas/item-summary/1.0.0.fixtures.json"
+    "./schemas/aih-scan-request-1.json": "./schemas/aih-scan-request-1.json",
+    "./schemas/aih-scan-source-1.json": "./schemas/aih-scan-source-1.json",
+    "./schemas/aih-scan-summary-1.json": "./schemas/aih-scan-summary-1.json",
+    "./schemas/aih-scan-withdrawn-1.json": "./schemas/aih-scan-withdrawn-1.json",
+    "./package.json": "./package.json"
   },
   "bin": {
     "aih-scan": "./dist/cli.js"
@@ -72,13 +43,13 @@
   "files": [
     "dist",
     "schemas",
-    "docs/DETECTOR-DEFINITIONS.md",
-    "docs/contract-fixtures.md",
-    "examples/detector-definitions",
-    "tools/baseline-analyzers",
-    "tools/verify-core-contract-lock-v2.mjs",
-    "docs/item-records.md",
-    "docs/item-summaries.md"
+    "trust",
+    "docs/scan-sources.md",
+    "docs/analyzers.md",
+    "docs/verification.md",
+    "docs/advisories.md",
+    "CONTRACTS.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "generate:identity": "node tools/generate-package-identity.mjs",
@@ -90,11 +61,11 @@
     "test": "vitest run",
     "test:cov": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "verify:cold-core-evidence": "node tools/verify-cold-core-evidence.mjs",
     "verify:workflow-action-pins": "node tools/verify-pinned-actions.mjs",
     "verify": "npm run typecheck && npm run lint && npm run build && npm test && npm run verify:workflow-action-pins"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.9",
     "@biomejs/biome": "2.5.1",
     "@types/node": "26.1.1",
     "@vitest/coverage-v8": "4.1.11",
@@ -104,12 +75,7 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
-    "@babel/parser": "7.29.9",
-    "@sigstore/bundle": "5.0.0",
-    "@sigstore/protobuf-specs": "0.5.0",
-    "@sigstore/verify": "4.1.2",
     "jsonc-parser": "3.3.1",
-    "yaml": "2.9.1",
-    "zod": "4.4.3"
+    "yaml": "2.9.1"
   }
 }

@@ -1,4 +1,5 @@
-// Writes src/contracts/sigstore-trusted-root.ts from an independently authenticated Sigstore
+// Writes src/contracts/sigstore-trusted-root.ts and the published copy
+// trust/sigstore-trusted-root.json from an independently authenticated Sigstore
 // public-instance trusted_root.json (obtained through upstream TUF, for example with
 // sigstore-python's TrustUpdater or @sigstore/tuf). The exact bytes are embedded unchanged so
 // their SHA-256 equals the TUF targets entry recorded in src/contracts/verification.ts.
@@ -20,4 +21,5 @@ writeFileSync(
     `/** The exact text of the pinned Sigstore public-instance trusted_root.json. */\n` +
     `export const sigstoreTrustedRootText: string = ${JSON.stringify(text)};\n`,
 );
+writeFileSync(join(import.meta.dirname, "..", "trust", "sigstore-trusted-root.json"), bytes);
 process.stdout.write(`${createHash("sha256").update(bytes).digest("hex")} ${bytes.length}\n`);

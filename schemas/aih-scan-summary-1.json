@@ -1,0 +1,316 @@
+{
+  "$id": "https://github.com/samartomar/aih-scan/schemas/aih-scan-summary-1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "aih-scan-summary/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "scanKey",
+    "revision",
+    "origin",
+    "scannedAt",
+    "scanner",
+    "routing",
+    "scoring",
+    "score",
+    "label",
+    "coverage",
+    "files",
+    "tools",
+    "notAnalysed",
+    "sarif",
+    "dependencies"
+  ],
+  "properties": {
+    "format": {
+      "const": "aih-scan-summary/1"
+    },
+    "scanKey": {
+      "type": "string",
+      "pattern": "^git-(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "origin": {
+      "enum": [
+        "published",
+        "local"
+      ]
+    },
+    "scannedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    },
+    "scanner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "routing": {
+      "const": "aih-scan-routing/1"
+    },
+    "scoring": {
+      "const": "aih-risk/1"
+    },
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "label": {
+      "enum": [
+        "SAFE",
+        "CAUTION",
+        "DO NOT INSTALL",
+        "NOT ASSESSED"
+      ]
+    },
+    "coverage": {
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "mode",
+          "part",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "mode": {
+            "enum": [
+              "100644",
+              "100755"
+            ]
+          },
+          "part": {
+            "enum": [
+              "config",
+              "dependencies",
+              "code",
+              "text",
+              "none"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tool",
+          "version",
+          "mode",
+          "result",
+          "counts"
+        ],
+        "properties": {
+          "tool": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mode": {
+            "enum": [
+              "static",
+              "ai"
+            ]
+          },
+          "ai": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "via",
+              "provider",
+              "model"
+            ],
+            "properties": {
+              "via": {
+                "enum": [
+                  "cli",
+                  "local",
+                  "provider"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "minLength": 1
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "result": {
+            "enum": [
+              "pass",
+              "warn",
+              "fail",
+              "not-run",
+              "not-applicable"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "critical": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "high": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "medium": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "low": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "info": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "suppressed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "count",
+                "reason"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notAnalysed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "secretsChecked"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "secretsChecked": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "sarif": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ecosystem",
+          "name",
+          "version",
+          "file"
+        ],
+        "properties": {
+          "ecosystem": {
+            "enum": [
+              "npm",
+              "pypi"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      }
+    }
+  }
+}
