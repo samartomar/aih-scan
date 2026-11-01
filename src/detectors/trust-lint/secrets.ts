@@ -285,3 +285,38 @@ export function scanMcpConfigSecretsV1(
     };
   });
 }
+
+/**
+ * The every-text-file secret check (`aih-scan-routing/1`): provider token shapes and raw
+ * `Authorization: Bearer` literals on each line of any text file, and any non-template `.env`
+ * file at any depth. One finding per line and token kind.
+ */
+export function scanTextSecretsV1(rel: string, text: string): TrustLintFindingV1[] {
+  const findings: TrustLintFindingV1[] = [];
+  const name = rel.split("/").at(-1) ?? "";
+  if (isEnvFile(name))
+    findings.push({
+      name: PLAINTEXT_SECRET_RULE_V1,
+      verdict: "fail",
+      detail: `${rel} — plaintext secret on disk; migrate to a vault and rotate the exposed credential`,
+      code: "secrets.plaintext-detected",
+      location: { uri: rel, startLine: 1 },
+      fingerprint: `${PLAINTEXT_SECRET_RULE_V1}:${rel}`,
+    });
+  text.split(/\r?\n/).forEach((line, index) => {
+    const kinds = TOKEN_PATTERNS.filter((pattern) => pattern.re.test(line)).map(
+      (pattern) => pattern.kind,
+    );
+    if (hasRawBearerLiteral(line)) kinds.push("authorization bearer literal");
+    for (const kind of kinds)
+      findings.push({
+        name: PLAINTEXT_SECRET_RULE_V1,
+        verdict: "fail",
+        detail: `${rel}:${index + 1} holds a ${kind}; move it out of the content and rotate the exposed value`,
+        code: "secrets.plaintext-detected",
+        location: { uri: rel, startLine: index + 1 },
+        fingerprint: `${PLAINTEXT_SECRET_RULE_V1}:${rel}:${index + 1}:${kind}`,
+      });
+  });
+  return findings;
+}

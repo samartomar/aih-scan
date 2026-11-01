@@ -85,15 +85,30 @@ export function scanNativeMaliciousCodeV1(
     if (entry === undefined || entry.size > MAX_SCRIPT_SCAN_BYTES) continue;
     const source = tree.readText(rel);
     if (source === undefined) throw new TypeError(`trust-lint: unreadable script file ${rel}`);
-    const lines = source.split(/\r?\n/);
-    lines.forEach((line, index) => {
-      const normalizedLine = normalizeShellWhitespace(line);
-      for (const rule of MALICIOUS_PATTERNS) {
-        if (rule.pattern.test(normalizedLine)) {
-          checks.push(maliciousCodeCheck(occurrences, rel, index + 1, line, rule.label));
-        }
-      }
-    });
+    checks.push(...scanMaliciousCodeTextV1(rel, source, occurrences));
   }
+  return checks;
+}
+
+/**
+ * The per-line malicious-code shapes over one text, whatever its path (routed Code files
+ * and inline config commands). `lineOffset` places an inline command at its config line.
+ */
+export function scanMaliciousCodeTextV1(
+  rel: string,
+  source: string,
+  occurrences: Map<string, number> = new Map(),
+  lineOffset = 0,
+): TrustLintFindingV1[] {
+  const checks: TrustLintFindingV1[] = [];
+  const lines = source.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const normalizedLine = normalizeShellWhitespace(line);
+    for (const rule of MALICIOUS_PATTERNS) {
+      if (rule.pattern.test(normalizedLine)) {
+        checks.push(maliciousCodeCheck(occurrences, rel, index + 1 + lineOffset, line, rule.label));
+      }
+    }
+  });
   return checks;
 }
