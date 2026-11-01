@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exitCodes } from "../../src/cli/commands-v1.js";
 import { runSignCommand, runVerifyCommand } from "../../src/cli/sign-verify-v1.js";
+import { limits } from "../../src/public/contracts.js";
 import { verifySummary } from "../../src/public/read.js";
 import { corpusCase } from "../support/scan-v1-corpus.js";
 import { type FixtureRoot, fixtureRoot } from "../support/scan-v1-fixture.js";
@@ -274,5 +275,38 @@ describe("aih-scan sign and verify (aih-sigstore-keyless/1)", () => {
       await runVerifyCommand(["summary.r1.json", "--bundle", "bundle.json"], malformed.io),
     ).toBe(exitCodes.input);
     expect(malformed.out()).toContain("Not verified: invalid bundle");
+  });
+
+  it("holds bundles and trusted roots to the published bundle limit, not the summary limit", async () => {
+    setup();
+    expect(limits.output.bundleBytes).toBeLessThan(limits.output.summaryBytes);
+    const over = new Uint8Array(limits.output.bundleBytes + 1).fill(0x20);
+    writeFileSync(fixture.path("big.sigstore"), over);
+    const bundle = capture();
+    expect(
+      await runVerifyCommand(["summary.r1.json", "--bundle", "big.sigstore"], bundle.io),
+    ).toBe(exitCodes.input);
+    expect(bundle.err()).toContain("the bundle exceeds the size limit");
+    writeFileSync(fixture.path("big-root.json"), over);
+    writeFileSync(fixture.path("small.sigstore"), "{}");
+    const root = capture();
+    expect(
+      await runVerifyCommand(
+        ["summary.r1.json", "--bundle", "small.sigstore", "--trusted-root", "big-root.json"],
+        root.io,
+      ),
+    ).toBe(exitCodes.input);
+    expect(root.err()).toContain("the trusted root exceeds the size limit");
+    // The portable reader applies the same published limit to bundle and root bytes.
+    const summaryBytes = new Uint8Array(readFileSync(fixture.path("summary.r1.json")));
+    expect(await verifySummary(summaryBytes, over)).toMatchObject({
+      status: "invalid",
+      verified: false,
+    });
+    expect(
+      await verifySummary(summaryBytes, new TextEncoder().encode("{}"), undefined, {
+        trustedRoot: over,
+      }),
+    ).toMatchObject({ status: "invalid", reason: "trusted-root" });
   });
 });

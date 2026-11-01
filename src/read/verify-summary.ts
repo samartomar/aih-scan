@@ -1,4 +1,5 @@
 import type { Problem } from "../contracts/formats.js";
+import { limits } from "../contracts/limits.js";
 import { sigstoreTrustedRootText } from "../contracts/sigstore-trusted-root.js";
 import { isBytes } from "../contracts/text.js";
 import { type Summary, validateWithdrawn, type Withdrawal } from "../contracts/validate.js";
@@ -73,7 +74,7 @@ function selectTrust(options: VerifySummaryOptions): TrustMaterial | Problem {
       return problem("refused", "trust-data-unavailable", "no trust material was selected");
     let value: unknown = options.trustedRoot;
     if (isBytes(value)) {
-      const parsed = parseJsonBytes(value, "trustedRoot", 4 * 1024 * 1024);
+      const parsed = parseJsonBytes(value, "trustedRoot", limits.output.bundleBytes);
       if (!parsed.ok)
         return problem("invalid", "trusted-root", "trustedRoot is not strict UTF-8 JSON");
       value = parsed.value;

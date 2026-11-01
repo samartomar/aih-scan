@@ -3,6 +3,7 @@
  * `application/vnd.dev.sigstore.bundle.v0.3+json`, an X.509 `certificate` and a
  * `messageSignature` with a SHA2_256 digest. Every other evidence form is refused explicitly.
  */
+import { limits } from "../../contracts/limits.js";
 import { base64Decode, utf8Text } from "./bytes.js";
 
 export const BUNDLE_MEDIA_TYPE = "application/vnd.dev.sigstore.bundle.v0.3+json";
@@ -128,7 +129,7 @@ export function parseBundle(value: unknown): KeylessBundle {
   let document = value;
   if (value instanceof Uint8Array || (ArrayBuffer.isView(value) && !(value instanceof DataView))) {
     const bytes = value as Uint8Array;
-    if (bytes.length > 8 * 1024 * 1024) invalid("the bundle is too large");
+    if (bytes.length > limits.output.bundleBytes) invalid("the bundle is too large");
     const text = utf8Text(bytes);
     if (text === undefined) return invalid("the bundle is not UTF-8 JSON");
     try {

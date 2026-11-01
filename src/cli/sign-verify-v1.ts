@@ -1,5 +1,6 @@
 import { closeSync, lstatSync, openSync, readFileSync, writeSync } from "node:fs";
 import { resolve } from "node:path";
+import { limits } from "../contracts/limits.js";
 import { sanitizeText } from "../contracts/text.js";
 import type { AllowedSigner } from "../contracts/verification.js";
 import {
@@ -43,9 +44,8 @@ export const verifyUsage = `${[
   "Exit: 0 verified (trusted or not), 2 not verified or bad input.",
 ].join("\n")}\n`;
 
-const MAX_FILE = 128 * 1024 * 1024;
-
-function readFile(path: string, label: string): Uint8Array {
+/** Summaries and withdrawals are held to the summary limit; bundles and roots to the bundle limit. */
+function readFile(path: string, label: string, maximum: number): Uint8Array {
   let stat: ReturnType<typeof lstatSync>;
   try {
     stat = lstatSync(path);
@@ -53,13 +53,17 @@ function readFile(path: string, label: string): Uint8Array {
     throw new UsageError(`${label} could not be read`);
   }
   if (!stat.isFile()) throw new UsageError(`${label} is not a regular file`);
-  if (stat.size > MAX_FILE) throw new UsageError(`${label} exceeds the size limit`);
+  if (stat.size > maximum) throw new UsageError(`${label} exceeds the size limit`);
   return new Uint8Array(readFileSync(path));
 }
 
 function readJson(path: string, label: string): unknown {
   try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(readFile(path, label)));
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        readFile(path, label, limits.output.bundleBytes),
+      ),
+    );
   } catch (error) {
     if (error instanceof UsageError) throw error;
     throw new UsageError(`${label} is not JSON`);
@@ -106,7 +110,7 @@ export async function runSignCommand(args: readonly string[], io: SigningIo): Pr
       cwd,
       single(parsed, "--bundle") ?? `${documentPath.replace(/\.json$/i, "")}.sigstore`,
     );
-    const bytes = readFile(documentPath, "the document");
+    const bytes = readFile(documentPath, "the document", limits.output.summaryBytes);
     const rootPath = single(parsed, "--trusted-root");
     let trust: ReturnType<typeof parseTrustedRoot> | undefined;
     if (rootPath !== undefined) {
@@ -171,8 +175,12 @@ export async function runVerifyCommand(args: readonly string[], io: CommandIo): 
     const cwd = io.cwd ?? process.cwd();
     const bundlePath = single(parsed, "--bundle");
     if (bundlePath === undefined) throw new UsageError("--bundle is required");
-    const summary = readFile(resolve(cwd, parsed.positional[0] as string), "the summary");
-    const bundle = readFile(resolve(cwd, bundlePath), "the bundle");
+    const summary = readFile(
+      resolve(cwd, parsed.positional[0] as string),
+      "the summary",
+      limits.output.summaryBytes,
+    );
+    const bundle = readFile(resolve(cwd, bundlePath), "the bundle", limits.output.bundleBytes);
     const signersPath = single(parsed, "--signers");
     const signers =
       signersPath === undefined
@@ -180,17 +188,23 @@ export async function runVerifyCommand(args: readonly string[], io: CommandIo): 
         : (readJson(resolve(cwd, signersPath), "the signers file") as AllowedSigner[]);
     const rootPath = single(parsed, "--trusted-root");
     const withdrawn = (parsed.values.get("--withdrawn") ?? []).map((path) =>
-      readFile(resolve(cwd, path), "a withdrawal"),
+      readFile(resolve(cwd, path), "a withdrawal", limits.output.summaryBytes),
     );
     const withdrawnBundle = (parsed.values.get("--withdrawn-bundle") ?? []).map((path) =>
-      readFile(resolve(cwd, path), "a withdrawal bundle"),
+      readFile(resolve(cwd, path), "a withdrawal bundle", limits.output.bundleBytes),
     );
     if (withdrawn.length !== withdrawnBundle.length)
       throw new UsageError("give each --withdrawn its --withdrawn-bundle");
     const result = await verifySummary(summary, bundle, signers, {
       ...(rootPath === undefined
         ? {}
-        : { trustedRoot: readFile(resolve(cwd, rootPath), "the trusted root") }),
+        : {
+            trustedRoot: readFile(
+              resolve(cwd, rootPath),
+              "the trusted root",
+              limits.output.bundleBytes,
+            ),
+          }),
       withdrawn,
       withdrawnBundle,
     });

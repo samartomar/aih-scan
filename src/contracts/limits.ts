@@ -44,6 +44,8 @@ export const limits = Object.freeze({
     summaryBytes: 128 * MiB,
     /** Bytes of one SARIF document accepted by `readFindings`. */
     sarifBytes: 256 * MiB,
+    /** Bytes of one Sigstore bundle or trusted root accepted by `verifySummary`. */
+    bundleBytes: 8 * MiB,
     /** Code points of a tool or summary reason. */
     reason: 500,
     /** Code points of a request label echoed in a scan result. */
