@@ -53,6 +53,34 @@ describe("aih-risk/1 scoring", () => {
     expect(result.counted[0]?.tool).toBe("aih-trust-lint");
   });
 
+  it("does not collapse one tool's findings sharing code, file and line", () => {
+    // Same tool, same rule: diminishing weights 25 + 12.5 = 37.5 -> 38.
+    const sameTool = scoreFindings([
+      finding({ ruleId: "r", severity: "HIGH" }),
+      finding({ ruleId: "r", severity: "HIGH" }),
+    ]);
+    expect(sameTool.counted).toHaveLength(2);
+    expect(sameTool.score).toBe(38);
+    // Same tool, different rules mapping to the same code: each rule restarts at weight 1.
+    expect(
+      scoreFindings([
+        finding({ ruleId: "r1", severity: "HIGH" }),
+        finding({ ruleId: "r2", severity: "HIGH" }),
+      ]).score,
+    ).toBe(50);
+  });
+
+  it("keeps every finding of the preferred tool when two tools report the same code, file and line", () => {
+    const result = scoreFindings([
+      finding({ tool: "skillspector", ruleId: "P1", severity: "MEDIUM" }),
+      finding({ tool: "aih-trust-lint", ruleId: "x", severity: "HIGH" }),
+      finding({ tool: "aih-trust-lint", ruleId: "x", severity: "LOW" }),
+    ]);
+    // trust-lint wins the key (HIGH > MEDIUM); both of its findings count: 25 + 5 * 0.5 = 27.5 -> 28.
+    expect(result.counted.map((entry) => entry.tool)).toEqual(["aih-trust-lint", "aih-trust-lint"]);
+    expect(result.score).toBe(28);
+  });
+
   it("breaks equal points by higher confidence (missing counts as 1), then tool name", () => {
     const byConfidence = scoreFindings([
       finding({ tool: "a-tool", severity: "HIGH", confidence: 0.5 }),

@@ -74,8 +74,9 @@ const codeUnit = (left: string, right: string) => (left < right ? -1 : left > ri
 /**
  * Applies `aih-risk/1`:
  * 1. points from the tool's severity, else the SARIF level;
- * 2. findings sharing code, file and line count once (from one tool or several): keep the
+ * 2. the same code, file and line from two tools counts once: keep the tool whose finding has the
  *    higher points, then higher confidence (missing = 1), then the tool name first in code-unit order;
+ *    one tool's findings sharing code, file and line are not collapsed (step 4 weighs them);
  * 3. within each kept tool rule, order by points x confidence x part multiplier, highest first,
  *    equal values by path then line;
  * 4. weigh them 1, 1/2, 1/4, then 0;
@@ -86,15 +87,24 @@ export function scoreFindings(findings: readonly ScoredFinding[]): Readonly<{
   score: number;
   counted: readonly CountedFinding[];
 }> {
-  const kept = new Map<string, ScoredFinding>();
+  // Step 2 applies across tools only: for each code, file and line the preferred tool's
+  // findings are kept (all of them) and other tools' findings there are dropped.
+  const byLocation = new Map<string, ScoredFinding[]>();
   for (const finding of findings) {
     if ((scoring.excludedCodes as readonly string[]).includes(finding.code)) continue;
     const key = JSON.stringify([finding.code, finding.path, finding.line]);
-    const previous = kept.get(key);
-    if (previous === undefined || prefer(finding, previous)) kept.set(key, finding);
+    const list = byLocation.get(key) ?? [];
+    list.push(finding);
+    byLocation.set(key, list);
+  }
+  const kept: ScoredFinding[] = [];
+  for (const list of byLocation.values()) {
+    let best = list[0] as ScoredFinding;
+    for (const finding of list) if (prefer(finding, best)) best = finding;
+    for (const finding of list) if (finding.tool === best.tool) kept.push(finding);
   }
   const groups = new Map<string, ScoredFinding[]>();
-  for (const finding of kept.values()) {
+  for (const finding of kept) {
     const key = JSON.stringify([finding.tool, finding.ruleId]);
     const group = groups.get(key) ?? [];
     group.push(finding);
