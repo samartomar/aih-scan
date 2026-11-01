@@ -1,0 +1,10 @@
+{
+  "SKILL.md": {
+    "mode": "100644",
+    "text": "---\nname: clean\ndescription: a calm fixture\n---\n# Clean\n\nSummarise the selected text in one paragraph.\n"
+  },
+  "scripts/greet.py": {
+    "mode": "100644",
+    "text": "print('hello')\n"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "format": "aih-scan-summary/1",
+  "scanKey": "git-sha1:5bc12f498aef42e0ec8c94fa49e91f7025028da6",
+  "revision": 1,
+  "origin": "local",
+  "scannedAt": "2026-11-01T00:30:00Z",
+  "scanner": "@aihq/scan 0.5.0",
+  "routing": "aih-scan-routing/1",
+  "scoring": "aih-risk/1",
+  "score": 0,
+  "label": "NOT ASSESSED",
+  "coverage": "complete",
+  "files": [
+    {
+      "path": "Dockerfile",
+      "mode": "100644",
+      "part": "none",
+      "sha256": "bb57c7da220a8753d7bdabac0d3afdb6efa742e4c736c5bc93ab40dfd5e23b9b"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "aih-trust-lint",
+      "version": "1.0.0",
+      "mode": "static",
+      "result": "pass",
+      "counts": {}
+    }
+  ],
+  "notAnalysed": [
+    {
+      "path": "Dockerfile",
+      "secretsChecked": true
+    }
+  ],
+  "sarif": [
+    {
+      "path": "sarif/04988eda47150145b97e43eaa1530854b35aa2891593704d7094283b1732e073.sarif",
+      "sha256": "04988eda47150145b97e43eaa1530854b35aa2891593704d7094283b1732e073"
+    }
+  ],
+  "dependencies": []
+}
