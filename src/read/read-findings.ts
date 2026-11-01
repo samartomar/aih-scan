@@ -4,7 +4,7 @@ import { sha256Hex } from "../contracts/git-tree.js";
 import { limits } from "../contracts/limits.js";
 import type { FindingPart, Severity } from "../contracts/risk.js";
 import { severityOf } from "../contracts/risk.js";
-import { isBytes, pathProblem, sanitizeText } from "../contracts/text.js";
+import { displayPathProblem, isBytes, sanitizeText } from "../contracts/text.js";
 import type { Summary } from "../contracts/validate.js";
 import { parseJsonBytes } from "./read-summary.js";
 
@@ -146,7 +146,7 @@ export async function readFindings(
         const entry = result as Obj;
         const { uri, line } = locationOf(entry);
         need(
-          pathProblem(uri, limits.output.findingPath, limits.input.depth) === undefined,
+          displayPathProblem(uri, limits.output.findingPath, limits.input.depth) === undefined,
           Mismatch,
         );
         const file = files.get(uri);
