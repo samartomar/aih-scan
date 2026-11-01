@@ -39,6 +39,12 @@ describe("supplied content never runs and static scans stay offline", () => {
     );
     const connect = vi.spyOn(net.Socket.prototype, "connect");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // The source route discovers the same folder's items (skill, hooks, MCP) without running them.
+    const discovered = await scan(
+      { format: "aih-scan-request/1", origin: "local", source: { type: "folder", path: item } },
+      { outDir: fixture.path("out-source") },
+    );
+    expect(discovered.status).toBe("ok");
     const result = await scan(
       { format: "aih-scan-request/1", origin: "local", items: [{ path: item }] },
       { outDir: fixture.path("out") },

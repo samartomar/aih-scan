@@ -52,3 +52,21 @@ export function contentFiles(entry: CorpusCase) {
     bytes: encoder.encode(file.text),
   }));
 }
+
+/** The published remote MCP golden constants, shared by acquisition, CLI, host and portable matching tests. */
+export interface RemoteMcpGolden {
+  readonly input: { type: "remote"; url: string; kind: "mcp" };
+  readonly cli: string;
+  readonly file: {
+    path: ".mcp.json";
+    mode: "100644";
+    text: string;
+    length: number;
+    sha256: string;
+    gitBlobSha1: string;
+  };
+  readonly scanKey: string;
+}
+export const remoteMcpGolden = JSON.parse(
+  readFileSync(join(corpusRoot, "remote-mcp", "golden.json"), "utf8"),
+) as RemoteMcpGolden;
