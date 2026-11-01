@@ -19,6 +19,7 @@ import {
   type SharedOutput,
   scanWith,
 } from "../host/scan.js";
+import { skillSpectorAiSetup } from "../host/skillspector.js";
 import { FINDINGS_MISMATCH_MESSAGE, type Finding, readFindings } from "../read/read-findings.js";
 import { readSummary } from "../read/read-summary.js";
 import { TargetError, targetSource } from "./targets-v1.js";
@@ -55,7 +56,9 @@ export const scanUsage = `${[
   "  --out <new-folder>          required; must not exist",
   "  --ref <name>                branch, tag or full commit of a Git target",
   "  --tools <list>              skillspector,aih-trust-lint[,cisco]; aih-trust-lint always runs",
-  "  --mode static|ai            default static",
+  "  --mode static|ai            default static; ai adds SkillSpector's AI pass using your",
+  "                              existing SKILLSPECTOR_PROVIDER settings and sends the scanned",
+  "                              content to that AI",
   "  --origin published|local    default local",
   "  --kinds <list>              skill,agent,command,rule,hook,mcp",
   "  --internal-scope <@scope>   repeatable",
@@ -189,7 +192,8 @@ function resultLine(entry: ScanItemResult, summary: Summary | undefined): string
   if (entry.status !== "ok")
     return `${name}: ${entry.status} (${safe(entry.reason, 200)})${entry.detail ? ` ${safe(entry.detail, 300)}` : ""}\n`;
   if (summary === undefined) return `${name}: summary unreadable\n`;
-  return `${name}\n  ${summaryLines(summary).trimEnd().split("\n").join("\n  ")}\n  summary ${safe(entry.summaryPath, 4096)}\n`;
+  const notes = (entry.notes ?? []).map((note) => `  note: ${safe(note, 300)}\n`).join("");
+  return `${name}\n  ${summaryLines(summary).trimEnd().split("\n").join("\n  ")}\n${notes}  summary ${safe(entry.summaryPath, 4096)}\n`;
 }
 
 function rollupLine(rollup: Rollup): string {
@@ -261,6 +265,15 @@ export async function runScanCommandV1(args: readonly string[], io: CommandIo): 
         throw new UsageError(error instanceof TargetError ? error.message : "unreadable target");
       }
     });
+    if (mode === "ai") {
+      // Said before anything is scanned, on stderr, whatever the output format.
+      const setup = skillSpectorAiSetup(io.internals?.env ?? process.env);
+      io.stderr(
+        setup.available
+          ? `aih-scan: AI mode: SkillSpector sends the content it scans to the AI you set up (provider ${setup.provider}, via ${setup.via}); static checks run too.\n`
+          : `aih-scan: AI not available here: ${safe(setup.reason, 200)}. SkillSpector runs static checks only; no content is sent to an AI.\n`,
+      );
+    }
     const shared: SharedOutput = { outDir: resolve(cwd, out), written: new Map() };
     for (const [index, source] of sources.entries()) {
       const request = {

@@ -28,6 +28,8 @@ export interface ToolFinding {
   readonly level?: SarifLevel;
   readonly confidence?: number;
   readonly fingerprint?: string;
+  /** The tool's own category, used for codes when its rule ids are open-ended (Cisco). */
+  readonly category?: string;
 }
 
 /** Why a tool did not run. `not selected` is the caller's choice; the rest are failures. */
@@ -49,6 +51,20 @@ export type ToolRun =
       suppressed?: readonly Readonly<{ count: number; reason: string }>[];
       /** Rule descriptions for the SARIF driver, by rule id. */
       rules?: Readonly<Record<string, string>>;
+      /**
+       * The tool ran but part of the requested analysis failed (SkillSpector's AI pass in AI
+       * mode); a counted tool then makes coverage `partial` with reason `failed`. Unsigned detail.
+       */
+      failedPart?: string;
+      /** Unsigned notes for the caller (for example why AI was not used); never in the summary. */
+      notes?: readonly string[];
+    }>
+  | Readonly<{
+      status: "not-applicable";
+      version: string;
+      mode: ScanMode;
+      detail?: string;
+      notes?: readonly string[];
     }>
   | Readonly<{
       status: "not-run";
@@ -56,6 +72,7 @@ export type ToolRun =
       mode: ScanMode;
       reason: NotRunReason;
       detail?: string;
+      notes?: readonly string[];
     }>;
 
 /**
@@ -68,33 +85,3 @@ export interface ToolAdapter {
   readonly version: string;
   run(item: AssessItem, context: ToolContext): Promise<ToolRun>;
 }
-
-/** SkillSpector before its native adapter lands: always truthfully unavailable. */
-export const unavailableSkillSpector: ToolAdapter = Object.freeze({
-  id: "skillspector" as const,
-  version: "2.13.2",
-  async run(_item: AssessItem, context: ToolContext): Promise<ToolRun> {
-    return Object.freeze({
-      status: "not-run" as const,
-      version: "2.13.2",
-      mode: context.mode,
-      reason: "unavailable" as const,
-      detail: "SkillSpector is not available in this build",
-    });
-  },
-});
-
-/** Cisco skill-scanner before its adapter lands: unavailable when named; never counts for coverage. */
-export const unavailableCisco: ToolAdapter = Object.freeze({
-  id: "cisco" as const,
-  version: "2.3.2",
-  async run(_item: AssessItem, _context: ToolContext): Promise<ToolRun> {
-    return Object.freeze({
-      status: "not-run" as const,
-      version: "2.3.2",
-      mode: "static" as const,
-      reason: "unavailable" as const,
-      detail: "Cisco skill-scanner is not available in this build",
-    });
-  },
-});

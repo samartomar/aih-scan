@@ -12,6 +12,7 @@ export {
   isScanCode,
   type ScanCode,
   scanCodes,
+  toolCategoryCodes,
   toolRuleCodes,
 } from "../contracts/codes.js";
 export { formats, type Problem, type ResultStatus } from "../contracts/formats.js";

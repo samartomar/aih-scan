@@ -178,6 +178,24 @@ describe("codes and limits", () => {
     expect(codes.scan).not.toContain("trust.known-vulnerability");
   });
 
+  it("maps SkillSpector rule ids and Cisco categories, never to an advisory code", () => {
+    expect(codeForRule("skillspector", "P1")).toBe("trust.prompt-injection");
+    expect(codeForRule("skillspector", "SC2")).toBe("trust.malicious-code");
+    expect(codeForRule("skillspector", "SC1")).toBe("trust.unpinned-dependency");
+    expect(codeForRule("skillspector", "TP1")).toBe("trust.mcp-tool-poisoning");
+    expect(codeForRule("skillspector", "SC4")).toBe("trust.unmapped-rule");
+    // A rule id wins over a category; a category decides only open-ended rule ids.
+    expect(codeForRule("cisco", "YARA_prompt_injection_generic", "prompt_injection")).toBe(
+      "trust.prompt-injection",
+    );
+    expect(codeForRule("cisco", "ANY_RULE", "hardcoded_secrets")).toBe("trust.plaintext-secret");
+    expect(codeForRule("cisco", "ANY_RULE", "policy_violation")).toBe("trust.unmapped-rule");
+    expect(codeForRule("cisco", "ANY_RULE", "__proto__")).toBe("trust.unmapped-rule");
+    expect(codeForRule("skillspector", "P1", "prompt_injection")).toBe("trust.prompt-injection");
+    for (const table of Object.values(codes.categories))
+      for (const code of Object.values(table)) expect(codes.scan).toContain(code);
+  });
+
   it("publishes the agreed input limits and concrete output bounds", () => {
     expect(limits.input).toEqual({
       sourceBytes: 500 * 1024 * 1024,

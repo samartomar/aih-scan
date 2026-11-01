@@ -43,6 +43,7 @@ describe("replacement public entries", () => {
       "severityOf",
       "sha256Hex",
       "storedLabel",
+      "toolCategoryCodes",
       "toolRuleCodes",
       "toolsForPart",
       "validateRequest",

@@ -252,3 +252,51 @@ describe("coverage-adjusted stored label through the CLI", () => {
     );
   });
 });
+
+describe("aih-scan scan --mode ai", () => {
+  it("says before scanning where content goes, or that AI is not available here, and prints notes", async () => {
+    const item = fixture.folder("item", cleanSkill);
+    const missing = capture();
+    const missingIo = {
+      ...missing.io,
+      internals: { env: { PATH: "/usr/bin:/bin", AIH_SCAN_SKILLSPECTOR: "none" } },
+    };
+    expect(
+      await runScanCommandV1([item, "--mode", "ai", "--out", fixture.path("o1")], missingIo),
+    ).toBe(exitCodes.ok);
+    expect(missing.err()).toContain(
+      "AI not available here: SKILLSPECTOR_PROVIDER is not set. SkillSpector runs static checks only; no content is sent to an AI.",
+    );
+    expect(missing.out()).toContain(
+      "note: AI not available here: SKILLSPECTOR_PROVIDER is not set; SkillSpector ran static checks only",
+    );
+    expect(missing.out()).toContain(
+      "note: skillspector: unavailable: disabled by AIH_SCAN_SKILLSPECTOR=none",
+    );
+
+    const set = capture();
+    const setIo = {
+      ...set.io,
+      internals: {
+        env: {
+          PATH: "/usr/bin:/bin",
+          AIH_SCAN_SKILLSPECTOR: "none",
+          SKILLSPECTOR_PROVIDER: "anthropic",
+          ANTHROPIC_API_KEY: "not-a-real-key",
+        },
+      },
+    };
+    expect(
+      await runScanCommandV1([item, "--mode", "ai", "--json", "--out", fixture.path("o2")], setIo),
+    ).toBe(exitCodes.ok);
+    expect(set.err()).toContain(
+      "AI mode: SkillSpector sends the content it scans to the AI you set up (provider anthropic, via provider)",
+    );
+    expect(JSON.parse(set.out()).targets[0].ai).toEqual({
+      status: "available",
+      provider: "anthropic",
+      via: "provider",
+    });
+    expect(set.out() + set.err()).not.toContain("not-a-real-key");
+  });
+});

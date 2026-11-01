@@ -17,10 +17,12 @@ import { type ScanRequest, type SourceDescriptor, validateRequest } from "../con
 import { acquireGit } from "./acquire-git.js";
 import { acquireNpm, type FetchLike, readNpmFile } from "./acquire-npm.js";
 import { assessItem, routeFiles } from "./assess.js";
+import { ciscoAdapter } from "./cisco.js";
 import { discoverItems } from "./discover.js";
 import { cloneCommit } from "./inventory.js";
+import { type AiSetup, skillSpectorAdapter, skillSpectorAiSetup } from "./skillspector.js";
 import { readFolder, type SnapshotFile, writeSnapshot } from "./snapshot.js";
-import { type ToolAdapter, unavailableCisco, unavailableSkillSpector } from "./tools.js";
+import type { ToolAdapter } from "./tools.js";
 import { trustLintAdapter } from "./trust-lint-tool.js";
 
 export interface ScanOptions {
@@ -63,6 +65,8 @@ export type ScanItemResult =
       summaryPath: string;
       sarifPaths: readonly string[];
       source: SourcePin;
+      /** Unsigned notes: why a tool did not run or was incomplete, AI availability. */
+      notes?: readonly string[];
     }>
   | Readonly<{
       path: string;
@@ -102,7 +106,16 @@ export interface Acquisition {
   readonly fetched: boolean;
 }
 
-type Extras = Readonly<{ rollup?: Rollup; acquisition?: Acquisition }>;
+/**
+ * AI mode only: whether the caller's existing SkillSpector AI settings were usable. With
+ * `available`, SkillSpector sent the scanned content to that AI; otherwise the scan stayed
+ * static ("AI not available here") and `reason` says why. Never holds a credential.
+ */
+export type AiAvailability =
+  | Readonly<{ status: "available"; provider: string; via: "cli" | "local" | "provider" }>
+  | Readonly<{ status: "not-available"; reason: string }>;
+
+type Extras = Readonly<{ rollup?: Rollup; acquisition?: Acquisition; ai?: AiAvailability }>;
 
 export type ScanResult =
   | (Readonly<{ status: "ok"; results: readonly ScanItemResult[] }> & Extras)
@@ -122,6 +135,7 @@ interface Written {
   readonly label: SummaryLabel;
   readonly coverage: Coverage;
   readonly reason?: string;
+  readonly notes: readonly string[];
 }
 
 /** An output folder shared by several scans of one run (the CLI's several targets). */
@@ -131,7 +145,7 @@ export interface SharedOutput {
   readonly written: Map<string, Written>;
 }
 
-/** Internal seams for adapters landing in later slices and for deterministic tests. */
+/** Internal seams for controlled adapters, environments and deterministic tests. */
 export interface ScanInternals {
   readonly adapters?: Partial<Record<ToolId, ToolAdapter>>;
   readonly now?: () => Date;
@@ -140,6 +154,15 @@ export interface ScanInternals {
   /** The HTTPS client for npm registry acquisition (a local stub in tests). */
   readonly fetch?: FetchLike;
   readonly sharedOutput?: SharedOutput;
+  /** The environment analyzers are found in and AI settings are read from (default `process.env`). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}
+
+/** The AI availability `scan` reports for `mode: ai`, from the caller's SkillSpector settings. */
+export function aiAvailability(setup: AiSetup): AiAvailability {
+  return setup.available
+    ? Object.freeze({ status: "available" as const, provider: setup.provider, via: setup.via })
+    : Object.freeze({ status: "not-available" as const, reason: setup.reason });
 }
 
 const none: readonly ScanItemResult[] = Object.freeze([]);
@@ -461,7 +484,7 @@ export function scan(request: unknown, options: ScanOptions): Promise<ScanResult
   return scanWith(request, options);
 }
 
-/** {@link scan} with internal seams (later-slice adapters, fixed clock, tool timeout). Not exported publicly. */
+/** {@link scan} with internal seams (adapters, environment, fixed clock, tool timeout). Not exported publicly. */
 export async function scanWith(
   request: unknown,
   options: ScanOptions,
@@ -478,8 +501,13 @@ export async function scanWith(
       ? await prepareSource(valid, signal, internals)
       : await prepareItems(valid, signal);
   if ("status" in phase1) return phase1;
-  const extras: { acquisition?: Acquisition } =
-    phase1.acquisition === undefined ? {} : { acquisition: phase1.acquisition };
+  const env = internals.env ?? process.env;
+  const mode = valid.mode ?? "static";
+  const aiSetup = mode === "ai" ? skillSpectorAiSetup(env) : undefined;
+  const extras: { acquisition?: Acquisition; ai?: AiAvailability } = {
+    ...(phase1.acquisition === undefined ? {} : { acquisition: phase1.acquisition }),
+    ...(aiSetup === undefined ? {} : { ai: aiAvailability(aiSetup) }),
+  };
   const cancelledEarly = signal.aborted;
   const shared = internals.sharedOutput;
   let outDir: string;
@@ -494,8 +522,12 @@ export async function scanWith(
   // Phase 2: assess each distinct key once.
   const adapters = new Map<ToolId, ToolAdapter>([
     ["aih-trust-lint", internals.adapters?.["aih-trust-lint"] ?? trustLintAdapter],
-    ["skillspector", internals.adapters?.skillspector ?? unavailableSkillSpector],
-    ["cisco", internals.adapters?.cisco ?? unavailableCisco],
+    [
+      "skillspector",
+      internals.adapters?.skillspector ??
+        skillSpectorAdapter({ env, ...(aiSetup === undefined ? {} : { ai: aiSetup }) }),
+    ],
+    ["cisco", internals.adapters?.cisco ?? ciscoAdapter({ env })],
   ]);
   const written = shared?.written ?? new Map<string, Written>();
   const results: ScanItemResult[] = [];
@@ -530,7 +562,7 @@ export async function scanWith(
           adapters,
           {
             origin: valid.origin,
-            mode: valid.mode ?? "static",
+            mode,
             tools: valid.tools,
             internalScopes: options.internalScopes ?? [],
             signal,
@@ -566,6 +598,7 @@ export async function scanWith(
           label: summary.label,
           coverage: summary.coverage,
           ...(summary.reason === undefined ? {} : { reason: summary.reason }),
+          notes: assessment.notes,
         });
         written.set(entry.scanKey, output);
       } finally {
@@ -579,6 +612,7 @@ export async function scanWith(
         status: "ok" as const,
         summaryPath: output.summaryPath,
         sarifPaths: output.sarifPaths,
+        ...(output.notes.length === 0 ? {} : { notes: output.notes }),
       }),
     );
   }

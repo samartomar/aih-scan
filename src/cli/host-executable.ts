@@ -11,14 +11,14 @@ import { posix, win32 } from "node:path";
  * Scan records and spawns, and only a path resolved here may be spawned by Scan's runner.
  */
 
-export type HostExecutableNameV1 = "uv" | "docker";
+export type HostExecutableNameV1 = "uv" | "docker" | "skillspector" | "skill-scanner";
 
 export type HostExecutableV1 = Readonly<{
   name: HostExecutableNameV1;
   /** The real (symlink-resolved) absolute path that is spawned and recorded. */
   path: string;
-  /** Where the search found it. */
-  foundIn: "PATH" | "well-known-directory";
+  /** Where the search found it, or `selected` for a caller-named absolute path. */
+  foundIn: "PATH" | "well-known-directory" | "selected";
 }>;
 
 const registered = new Set<string>();
@@ -135,6 +135,31 @@ export function resolveHostExecutableV1(
     }
   }
   return undefined;
+}
+
+/**
+ * Accepts a caller-selected executable path (for example from an `AIH_SCAN_*` variable) under
+ * the same rules as a search hit: absolute, a regular file, executable on POSIX and `<name>.exe`
+ * on Windows. Returns `undefined` when it does not qualify; nothing is run.
+ */
+export function selectHostExecutableV1(
+  name: HostExecutableNameV1,
+  selected: string,
+  platform: NodeJS.Platform = process.platform,
+): HostExecutableV1 | undefined {
+  const absolute =
+    platform === "win32" ? /^[A-Za-z]:[\\/]/u.test(selected) : selected.startsWith("/");
+  if (!absolute || selected.includes("\0")) return undefined;
+  const base = platform === "win32" ? win32.basename(selected) : posix.basename(selected);
+  if (platform === "win32" && base.toLowerCase() !== `${name}.exe`) return undefined;
+  const path = candidate(
+    platform === "win32" ? win32.dirname(selected) : posix.dirname(selected),
+    platform === "win32" ? name : (base as HostExecutableNameV1),
+    platform,
+  );
+  if (path === undefined) return undefined;
+  if (platform === process.platform) registered.add(path);
+  return Object.freeze({ name, path, foundIn: "selected" as const });
 }
 
 /** `true` only for a path this module resolved; Scan's runner spawns nothing else by path. */
