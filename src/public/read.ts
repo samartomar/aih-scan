@@ -1,7 +1,7 @@
 /**
  * `@aihq/scan/read` — portable readers (browser-safe: no Node globals or built-ins).
- * `readSummary` is synchronous; `readFindings` and `matchScan` resolve asynchronously
- * because they hash with WebCrypto.
+ * `readSummary` is synchronous; `readFindings`, `matchScan` and `verifySummary` resolve
+ * asynchronously because they use WebCrypto.
  */
 export {
   type MatchDifferences,
@@ -18,3 +18,11 @@ export {
   readFindings,
 } from "../read/read-findings.js";
 export { type ReadSummaryResult, readSummary } from "../read/read-summary.js";
+export {
+  type JsonInput,
+  type VerifiedSignerInfo,
+  type VerifySummaryOptions,
+  type VerifySummaryResult,
+  verifySummary,
+  type WithdrawalOutcome,
+} from "../read/verify-summary.js";

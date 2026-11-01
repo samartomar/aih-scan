@@ -11,6 +11,7 @@ describe("replacement public entries", () => {
       "matchScan",
       "readFindings",
       "readSummary",
+      "verifySummary",
     ]);
   });
 
@@ -21,6 +22,7 @@ describe("replacement public entries", () => {
       "algorithmOfKey",
       "codeForRule",
       "codes",
+      "defaultSigners",
       "displayLabel",
       "failAtReached",
       "formats",
@@ -42,6 +44,7 @@ describe("replacement public entries", () => {
       "scoring",
       "severityOf",
       "sha256Hex",
+      "sigstoreTrustedRootText",
       "storedLabel",
       "toolCategoryCodes",
       "toolRuleCodes",
@@ -50,6 +53,7 @@ describe("replacement public entries", () => {
       "validateSource",
       "validateSummary",
       "validateWithdrawn",
+      "verification",
     ]);
     for (const value of [
       contracts.formats,
@@ -58,6 +62,8 @@ describe("replacement public entries", () => {
       contracts.scoring,
       contracts.codes,
       contracts.schemas,
+      contracts.verification,
+      contracts.defaultSigners,
     ])
       expect(Object.isFrozen(value)).toBe(true);
   });

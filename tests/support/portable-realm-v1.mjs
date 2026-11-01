@@ -1,7 +1,7 @@
 // Loads the built portable entries (@aihq/scan/contracts and /read) in a realm with only
 // browser-like globals — no process, Buffer, require, fs, subprocesses or fetch — refusing every
 // Node built-in import, and exercises the readers against the shared corpus.
-// Usage: node --experimental-vm-modules portable-realm-v1.mjs <dist-dir> <corpus-dir>
+// Usage: node --experimental-vm-modules portable-realm-v1.mjs <dist-dir> <corpus-dir> [<sigstore-vectors.json>]
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createContext, runInContext, SourceTextModule } from "node:vm";
 import { webcrypto } from "node:crypto";
 
-const [dist, corpus] = process.argv.slice(2);
+const [dist, corpus, sigstoreVectors] = process.argv.slice(2);
 const context = createContext({ TextEncoder, TextDecoder, crypto: webcrypto, atob, btoa, URL });
 for (const name of ["process", "Buffer", "require", "fetch", "setImmediate"])
   assert.equal(runInContext(`typeof ${name}`, context), "undefined", name);
@@ -79,4 +79,53 @@ assert.equal(
   "git-sha1:23f948e8a00fa0cb22c78c7c51eeb6f0a6f7cb44",
 );
 assert.equal(contracts.validateRequest({ format: "aih-scan-request/9" }).status, "unsupported-version");
+
+// Offline aih-sigstore-keyless/1 verification of the shared fixture set inside the realm:
+// valid and tampered summaries, withdrawals, wrong root/log/SCT keys, invalid proofs and
+// signing-time boundaries, with the realm's own WebCrypto and no network.
+if (sigstoreVectors !== undefined) {
+  context.vectorsJson = readFileSync(sigstoreVectors, "utf8");
+  const vectors = runInContext("JSON.parse(vectorsJson)", context);
+  const decode = runInContext("(text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0))", context);
+  const content = JSON.parse(file(vectors.content, "content.json").toString("utf8"));
+  context.contentJson = JSON.stringify(content);
+  const files = runInContext(
+    "Object.entries(JSON.parse(contentJson)).map(([path, f]) => ({ path, mode: f.mode, bytes: new TextEncoder().encode(f.text) }))",
+    context,
+  );
+  let checked = 0;
+  for (const entry of vectors.cases) {
+    const root = entry.root === "shipped" ? undefined : entry.root === "none" ? null : vectors.roots[entry.root];
+    const pending = read.verifySummary(
+      decode(entry.summary),
+      entry.bundleBytes === undefined ? entry.bundle : decode(entry.bundleBytes),
+      entry.signers,
+      {
+        ...(root === undefined ? {} : { trustedRoot: root }),
+        withdrawn: (entry.withdrawn ?? []).map((w) => decode(w.bytes)),
+        withdrawnBundle: (entry.withdrawn ?? []).map((w) => w.bundle),
+      },
+    );
+    const result = await pending;
+    assert.equal(result.status, entry.expect.status, `${entry.name}: ${JSON.stringify(result)}`);
+    if (entry.expect.reason !== undefined) assert.equal(result.reason, entry.expect.reason, entry.name);
+    if (result.status === "ok") {
+      assert.equal(result.verified, true, entry.name);
+      assert.equal(result.signer.trusted, entry.expect.trusted, entry.name);
+      assert.equal(result.withdrawn, entry.expect.withdrawn, entry.name);
+      assert.equal(result.signer.identity, entry.expect.identity, entry.name);
+      const match = await read.matchScan(result, files);
+      assert.equal(match.status, "ok", entry.name);
+      assert.equal(match.matches, true, entry.name);
+      assert.deepEqual({ ...match.signer }, { identity: entry.expect.identity, trusted: entry.expect.trusted }, entry.name);
+    } else {
+      assert.equal(result.verified, false, entry.name);
+      assert.equal(result.signer, null, entry.name);
+    }
+    checked += 1;
+  }
+  assert.ok(checked >= 60, "the shared sigstore fixture set ran");
+  assert.equal(contracts.verification.profile, "aih-sigstore-keyless/1");
+  assert.equal(contracts.defaultSigners[0].identity, "aihq-scan-production");
+}
 process.stdout.write("portable-realm-ok\n");

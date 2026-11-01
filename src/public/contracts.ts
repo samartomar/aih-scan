@@ -58,6 +58,7 @@ export {
   toolsForPart,
 } from "../contracts/routing.js";
 export { schemas } from "../contracts/schemas.js";
+export { sigstoreTrustedRootText } from "../contracts/sigstore-trusted-root.js";
 export { pathProblem, sanitizeText } from "../contracts/text.js";
 export {
   type FileMode,
@@ -77,4 +78,10 @@ export {
   validateWithdrawn,
   type Withdrawal,
 } from "../contracts/validate.js";
+export {
+  type AllowedSigner,
+  defaultSigners,
+  type Verification,
+  verification,
+} from "../contracts/verification.js";
 export { packageIdentity } from "./package-identity.js";
