@@ -17,7 +17,7 @@ import {
 import { parseTrustedRoot } from "../../src/read/sigstore/trust.js";
 import { parseCertificate, subjectAlternativeName } from "../../src/read/sigstore/x509.js";
 
-const fixtures = join(import.meta.dirname, "..", "artifact", "fixtures");
+const fixtures = join(import.meta.dirname, "..", "fixtures", "sigstore-interop");
 const json = (name: string) => JSON.parse(readFileSync(join(fixtures, name), "utf8"));
 const b64 = (value: string) => base64Decode(value) as Uint8Array;
 

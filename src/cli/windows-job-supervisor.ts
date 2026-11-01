@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { parseStrictJsonObjectV1 } from "../contract/strict-json-v1.js";
+import { parseStrictJsonObjectV1 } from "../shared/strict-json.js";
 import { processOutputV1 } from "./process-output.js";
 import type {
   ProcessRunnerOptions,

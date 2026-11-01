@@ -5,14 +5,14 @@ import { basename, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type ProcessRunnerOptions, spawnBoundedV1 } from "../../src/cli/process-runner.js";
 import {
-  findProcessesReferencingV1,
-  sweepResidualProcessesV1,
-} from "../../src/cli/residual-processes.js";
-import {
   runUnderWindowsJobV1,
   windowsCommandLineV1,
   windowsJobSupervisorExecutableV1,
 } from "../../src/cli/windows-job-supervisor.js";
+import {
+  findProcessesReferencingV1,
+  sweepResidualProcessesV1,
+} from "../support/residual-processes.js";
 
 /**
  * Real Windows process trees under the Job Object supervisor. The tree is node -> node ->

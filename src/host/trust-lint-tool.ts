@@ -1,17 +1,17 @@
 import type { FindingPart, Severity } from "../contracts/risk.js";
 import { textOf } from "../contracts/routing.js";
-import { scanTrustDependencyNamesV1 } from "../detectors/trust-lint/depnames.js";
-import type { TrustLintFindingV1 } from "../detectors/trust-lint/findings.js";
+import { scanTrustDependencyNamesV1 } from "../trust-lint/depnames.js";
+import type { TrustLintFindingV1 } from "../trust-lint/findings.js";
 import type {
   TrustLintPathKindV1,
   TrustLintTreeEntryV1,
   TrustLintTreeV1,
-} from "../detectors/trust-lint/inventory.js";
-import { scanTrustDocumentV1, scanTrustUnicodeDocumentV1 } from "../detectors/trust-lint/lint.js";
-import { scanMaliciousCodeTextV1 } from "../detectors/trust-lint/malicious-code.js";
-import { scanTrustManifestsV1 } from "../detectors/trust-lint/manifest.js";
-import { scanMcpServerDescriptionsV1 } from "../detectors/trust-lint/mcp-description.js";
-import { scanMcpConfigSecretsV1, scanTextSecretsV1 } from "../detectors/trust-lint/secrets.js";
+} from "../trust-lint/inventory.js";
+import { scanTrustDocumentV1, scanTrustUnicodeDocumentV1 } from "../trust-lint/lint.js";
+import { scanMaliciousCodeTextV1 } from "../trust-lint/malicious-code.js";
+import { scanTrustManifestsV1 } from "../trust-lint/manifest.js";
+import { scanMcpServerDescriptionsV1 } from "../trust-lint/mcp-description.js";
+import { scanMcpConfigSecretsV1, scanTextSecretsV1 } from "../trust-lint/secrets.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
 export const TRUST_LINT_VERSION = "1.0.0";

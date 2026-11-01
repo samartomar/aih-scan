@@ -21,7 +21,7 @@ import { pathProblem } from "../contracts/text.js";
 import {
   readSourceEntryNamesV1,
   UnrepresentableSourcePathErrorV1,
-} from "../observation/source-entry-name-v1.js";
+} from "../shared/source-entry-name.js";
 
 /** One regular file of a folder as Scan read it: these exact bytes are hashed and given to every tool. */
 export interface SnapshotFile {

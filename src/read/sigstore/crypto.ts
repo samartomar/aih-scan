@@ -79,12 +79,6 @@ export function publicKeyOf(spki: Uint8Array): PublicKey {
   return unsupported(`elliptic curve ${curve}`);
 }
 
-const HASH_FOR: Record<KeyKind, HashName | undefined> = {
-  "ecdsa-p256": "SHA-256",
-  "ecdsa-p384": "SHA-384",
-  ed25519: undefined,
-};
-
 /** Converts a DER ECDSA-Sig-Value to IEEE P1363 r||s. */
 export function rawEcdsaSignature(der: Uint8Array, size: number): Uint8Array {
   const node = expectTag(parseDer(der), TAG.sequence, "ECDSA signature");
@@ -139,6 +133,3 @@ export async function verifySignature(
     view(data),
   );
 }
-
-/** The hash the profile uses with a key (undefined for Ed25519). */
-export const hashForKey = (key: PublicKey): HashName | undefined => HASH_FOR[key.kind];

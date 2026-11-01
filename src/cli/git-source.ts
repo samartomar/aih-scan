@@ -1,10 +1,10 @@
 import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { startGitFetchRelay } from "../assessment/git-fetch-relay.js";
-import { GitContainmentError, runPinnedGit } from "../assessment/git-runner.js";
-import { repositoryShape } from "../assessment/shapes.js";
-import { decodeStrictUtf8V1 } from "../assessment/strict-json.js";
+import { startGitFetchRelay } from "../host/git-fetch-relay.js";
+import { GitContainmentError, runPinnedGit } from "../host/git-runner.js";
+import { hasControl } from "../shared/json.js";
+import { decodeStrictUtf8V1 } from "../shared/strict-json.js";
 
 /**
  * Scan-command Git sources: classifies the command-line target and resolves a Git
@@ -34,6 +34,21 @@ const urlScheme = /^[A-Za-z][A-Za-z0-9+.-]+:\/\//;
 /** scp-like `user@host:path` Git remotes. */
 const scpLike = /^[^/\\@:]+@[^/\\:]+:/;
 
+/** A credential-free https:// repository URL of at most 2048 UTF-8 bytes, with no controls or spaces. */
+function supportedRepositoryUrl(spelling: string, url: URL): boolean {
+  return (
+    new TextEncoder().encode(spelling).length <= 2048 &&
+    /^https:\/\/[^/@\s]+(?:\/[^?#\s]*)?$/.test(spelling) &&
+    !hasControl(spelling, true) &&
+    url.protocol === "https:" &&
+    !url.username &&
+    !url.password &&
+    !url.hash &&
+    !url.search &&
+    url.hostname !== ""
+  );
+}
+
 function httpsRepository(spelling: string): string {
   if (!/^https:\/\//i.test(spelling)) refuse(unsupportedSource);
   let url: URL;
@@ -46,7 +61,7 @@ function httpsRepository(spelling: string): string {
     refuse("the Git URL contains credentials; credentials are never accepted in a Git URL");
   if (url.search || url.hash || spelling.includes("?") || spelling.includes("#"))
     refuse("the Git URL has a query or fragment; name the repository URL only");
-  if (!repositoryShape.safeParse(spelling).success)
+  if (!supportedRepositoryUrl(spelling, url))
     refuse("the Git URL is not a supported https:// repository URL");
   return spelling;
 }

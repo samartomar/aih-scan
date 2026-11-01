@@ -2,10 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AnalyzerOutputReadErrorV1,
-  readBoundedAnalyzerOutputV1,
-} from "../baseline/bounded-output-read-v1.js";
-import {
   type HostExecutableNameV1,
   type HostExecutableV1,
   resolveHostExecutableV1,
@@ -13,6 +9,10 @@ import {
 } from "../cli/host-executable.js";
 import { type ProcessRunnerResult, processRunner } from "../cli/process-runner.js";
 import { limits } from "../contracts/limits.js";
+import {
+  AnalyzerOutputReadErrorV1,
+  readBoundedAnalyzerOutputV1,
+} from "../shared/bounded-output-read.js";
 
 /** The process environment an analyzer adapter reads; `process.env` unless a test supplies one. */
 export type HostEnv = Readonly<Record<string, string | undefined>>;

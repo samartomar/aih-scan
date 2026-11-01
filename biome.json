@@ -14,14 +14,6 @@
       "includes": ["tools/**/*.mjs"],
       "formatter": { "enabled": false },
       "assist": { "enabled": false }
-    },
-    {
-      "includes": ["tools/prepare-aih-delivery-publication.mjs"],
-      "linter": { "rules": { "suspicious": { "useIterableCallbackReturn": "off" } } }
-    },
-    {
-      "includes": ["tools/verify-cisco-oci-candidate.mjs"],
-      "linter": { "rules": { "suspicious": { "noShadowRestrictedNames": "off" } } }
     }
   ],
   "formatter": {

@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitTransportLimit, startGitFetchRelay } from "../assessment/git-fetch-relay.js";
-import { GitContainmentError, runPinnedGit } from "../assessment/git-runner.js";
-import { ContractError } from "../assessment/json.js";
 import { GitSourceRefusal, parseGitRef, resolveGitSource } from "../cli/git-source.js";
 import { limits } from "../contracts/limits.js";
+import { ContractError } from "../shared/json.js";
+import { gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
+import { GitContainmentError, runPinnedGit } from "./git-runner.js";
 import { inventoryProblem } from "./inventory.js";
 import type { FolderRefusalReason, SnapshotFile } from "./snapshot.js";
 

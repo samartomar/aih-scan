@@ -18,6 +18,16 @@ import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fix
 const skillspector = process.env.AIH_SCAN_TEST_SKILLSPECTOR;
 const skillScanner = process.env.AIH_SCAN_TEST_SKILL_SCANNER;
 const unshare = spawnSync("unshare", ["-rn", "true"]).status === 0;
+
+// CI sets AIH_SCAN_REQUIRE_REAL_ANALYZERS=1 after provisioning the locked runtimes, so a
+// missing runtime fails here instead of silently skipping the real proofs.
+it.runIf(process.env.AIH_SCAN_REQUIRE_REAL_ANALYZERS === "1")(
+  "has both real analyzer runtimes when they are required",
+  () => {
+    expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
+    expect(skillScanner, "AIH_SCAN_TEST_SKILL_SCANNER").toBeDefined();
+  },
+);
 const python = spawnSync("python3", ["-c", "pass"]).status === 0;
 
 let fixture: FixtureRoot;

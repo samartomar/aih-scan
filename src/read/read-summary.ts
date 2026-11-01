@@ -1,8 +1,8 @@
-import { decodeStrictUtf8V1, parseStrictJsonV1 } from "../assessment/strict-json.js";
 import type { Problem } from "../contracts/formats.js";
 import { limits } from "../contracts/limits.js";
 import { isBytes } from "../contracts/text.js";
 import { type Summary, validateSummary } from "../contracts/validate.js";
+import { decodeStrictUtf8V1, parseStrictJsonV1 } from "../shared/strict-json.js";
 
 export type ReadSummaryResult = Readonly<{ status: "ok"; summary: Summary }> | Problem;
 
