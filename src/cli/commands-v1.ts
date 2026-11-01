@@ -72,15 +72,15 @@ const readUsage =
   "Usage: aih-scan read <summary.json> [--json] [--fail-at CAUTION|DO_NOT_INSTALL]\n";
 const findingsUsage = "Usage: aih-scan findings <summary.json> --key <scanKey> [--json]\n";
 
-class UsageError extends Error {}
+export class UsageError extends Error {}
 
-interface Parsed {
+export interface Parsed {
   readonly positional: string[];
   readonly values: Map<string, string[]>;
   readonly flags: Set<string>;
 }
 
-function parse(
+export function parse(
   args: readonly string[],
   valued: readonly string[],
   booleans: readonly string[],
@@ -115,7 +115,7 @@ function parse(
   return { positional, values, flags };
 }
 
-function single(parsed: Parsed, name: string): string | undefined {
+export function single(parsed: Parsed, name: string): string | undefined {
   const list = parsed.values.get(name);
   if (list !== undefined && list.length > 1) throw new UsageError(`${name} may be given once`);
   return list?.[0];

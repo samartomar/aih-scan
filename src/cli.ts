@@ -48,6 +48,7 @@ import {
   runScanCommandV1,
 } from "./cli/commands-v1.js";
 import { ExclusiveOutputError, writeNewSafeOutput } from "./cli/exclusive-output.js";
+import { runSignCommand, runVerifyCommand } from "./cli/sign-verify-v1.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
   canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
@@ -55,9 +56,7 @@ import {
   projectVerifiedScanAttestationToCoreEvidenceEnvelopeV1,
 } from "./core/organization-evidence-envelope-v1.js";
 import {
-  canonicalScanAttestationEnvelopeBytesV2,
   parseScanAttestationEnvelopeV2Json,
-  signScanCandidateV2,
   verifyScanAttestationV2,
 } from "./observation/scan-attestation-v2.js";
 import { readScanCaptureBundleV2, writeScanCaptureBundleV2 } from "./observation/scan-bundle-v2.js";
@@ -234,13 +233,6 @@ function verifiedFromCli(args: readonly string[], allowed: ReadonlySet<string>) 
     candidate: bundle.candidate,
     annexArtifacts: bundle.annexArtifacts,
   });
-}
-function verify(args: readonly string[]): void {
-  const result = verifiedFromCli(
-    args,
-    new Set(["--evidence", "--bundle", "--roots", "--expected", "--seen"]),
-  );
-  process.stdout.write(`${canonicalStrictJsonBytesV1(result.facts).toString("utf8")}\n`);
 }
 function writeNew(path: string, bytes: Uint8Array): void {
   const descriptor = openSync(resolve(path), "wx", 0o600);
@@ -590,51 +582,6 @@ function baselineInspect(args: readonly string[]): void {
   });
   process.stdout.write(`${canonicalStrictJsonBytesV1(verified.facts).toString("utf8")}\n`);
 }
-function sign(args: readonly string[]): void {
-  if (
-    args.length !== 10 ||
-    args[0] !== "--bundle" ||
-    args[2] !== "--signer" ||
-    args[4] !== "--private-key" ||
-    args[6] !== "--claims" ||
-    args[8] !== "--output"
-  )
-    fail("sign usage");
-  const bundleDirectory = args[1],
-    signerPath = args[3],
-    privateKeyPath = args[5],
-    claimsPath = args[7],
-    outputPath = args[9];
-  if (
-    [bundleDirectory, signerPath, privateKeyPath, claimsPath, outputPath].some(
-      (entry) => typeof entry !== "string",
-    )
-  )
-    fail("sign arguments");
-  const bundle = readScanCaptureBundleV2({ bundleDirectory: bundleDirectory as string });
-  const signerWire = readJson(signerPath as string, "signer");
-  const claims = readJson(claimsPath as string, "claims");
-  exactWire(signerWire, ["identity", "class", "keyId"], "signer");
-  if (
-    typeof signerWire.identity !== "string" ||
-    typeof signerWire.class !== "string" ||
-    typeof signerWire.keyId !== "string" ||
-    Object.keys(signerWire).length !== 3
-  )
-    fail("signer fields");
-  const evidence = signScanCandidateV2({
-    candidate: bundle.candidate,
-    signer: {
-      identity: signerWire.identity,
-      class: signerWire.class,
-      keyId: signerWire.keyId,
-      privateKey: createPrivateKey(readPrivateKey(privateKeyPath as string)),
-    },
-    claims,
-    annexArtifacts: bundle.annexArtifacts,
-  });
-  writeNew(outputPath as string, canonicalScanAttestationEnvelopeBytesV2(evidence));
-}
 /**
  * The first SIGINT or SIGTERM cancels the assessment so the command can still report
  * what finished (exit 130); a second one stops immediately. The handlers exist only
@@ -671,7 +618,7 @@ const io = {
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "verify") {
-    verify(args);
+    process.exitCode = await runVerifyCommand(args, io);
     return;
   }
   if (command === "project-core-evidence") {
@@ -726,10 +673,13 @@ async function main(): Promise<void> {
     }
     return baselineInspect(args);
   }
-  if (command === "sign") return sign(args);
+  if (command === "sign") {
+    process.exitCode = await runSignCommand(args, io);
+    return;
+  }
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan scan ... | read ... | findings ... | baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign ... | verify ... | project-core-evidence ...\n",
+      "Usage: aih-scan scan ... | read ... | findings ... | baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign <summary.json> | verify <summary.json> --bundle <file> | project-core-evidence ...\n",
     );
     return;
   }
