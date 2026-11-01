@@ -41,8 +41,13 @@ import {
   runBaselineVetRequestSetV1,
 } from "./baseline/request-set-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
+import {
+  exitCodes,
+  runFindingsCommand,
+  runReadCommand,
+  runScanCommandV1,
+} from "./cli/commands-v1.js";
 import { ExclusiveOutputError, writeNewSafeOutput } from "./cli/exclusive-output.js";
-import { runScanCommand, scanExitCodes } from "./cli/scan-command.js";
 import { canonicalStrictJsonBytesV1, parseStrictJsonObjectV1 } from "./contract/strict-json-v1.js";
 import {
   canonicalCoreOrganizationEvidenceEnvelopeV1Bytes,
@@ -640,7 +645,7 @@ async function scan(args: readonly string[]): Promise<void> {
   let signals = 0;
   const onSignal = (signal: NodeJS.Signals) => {
     signals += 1;
-    if (signals > 1) process.exit(scanExitCodes.cancelled);
+    if (signals > 1) process.exit(exitCodes.cancelled);
     process.stderr.write(
       `aih-scan: ${signal} received; cancelling the assessment (send it again to stop immediately)\n`,
     );
@@ -649,7 +654,7 @@ async function scan(args: readonly string[]): Promise<void> {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
-    process.exitCode = await runScanCommand(args, {
+    process.exitCode = await runScanCommandV1(args, {
       stdout: (text) => process.stdout.write(text),
       stderr: (text) => process.stderr.write(text),
       cancellation: cancellation.signal,
@@ -659,6 +664,10 @@ async function scan(args: readonly string[]): Promise<void> {
     process.off("SIGTERM", onSignal);
   }
 }
+const io = {
+  stdout: (text: string) => void process.stdout.write(text),
+  stderr: (text: string) => void process.stderr.write(text),
+};
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (command === "verify") {
@@ -673,6 +682,14 @@ async function main(): Promise<void> {
     return projectCoreEvidence(args);
   }
   if (command === "scan") return scan(args);
+  if (command === "read") {
+    process.exitCode = runReadCommand(args, io);
+    return;
+  }
+  if (command === "findings") {
+    process.exitCode = await runFindingsCommand(args, io);
+    return;
+  }
   if (command === "capture") return capture(args);
   if (command === "baseline-vet") {
     if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
@@ -712,7 +729,7 @@ async function main(): Promise<void> {
   if (command === "sign") return sign(args);
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan scan ... | baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign ... | verify ... | project-core-evidence ...\n",
+      "Usage: aih-scan scan ... | read ... | findings ... | baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign ... | verify ... | project-core-evidence ...\n",
     );
     return;
   }

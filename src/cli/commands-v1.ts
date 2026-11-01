@@ -1,0 +1,338 @@
+import { lstatSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { formats } from "../contracts/formats.js";
+import { limits } from "../contracts/limits.js";
+import {
+  displayLabel,
+  failAtReached,
+  type RiskLabel,
+  type SummaryLabel,
+} from "../contracts/risk.js";
+import { kinds, optionalTools } from "../contracts/routing.js";
+import { pathProblem, sanitizeText } from "../contracts/text.js";
+import type { Summary } from "../contracts/validate.js";
+import { type ScanResult, scan } from "../host/scan.js";
+import { FINDINGS_MISMATCH_MESSAGE, type Finding, readFindings } from "../read/read-findings.js";
+import { readSummary } from "../read/read-summary.js";
+
+/** 0 finished (complete or partial); 1 only with --fail-at; 2 could not scan or read; 130 cancelled. */
+export const exitCodes = Object.freeze({ ok: 0, failAt: 1, input: 2, cancelled: 130 });
+
+export interface CommandIo {
+  readonly stdout: (text: string) => void;
+  readonly stderr: (text: string) => void;
+  readonly cancellation?: AbortSignal;
+  readonly cwd?: string;
+}
+
+export const scanUsage = `${[
+  "Usage: aih-scan scan <folder> [<folder>...] --out <new-folder> [options]",
+  "",
+  "Scans each folder as handed over: one result per folder, keyed by its Git tree hash.",
+  "Supplied content is never executed; static mode makes no network calls.",
+  "",
+  "Options:",
+  "  --out <new-folder>          required; must not exist",
+  "  --tools <list>              skillspector,aih-trust-lint[,cisco]; aih-trust-lint always runs",
+  "  --mode static|ai            default static",
+  "  --origin published|local    default local",
+  "  --kinds <list>              skill,agent,command,rule,hook,mcp",
+  "  --internal-scope <@scope>   repeatable",
+  "  --fail-at CAUTION|DO_NOT_INSTALL   exit 1 when a stored label reaches it",
+  "  --json | --quiet",
+  "",
+  "Exit: 0 finished (complete or partial), 1 only with --fail-at, 2 could not scan, 130 cancelled.",
+].join("\n")}\n`;
+
+const readUsage =
+  "Usage: aih-scan read <summary.json> [--json] [--fail-at CAUTION|DO_NOT_INSTALL]\n";
+const findingsUsage = "Usage: aih-scan findings <summary.json> --key <scanKey> [--json]\n";
+
+class UsageError extends Error {}
+
+interface Parsed {
+  readonly positional: string[];
+  readonly values: Map<string, string[]>;
+  readonly flags: Set<string>;
+}
+
+function parse(
+  args: readonly string[],
+  valued: readonly string[],
+  booleans: readonly string[],
+): Parsed {
+  const positional: string[] = [];
+  const values = new Map<string, string[]>();
+  const flags = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] as string;
+    if (arg === "--") {
+      positional.push(...args.slice(index + 1));
+      break;
+    }
+    if (arg.startsWith("--")) {
+      const [name, inline] = arg.includes("=")
+        ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)]
+        : [arg, undefined];
+      if (booleans.includes(name)) {
+        if (inline !== undefined) throw new UsageError(`${name} takes no value`);
+        flags.add(name);
+        continue;
+      }
+      if (!valued.includes(name)) throw new UsageError(`unknown option ${sanitizeText(name, 64)}`);
+      if (inline === undefined) index += 1;
+      const value = inline ?? args[index];
+      if (value === undefined || value.length === 0) throw new UsageError(`${name} needs a value`);
+      values.set(name, [...(values.get(name) ?? []), value]);
+      continue;
+    }
+    positional.push(arg);
+  }
+  return { positional, values, flags };
+}
+
+function single(parsed: Parsed, name: string): string | undefined {
+  const list = parsed.values.get(name);
+  if (list !== undefined && list.length > 1) throw new UsageError(`${name} may be given once`);
+  return list?.[0];
+}
+
+function list(
+  value: string | undefined,
+  allowed: readonly string[],
+  name: string,
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  const entries = value.split(",").map((entry) => entry.trim());
+  for (const entry of entries)
+    if (!allowed.includes(entry)) throw new UsageError(`${name} accepts ${allowed.join(", ")}`);
+  return entries;
+}
+
+function failAtOf(value: string | undefined): RiskLabel | undefined {
+  if (value === undefined) return undefined;
+  if (value === "CAUTION") return "CAUTION";
+  if (value === "DO_NOT_INSTALL" || value === "DO NOT INSTALL") return "DO NOT INSTALL";
+  throw new UsageError("--fail-at accepts CAUTION or DO_NOT_INSTALL");
+}
+
+const safe = (value: string, max: number = limits.output.findingPath) => sanitizeText(value, max);
+
+function readSummaryFile(path: string): { summary: Summary } | { problem: string } {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return { problem: "summary is not a regular file" };
+    if (stat.size > limits.output.summaryBytes)
+      return { problem: "summary exceeds the size limit" };
+    const read = readSummary(new Uint8Array(readFileSync(path)));
+    if (read.status !== "ok")
+      return {
+        problem: `summary ${read.status}${read.detail ? `: ${safe(read.detail, 300)}` : ""}`,
+      };
+    return { summary: read.summary };
+  } catch {
+    return { problem: "summary could not be read" };
+  }
+}
+
+function summaryLines(summary: Summary): string {
+  const lines = [
+    `${displayLabel(summary)}  score ${summary.score}  ${summary.scanKey}`,
+    `  coverage ${summary.coverage}${summary.reason ? ` (${safe(summary.reason, 200)})` : ""}; routing ${summary.routing}; scoring ${summary.scoring}`,
+    `  scanned ${summary.scannedAt} by ${safe(summary.scanner, 128)}; origin ${summary.origin}; revision ${summary.revision}`,
+    ...summary.tools.map(
+      (tool) =>
+        `  ${safe(tool.tool, 64)} ${safe(tool.version, 64)} ${tool.mode}: ${tool.result}${tool.reason ? ` (${safe(tool.reason, 200)})` : ""}${
+          Object.keys(tool.counts).length > 0
+            ? ` ${Object.entries(tool.counts)
+                .map(([key, count]) => `${key} ${count}`)
+                .join(", ")}`
+            : ""
+        }`,
+    ),
+    `  files ${summary.files.length}; not analysed ${summary.notAnalysed.length}${
+      summary.notAnalysed.length > 0
+        ? ` (${summary.notAnalysed.map((entry) => `${safe(entry.path)}${entry.secretsChecked ? " secrets checked" : " binary"}`).join("; ")})`
+        : ""
+    }`,
+  ];
+  if (summary.dependencies.length > 0)
+    lines.push(
+      `  dependencies ${summary.dependencies.map((d) => `${safe(d.name, 214)}@${d.version === null ? "?" : safe(d.version, 64)}`).join(", ")}`,
+    );
+  return `${lines.join("\n")}\n`;
+}
+
+/** `aih-scan scan <folder...> --out <new-folder>`: each folder is one item as handed over. */
+export async function runScanCommandV1(args: readonly string[], io: CommandIo): Promise<number> {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    io.stdout(scanUsage);
+    return exitCodes.ok;
+  }
+  let result: ScanResult;
+  let failAt: RiskLabel | undefined;
+  let json = false;
+  let quiet = false;
+  try {
+    const parsed = parse(
+      args,
+      ["--out", "--tools", "--mode", "--origin", "--kinds", "--internal-scope", "--fail-at"],
+      ["--json", "--quiet"],
+    );
+    if (parsed.positional.length === 0) throw new UsageError("name at least one folder");
+    const out = single(parsed, "--out");
+    if (out === undefined) throw new UsageError("--out <new-folder> is required");
+    json = parsed.flags.has("--json");
+    quiet = parsed.flags.has("--quiet");
+    if (json && quiet) throw new UsageError("--json and --quiet cannot be combined");
+    failAt = failAtOf(single(parsed, "--fail-at"));
+    const tools = list(single(parsed, "--tools"), optionalTools, "--tools");
+    const selectedKinds = list(single(parsed, "--kinds"), kinds, "--kinds");
+    const mode = single(parsed, "--mode");
+    const origin = single(parsed, "--origin") ?? "local";
+    const scopes = parsed.values.get("--internal-scope") ?? [];
+    for (const scope of scopes)
+      if (!/^@[a-z0-9][a-z0-9._~-]*$/.test(scope))
+        throw new UsageError("--internal-scope takes @scope");
+    const cwd = io.cwd ?? process.cwd();
+    const request = {
+      format: formats.request,
+      origin,
+      items: parsed.positional.map((path) => ({ path: resolve(cwd, path) })),
+      ...(selectedKinds === undefined ? {} : { kinds: selectedKinds }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(mode === undefined ? {} : { mode }),
+    };
+    result = await scan(request, {
+      outDir: resolve(cwd, out),
+      ...(io.cancellation === undefined ? {} : { signal: io.cancellation }),
+      internalScopes: [...new Set(scopes)].sort(),
+    });
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.stderr(`aih-scan: ${error.message}\n${scanUsage}`);
+      return exitCodes.input;
+    }
+    io.stderr("aih-scan: the scan could not complete\n");
+    return exitCodes.input;
+  }
+  const summaries = new Map<string, Summary>();
+  for (const entry of result.results) {
+    if (entry.status !== "ok" || summaries.has(entry.summaryPath)) continue;
+    const read = readSummaryFile(entry.summaryPath);
+    if ("summary" in read) summaries.set(entry.summaryPath, read.summary);
+  }
+  if (json) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
+  else if (!quiet) {
+    for (const entry of result.results) {
+      if (entry.status === "ok") {
+        const summary = summaries.get(entry.summaryPath);
+        io.stdout(
+          summary === undefined
+            ? `${safe(entry.path)}: summary unreadable\n`
+            : `${safe(entry.path)}\n  ${summaryLines(summary).trimEnd().split("\n").join("\n  ")}\n  summary ${safe(entry.summaryPath, 4096)}\n`,
+        );
+      } else
+        io.stdout(
+          `${safe(entry.path)}: ${entry.status} (${safe(entry.reason, 200)})${entry.detail ? ` ${safe(entry.detail, 300)}` : ""}\n`,
+        );
+    }
+  }
+  if (result.status === "cancelled") {
+    io.stderr("aih-scan: cancelled; finished results were kept\n");
+    return exitCodes.cancelled;
+  }
+  if (result.status !== "ok") {
+    if (result.results.length === 0 && "detail" in result)
+      io.stderr(
+        `aih-scan: ${result.status} (${safe(result.reason, 200)}): ${safe(String(result.detail ?? ""), 300)}\n`,
+      );
+    return exitCodes.input;
+  }
+  if (
+    failAt !== undefined &&
+    [...summaries.values()].some((summary) => failAtReached(summary.label as SummaryLabel, failAt))
+  )
+    return exitCodes.failAt;
+  return exitCodes.ok;
+}
+
+/** `aih-scan read <summary.json>`: prints the summary. */
+export function runReadCommand(args: readonly string[], io: CommandIo): number {
+  try {
+    const parsed = parse(args, ["--fail-at"], ["--json"]);
+    if (parsed.positional.length !== 1) throw new UsageError("name one summary file");
+    const failAt = failAtOf(single(parsed, "--fail-at"));
+    const read = readSummaryFile(resolve(io.cwd ?? process.cwd(), parsed.positional[0] as string));
+    if ("problem" in read) {
+      io.stderr(`aih-scan: ${read.problem}\n`);
+      return exitCodes.input;
+    }
+    io.stdout(
+      parsed.flags.has("--json")
+        ? `${JSON.stringify(read.summary, null, 2)}\n`
+        : summaryLines(read.summary),
+    );
+    return failAt !== undefined && failAtReached(read.summary.label, failAt)
+      ? exitCodes.failAt
+      : exitCodes.ok;
+  } catch (error) {
+    io.stderr(
+      `aih-scan: ${error instanceof UsageError ? error.message : "the summary could not be read"}\n${readUsage}`,
+    );
+    return exitCodes.input;
+  }
+}
+
+function findingLine(finding: Finding): string {
+  return `${finding.severity.padEnd(8)} ${finding.code}  ${safe(finding.path)}:${finding.line}  [${finding.tool} ${finding.ruleId}] ${finding.text}\n`;
+}
+
+/** `aih-scan findings <summary.json> --key <scanKey>`: one line per finding from every pinned SARIF. */
+export async function runFindingsCommand(args: readonly string[], io: CommandIo): Promise<number> {
+  try {
+    const parsed = parse(args, ["--key"], ["--json"]);
+    if (parsed.positional.length !== 1) throw new UsageError("name one summary file");
+    const key = single(parsed, "--key");
+    if (key === undefined) throw new UsageError("--key <scanKey> is required");
+    const path = resolve(io.cwd ?? process.cwd(), parsed.positional[0] as string);
+    const read = readSummaryFile(path);
+    if ("problem" in read) {
+      io.stderr(`aih-scan: ${read.problem}\n`);
+      return exitCodes.input;
+    }
+    const findings: Finding[] = [];
+    for (const entry of read.summary.sarif) {
+      if (pathProblem(entry.path, limits.input.pathLength, limits.input.depth) !== undefined) {
+        io.stderr(`aih-scan: ${FINDINGS_MISMATCH_MESSAGE}\n`);
+        return exitCodes.input;
+      }
+      let bytes: Uint8Array;
+      try {
+        const file = join(dirname(path), ...entry.path.split("/"));
+        const stat = lstatSync(file);
+        if (!stat.isFile() || stat.size > limits.output.sarifBytes) throw new Error("not a file");
+        bytes = new Uint8Array(readFileSync(file));
+      } catch {
+        io.stderr("aih-scan: a pinned SARIF file could not be read\n");
+        return exitCodes.input;
+      }
+      const result = await readFindings(read.summary, bytes, key);
+      if (result.status !== "ok") {
+        io.stderr(`aih-scan: ${"message" in result ? result.message : `SARIF ${result.status}`}\n`);
+        return exitCodes.input;
+      }
+      findings.push(...result.findings);
+    }
+    if (parsed.flags.has("--json"))
+      io.stdout(`${JSON.stringify({ status: "ok", findings }, null, 2)}\n`);
+    else if (findings.length === 0) io.stdout("No findings.\n");
+    else for (const finding of findings) io.stdout(findingLine(finding));
+    return exitCodes.ok;
+  } catch (error) {
+    io.stderr(
+      `aih-scan: ${error instanceof UsageError ? error.message : "the findings could not be read"}\n${findingsUsage}`,
+    );
+    return exitCodes.input;
+  }
+}
