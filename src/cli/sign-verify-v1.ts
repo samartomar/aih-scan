@@ -97,6 +97,10 @@ const httpsUrl = (value: string | undefined, fallback: string, name: string) => 
 
 /** `aih-scan sign <document>`: signs a summary or withdrawal with the caller's own identity. */
 export async function runSignCommand(args: readonly string[], io: SigningIo): Promise<number> {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    io.stdout(signUsage);
+    return exitCodes.ok;
+  }
   try {
     const parsed = parse(
       args,
@@ -165,6 +169,10 @@ export async function runSignCommand(args: readonly string[], io: SigningIo): Pr
 
 /** `aih-scan verify <summary.json> --bundle <file>`: offline verification and withdrawals. */
 export async function runVerifyCommand(args: readonly string[], io: CommandIo): Promise<number> {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    io.stdout(verifyUsage);
+    return exitCodes.ok;
+  }
   try {
     const parsed = parse(
       args,

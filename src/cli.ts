@@ -1,21 +1,25 @@
 #!/usr/bin/env node
-import { runAdvisoriesCommand } from "./cli/advisories-v1.js";
+import { advisoriesUsage, runAdvisoriesCommand } from "./cli/advisories-v1.js";
 import {
   exitCodes,
+  findingsUsage,
+  readUsage,
   runFindingsCommand,
   runReadCommand,
   runScanCommandV1,
+  scanUsage,
 } from "./cli/commands-v1.js";
-import { runSignCommand, runVerifyCommand } from "./cli/sign-verify-v1.js";
+import { runSignCommand, runVerifyCommand, signUsage, verifyUsage } from "./cli/sign-verify-v1.js";
+import { commandsUsage } from "./cli/usage.js";
 
-const usage =
-  "Usage: aih-scan scan <target...> --out <new-folder> [options]\n" +
-  "       aih-scan advisories <target> [--internal-scope @scope] [--private] [--include-private]\n" +
-  "       aih-scan read <summary.json>\n" +
-  "       aih-scan findings <summary.json> --key <scanKey>\n" +
-  "       aih-scan verify <summary.json> --bundle <file>\n" +
-  "       aih-scan sign <summary.json>\n" +
-  "Run `aih-scan scan --help` or `aih-scan advisories --help` for their options.\n";
+const usage = commandsUsage([
+  scanUsage,
+  advisoriesUsage,
+  readUsage,
+  findingsUsage,
+  verifyUsage,
+  signUsage,
+]);
 
 const io = {
   stdout: (text: string) => void process.stdout.write(text),

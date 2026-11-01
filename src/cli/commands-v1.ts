@@ -69,9 +69,9 @@ export const scanUsage = `${[
   "Exit: 0 finished (complete or partial), 1 only with --fail-at, 2 could not scan, 130 cancelled.",
 ].join("\n")}\n`;
 
-const readUsage =
+export const readUsage =
   "Usage: aih-scan read <summary.json> [--json] [--fail-at CAUTION|DO_NOT_INSTALL]\n";
-const findingsUsage = "Usage: aih-scan findings <summary.json> --key <scanKey> [--json]\n";
+export const findingsUsage = "Usage: aih-scan findings <summary.json> --key <scanKey> [--json]\n";
 
 export class UsageError extends Error {}
 
@@ -365,6 +365,10 @@ export async function runScanCommandV1(args: readonly string[], io: CommandIo): 
 
 /** `aih-scan read <summary.json>`: prints the summary. */
 export function runReadCommand(args: readonly string[], io: CommandIo): number {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    io.stdout(readUsage);
+    return exitCodes.ok;
+  }
   try {
     const parsed = parse(args, ["--fail-at"], ["--json"]);
     if (parsed.positional.length !== 1) throw new UsageError("name one summary file");
@@ -396,6 +400,10 @@ function findingLine(finding: Finding): string {
 
 /** `aih-scan findings <summary.json> --key <scanKey>`: one line per finding from every pinned SARIF. */
 export async function runFindingsCommand(args: readonly string[], io: CommandIo): Promise<number> {
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    io.stdout(findingsUsage);
+    return exitCodes.ok;
+  }
   try {
     const parsed = parse(args, ["--key"], ["--json"]);
     if (parsed.positional.length !== 1) throw new UsageError("name one summary file");
