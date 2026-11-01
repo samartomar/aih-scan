@@ -44,7 +44,8 @@ from `.git` as data; its remote address is never read or recorded.
 
 Fetches happen before the scan. The result's `acquisition` says whether the source
 was fetched; the scan itself runs nothing supplied and, in static mode, makes no
-network call.
+network call. [analyzers.md](analyzers.md) describes the installed SkillSpector and
+optional Cisco skill-scanner runs, AI mode and what each sends where.
 
 ## Items found
 
