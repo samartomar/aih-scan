@@ -41,6 +41,7 @@ import {
   runBaselineVetRequestSetV1,
 } from "./baseline/request-set-v1.js";
 import { captureCiscoOciCandidateV2 } from "./cisco/capture-v2.js";
+import { runAdvisoriesCommand } from "./cli/advisories-v1.js";
 import {
   exitCodes,
   runFindingsCommand,
@@ -633,6 +634,22 @@ async function main(): Promise<void> {
     process.exitCode = runReadCommand(args, io);
     return;
   }
+  if (command === "advisories") {
+    const cancellation = new AbortController();
+    const onSignal = () => cancellation.abort();
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    try {
+      process.exitCode = await runAdvisoriesCommand(args, {
+        ...io,
+        cancellation: cancellation.signal,
+      });
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    }
+    return;
+  }
   if (command === "findings") {
     process.exitCode = await runFindingsCommand(args, io);
     return;
@@ -679,7 +696,7 @@ async function main(): Promise<void> {
   }
   if (command === "--help" || command === "-h") {
     process.stdout.write(
-      "Usage: aih-scan scan ... | read ... | findings ... | baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign <summary.json> | verify <summary.json> --bundle <file> | project-core-evidence ...\n",
+      "Usage: aih-scan scan ... | advisories ... | read ... | findings ... | baseline-vet ... | baseline-sign ... | baseline-verify ... | baseline-pack ... | baseline-inspect ... | capture ... | sign <summary.json> | verify <summary.json> --bundle <file> | project-core-evidence ...\n",
     );
     return;
   }

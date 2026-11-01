@@ -142,7 +142,7 @@ function failAtOf(value: string | undefined): RiskLabel | undefined {
 
 const safe = (value: string, max: number = limits.output.findingPath) => sanitizeText(value, max);
 
-function readSummaryFile(path: string): { summary: Summary } | { problem: string } {
+export function readSummaryFile(path: string): { summary: Summary } | { problem: string } {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile()) return { problem: "summary is not a regular file" };

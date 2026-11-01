@@ -12,8 +12,13 @@ import { keyFolderName, scanKeyOf } from "../contracts/git-tree.js";
 import { limits } from "../contracts/limits.js";
 import { remoteMcpFile } from "../contracts/remote-mcp.js";
 import { type Coverage, type SummaryLabel, scoring } from "../contracts/risk.js";
-import type { Kind, ToolId } from "../contracts/routing.js";
-import { type ScanRequest, type SourceDescriptor, validateRequest } from "../contracts/validate.js";
+import { type Dependency, type Kind, routeFile, type ToolId } from "../contracts/routing.js";
+import {
+  type ScanRequest,
+  type SourceDescriptor,
+  validateRequest,
+  validateSource,
+} from "../contracts/validate.js";
 import { acquireGit } from "./acquire-git.js";
 import { acquireNpm, type FetchLike, readNpmFile } from "./acquire-npm.js";
 import { assessItem, routeFiles } from "./assess.js";
@@ -358,6 +363,53 @@ async function acquire(
       };
     }
   }
+}
+
+/** The dependencies a source declares, read by the same acquisition and routing as `scan`. */
+export type SourceDependencies =
+  | Readonly<{
+      status: "ok";
+      /** In source file order; `file` is the source-relative path. */
+      dependencies: readonly Dependency[];
+      acquisition: Acquisition;
+    }>
+  | Readonly<{ status: "cancelled"; acquisition?: Acquisition }>
+  | (Problem & Readonly<{ acquisition?: Acquisition }>);
+
+/**
+ * Acquires a source exactly as `scan` does (nothing supplied is run) and lists the
+ * dependencies its files declare (`package.json`, `requirements*.txt`, `npx`/`uvx` MCP
+ * entries). Used by the CLI `advisories` command; not part of the public host entry.
+ */
+export async function sourceDependencies(
+  source: unknown,
+  signal: AbortSignal = new AbortController().signal,
+  internals: ScanInternals = {},
+): Promise<SourceDependencies> {
+  const checked = validateSource(source);
+  if (checked.status !== "ok") return checked;
+  const acquired = await acquire(checked.source, signal, internals);
+  if ("status" in acquired) {
+    const acquisition =
+      acquired.acquisition === undefined ? {} : { acquisition: acquired.acquisition };
+    if (acquired.status === "cancelled")
+      return Object.freeze({ status: "cancelled" as const, ...acquisition });
+    const failed = acquired as Problem;
+    return Object.freeze({
+      status: failed.status,
+      reason: failed.reason,
+      ...(failed.detail === undefined ? {} : { detail: failed.detail }),
+      ...acquisition,
+    }) as SourceDependencies;
+  }
+  const dependencies: Dependency[] = [];
+  for (const file of acquired.files)
+    dependencies.push(...routeFile(file.path, file.bytes).dependencies);
+  return Object.freeze({
+    status: "ok" as const,
+    dependencies: Object.freeze(dependencies),
+    acquisition: Object.freeze({ type: checked.source.type, fetched: acquired.fetched }),
+  });
 }
 
 /** Source route: acquire, discover (or take the one named item), filter by kinds and key every item. */
