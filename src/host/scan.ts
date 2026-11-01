@@ -419,8 +419,6 @@ async function prepareSource(
   internals: ScanInternals,
 ): Promise<Phase1> {
   const source = valid.source as SourceDescriptor;
-  if (source.type === "git" && source.kind !== undefined && source.path === undefined)
-    return problem("invalid", "schema", "request.source.kind on a git source requires a path");
   const acquired = await acquire(source, signal, internals);
   if ("status" in acquired) return acquired;
   const acquisition: Acquisition = { type: source.type, fetched: acquired.fetched };

@@ -61,6 +61,11 @@
             "mcp"
           ]
         }
+      },
+      "dependencies": {
+        "kind": [
+          "path"
+        ]
       }
     },
     {

@@ -287,6 +287,8 @@ function source(value: unknown, at: string): SourceDescriptor {
             };
       const path =
         descriptor.path === undefined ? {} : { path: contentPath(descriptor.path, `${at}.path`) };
+      if (descriptor.kind !== undefined && descriptor.path === undefined)
+        invalid(`${at}.kind on a git source requires ${at}.path`);
       return Object.freeze({ ...format, type, repo, ...ref, ...path, ...kindOf(kinds) });
     }
     case "npm": {

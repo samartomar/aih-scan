@@ -137,6 +137,17 @@ describe("request and source validation", () => {
     );
     expect(validateSource({ type: "ftp", path: "x" }).status).toBe("invalid");
   });
+
+  it("refuses a git kind without a path in the validator and the schema alike", () => {
+    const descriptor = { type: "git", repo: "https://github.com/o/r", kind: "skill" };
+    expect(validateSource(descriptor)).toMatchObject({ status: "invalid", reason: "schema" });
+    expect(validateRequest({ ...base, source: descriptor }).status).toBe("invalid");
+    expect(compile(schemas.source)(descriptor)).toBe(false);
+    expect(compile(schemas.request)({ ...base, source: descriptor })).toBe(false);
+    const named = { ...descriptor, path: "skills/x" };
+    expect(validateSource(named).status).toBe("ok");
+    expect(compile(schemas.source)(named)).toBe(true);
+  });
 });
 
 describe("summary and withdrawal schemas", () => {

@@ -52,6 +52,7 @@ const source = {
         path: relativePath,
         kind,
       },
+      dependencies: { kind: ["path"] },
     },
     {
       type: "object",
