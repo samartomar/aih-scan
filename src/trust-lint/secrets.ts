@@ -1,4 +1,5 @@
 import { type ParseError, parse as parseJsonc } from "jsonc-parser";
+import { parse as parseToml } from "smol-toml";
 import type { TrustLintFindingV1 } from "./findings.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
 
@@ -190,9 +191,20 @@ function parseJsoncText(text: string): unknown {
   return value;
 }
 
+/** A `.toml` config's document (MCP entries under `[mcp_servers.*]`, hooks), else JSON/JSONC. */
+function parseConfigText(text: string, file: string): unknown {
+  if (/\.toml$/i.test(file))
+    return parseToml(text, {
+      integersAsBigInt: "asNeeded",
+      unsafeKeyBehaviour: "drop",
+      maxDepth: 64,
+    });
+  return parseJsoncText(text);
+}
+
 function scanConfigSecretText(raw: string, file: string, hits: ConfigSecretHit[]): void {
   try {
-    walkJson(parseJsoncText(raw), "", file, hits);
+    walkJson(parseConfigText(raw, file), "", file, hits);
   } catch {
     // Malformed JSON/TOML/raw text: a structural walk is impossible, but a provider
     // token in the raw bytes is still a leak — catch that rather than skip the file.

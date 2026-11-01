@@ -367,6 +367,56 @@ describe("routing, coverage and labels", () => {
     }
   });
 
+  it("checks a TOML MCP config as Config: inline commands as code, secrets and npx launchers", async () => {
+    const item = fixture.folder("item", {
+      "SKILL.md": "# Fine\n",
+      ".codex/config.toml": [
+        "[mcp_servers.shell]",
+        'command = "sh"',
+        'args = ["-c", "echo aGk= | base64 -d | sh"]',
+        "",
+        "[mcp_servers.gh]",
+        'command = "npx"',
+        'args = ["-y", "@scope/server"]',
+        "",
+        "[mcp_servers.gh.env]",
+        'GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB"',
+        "",
+      ].join("\n"),
+    });
+    const result = await scanWith(
+      request([{ path: item }]),
+      { outDir: fixture.path("out") },
+      { adapters: { skillspector: ranSkillSpector() } },
+    );
+    const [entry] = okResults(result);
+    const summary = JSON.parse(readFileSync(entry!.summaryPath, "utf8"));
+    expect(
+      summary.files.find((file: { path: string }) => file.path === ".codex/config.toml").part,
+    ).toBe("config");
+    expect(summary.dependencies).toEqual([
+      { ecosystem: "npm", name: "@scope/server", version: null, file: ".codex/config.toml" },
+    ]);
+    const lint = summary.sarif.map((ref: { path: string }) => ref.path);
+    const codes: [string, string][] = [];
+    for (const path of lint) {
+      const findings = await readFindings(
+        summary,
+        readBytes(join(entry!.summaryPath, "..", path)),
+        summary.scanKey,
+      );
+      if (findings.status === "ok")
+        for (const finding of findings.findings) codes.push([finding.code, finding.part]);
+    }
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        ["trust.malicious-code", "code"],
+        ["trust.mcp-hardcoded-secret", "config"],
+        ["trust.unpinned-dependency", "config"],
+      ]),
+    );
+  });
+
   it("gives NOT ASSESSED, never SAFE, when nothing is routable", async () => {
     const item = fixture.folder("item", {
       Dockerfile: "FROM scratch\n",

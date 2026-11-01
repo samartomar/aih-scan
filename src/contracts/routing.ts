@@ -1,3 +1,4 @@
+import { parse as parseToml } from "smol-toml";
 import { formats } from "./formats.js";
 
 export type Part = "config" | "dependencies" | "code" | "text";
@@ -45,7 +46,7 @@ const CODE_EXTENSIONS = Object.freeze([
 ]);
 const TEXT_EXTENSIONS = Object.freeze(["md", "txt", "mdc", "json", "toml"]);
 const CONFIG_NAMES = Object.freeze(["hooks.json", ".mcp.json", "mcp.json", "plugin.json"]);
-const SERVER_MAP_KEYS = Object.freeze(["mcpServers", "servers", "mcp"]);
+const SERVER_MAP_KEYS = Object.freeze(["mcpServers", "servers", "mcp", "mcp_servers"]);
 
 /**
  * `aih-scan-routing/1`. Each file gets exactly one part: the first that matches in the order
@@ -61,7 +62,7 @@ export const routing = Object.freeze({
     config: Object.freeze({
       names: CONFIG_NAMES,
       content:
-        "a JSON hook entry (an event with a command) or MCP entry (command and args, or url)",
+        "a JSON or TOML (.toml) hook entry (an event with a command) or MCP entry (command and args, or url), at the top level or under mcpServers, servers, mcp or mcp_servers",
       tools: Object.freeze(["aih-trust-lint", "skillspector"] as const),
     }),
     dependencies: Object.freeze({
@@ -153,6 +154,19 @@ function parseJson(text: string): Json | undefined {
   }
 }
 
+/** A `.toml` file's document as plain data, or undefined when it is not valid TOML. */
+function parseTomlDocument(text: string): Json | undefined {
+  try {
+    return parseToml(text, {
+      integersAsBigInt: "asNeeded",
+      unsafeKeyBehaviour: "drop",
+      maxDepth: 64,
+    }) as unknown as Json;
+  } catch {
+    return undefined;
+  }
+}
+
 function isMcpEntry(value: unknown): value is Record<string, Json> {
   if (!isObject(value)) return false;
   return (
@@ -201,7 +215,8 @@ function hookCommands(document: Json | undefined): string[] {
 
 function lineOf(text: string, needle: string): number {
   const encoded = JSON.stringify(needle).slice(1, -1);
-  const index = text.indexOf(encoded);
+  let index = text.indexOf(encoded);
+  if (index < 0) index = text.indexOf(needle);
   return index < 0 ? 1 : text.slice(0, index).split("\n").length;
 }
 
@@ -287,7 +302,9 @@ export function routeFile(path: string, bytes: Uint8Array): RoutedFile {
   const ext = extension(path);
   const body = stripBom(text);
   const looksJson = /^\s*[{[]/.test(body);
-  const document = looksJson ? parseJson(body) : undefined;
+  // A .toml file is read as TOML (its tables also start with "["); other files as JSON.
+  const document =
+    ext === "toml" ? parseTomlDocument(body) : looksJson ? parseJson(body) : undefined;
   const servers = mcpEntries(document);
   const hooks = hookCommands(document);
   if (CONFIG_NAMES.includes(name) || servers.length > 0 || hooks.length > 0) {

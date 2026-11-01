@@ -320,7 +320,7 @@ describe("the packed tarball", () => {
       "./schemas/aih-scan-withdrawn-1.json",
       "./package.json",
     ]);
-    expect(Object.keys(manifest.dependencies).sort()).toEqual(["jsonc-parser", "yaml"]);
+    expect(Object.keys(manifest.dependencies).sort()).toEqual(["jsonc-parser", "smol-toml", "yaml"]);
     const installed = readdirSync(join(consumer, "node_modules"));
     for (const retired of ["@sigstore", "zod", "@babel"])
       expect(installed, retired).not.toContain(retired);

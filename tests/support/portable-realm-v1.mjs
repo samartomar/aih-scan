@@ -3,9 +3,9 @@
 // Node built-in import, and exercises the readers against the shared corpus.
 // Usage: node --experimental-vm-modules portable-realm-v1.mjs <dist-dir> <corpus-dir> [<sigstore-vectors.json>]
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createContext, runInContext, SourceTextModule } from "node:vm";
 import { webcrypto } from "node:crypto";
@@ -21,8 +21,30 @@ const moduleFor = (url) => {
   modules.set(url, module);
   return module;
 };
+// The only package dependencies the portable graph may import; each must itself be portable
+// (its own imports go through this same linker, so a Node built-in anywhere fails the realm).
+const portablePackages = new Set(["smol-toml"]);
+const packageEntry = (name, fromDirectories) => {
+  for (const start of fromDirectories) {
+    for (let directory = start; ; directory = dirname(directory)) {
+      const manifest = join(directory, "node_modules", name, "package.json");
+      if (existsSync(manifest)) {
+        const { exports } = JSON.parse(readFileSync(manifest, "utf8"));
+        const target = typeof exports === "string" ? exports : (exports?.import ?? exports?.["."]?.import);
+        assert.equal(typeof target, "string", `${name} has no ESM entry`);
+        return pathToFileURL(join(dirname(manifest), target)).href;
+      }
+      if (dirname(directory) === directory) break;
+    }
+  }
+  throw new Error(`portable dependency not installed: ${name}`);
+};
 const link = (specifier, referencing) => {
   if (isBuiltin(specifier)) throw new Error(`portable entry imported a host module: ${specifier}`);
+  if (portablePackages.has(specifier))
+    return moduleFor(
+      packageEntry(specifier, [dirname(fileURLToPath(referencing.identifier)), dirname(fileURLToPath(import.meta.url))]),
+    );
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) throw new Error(`unexpected dependency: ${specifier}`);
   return moduleFor(new URL(specifier, referencing.identifier).href);
 };
@@ -79,6 +101,15 @@ assert.equal(
   "git-sha1:23f948e8a00fa0cb22c78c7c51eeb6f0a6f7cb44",
 );
 assert.equal(contracts.validateRequest({ format: "aih-scan-request/9" }).status, "unsupported-version");
+// TOML config routing (the bundled portable TOML parser) runs in the realm.
+{
+  const routed = contracts.routeFile(
+    ".codex/config.toml",
+    runInContext("new TextEncoder().encode('[mcp_servers.gh]\\ncommand = \"npx\"\\nargs = [\"-y\", \"@scope/server@2.0.1\"]\\n')", context),
+  );
+  assert.equal(routed.part, "config");
+  assert.deepEqual([...routed.dependencies.map((d) => `${d.ecosystem}:${d.name}@${d.version}`)], ["npm:@scope/server@2.0.1"]);
+}
 
 // checkAdvisories runs in the realm with only an injected fetch (the realm has none): exact
 // versions are sent, internal scopes and ranges are not, and no fetch means not-checked.
