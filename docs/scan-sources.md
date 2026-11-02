@@ -29,7 +29,11 @@ from `.git` as data; its remote address is never read or recorded.
   with credential helpers, askpass programs, prompts, hooks, redirects and ambient
   Git configuration disabled, and with only an allowlisted environment and a private
   empty home folder, so no `~/.netrc` or user configuration is read; a repository that needs credentials is refused as
-  `source-unavailable`. A full commit given as `--ref` must be reachable from an
+  `source-unavailable`. The CLI and `validateSource` accept the same repository URLs:
+  `https://` with a host and an optional path, and no credentials, query, fragment,
+  spaces or control characters. Scan does not refuse loopback, link-local or private
+  hosts; when a request can come from someone else, run Scan where its network access
+  is limited to the hosts you intend. A full commit given as `--ref` must be reachable from an
   advertised branch or tag. npm packages are fetched by exact version, checked
   against the registry's sha512 integrity and read as files: no npm client,
   install, lifecycle script or server start ever runs.

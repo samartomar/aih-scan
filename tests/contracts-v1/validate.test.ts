@@ -148,6 +148,39 @@ describe("request and source validation", () => {
     expect(validateSource(named).status).toBe("ok");
     expect(compile(schemas.source)(named)).toBe(true);
   });
+
+  it("applies the CLI's Git URL rule: no query, fragment, credentials, spaces or controls", async () => {
+    const { classifyScanTarget } = await import("../../src/cli/git-source.js");
+    const refused = [
+      "https://github.com/o/r?access_token=FAKE-TOKEN-NOT-REAL",
+      "https://github.com/o/r#frag",
+      "https://github.com/o/r?",
+      "https://u@github.com/o/r",
+      "https://github.com/o/r with space",
+      "https://github.com/o/r\u0007",
+      `https://github.com/${"a".repeat(2048)}`,
+    ];
+    for (const repo of refused) {
+      const descriptor = { type: "git", repo };
+      expect([repo, validateSource(descriptor).status]).toEqual([repo, "invalid"]);
+      expect([repo, compile(schemas.source)(descriptor)]).toEqual([repo, false]);
+      expect(() => classifyScanTarget(repo, "/nonexistent-cwd")).toThrow();
+    }
+    // Loopback, link-local and private hosts are left to operator network isolation.
+    for (const repo of [
+      "https://github.com/o/r",
+      "https://127.0.0.1:8443/o/r",
+      "https://[::1]/o/r",
+      "https://intranet.local/o/r.git",
+    ]) {
+      expect([repo, validateSource({ type: "git", repo }).status]).toEqual([repo, "ok"]);
+      expect([repo, compile(schemas.source)({ type: "git", repo })]).toEqual([repo, true]);
+      expect(classifyScanTarget(repo, "/nonexistent-cwd")).toEqual({
+        kind: "git",
+        repository: repo,
+      });
+    }
+  });
 });
 
 describe("summary and withdrawal schemas", () => {

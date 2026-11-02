@@ -1,4 +1,5 @@
 import { formats } from "./formats.js";
+import { GIT_REPOSITORY_URL_PATTERN } from "./git-url.js";
 import { limits } from "./limits.js";
 import { kinds, optionalTools } from "./routing.js";
 
@@ -47,7 +48,7 @@ const source = {
       properties: {
         format: { const: formats.source },
         type: { const: "git" },
-        repo: { type: "string", pattern: "^https://" },
+        repo: { type: "string", maxLength: 2048, pattern: GIT_REPOSITORY_URL_PATTERN },
         ref: { type: "string", minLength: 1, maxLength: 255 },
         path: relativePath,
         kind,

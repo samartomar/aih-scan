@@ -1,6 +1,7 @@
 import { formatProblem, formats, type Problem } from "./formats.js";
 import type { FileMode } from "./git-tree.js";
 import { SCAN_KEY_PATTERN } from "./git-tree.js";
+import { isSupportedRepositoryUrl } from "./git-url.js";
 import { limits } from "./limits.js";
 import { NPM_NAME_PATTERN } from "./npm.js";
 import { type Coverage, type FindingPart, type SummaryLabel, storedLabel } from "./risk.js";
@@ -277,6 +278,8 @@ function source(value: unknown, at: string): SourceDescriptor {
       return Object.freeze({ ...format, type, path: hostPath(descriptor.path, `${at}.path`) });
     case "git": {
       const repo = webUrl(descriptor.repo, `${at}.repo`, ["https:"]);
+      if (!isSupportedRepositoryUrl(repo))
+        invalid(`${at}.repo must be an https:// repository URL without a query or fragment`);
       const ref =
         descriptor.ref === undefined
           ? {}
