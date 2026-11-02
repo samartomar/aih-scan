@@ -303,10 +303,7 @@ describe("@aihq/scan release boundary (#12)", () => {
       "verify",
       "verify:workflow-action-pins",
     ]);
-    expect(Object.keys(manifest.dependencies as object).sort()).toEqual([
-      "smol-toml",
-      "yaml",
-    ]);
+    expect(Object.keys(manifest.dependencies as object).sort()).toEqual(["smol-toml", "yaml"]);
     // Runtime dependencies are pinned exactly.
     for (const version of Object.values(manifest.dependencies as Record<string, string>))
       expect(version).toMatch(/^\d+\.\d+\.\d+$/);
@@ -352,18 +349,30 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain("environment: scan-report-signing-prod");
     expect(workflow).toContain("node tools/publisher/candidate.mjs check-run");
     expect(workflow).toContain("node tools/publisher/candidate.mjs select");
-    expect(workflow).toContain('node dist/cli.js sign "signing/$path"');
-    expect(workflow).toContain('node dist/cli.js verify "signing/$path" --bundle "$bundle" --json');
+    expect(workflow).toContain('node "$cli" sign "signing/$path"');
+    expect(workflow).toContain('node "$cli" verify "signing/$path" --bundle "$bundle" --json');
     expect(workflow).toContain("r.signer?.trusted!==true");
     expect(workflow).not.toMatch(/workflow_call|pull_request|push:/);
     const signer = workflow.slice(workflow.indexOf("  signer:\n"));
     expect(signer).toMatch(/id-token:\s*write/);
     expect(signer).not.toMatch(/contents:\s*write|attestations:\s*write|actions:\s*read/);
+    // With id-token: write the signer installs, builds and checks out nothing: it runs only the
+    // runtime the read-only job packed with runtime dependencies, after checking its digest.
+    expect(signer).not.toMatch(/npm (ci|install|run|pack)|actions\/checkout|uv sync/);
+    expect(signer).toContain("cli=signer-runtime/node_modules/@aihq/scan/dist/cli.js");
+    expect(signer).toContain(
+      'test "$(sha256sum runtime/signer-runtime.tar | awk \'{print $1}\')" = "$RUNTIME_SHA"',
+    );
+    expect(signer).toContain("needs.bounded-candidate.outputs.runtime_sha256");
     const bounded = workflow.slice(
       workflow.indexOf("  bounded-candidate:\n"),
       workflow.indexOf("  signer:\n"),
     );
     expect(bounded).not.toMatch(/id-token|environment:/);
+    expect(bounded).toContain(
+      'npm install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "$tarball"',
+    );
+    expect(bounded).toContain("npm pack --ignore-scripts --json");
     // The workflow path is the default signer's identity.
     expect(read("src/contracts/verification.ts")).toContain(
       ".github/workflows/scan-report-publisher.yml@refs/heads/main",

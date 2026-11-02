@@ -2,8 +2,9 @@
 # runs in this workflow file on main, so its keyless certificate carries the default trusted
 # publisher identity (`defaultSigners` in @aihq/scan/contracts). Each bundle is a Sigstore
 # messageSignature bundle (aih-sigstore-keyless/1) and is verified against the default signers
-# before upload. Nothing is published to a store or a release here. See
-# docs/production-publisher.md.
+# before upload. The signer installs and builds nothing: it runs the exact CLI that the read-only
+# job packed and installed with runtime dependencies only, after checking that runtime's digest.
+# Nothing is published to a store or a release here. See docs/production-publisher.md.
 name: Restricted Scan report publisher
 on:
   workflow_dispatch:
@@ -28,6 +29,8 @@ jobs:
     permissions:
       contents: read
       actions: read
+    outputs:
+      runtime_sha256: ${{ steps.runtime.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -75,6 +78,26 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+      - name: Pack the exact CLI and install it with runtime dependencies only for the signer
+        id: runtime
+        run: |-
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/packed" signer-runtime
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/packed" > "$RUNNER_TEMP/pack.json"
+          tarball="$RUNNER_TEMP/packed/$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$RUNNER_TEMP/pack.json")"
+          cd signer-runtime
+          printf '{"name":"scan-report-signer","version":"0.0.0","private":true}\n' > package.json
+          npm install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "$tarball"
+          cd ..
+          tar --create --file signer-runtime.tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 signer-runtime
+          echo "sha256=$(sha256sum signer-runtime.tar | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signer-runtime
+          path: signer-runtime.tar
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
   signer:
     needs: bounded-candidate
     if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
@@ -85,14 +108,24 @@ jobs:
       id-token: write
     environment: scan-report-signing-prod
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
-      - run: npm ci --ignore-scripts && npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: signer-runtime
+          digest-mismatch: error
+          path: runtime
+      - name: Check the packed runtime's digest and unpack it
+        env:
+          RUNTIME_SHA: ${{ needs.bounded-candidate.outputs.runtime_sha256 }}
+        run: |-
+          set -euo pipefail
+          case "$RUNTIME_SHA" in ''|*[!0-9a-f]*) exit 1;; esac
+          test "${#RUNTIME_SHA}" -eq 64
+          test "$(sha256sum runtime/signer-runtime.tar | awk '{print $1}')" = "$RUNTIME_SHA"
+          tar --extract --file runtime/signer-runtime.tar --no-same-owner --no-same-permissions
+          test -f signer-runtime/node_modules/@aihq/scan/dist/cli.js
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: checked-summaries
@@ -104,11 +137,12 @@ jobs:
         run: |-
           set -euo pipefail
           test "$(sha256sum signing/selection.txt | awk '{print $1}')" = "$SELECTION_SHA"
+          cli=signer-runtime/node_modules/@aihq/scan/dist/cli.js
           while read -r digest path; do
             test "$(sha256sum "signing/$path" | awk '{print $1}')" = "$digest"
-            node dist/cli.js sign "signing/$path"
+            node "$cli" sign "signing/$path"
             bundle="signing/${path%.json}.sigstore"
-            node dist/cli.js verify "signing/$path" --bundle "$bundle" --json > "signing/${path%.json}.verified.json"
+            node "$cli" verify "signing/$path" --bundle "$bundle" --json > "signing/${path%.json}.verified.json"
             node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); if(r.status!=="ok"||r.verified!==true||r.signer?.trusted!==true||r.withdrawn!==false) process.exit(1)' "signing/${path%.json}.verified.json"
           done < signing/selection.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

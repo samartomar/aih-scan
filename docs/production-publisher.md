@@ -53,9 +53,13 @@ inputs must equal them.
    `samartomar`, with exactly the selected unexpired artifact and digest), downloads the
    artifact by ID with digest checking, selects the reviewed summaries
    (`candidate.mjs select`, which refuses links, a changed summary or a different listing)
-   and reads each with `aih-scan read`.
+   and reads each with `aih-scan read`. It then packs the exact CLI, installs it in a fresh
+   folder with runtime dependencies only (`--omit=dev`, no install scripts) and uploads that
+   runtime with its SHA-256 as a job output.
 2. `signer` runs in the protected `scan-report-signing-prod` environment with
-   `id-token: write` only. It rechecks the listing and every summary digest, signs each
+   `id-token: write` only. It checks out, installs and builds nothing: it checks the
+   runtime's SHA-256 against the read-only job's output and runs only that CLI. It
+   rechecks the listing and every summary digest, signs each
    summary with `aih-scan sign` (GitHub Actions OIDC, public Fulcio and Rekor), and
    verifies each bundle with `aih-scan verify` under the default signers, requiring
    `verified`, a trusted signer and no withdrawal. It uploads `scan-report-signed`: the
