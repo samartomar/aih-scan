@@ -3,7 +3,8 @@
 # publisher identity (`defaultSigners` in @aihq/scan/contracts). Each bundle is a Sigstore
 # messageSignature bundle (aih-sigstore-keyless/1) and is verified against the default signers
 # before upload. The signer installs and builds nothing: it runs the exact CLI that the read-only
-# job packed and installed with runtime dependencies only, after checking that runtime's digest.
+# job packed and installed with runtime dependencies only from the committed lockfile, before any
+# candidate byte was downloaded or read, after checking that runtime's digest.
 # Nothing is published to a store or a release here. See docs/production-publisher.md.
 name: Restricted Scan report publisher
 on:
@@ -40,6 +41,28 @@ jobs:
         with:
           node-version: 24.15.0
       - run: npm ci --ignore-scripts && npm run build
+      - name: Pack the exact CLI and install it with runtime dependencies only for the signer
+        id: runtime
+        run: |-
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/packed" signer-runtime
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/packed" > "$RUNNER_TEMP/pack.json"
+          tarball="$RUNNER_TEMP/packed/$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$RUNNER_TEMP/pack.json")"
+          cp package.json package-lock.json signer-runtime/
+          cd signer-runtime
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          mkdir -p node_modules/@aihq/scan
+          tar --extract --file "$tarball" --strip-components=1 --directory node_modules/@aihq/scan --no-same-owner --no-same-permissions
+          cd ..
+          tar --create --file signer-runtime.tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 signer-runtime
+          echo "sha256=$(sha256sum signer-runtime.tar | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signer-runtime
+          path: signer-runtime.tar
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
       - name: Verify immutable candidate run custody before download
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,26 +98,6 @@ jobs:
         with:
           name: checked-summaries
           path: selected/
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-      - name: Pack the exact CLI and install it with runtime dependencies only for the signer
-        id: runtime
-        run: |-
-          set -euo pipefail
-          mkdir "$RUNNER_TEMP/packed" signer-runtime
-          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/packed" > "$RUNNER_TEMP/pack.json"
-          tarball="$RUNNER_TEMP/packed/$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$RUNNER_TEMP/pack.json")"
-          cd signer-runtime
-          printf '{"name":"scan-report-signer","version":"0.0.0","private":true}\n' > package.json
-          npm install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "$tarball"
-          cd ..
-          tar --create --file signer-runtime.tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 signer-runtime
-          echo "sha256=$(sha256sum signer-runtime.tar | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: signer-runtime
-          path: signer-runtime.tar
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

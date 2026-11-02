@@ -369,10 +369,22 @@ describe("@aihq/scan release boundary (#12)", () => {
       workflow.indexOf("  signer:\n"),
     );
     expect(bounded).not.toMatch(/id-token|environment:/);
-    expect(bounded).toContain(
-      'npm install --omit=dev --ignore-scripts --no-audit --no-fund --save-exact "$tarball"',
-    );
+    // The runtime comes from the committed lockfile and is packed, installed and digested
+    // before any candidate step downloads or reads a candidate byte.
+    expect(bounded).toContain("cp package.json package-lock.json signer-runtime/");
+    expect(bounded).toContain("npm ci --omit=dev --ignore-scripts --no-audit --no-fund");
+    expect(bounded).not.toMatch(/npm install/);
     expect(bounded).toContain("npm pack --ignore-scripts --json");
+    const runtimeAt = bounded.indexOf("id: runtime");
+    const runtimeUploadAt = bounded.indexOf("name: signer-runtime");
+    for (const candidateStep of [
+      "Verify immutable candidate run custody",
+      "actions/download-artifact@",
+      "candidate.mjs select",
+    ]) {
+      expect(bounded.indexOf(candidateStep), candidateStep).toBeGreaterThan(runtimeUploadAt);
+      expect(runtimeAt).toBeGreaterThan(0);
+    }
     // The workflow path is the default signer's identity.
     expect(read("src/contracts/verification.ts")).toContain(
       ".github/workflows/scan-report-publisher.yml@refs/heads/main",
