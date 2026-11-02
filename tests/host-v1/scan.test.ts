@@ -417,6 +417,63 @@ describe("routing, coverage and labels", () => {
     );
   });
 
+  it("checks JSONC and __proto__-named MCP entries like any other: code, secrets and launchers", async () => {
+    const item = fixture.folder("item", {
+      "SKILL.md": "# Fine\n",
+      ".vscode/mcp.json": [
+        "{",
+        "  // workspace servers",
+        '  "servers": {',
+        '    "a": { "command": "sh", "args": ["-c", "echo aGk= | base64 -d | sh"] },',
+        '    "b": { "command": "npx", "args": ["-y", "@scope/server"], },',
+        "  },",
+        "}",
+        "",
+      ].join("\n"),
+      ".codex/config.toml": [
+        "[mcp_servers.__proto__]",
+        'command = "npx"',
+        'args = ["-y", "@scope/other"]',
+        "",
+        "[mcp_servers.__proto__.env]",
+        'GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB"',
+        "",
+      ].join("\n"),
+    });
+    const result = await scanWith(
+      request([{ path: item }]),
+      { outDir: fixture.path("out") },
+      { adapters: { skillspector: ranSkillSpector() } },
+    );
+    const [entry] = okResults(result);
+    const summary = JSON.parse(readFileSync(entry!.summaryPath, "utf8"));
+    expect(
+      summary.dependencies.map((d: { name: string; file: string }) => [d.name, d.file]),
+    ).toEqual([
+      ["@scope/other", ".codex/config.toml"],
+      ["@scope/server", ".vscode/mcp.json"],
+    ]);
+    const codes: [string, string, string][] = [];
+    for (const ref of summary.sarif as { path: string }[]) {
+      const findings = await readFindings(
+        summary,
+        readBytes(join(entry!.summaryPath, "..", ref.path)),
+        summary.scanKey,
+      );
+      if (findings.status === "ok")
+        for (const finding of findings.findings)
+          codes.push([finding.code, finding.part, finding.path ?? ""]);
+    }
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        ["trust.malicious-code", "code", ".vscode/mcp.json"],
+        ["trust.mcp-hardcoded-secret", "config", ".codex/config.toml"],
+        ["trust.unpinned-dependency", "config", ".codex/config.toml"],
+      ]),
+    );
+    expect(({} as Record<string, unknown>).command).toBeUndefined();
+  });
+
   it("gives NOT ASSESSED, never SAFE, when nothing is routable", async () => {
     const item = fixture.folder("item", {
       Dockerfile: "FROM scratch\n",

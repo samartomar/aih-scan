@@ -105,6 +105,34 @@ describe("scanMcpConfigSecretsV1 (parity: Core mcpConfigSecretChecks)", () => {
     ]);
   });
 
+  it("checks entries named __proto__ or constructor, in JSON, JSONC and TOML", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    write(
+      ".mcp.json",
+      `{"mcpServers":{"__proto__":{"command":"npx","args":[],"env":{"GITHUB_TOKEN":"${token}"}}}}`,
+    );
+    write(
+      ".vscode/mcp.json",
+      `{\n  // comment\n  "servers": { "constructor": { "command": "npx", "args": [], "env": { "API_KEY": "plain-literal-value-1234" }, }, },\n}\n`,
+    );
+    write(
+      ".codex/config.toml",
+      `[mcp_servers.__proto__]\ncommand = "npx"\nargs = []\nenv = { GITHUB_TOKEN = "${token}" }\n`,
+    );
+    const tree = buildTrustLintTreeV1(dir);
+    const checks = scanMcpConfigSecretsV1(tree, [
+      ".mcp.json",
+      ".vscode/mcp.json",
+      ".codex/config.toml",
+    ]);
+    expect(checks.map((check) => check.fingerprint)).toEqual([
+      "mcp.hardcoded-secret:.mcp.json:GITHUB_TOKEN",
+      "mcp.hardcoded-secret:.vscode/mcp.json:API_KEY",
+      "mcp.hardcoded-secret:.codex/config.toml:GITHUB_TOKEN",
+    ]);
+    expect(({} as Record<string, unknown>).GITHUB_TOKEN).toBeUndefined();
+  });
+
   it("flags hardcoded secrets inside OpenCode MCP configs", () => {
     write(
       "opencode.json",

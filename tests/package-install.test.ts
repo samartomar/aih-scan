@@ -321,7 +321,6 @@ describe("the packed tarball", () => {
       "./package.json",
     ]);
     expect(Object.keys(manifest.dependencies).sort()).toEqual([
-      "jsonc-parser",
       "smol-toml",
       "yaml",
     ]);

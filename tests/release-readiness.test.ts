@@ -304,7 +304,6 @@ describe("@aihq/scan release boundary (#12)", () => {
       "verify:workflow-action-pins",
     ]);
     expect(Object.keys(manifest.dependencies as object).sort()).toEqual([
-      "jsonc-parser",
       "smol-toml",
       "yaml",
     ]);

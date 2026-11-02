@@ -34,7 +34,8 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   privacy-aware defaults; never signed and never part of a score.
 - Config routing for JSON and TOML hook and MCP entries (for example a Codex
   `config.toml` `[mcp_servers.*]` table), using the pinned pure-JS `smol-toml` runtime
-  dependency.
+  dependency. Named config files (`hooks.json`, `.mcp.json`, `mcp.json`, `plugin.json`)
+  may use JSONC comments and trailing commas.
 - CLI: `scan`, `advisories`, `read`, `findings`, `verify` and `sign`, with exits 0
   (finished, complete or partial), 1 (only with `--fail-at`), 2 (could not scan or read)
   and 130 (cancelled).
@@ -50,7 +51,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 - The `capture`, old `sign`/`verify`, `baseline-*` and `project-core-evidence` commands;
   `--detector`, `--mcp-config`, `--artifact` and `--fail-on-findings` (replaced by
   `--tools`, discovery, `--out` and the opt-in `--fail-at`).
-- The `@sigstore/*` and `zod` runtime dependencies.
+- The `@sigstore/*`, `zod` and `jsonc-parser` runtime dependencies.
 
 Historical published versions and tags are kept unchanged as release history; see
 [RELEASING.md](RELEASING.md).

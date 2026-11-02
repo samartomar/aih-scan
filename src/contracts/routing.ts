@@ -1,4 +1,5 @@
 import { parse as parseToml } from "smol-toml";
+import { parseJsonc } from "../shared/jsonc.js";
 import { isRecord, type Json } from "../shared/values.js";
 import { formats } from "./formats.js";
 
@@ -63,7 +64,7 @@ export const routing = Object.freeze({
     config: Object.freeze({
       names: CONFIG_NAMES,
       content:
-        "a JSON or TOML (.toml) hook entry (an event with a command) or MCP entry (command and args, or url), at the top level or under mcpServers, servers, mcp or mcp_servers",
+        "a JSON or TOML (.toml) hook entry (an event with a command) or MCP entry (command and args, or url), at the top level or under mcpServers, servers, mcp or mcp_servers; the named files may use JSONC comments and trailing commas",
       tools: Object.freeze(["aih-trust-lint", "skillspector"] as const),
     }),
     dependencies: Object.freeze({
@@ -145,21 +146,25 @@ function extension(path: string): string {
 
 const isObject = isRecord<Json>;
 
-function parseJson(text: string): Json | undefined {
+/** JSON, or JSONC (comments, trailing commas) for the named config files editors write. */
+function parseJson(text: string, jsonc: boolean): Json | undefined {
   try {
-    return JSON.parse(text) as Json;
+    return (jsonc ? parseJsonc(text) : JSON.parse(text)) as Json;
   } catch {
     return undefined;
   }
 }
 
-/** A `.toml` file's document as plain data, or undefined when it is not valid TOML. */
+/**
+ * A `.toml` file's document as plain data, or undefined when it is not valid TOML. Keys such as
+ * `__proto__` and `constructor` are kept as own data properties (never assigned through a
+ * prototype), so a server with such a name is still routed; the library's default depth applies.
+ */
 function parseTomlDocument(text: string): Json | undefined {
   try {
     return parseToml(text, {
       integersAsBigInt: "asNeeded",
-      unsafeKeyBehaviour: "drop",
-      maxDepth: 64,
+      unsafeKeyBehaviour: "keep",
     }) as unknown as Json;
   } catch {
     return undefined;
@@ -303,7 +308,11 @@ export function routeFile(path: string, bytes: Uint8Array): RoutedFile {
   const looksJson = /^\s*[{[]/.test(body);
   // A .toml file is read as TOML (its tables also start with "["); other files as JSON.
   const document =
-    ext === "toml" ? parseTomlDocument(body) : looksJson ? parseJson(body) : undefined;
+    ext === "toml"
+      ? parseTomlDocument(body)
+      : looksJson
+        ? parseJson(body, CONFIG_NAMES.includes(name))
+        : undefined;
   const servers = mcpEntries(document);
   const hooks = hookCommands(document);
   if (CONFIG_NAMES.includes(name) || servers.length > 0 || hooks.length > 0) {

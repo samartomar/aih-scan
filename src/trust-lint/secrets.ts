@@ -1,5 +1,5 @@
-import { type ParseError, parse as parseJsonc } from "jsonc-parser";
 import { parse as parseToml } from "smol-toml";
+import { parseJsonc } from "../shared/jsonc.js";
 import type { TrustLintFindingV1 } from "./findings.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
 
@@ -185,10 +185,8 @@ function walkJson(node: unknown, key: string, file: string, hits: ConfigSecretHi
 
 function parseJsoncText(text: string): unknown {
   if (text.trim().length === 0) return undefined;
-  const errors: ParseError[] = [];
-  const value = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false });
-  if (errors.length > 0) throw new TypeError("malformed JSON/JSONC config text");
-  return value;
+  // Keys such as `__proto__` stay own data, so the walk below sees every entry.
+  return parseJsonc(text.startsWith("\uFEFF") ? text.slice(1) : text);
 }
 
 /** A `.toml` config's document (MCP entries under `[mcp_servers.*]`, hooks), else JSON/JSONC. */
@@ -196,8 +194,7 @@ function parseConfigText(text: string, file: string): unknown {
   if (/\.toml$/i.test(file))
     return parseToml(text, {
       integersAsBigInt: "asNeeded",
-      unsafeKeyBehaviour: "drop",
-      maxDepth: 64,
+      unsafeKeyBehaviour: "keep",
     });
   return parseJsoncText(text);
 }
