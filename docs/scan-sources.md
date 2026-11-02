@@ -37,6 +37,16 @@ from `.git` as data; its remote address is never read or recorded.
   advertised branch or tag. npm packages are fetched by exact version, checked
   against the registry's sha512 integrity and read as files: no npm client,
   install, lifecycle script or server start ever runs.
+- **Git environment**: Git inherits only `PATH`, `PATHEXT`, `SYSTEMROOT`, `WINDIR`,
+  `COMSPEC`, `TMPDIR`, `TMP`, `TEMP`, `LANG`, `LC_ALL` and `LC_CTYPE` (names compared
+  in upper case). `HOME`, `USERPROFILE` and `XDG_CONFIG_HOME` point at an empty
+  Scan-owned folder, and the system and global Git configuration are not read. Proxy
+  variables (`HTTPS_PROXY` and similar), `SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO`,
+  `GIT_*`, `CURL_*` and `NETRC` are not passed on. A host that reaches public Git only
+  through a proxy or a custom CA store, or a Git build that finds its CA bundle through
+  system configuration or environment (for example some Nix or conda installs), fails
+  closed as `source-unavailable`; scan a clone as a folder instead. Scan's tests do not
+  run Git acquisition on Windows, so the Windows variables are untested.
 - **Private repositories**: clone with your own access, then scan the clone as a
   folder. Scan never asks for, stores or records credentials.
 - **Private or internal packages**: download the tarball with your own access,
