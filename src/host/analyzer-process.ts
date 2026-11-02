@@ -1,7 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { trackTemporaryRoot } from "../cli/emergency-stop.js";
 import {
   type HostExecutableNameV1,
   type HostExecutableV1,
@@ -14,6 +10,7 @@ import {
   AnalyzerOutputReadErrorV1,
   readBoundedAnalyzerOutputV1,
 } from "../shared/bounded-output-read.js";
+import { createTemporaryRoot } from "../shared/emergency-stop.js";
 
 /** The process environment an analyzer adapter reads; `process.env` unless a test supplies one. */
 export type HostEnv = Readonly<Record<string, string | undefined>>;
@@ -118,15 +115,7 @@ export function probeVersion(
 
 /** A private scratch folder outside the item's working copy, for reports and the tool's HOME. */
 export function scratchFolder(prefix: string): Readonly<{ path: string; dispose(): void }> {
-  const path = mkdtempSync(join(tmpdir(), prefix));
-  const release = trackTemporaryRoot(path);
-  return Object.freeze({
-    path,
-    dispose() {
-      rmSync(path, { recursive: true, force: true });
-      release();
-    },
-  });
+  return createTemporaryRoot(prefix);
 }
 
 /** Reads and parses an analyzer's JSON report, or `undefined` when it is missing or malformed. */

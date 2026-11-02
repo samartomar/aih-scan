@@ -6,19 +6,17 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readSync,
-  rmSync,
   type Stats,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { trackTemporaryRoot } from "../cli/emergency-stop.js";
 import type { FileMode } from "../contracts/git-tree.js";
 import { limits } from "../contracts/limits.js";
 import { pathProblem } from "../contracts/text.js";
+import { createTemporaryRoot } from "../shared/emergency-stop.js";
 import {
   readSourceEntryNamesV1,
   UnrepresentableSourcePathErrorV1,
@@ -294,8 +292,8 @@ export interface Snapshot {
 
 /** Writes the exact bytes into a new private folder and makes it read-only. */
 export function writeSnapshot(files: readonly SnapshotFile[], parent = tmpdir()): Snapshot {
-  const stage = mkdtempSync(join(parent, "aih-scan-snapshot-"));
-  const release = trackTemporaryRoot(stage);
+  const temporary = createTemporaryRoot("aih-scan-snapshot-", parent);
+  const stage = temporary.path;
   const root = join(stage, "item");
   mkdirSync(root, { mode: 0o700 });
   const folders = new Set<string>([root]);
@@ -323,8 +321,7 @@ export function writeSnapshot(files: readonly SnapshotFile[], parent = tmpdir())
       } catch {
         // Best effort: removal below reports nothing either way.
       }
-      rmSync(stage, { recursive: true, force: true });
-      release();
+      temporary.dispose();
     },
   });
 }

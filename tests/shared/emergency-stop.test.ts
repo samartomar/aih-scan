@@ -11,9 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { stopNowSync } from "../../src/cli/emergency-stop.js";
 import { spawnBoundedV1 } from "../../src/cli/process-runner.js";
 import { writeSnapshot } from "../../src/host/snapshot.js";
+import { createTemporaryRoot, stopNowSync } from "../../src/shared/emergency-stop.js";
 import { alive } from "../support/analyzer-cli-v1.js";
 
 /**
@@ -76,5 +76,20 @@ describe.runIf(process.platform !== "win32")("stopNowSync", () => {
     stopNowSync();
     expect(alive(untracked.pid as number)).toBe(true);
     untracked.kill("SIGKILL");
+  });
+
+  it("creates, tracks and disposes one Scan-owned temporary root", () => {
+    const parent = mkdtempSync(join(tmpdir(), "aih-scan-stop-test-"));
+    roots.push(parent);
+    const disposed = createTemporaryRoot("aih-scan-a-", parent);
+    const tracked = createTemporaryRoot("aih-scan-b-", parent);
+    expect(disposed.path.startsWith(join(parent, "aih-scan-a-"))).toBe(true);
+    writeFileSync(join(disposed.path, "f"), "x");
+    disposed.dispose();
+    disposed.dispose();
+    expect(existsSync(disposed.path)).toBe(false);
+    expect(existsSync(tracked.path)).toBe(true);
+    stopNowSync();
+    expect(existsSync(tracked.path)).toBe(false);
   });
 });

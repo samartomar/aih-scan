@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { trackTemporaryRoot } from "../cli/emergency-stop.js";
 import { GitSourceRefusal, parseGitRef, resolveGitSource } from "../cli/git-source.js";
 import { limits } from "../contracts/limits.js";
+import { createTemporaryRoot } from "../shared/emergency-stop.js";
 import { ContractError } from "../shared/json.js";
 import { gitTransportLimit, startGitFetchRelay } from "./git-fetch-relay.js";
 import { GitContainmentError, runPinnedGit } from "./git-runner.js";
@@ -128,8 +127,8 @@ export async function acquireGit(
 ): Promise<GitAcquisition> {
   const parsed = parseGitRef(source.ref);
   if (!parsed.ok) return Object.freeze({ status: "invalid", reason: "ref", detail: parsed.detail });
-  const stage = mkdtempSync(join(tmpdir(), "aih-scan-git-"));
-  const release = trackTemporaryRoot(stage);
+  const temporary = createTemporaryRoot("aih-scan-git-");
+  const stage = temporary.path;
   try {
     let resolved: { commit: string; ref?: string };
     try {
@@ -264,7 +263,6 @@ export async function acquireGit(
     // Git's own messages may repeat the URL; only fixed text is returned.
     return Object.freeze({ status: "refused", reason: "source-unavailable", detail: unavailable });
   } finally {
-    rmSync(stage, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    release();
+    temporary.dispose();
   }
 }

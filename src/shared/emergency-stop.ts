@@ -1,4 +1,5 @@
-import { chmodSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -20,6 +21,31 @@ export function trackProcessTree(kill: () => void): () => void {
 export function trackTemporaryRoot(path: string): () => void {
   roots.add(path);
   return () => void roots.delete(path);
+}
+
+export interface TemporaryRoot {
+  readonly path: string;
+  /**
+   * Removes the folder, retrying transient locks, then stops tracking it. Throws when it cannot
+   * be removed; the folder then stays tracked for the forced stop. Later calls do nothing.
+   */
+  dispose(): void;
+}
+
+/** Creates a new private temporary folder under `parent` and tracks it until it is disposed. */
+export function createTemporaryRoot(prefix: string, parent: string = tmpdir()): TemporaryRoot {
+  const path = mkdtempSync(join(parent, prefix));
+  const release = trackTemporaryRoot(path);
+  let disposed = false;
+  return Object.freeze({
+    path,
+    dispose() {
+      if (disposed) return;
+      rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      disposed = true;
+      release();
+    },
+  });
 }
 
 /** Makes every folder under `root` writable again (read-only working copies), never following links. */

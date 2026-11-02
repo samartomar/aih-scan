@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { trackProcessTree } from "./emergency-stop.js";
+import { trackProcessTree } from "../shared/emergency-stop.js";
 import { isRegisteredHostExecutableV1 } from "./host-executable.js";
 import { processOutputV1 } from "./process-output.js";
 import { runUnderWindowsJobV1 } from "./windows-job-supervisor.js";

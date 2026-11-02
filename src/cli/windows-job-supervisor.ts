@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, win32 } from "node:path";
+import { createTemporaryRoot, trackProcessTree } from "../shared/emergency-stop.js";
 import { parseStrictJsonObjectV1 } from "../shared/strict-json.js";
-import { trackProcessTree, trackTemporaryRoot } from "./emergency-stop.js";
 import { processOutputV1 } from "./process-output.js";
 import type {
   ProcessRunnerOptions,
@@ -580,8 +579,8 @@ export function runUnderWindowsJobV1(
   const supervisor = windowsJobSupervisorExecutableV1();
   const commandLine = windowsCommandLineV1(argv);
   const environment = environmentEntries(options.env);
-  const privateRoot = mkdtempSync(join(tmpdir(), "aihj-"));
-  const releaseRoot = trackTemporaryRoot(privateRoot);
+  const temporary = createTemporaryRoot("aihj-");
+  const privateRoot = temporary.path;
   const statusPath = join(privateRoot, "status.json");
   const spec = Buffer.from(
     JSON.stringify({
@@ -610,8 +609,7 @@ export function runUnderWindowsJobV1(
     const cleanup = () => {
       releaseTree();
       try {
-        rmSync(privateRoot, { recursive: true, force: true });
-        releaseRoot();
+        temporary.dispose();
       } catch {
         // The supervisor may still hold the compiled helper briefly; the run already settled.
       }

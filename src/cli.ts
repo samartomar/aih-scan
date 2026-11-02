@@ -9,9 +9,9 @@ import {
   runScanCommandV1,
   scanUsage,
 } from "./cli/commands-v1.js";
-import { stopNowSync } from "./cli/emergency-stop.js";
 import { runSignCommand, runVerifyCommand, signUsage, verifyUsage } from "./cli/sign-verify-v1.js";
 import { commandsUsage } from "./cli/usage.js";
+import { stopNowSync } from "./shared/emergency-stop.js";
 
 const usage = commandsUsage([
   scanUsage,
