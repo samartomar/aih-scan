@@ -73,6 +73,14 @@ private (the repository or package is still fetched to list its dependencies, bu
 sent to the advisory service). Giving both flags is invalid. Internal scopes and version ranges
 are never sent in any mode.
 
+What `--include-private` sends: the name and exact version of every npm package that is not
+under an `--internal-scope` you named, and of every PyPI package with a pinned version. npm
+packages without a scope, or under a scope you did not name, are sent even when they are
+internal names; PyPI has no scopes, so every pinned PyPI name is sent. A private package name
+can itself be sensitive: list every internal npm scope with `--internal-scope`, and do not use
+`--include-private` for content whose unscoped npm or PyPI names you do not want an external
+service to see.
+
 `--json` prints `{ status, source, private, checked }` plus either `dependencies` (nothing was
 sent) or the `checkAdvisories` result (`checkedAt`, `results`). Exit codes: 0 finished
 (advisories found or not, service reachable or not), 2 bad input or unreadable target, 130

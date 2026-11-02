@@ -150,6 +150,22 @@ reported as a `failed` Cisco outcome, which never affects required coverage. Cal
 do not want this can leave Cisco unselected (the default). Scan routes `.pyc` files to no
 tool; they are listed in `notAnalysed` with `secretsChecked: false`.
 
+Treat this as a real exposure, not only a crash risk: never unmarshal untrusted data in your
+own tooling, and when you select Cisco for content you do not trust, run Scan inside an
+operating-system sandbox (a container, VM or unprivileged user namespace with no network and
+no access to your credentials) so that a flaw in Python's `marshal` or in any analyzer parser
+cannot reach the host.
+
+## Isolation
+
+Scan keeps analyzers static and off the network by their own flags and by the environment it
+passes (no provider, proxy or credential variables, a private HOME and TEMP); it does not
+place them in an operating-system sandbox. Their parsers still read untrusted content with
+your user's file-system rights. For untrusted content, run Scan in an isolated environment
+(a container or VM without credentials, or on Linux `unshare -rn aih-scan scan <folder>`, which
+removes the network for Scan and every analyzer it starts, so only local folders and
+tarballs can be scanned and the AI mode has no provider).
+
 ## Platform notes
 
 Native Windows runs use the same command lines with `.exe` entry points and a Windows Job
