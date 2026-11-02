@@ -1,3 +1,4 @@
+import { parseJsonc } from "../shared/jsonc.js";
 import { isRecord } from "../shared/values.js";
 import type { TrustLintFindingV1 } from "./findings.js";
 import type { TrustLintTreeV1 } from "./inventory.js";
@@ -6,9 +7,11 @@ import { scanTrustDocumentV1 } from "./lint.js";
 /**
  * Port of the MCP server description lint half of Core's `incomingMcpChecks`
  * (`src/trust/scan.ts`), C2a §2.2(5). For each declared MCP config path in
- * declared order, the UTF-8 text is parsed with strict `JSON.parse` (never
- * JSONC); a read or parse failure yields NO description lint for the file —
- * Core reports the malformed file as policy, which stays in Core.
+ * declared order, the UTF-8 text is parsed as JSONC (strict JSON plus the
+ * comments and trailing commas editors accept in these files, exactly as the
+ * routing and secret checks read them); a read or parse failure yields NO
+ * description lint for the file — the secret check reports it as
+ * `mcp.config-invalid`.
  *
  * Server maps follow Core's `incomingServerMaps`: own properties
  * `mcpServers`, then `servers`, then `mcp`; if any present map is not a
@@ -95,7 +98,7 @@ export function scanMcpServerDescriptionsV1(
     if (text === undefined) continue;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(text);
+      parsed = parseJsonc(text.startsWith("\uFEFF") ? text.slice(1) : text);
     } catch {
       continue;
     }

@@ -213,6 +213,25 @@ describe("scanMcpConfigSecretsV1 (parity: Core mcpConfigSecretChecks)", () => {
   });
 });
 
+describe("unparsable MCP config (fail closed)", () => {
+  it("reports a config it cannot parse as config-invalid and still catches raw provider tokens", () => {
+    write(".vscode/mcp.json", `{"servers": {"a": {"env": {"T": "ghp_${"a".repeat(36)}"}}}`);
+    write(".mcp.json", '{"mcpServers": {,}}');
+    write("hooks.json", "// only a comment\n{}\n");
+    const tree = buildTrustLintTreeV1(dir);
+    expect(
+      scanMcpConfigSecretsV1(tree, [".vscode/mcp.json", ".mcp.json", "hooks.json"]).map((check) => [
+        check.code,
+        check.location.uri,
+      ]),
+    ).toEqual([
+      ["mcp.config-invalid", ".vscode/mcp.json"],
+      ["mcp.hardcoded-secret", ".vscode/mcp.json"],
+      ["mcp.config-invalid", ".mcp.json"],
+    ]);
+  });
+});
+
 describe("symlinks (parity: Core lstat-based discovery)", () => {
   function trySymlink(target: string, rel: string): boolean {
     try {

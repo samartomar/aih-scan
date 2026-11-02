@@ -305,17 +305,19 @@ export function routeFile(path: string, bytes: Uint8Array): RoutedFile {
   const name = baseName(path);
   const ext = extension(path);
   const body = stripBom(text);
+  const named = CONFIG_NAMES.includes(name);
   const looksJson = /^\s*[{[]/.test(body);
-  // A .toml file is read as TOML (its tables also start with "["); other files as JSON.
+  // A .toml file is read as TOML (its tables also start with "["); a named config file always as
+  // JSONC (it may start with a comment); other files as JSON when they look like JSON.
   const document =
     ext === "toml"
       ? parseTomlDocument(body)
-      : looksJson
-        ? parseJson(body, CONFIG_NAMES.includes(name))
+      : named || looksJson
+        ? parseJson(body, named)
         : undefined;
   const servers = mcpEntries(document);
   const hooks = hookCommands(document);
-  if (CONFIG_NAMES.includes(name) || servers.length > 0 || hooks.length > 0) {
+  if (named || servers.length > 0 || hooks.length > 0) {
     const inlineCommands = [
       ...hooks.map((command) => ({ command, line: lineOf(body, command) })),
       ...servers

@@ -35,7 +35,8 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 - Config routing for JSON and TOML hook and MCP entries (for example a Codex
   `config.toml` `[mcp_servers.*]` table), using the pinned pure-JS `smol-toml` runtime
   dependency. Named config files (`hooks.json`, `.mcp.json`, `mcp.json`, `plugin.json`)
-  may use JSONC comments and trailing commas.
+  may use JSONC comments and trailing commas; one that cannot be parsed is reported as
+  aih-trust-lint `mcp.config-invalid` rather than passed over.
 - CLI: `scan`, `advisories`, `read`, `findings`, `verify` and `sign`, with exits 0
   (finished, complete or partial), 1 (only with `--fail-at`), 2 (could not scan or read)
   and 130 (cancelled).

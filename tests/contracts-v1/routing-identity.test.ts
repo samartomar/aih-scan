@@ -161,6 +161,21 @@ describe("aih-scan-routing/1", () => {
     expect(routeFile("hooks.json", bytes('{ "Stop": [ /* unterminated')).part).toBe("config");
   });
 
+  it("reads a named config file the way editors do, whatever its line breaks and whitespace", () => {
+    const evil = '"evil": {"command": "npx", "args": ["-y", "evil-pkg"]}';
+    const deps = (text: string) =>
+      routeFile(".vscode/mcp.json", bytes(text)).dependencies.map((d) => d.name);
+    expect(
+      deps(`{"servers": {"a": {"command":"node","args":["x.js"]} // note\r, ${evil}\n}}`),
+    ).toEqual(["evil-pkg"]);
+    expect(deps(`{\r  // servers\r  "servers": {\r    ${evil}\r  }\r}\r`)).toEqual(["evil-pkg"]);
+    expect(deps(`{\u00a0"servers": {\u2028${evil}\u3000}}`)).toEqual(["evil-pkg"]);
+    expect(deps(`// servers\n{"servers": {${evil}}}`)).toEqual(["evil-pkg"]);
+    // Text an editor would only recover from is not read; trust-lint reports it as invalid.
+    const broken = routeFile(".vscode/mcp.json", bytes(`{"servers": {${evil}}`));
+    expect(broken).toMatchObject({ part: "config", inlineCommands: [], dependencies: [] });
+  });
+
   it("records declared dependency versions exactly as written", () => {
     expect(
       routeFile(

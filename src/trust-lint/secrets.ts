@@ -203,6 +203,14 @@ function scanConfigSecretText(raw: string, file: string, hits: ConfigSecretHit[]
   try {
     walkJson(parseConfigText(raw, file), "", file, hits);
   } catch {
+    // A config file that cannot be parsed fails closed: an editor may still recover entries
+    // from it that no check here can see.
+    hits.push({
+      file,
+      key: "",
+      kind: "the config could not be parsed as JSON, JSONC or TOML",
+      code: "mcp.config-invalid",
+    });
     // Malformed JSON/TOML/raw text: a structural walk is impossible, but a provider
     // token in the raw bytes is still a leak — catch that rather than skip the file.
     const provider = matchProvider(raw);
@@ -220,9 +228,9 @@ function scanConfigSecretText(raw: string, file: string, hits: ConfigSecretHit[]
  * `files` are the DECLARED `detectorOptions.mcpConfigPaths`, scanned in
  * declared order. A path absent from the tree is skipped (§2.1 validation
  * refuses it earlier); a symlink, a directory or any other non-regular-file
- * path, and a listed file that cannot be read, each give one
- * `mcp.config-invalid` hit — fail closed, exactly like Core's
- * `readMcpConfig` unsafe state.
+ * path, a listed file that cannot be read, and a listed file that cannot be
+ * parsed as JSON, JSONC or TOML each give one `mcp.config-invalid` hit — fail
+ * closed, like Core's `readMcpConfig` unsafe state.
  */
 export function scanMcpConfigSecretsV1(
   tree: TrustLintTreeV1,
