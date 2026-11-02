@@ -9,6 +9,7 @@ import {
   runScanCommandV1,
   scanUsage,
 } from "./cli/commands-v1.js";
+import { stopNowSync } from "./cli/emergency-stop.js";
 import { runSignCommand, runVerifyCommand, signUsage, verifyUsage } from "./cli/sign-verify-v1.js";
 import { commandsUsage } from "./cli/usage.js";
 
@@ -28,8 +29,9 @@ const io = {
 
 /**
  * Runs a cancellable command. The first SIGINT or SIGTERM cancels the work so the command can
- * still report what finished (exit 130); a second one stops immediately. The handlers exist only
- * while the command runs.
+ * still report what finished (exit 130); a second one stops immediately, after force-killing the
+ * process trees Scan started and removing the temporary folders it created. The handlers exist
+ * only while the command runs.
  */
 async function cancellable(
   run: (cancellation: AbortSignal) => Promise<number>,
@@ -39,7 +41,10 @@ async function cancellable(
   let signals = 0;
   const onSignal = (signal: NodeJS.Signals) => {
     signals += 1;
-    if (signals > 1) process.exit(exitCodes.cancelled);
+    if (signals > 1) {
+      stopNowSync();
+      process.exit(exitCodes.cancelled);
+    }
     process.stderr.write(
       `aih-scan: ${signal} received; cancelling the ${what} (send it again to stop immediately)\n`,
     );

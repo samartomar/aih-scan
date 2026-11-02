@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { parseStrictJsonObjectV1 } from "../shared/strict-json.js";
+import { trackProcessTree, trackTemporaryRoot } from "./emergency-stop.js";
 import { processOutputV1 } from "./process-output.js";
 import type {
   ProcessRunnerOptions,
@@ -580,6 +581,7 @@ export function runUnderWindowsJobV1(
   const commandLine = windowsCommandLineV1(argv);
   const environment = environmentEntries(options.env);
   const privateRoot = mkdtempSync(join(tmpdir(), "aihj-"));
+  const releaseRoot = trackTemporaryRoot(privateRoot);
   const statusPath = join(privateRoot, "status.json");
   const spec = Buffer.from(
     JSON.stringify({
@@ -604,9 +606,12 @@ export function runUnderWindowsJobV1(
     AIH_SCAN_WINDOWS_JOB_SOURCE: ENCODED_SUPERVISOR_SOURCE,
   };
   return new Promise((resolveResult, reject) => {
+    let releaseTree = () => {};
     const cleanup = () => {
+      releaseTree();
       try {
         rmSync(privateRoot, { recursive: true, force: true });
+        releaseRoot();
       } catch {
         // The supervisor may still hold the compiled helper briefly; the run already settled.
       }
@@ -626,6 +631,9 @@ export function runUnderWindowsJobV1(
       );
       // Closing stdin is the cancellation signal; the supervisor never reads data from it.
       child.stdin?.on("error", () => undefined);
+      // Ending the supervisor closes its job handle, which kills the job (KILL_ON_JOB_CLOSE).
+      const supervisorProcess = child;
+      releaseTree = trackProcessTree(() => void supervisorProcess.kill());
     } catch (error) {
       cleanup();
       reject(error);

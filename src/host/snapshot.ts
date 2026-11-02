@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { trackTemporaryRoot } from "../cli/emergency-stop.js";
 import type { FileMode } from "../contracts/git-tree.js";
 import { limits } from "../contracts/limits.js";
 import { pathProblem } from "../contracts/text.js";
@@ -294,6 +295,7 @@ export interface Snapshot {
 /** Writes the exact bytes into a new private folder and makes it read-only. */
 export function writeSnapshot(files: readonly SnapshotFile[], parent = tmpdir()): Snapshot {
   const stage = mkdtempSync(join(parent, "aih-scan-snapshot-"));
+  const release = trackTemporaryRoot(stage);
   const root = join(stage, "item");
   mkdirSync(root, { mode: 0o700 });
   const folders = new Set<string>([root]);
@@ -322,6 +324,7 @@ export function writeSnapshot(files: readonly SnapshotFile[], parent = tmpdir())
         // Best effort: removal below reports nothing either way.
       }
       rmSync(stage, { recursive: true, force: true });
+      release();
     },
   });
 }

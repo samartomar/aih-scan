@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { trackTemporaryRoot } from "../cli/emergency-stop.js";
 import {
   type HostExecutableNameV1,
   type HostExecutableV1,
@@ -118,10 +119,12 @@ export function probeVersion(
 /** A private scratch folder outside the item's working copy, for reports and the tool's HOME. */
 export function scratchFolder(prefix: string): Readonly<{ path: string; dispose(): void }> {
   const path = mkdtempSync(join(tmpdir(), prefix));
+  const release = trackTemporaryRoot(path);
   return Object.freeze({
     path,
     dispose() {
       rmSync(path, { recursive: true, force: true });
+      release();
     },
   });
 }

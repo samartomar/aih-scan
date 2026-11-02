@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { trackProcessTree } from "./emergency-stop.js";
 import { isRegisteredHostExecutableV1 } from "./host-executable.js";
 import { processOutputV1 } from "./process-output.js";
 import { runUnderWindowsJobV1 } from "./windows-job-supervisor.js";
@@ -109,11 +110,21 @@ export function spawnBoundedV1(
     let terminationTimer: ReturnType<typeof setTimeout> | undefined;
     let groupExitTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => terminate("abort");
+    // A forced stop of the whole CLI (a second SIGINT) still kills this tree synchronously.
+    const pid = child.pid;
+    const release =
+      pid === undefined
+        ? () => {}
+        : trackProcessTree(() => {
+            if (group) process.kill(-pid, "SIGKILL");
+            else child.kill("SIGKILL");
+          });
     const settle = (
       outcome: { readonly result: ProcessRunnerResult } | { readonly error: unknown },
     ) => {
       if (settled) return;
       settled = true;
+      release();
       if (timer !== undefined) clearTimeout(timer);
       if (terminationTimer !== undefined) clearTimeout(terminationTimer);
       if (groupExitTimer !== undefined) clearTimeout(groupExitTimer);

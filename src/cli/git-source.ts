@@ -5,6 +5,7 @@ import { startGitFetchRelay } from "../host/git-fetch-relay.js";
 import { GitContainmentError, runPinnedGit } from "../host/git-runner.js";
 import { hasControl } from "../shared/json.js";
 import { decodeStrictUtf8V1 } from "../shared/strict-json.js";
+import { trackTemporaryRoot } from "./emergency-stop.js";
 
 /**
  * Scan-command Git sources: classifies the command-line target and resolves a Git
@@ -256,10 +257,14 @@ function select(listing: Listing, request: ListedRequest): { commit: string; ref
   return found;
 }
 
+const stages = new Map<string, () => void>();
+
 /** Removes the resolver's own temporary directory, retrying transient Windows locks. */
 function removeStage(stage: string): boolean {
   try {
     rmSync(stage, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    stages.get(stage)?.();
+    stages.delete(stage);
     return true;
   } catch {
     return false;
@@ -326,6 +331,7 @@ export async function resolveGitSource(
 ): Promise<ResolvedGitSource> {
   if (request.kind === "commit") return { repository, commit: request.commit };
   const stage = mkdtempSync(join(tmpdir(), "aih-scan-git-source-"));
+  stages.set(stage, trackTemporaryRoot(stage));
   let resolved: { commit: string; ref?: string };
   try {
     resolved = select(await listRefs(stage, repository, request, signal), request);

@@ -16,6 +16,8 @@ export interface FakeAnalyzerBehaviour {
   readonly exit?: number;
   /** Start a long-lived child process, record both pids, and never exit. */
   readonly hang?: boolean;
+  /** With `hang`: both processes ignore SIGTERM, so only a forced stop ends them. */
+  readonly ignoreTerm?: boolean;
 }
 
 export interface FakeCall {
@@ -70,7 +72,9 @@ if (args[0] === "--version") {
   process.exit(0);
 }
 if (b.hang) {
-  const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const keep = b.ignoreTerm ? "process.on('SIGTERM', () => {}); " : "";
+  if (b.ignoreTerm) process.on("SIGTERM", () => {});
+  const child = require("node:child_process").spawn(process.execPath, ["-e", keep + "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   fs.writeFileSync(path.join(dir, "pids.json"), JSON.stringify({ self: process.pid, child: child.pid }));
   setInterval(() => {}, 1000);
 } else {

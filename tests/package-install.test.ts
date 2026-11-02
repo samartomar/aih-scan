@@ -320,10 +320,7 @@ describe("the packed tarball", () => {
       "./schemas/aih-scan-withdrawn-1.json",
       "./package.json",
     ]);
-    expect(Object.keys(manifest.dependencies).sort()).toEqual([
-      "smol-toml",
-      "yaml",
-    ]);
+    expect(Object.keys(manifest.dependencies).sort()).toEqual(["smol-toml", "yaml"]);
     const installed = readdirSync(join(consumer, "node_modules"));
     for (const retired of ["@sigstore", "zod", "@babel"])
       expect(installed, retired).not.toContain(retired);
@@ -808,6 +805,41 @@ describe("the installed aih-scan CLI", () => {
       expect(pids).toBeDefined();
       expect(alive(pids!.self)).toBe(false);
       expect(alive(pids!.child)).toBe(false);
+    },
+    120_000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "stops at once on a second SIGINT, still ending the analyzer tree and removing Scan's temporary folders",
+    async () => {
+      const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
+        versionText: "SkillSpector v2.13.2",
+        outputFlag: "--output",
+        report: null,
+        hang: true,
+        ignoreTerm: true,
+      });
+      const skill = folder("cancel-twice", cleanSkill);
+      const temporary = join(work, "tmp-cancel-twice");
+      mkdirSync(temporary);
+      const run = await cli(["scan", skill, "--out", outFolder("cancel-twice")], {
+        env: { AIH_SCAN_SKILLSPECTOR: hanging.path, TMPDIR: temporary },
+        onStart: (child) => {
+          const poll = setInterval(() => {
+            if (hanging.pids() !== undefined) {
+              clearInterval(poll);
+              child.kill("SIGINT");
+              setTimeout(() => child.kill("SIGINT"), 200);
+            }
+          }, 50);
+        },
+      });
+      expect(run.code, run.stderr).toBe(130);
+      const pids = hanging.pids();
+      expect(pids).toBeDefined();
+      expect(alive(pids!.self)).toBe(false);
+      expect(alive(pids!.child)).toBe(false);
+      expect(readdirSync(temporary)).toEqual([]);
     },
     120_000,
   );
