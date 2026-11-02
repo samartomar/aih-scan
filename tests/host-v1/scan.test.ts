@@ -496,12 +496,13 @@ describe("routing, coverage and labels", () => {
         { adapters: { skillspector: ranSkillSpector() } },
       );
       const [entry] = okResults(result);
-      const summary = JSON.parse(readFileSync(entry!.summaryPath, "utf8"));
+      if (entry === undefined) throw new Error("no result");
+      const summary = JSON.parse(readFileSync(entry.summaryPath, "utf8"));
       const found: { code: string; ruleId: string; part: string }[] = [];
       for (const ref of summary.sarif as { path: string }[]) {
         const findings = await readFindings(
           summary,
-          readBytes(join(entry!.summaryPath, "..", ref.path)),
+          readBytes(join(entry.summaryPath, "..", ref.path)),
           summary.scanKey,
         );
         if (findings.status === "ok")
