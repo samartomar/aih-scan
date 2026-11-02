@@ -1,8 +1,9 @@
 # Contributing
 
 Install dependencies with `npm ci --ignore-scripts` and run `npm run verify` before
-requesting review. Keep changes scoped, preserve Scanner's evidence-only authority
-boundary, and add focused tests for changed behavior.
+requesting review. Keep changes scoped, preserve Scan's boundary (it informs and never
+blocks; supplied content never runs), and add focused tests for changed behavior. Never
+scan the source checkout; use temporary fixtures.
 
 Every PR needs exactly one `semver:none|patch|minor|major` label before merge. Labels are
 maintainer-owned; external contributors need not apply them. Use `semver:none` only when

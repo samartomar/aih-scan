@@ -1,63 +1,39 @@
-export { readArtifact } from "../artifact/read.js";
-export type { ReadArtifactResult } from "../artifact/types.js";
+/**
+ * `@aihq/scan/read` — portable readers (browser-safe: no Node globals or built-ins).
+ * `readSummary` is synchronous; `readFindings`, `matchScan` and `verifySummary` resolve
+ * asynchronously because they use WebCrypto. `checkAdvisories` asks a live advisory service
+ * (OSV) through `fetch`; it is separate from every scan and never signed.
+ */
 export {
-  coverageBatchLimits,
-  maxContentDescriptors,
-  readContentCoverage,
-  readContentCoverageBatch,
-} from "../assessment/content-coverage.js";
-export type {
-  ItemAssessment,
-  ItemDescriptor,
-  ItemMaterial,
-  ItemRecord,
-  ItemRecordBatchResult,
-  ItemRecordRefusal,
-  ItemRecordResult,
-  ItemRecordVerification,
-  ItemSubject,
-} from "../assessment/item-record.js";
+  type Advisory,
+  type AdvisoryDependency,
+  type AdvisoryFetch,
+  type AdvisoryResult,
+  type CheckAdvisoriesOptions,
+  type CheckAdvisoriesResult,
+  checkAdvisories,
+  type NotCheckedReason,
+} from "../read/check-advisories.js";
 export {
-  itemIdentity,
-  itemRecordSchema,
-  payloadMaterialId,
-  readItemRecord,
-  recordItems,
-  verifyItemRecord,
-} from "../assessment/item-record.js";
-export type {
-  CandidateDiagnostic,
-  EvidencePolicy,
-  ItemAuthentication,
-  ItemRecordCandidate,
-  ItemSummary,
-  ItemTrustStatus,
-  PickReason,
-  PickRecordInput,
-  PickRecordResult,
-  SummariseItemInput,
-  SummariseItemResult,
-} from "../assessment/item-summary.js";
+  type MatchDifferences,
+  type MatchFile,
+  type MatchScanResult,
+  type MatchSigner,
+  matchScan,
+  type VerifiedSummaryInput,
+} from "../read/match-scan.js";
 export {
-  evidencePolicySchema,
-  itemSummarySchema,
-  pickRecord,
-  summariseItem,
-} from "../assessment/item-summary.js";
-export { readReport } from "../assessment/report.js";
-export { maxAssessments, selectAssessments } from "../assessment/selection.js";
-export type { SeverityProfile } from "../assessment/severity-profile.js";
-export { severityProfileRef, severityProfileSchema } from "../assessment/severity-profile.js";
-export { maxAssessmentBytes, readSummary } from "../assessment/summary.js";
-export type * from "../assessment/summary-types.js";
-export type {
-  ContentCoverageBatchRow,
-  ContentCoverageExclusionReason,
-  ContentCoverageObservation,
-  ContentDescriptor,
-  ReadContentCoverageBatchInput,
-  ReadContentCoverageBatchResult,
-  ReadContentCoverageInput,
-  ReadContentCoverageResult,
-  ReadReportResult,
-} from "../assessment/types.js";
+  FINDINGS_MISMATCH_MESSAGE,
+  type Finding,
+  type ReadFindingsResult,
+  readFindings,
+} from "../read/read-findings.js";
+export { type ReadSummaryResult, readSummary } from "../read/read-summary.js";
+export {
+  type JsonInput,
+  type VerifiedSignerInfo,
+  type VerifySummaryOptions,
+  type VerifySummaryResult,
+  verifySummary,
+  type WithdrawalOutcome,
+} from "../read/verify-summary.js";

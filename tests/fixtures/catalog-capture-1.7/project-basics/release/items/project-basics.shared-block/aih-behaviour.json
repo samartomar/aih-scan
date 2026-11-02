@@ -1,1 +1,0 @@
-{"dependencies":{"conflicts":[],"optional":[],"requires":[{"itemId":"project-basics.router"},{"itemId":"project-basics.working-rules"}]},"executable":{"shared-block.md":false},"kind":"rule","payload":{"applyTo":["**"],"applyToBasis":"publisher","placement":"entry-block"},"requirements":{"inputs":{}}}

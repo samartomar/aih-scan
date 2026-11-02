@@ -1,291 +1,89 @@
-name: Frozen Scan production refresh
+# Manual: scan reviewed, pinned public sources with the packed installed CLI and upload the
+# unsigned candidate. It reads only the pinned sources (public Git clone or npm tarball before
+# scanning) and runs the analyzers in static mode; nothing is signed or published here. See
+# docs/production-publisher.md.
+name: Scan report candidate
 on:
   workflow_dispatch:
     inputs:
-      phase:
-        description: Freeze and review before running pinned source data
+      sources_json:
+        description: Exact reviewed sources JSON (its SHA-256 must equal vars.SCAN_REPORT_SOURCES_SHA256)
         required: true
-        type: choice
-        options:
-          - freeze
-          - run
-      input_json:
-        description: Exact reviewed input JSON bytes; freeze only
-        required: false
         type: string
 permissions: {}
 concurrency:
   group: scan-report-candidate-upload
   cancel-in-progress: false
 jobs:
-  upload:
-    if: always() && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1'
+  candidate:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_SOURCES_SHA256 != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
       contents: read
-      actions: read
     steps:
-      - if: ${{ success() && !cancelled() }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - if: ${{ success() && !cancelled() }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 24.15.0
-      - if: ${{ success() && !cancelled() }}
-        run: npm ci --ignore-scripts && npm run build
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.13"
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
           version: 0.12.13
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-      - name: Prepare fixed Linux namespace runtime
-        run: |-
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends apparmor apparmor-profiles bubblewrap
-          sudo apparmor_parser --replace /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
-          python_prefix="$(python3.13 -c 'import sys; print(sys.prefix)')"
-          case "$python_prefix" in /usr|/usr/*) exit 1;; esac
-          sudo cp -a "${python_prefix}/." /usr/local/
-          sudo install -m 0644 "${python_prefix}/lib/libpython3.13.so.1.0" /usr/lib/x86_64-linux-gnu/libpython3.13.so.1.0
-          sudo install -m 0755 "$(command -v uv)" /usr/local/bin/uv
-          sudo ln -sf /usr/local/bin/python3.13 /usr/bin/python3.13
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-      - name: Freeze reviewed input with a packed installed scanner
-        if: ${{ success() && !cancelled() && inputs.phase == 'freeze' }}
+      - name: Validate the reviewed sources
         env:
-          INPUT_JSON: ${{ inputs.input_json }}
-          INPUT_SHA: ${{ vars.SCAN_REFRESH_INPUT_SHA256 }}
-          GH_TOKEN: ${{ github.token }}
+          SOURCES_JSON: ${{ inputs.sources_json }}
+          SOURCES_SHA256: ${{ vars.SCAN_REPORT_SOURCES_SHA256 }}
         run: |-
           set -euo pipefail
-          mkdir "$RUNNER_TEMP/frozen"
-          node --input-type=module <<'NODE'
-          import {writeFileSync} from 'node:fs';
-          import {canonicalBytes,parseJson,sha256,validateInput} from './tools/refresh/contracts.mjs';
-          const bytes=Buffer.from(process.env.INPUT_JSON,'utf8');
-          if(sha256(bytes)!==process.env.INPUT_SHA)throw Error('Reviewed input digest mismatch');
-          const input=validateInput(parseJson(bytes));
-          if(input.scannerSourceCommit!==process.env.GITHUB_SHA||!canonicalBytes(input.runtime).equals(canonicalBytes({node:process.version,platform:process.platform,architecture:process.arch})))throw Error('Frozen source or runtime mismatch');
-          writeFileSync(process.env.RUNNER_TEMP+'/input.json',bytes,{flag:'wx'});
-          NODE
-          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/frozen" > "$RUNNER_TEMP/pack.json"
-          node --input-type=module <<'NODE'
-          import {readFileSync,renameSync,writeFileSync,mkdirSync} from 'node:fs';
-          const dir=process.env.RUNNER_TEMP+'/frozen',file=JSON.parse(readFileSync(process.env.RUNNER_TEMP+'/pack.json'))[0].filename;
-          renameSync(dir+'/'+file,dir+'/scanner.tgz');mkdirSync(dir+'/consumer');writeFileSync(dir+'/consumer/package.json',JSON.stringify({name:'scan-refresh-consumer',version:'0.0.0',private:true,type:'module'}),{flag:'wx'});
-          NODE
-          (cd "$RUNNER_TEMP/frozen/consumer" && npm install --ignore-scripts --no-audit --no-fund --save-exact ../scanner.tgz)
-          node tools/refresh/refresh.mjs freeze --input "$RUNNER_TEMP/input.json" --scanner-tgz "$RUNNER_TEMP/frozen/scanner.tgz" --scanner-install "$RUNNER_TEMP/frozen/consumer" --out "$RUNNER_TEMP/frozen/manifest.json"
-          node tools/artifact/refresh-publication.mjs retain "$RUNNER_TEMP/frozen" "$RUNNER_TEMP/frozen/scanner.tgz" "$RUNNER_TEMP/frozen/consumer"
+          printf '%s' "$SOURCES_JSON" > "$RUNNER_TEMP/sources.json"
+          node tools/publisher/candidate.mjs sources "$RUNNER_TEMP/sources.json" "$SOURCES_SHA256" > "$RUNNER_TEMP/targets.json"
+      - name: Pack and install the exact scanner in a fresh consumer
+        run: |-
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          mkdir "$RUNNER_TEMP/scanner" "$RUNNER_TEMP/consumer"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/scanner" > "$RUNNER_TEMP/pack.json"
+          tarball="$RUNNER_TEMP/scanner/$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$RUNNER_TEMP/pack.json")"
+          cd "$RUNNER_TEMP/consumer"
+          printf '{"name":"scan-report-consumer","version":"0.0.0","private":true,"type":"module"}\n' > package.json
+          npm install --ignore-scripts --no-audit --no-fund --save-exact "$tarball"
+          sha256sum "$tarball" | awk '{print $1}' > "$RUNNER_TEMP/scanner/tarball.sha256"
+      - name: Provision the locked analyzer runtimes
+        run: |-
+          set -euo pipefail
+          runtimes="$RUNNER_TEMP/analyzers"
+          UV_PROJECT_ENVIRONMENT="$runtimes/skillspector" uv sync --project tools/analyzers/skillspector --locked --no-install-project --python 3.13
+          UV_PROJECT_ENVIRONMENT="$runtimes/cisco-skill-scanner" uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project --python 3.13
+      - name: Scan every reviewed source with the installed CLI
+        env:
+          AIH_SCAN_SKILLSPECTOR: ${{ runner.temp }}/analyzers/skillspector/bin/skillspector
+          AIH_SCAN_SKILL_SCANNER: ${{ runner.temp }}/analyzers/cisco-skill-scanner/bin/skill-scanner
+        run: |-
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          mkdir -p "$candidate/targets"
+          cli="$RUNNER_TEMP/consumer/node_modules/.bin/aih-scan"
+          count="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).length' "$RUNNER_TEMP/targets.json")"
+          for ((index = 0; index < count; index++)); do
+            target="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[Number(process.argv[2])].target' "$RUNNER_TEMP/targets.json" "$index")"
+            ref="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[Number(process.argv[2])].ref ?? ""' "$RUNNER_TEMP/targets.json" "$index")"
+            args=(scan "$target" --origin published --json --out "$candidate/targets/$index")
+            if [ -n "$ref" ]; then args+=(--ref "$ref"); fi
+            "$cli" "${args[@]}" > "$candidate/targets/$index.result.json"
+          done
+          cp "$RUNNER_TEMP/sources.json" "$candidate/sources.json"
+          cp "$RUNNER_TEMP/scanner/tarball.sha256" "$candidate/scanner-tarball.sha256"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: scan-refresh-frozen
-          path: |-
-            ${{ runner.temp }}/frozen/manifest.json
-            ${{ runner.temp }}/frozen/scanner.tgz
-            ${{ runner.temp }}/frozen/consumer-package-lock.json
-            ${{ runner.temp }}/frozen/custody.json
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-        if: ${{ success() && !cancelled() && inputs.phase == 'freeze' }}
-      - name: Verify independently selected freeze run before downloading data
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ vars.SCAN_REFRESH_FROZEN_RUN_ID }}
-          ARCHIVE_ID: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_ID }}
-          ARCHIVE_DIGEST: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_DIGEST }}
-          HEAD: ${{ vars.SCAN_REPORT_REVIEWED_HEAD }}
-        run: |-
-          set -euo pipefail
-          case "$RUN_ID" in ''|*[!0-9]*) exit 1;; esac
-          test "${#RUN_ID}" -le 16
-          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID" > run.json
-          gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID/artifacts?per_page=100" > archives.json
-          node tools/artifact/check-refresh-run.mjs run.json archives.json "$RUN_ID" "$HEAD" "$ARCHIVE_ID" "$ARCHIVE_DIGEST" scan-refresh-frozen
-      - if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          artifact-ids: ${{ vars.SCAN_REFRESH_FROZEN_ARTIFACT_ID }}
-          digest-mismatch: error
-          run-id: ${{ vars.SCAN_REFRESH_FROZEN_RUN_ID }}
-          github-token: ${{ github.token }}
-          path: frozen
-      - name: Restore exact retained scanner installation
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-        env:
-          MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
-        run: |-
-          set -euo pipefail
-          node tools/artifact/install-retained-scanner.mjs frozen "$MANIFEST_SHA" "$RUNNER_TEMP/scanner-work/consumer"
-      - name: Execute frozen batch serially; retain truthful partial and diagnostic rows
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-        env:
-          MANIFEST_SHA: ${{ vars.SCAN_REPORT_MANIFEST_SHA256 }}
-          GH_TOKEN: ${{ github.token }}
-        run: exec bash tools/refresh/run-workflow.sh frozen/manifest.json frozen/scanner.tgz "$RUNNER_TEMP/scanner-work/consumer" "$RUNNER_TEMP/candidate" "$MANIFEST_SHA" "$RUNNER_TEMP/selection.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-candidate
+          name: scan-report-candidate
           path: ${{ runner.temp }}/candidate/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-        if: ${{ success() && !cancelled() && inputs.phase == 'run' }}
-      - id: failure-evidence
-        name: Retain bounded NONPUBLISHABLE original failure evidence
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' }}
-        run: node tools/artifact/retain-failure-evidence.mjs "$RUNNER_TEMP/candidate" frozen "$RUNNER_TEMP/failure-evidence"
-      - name: Upload NONPUBLISHABLE failure root
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.root == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-root
-          path: ${{ runner.temp }}/failure-evidence/root/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure mattpocock--skills
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_0 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-mattpocock--skills
-          path: ${{ runner.temp }}/failure-evidence/targets/mattpocock--skills/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure affaan-m--ECC
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_1 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-affaan-m--ECC
-          path: ${{ runner.temp }}/failure-evidence/targets/affaan-m--ECC/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure anthropics--skills
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_2 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-anthropics--skills
-          path: ${{ runner.temp }}/failure-evidence/targets/anthropics--skills/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure obra--superpowers
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_3 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-obra--superpowers
-          path: ${{ runner.temp }}/failure-evidence/targets/obra--superpowers/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure nextlevelbuilder--ui-ux-pro-max-skill
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_4 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-nextlevelbuilder--ui-ux-pro-max-skill
-          path: ${{ runner.temp }}/failure-evidence/targets/nextlevelbuilder--ui-ux-pro-max-skill/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure DietrichGebert--ponytail
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_5 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-DietrichGebert--ponytail
-          path: ${{ runner.temp }}/failure-evidence/targets/DietrichGebert--ponytail/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure samartomar--aih-extensions
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_6 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-samartomar--aih-extensions
-          path: ${{ runner.temp }}/failure-evidence/targets/samartomar--aih-extensions/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE failure samartomar--aih-catalog
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.target_7 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-samartomar--aih-catalog
-          path: ${{ runner.temp }}/failure-evidence/targets/samartomar--aih-catalog/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 0
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_0 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-0
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_0_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 1
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_1 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-1
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_1_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 2
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_2 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-2
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_2_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 3
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_3 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-3
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_3_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 4
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_4 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-4
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_4_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 5
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_5 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-5
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_5_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-      - name: Upload NONPUBLISHABLE independent capture 6
-        if: ${{ (failure() || cancelled()) && inputs.phase == 'run' && steps.failure-evidence.outputs.capture_6 == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scan-refresh-NONPUBLISHABLE-capture-6
-          path: ${{ runner.temp }}/failure-evidence/targets/${{ steps.failure-evidence.outputs.capture_6_directory }}/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30

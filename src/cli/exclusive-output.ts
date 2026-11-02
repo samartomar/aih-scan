@@ -12,8 +12,8 @@ import { dirname, resolve } from "node:path";
 /**
  * An exclusive file writer for CLI outputs: it creates a new file, never replaces one,
  * and fails closed when a parent directory is a link or reparse point or when the file
- * or a parent changes while the file is written. `project-core-evidence` and
- * `scan --artifact` both write through it.
+ * or a parent changes while the file is written. `scan` writes every summary and SARIF
+ * document of its `--out` / `outDir` folder through it.
  */
 
 /** Why an exclusive write was refused. `message` is the bare reason; callers add context. */

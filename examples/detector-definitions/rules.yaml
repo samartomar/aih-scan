@@ -1,6 +1,0 @@
-rules:
-  - id: organization.disallow-eval
-    languages: [javascript, typescript]
-    message: Review dynamic code execution.
-    severity: WARNING
-    pattern: eval(...)

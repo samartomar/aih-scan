@@ -1,34 +1,20 @@
-export type { SignArtifactInput } from "../artifact/host.js";
+/**
+ * `@aihq/scan/host` — Node host operations: `scan` reads supplied folders or acquires a source
+ * (folder, public Git repository or item, npm package or tarball, remote MCP configuration),
+ * discovers its items, snapshots each read-only and writes summaries and SARIF into a new output
+ * folder; `matchScan` matches a summary to a folder on disk. Supplied content is never executed.
+ * SkillSpector and the optional Cisco skill-scanner run as installed native CLIs (see
+ * docs/analyzers.md); `mode: "ai"` uses the caller's existing SkillSpector AI settings.
+ */
+export { matchScan } from "../host/match-folder.js";
 export {
-  attachAttestation,
-  authenticateArtifact,
-  prepareArtifact,
-  signArtifact,
-} from "../artifact/host.js";
-// Artifact types that exported operations accept or return (report body types come from ./contracts);
-// internal validation records stay private.
-export type {
-  AnnexDescriptor,
-  Artifact,
-  ArtifactAnnex,
-  ArtifactResult,
-  ArtifactStatement,
-  AssociationReason,
-  AssociationResult,
-  AuthenticationTrust,
-  PrepareArtifactInput,
-  PreparedArtifact,
-  SigstoreBundle,
-  VerificationKey,
-  VerificationPublisher,
-} from "../artifact/types.js";
-export type { SuppliedDetectorDefinitionV1 } from "../assessment/detector-definition.js";
-export type { RetainedObservationsV1 } from "../assessment/reuse.js";
-export { createRetainedObservationsV1 } from "../assessment/reuse.js";
-export type { RunScanOptions } from "../assessment/run.js";
-export { runScan } from "../assessment/run.js";
-export type { ScanRequest, ScanRunResult } from "../assessment/types.js";
-export { compareMaterialInventories } from "../material-change/compare.js";
-export { deliverMaterialChange } from "../material-change/delivery.js";
-export type * from "../material-change/delivery-types.js";
-export type * from "../material-change/types.js";
+  type Acquisition,
+  type AiAvailability,
+  type ResultKind,
+  type Rollup,
+  type ScanItemResult,
+  type ScanOptions,
+  type ScanResult,
+  type SourcePin,
+  scan,
+} from "../host/scan.js";

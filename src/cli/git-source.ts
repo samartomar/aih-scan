@@ -1,10 +1,10 @@
-import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { startGitFetchRelay } from "../assessment/git-fetch-relay.js";
-import { GitContainmentError, runPinnedGit } from "../assessment/git-runner.js";
-import { repositoryShape } from "../assessment/shapes.js";
-import { decodeStrictUtf8V1 } from "../assessment/strict-json.js";
+import { isSupportedRepositoryUrl } from "../contracts/git-url.js";
+import { startGitFetchRelay } from "../host/git-fetch-relay.js";
+import { GitContainmentError, runPinnedGit } from "../host/git-runner.js";
+import { createTemporaryRoot, type TemporaryRoot } from "../shared/emergency-stop.js";
+import { decodeStrictUtf8V1 } from "../shared/strict-json.js";
 
 /**
  * Scan-command Git sources: classifies the command-line target and resolves a Git
@@ -46,7 +46,7 @@ function httpsRepository(spelling: string): string {
     refuse("the Git URL contains credentials; credentials are never accepted in a Git URL");
   if (url.search || url.hash || spelling.includes("?") || spelling.includes("#"))
     refuse("the Git URL has a query or fragment; name the repository URL only");
-  if (!repositoryShape.safeParse(spelling).success)
+  if (!isSupportedRepositoryUrl(spelling))
     refuse("the Git URL is not a supported https:// repository URL");
   return spelling;
 }
@@ -242,9 +242,9 @@ function select(listing: Listing, request: ListedRequest): { commit: string; ref
 }
 
 /** Removes the resolver's own temporary directory, retrying transient Windows locks. */
-function removeStage(stage: string): boolean {
+function removeStage(stage: TemporaryRoot): boolean {
   try {
-    rmSync(stage, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    stage.dispose();
     return true;
   } catch {
     return false;
@@ -310,10 +310,10 @@ export async function resolveGitSource(
   signal: AbortSignal,
 ): Promise<ResolvedGitSource> {
   if (request.kind === "commit") return { repository, commit: request.commit };
-  const stage = mkdtempSync(join(tmpdir(), "aih-scan-git-source-"));
+  const stage = createTemporaryRoot("aih-scan-git-source-");
   let resolved: { commit: string; ref?: string };
   try {
-    resolved = select(await listRefs(stage, repository, request, signal), request);
+    resolved = select(await listRefs(stage.path, repository, request, signal), request);
   } catch (error) {
     removeStage(stage);
     throw error;

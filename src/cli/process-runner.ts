@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { trackProcessTree } from "../shared/emergency-stop.js";
 import { isRegisteredHostExecutableV1 } from "./host-executable.js";
 import { processOutputV1 } from "./process-output.js";
 import { runUnderWindowsJobV1 } from "./windows-job-supervisor.js";
@@ -6,14 +7,6 @@ import { runUnderWindowsJobV1 } from "./windows-job-supervisor.js";
 const terminationGraceMs = 1_000;
 const groupExitPollMs = 10;
 const groupExitPollAttempts = 100;
-export const BASELINE_DOCKER_EXECUTABLE_V1 = "/usr/bin/docker";
-export const BASELINE_BWRAP_EXECUTABLE_V1 = "/usr/bin/bwrap";
-export const BASELINE_UV_EXECUTABLE_V1 = "/usr/local/bin/uv";
-const allowedExecutables = new Set([
-  BASELINE_BWRAP_EXECUTABLE_V1,
-  BASELINE_DOCKER_EXECUTABLE_V1,
-  BASELINE_UV_EXECUTABLE_V1,
-]);
 
 /**
  * Why the runner ended a process tree itself:
@@ -69,17 +62,16 @@ function fail(message: string): never {
   throw new TypeError(`aih-scan: ${message}`);
 }
 
-/** Bounded, shell-free runner for Scanner-owned executable profiles only. */
+/**
+ * Bounded, shell-free runner for host executables Scan resolved itself (see
+ * `selectHostExecutableV1`): the installed analyzers. Any other argv is refused.
+ */
 export function processRunner(
   argv: readonly string[],
   options: ProcessRunnerOptions,
 ): Promise<ProcessRunnerResult> {
   const executable = argv[0];
-  if (
-    executable === undefined ||
-    argv.length < 2 ||
-    !(allowedExecutables.has(executable) || isRegisteredHostExecutableV1(executable))
-  )
+  if (executable === undefined || argv.length < 2 || !isRegisteredHostExecutableV1(executable))
     fail("registered process argv");
   return spawnBoundedV1(argv, options);
 }
@@ -118,11 +110,21 @@ export function spawnBoundedV1(
     let terminationTimer: ReturnType<typeof setTimeout> | undefined;
     let groupExitTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => terminate("abort");
+    // A forced stop of the whole CLI (a second SIGINT) still kills this tree synchronously.
+    const pid = child.pid;
+    const release =
+      pid === undefined
+        ? () => {}
+        : trackProcessTree(() => {
+            if (group) process.kill(-pid, "SIGKILL");
+            else child.kill("SIGKILL");
+          });
     const settle = (
       outcome: { readonly result: ProcessRunnerResult } | { readonly error: unknown },
     ) => {
       if (settled) return;
       settled = true;
+      release();
       if (timer !== undefined) clearTimeout(timer);
       if (terminationTimer !== undefined) clearTimeout(terminationTimer);
       if (groupExitTimer !== undefined) clearTimeout(groupExitTimer);

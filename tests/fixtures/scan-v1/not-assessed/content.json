@@ -1,0 +1,6 @@
+{
+  "Dockerfile": {
+    "mode": "100644",
+    "text": "FROM scratch\n"
+  }
+}

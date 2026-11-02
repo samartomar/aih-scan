@@ -1,0 +1,61 @@
+{
+  "format": "aih-scan-summary/1",
+  "scanKey": "git-sha1:2a95b27ee0360b5f03a2d9c03a0b74cc65d00879",
+  "revision": 1,
+  "origin": "local",
+  "scannedAt": "2026-11-01T00:30:00Z",
+  "scanner": "@aihq/scan 0.1.0",
+  "routing": "aih-scan-routing/1",
+  "scoring": "aih-risk/1",
+  "score": 46,
+  "label": "CAUTION",
+  "coverage": "partial",
+  "reason": "unavailable",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "mode": "100644",
+      "part": "text",
+      "sha256": "fa4f2b7f3bf0cbb40f7f4b37fa326028ad2a82cfd1c206668adb2a612aa29b11"
+    },
+    {
+      "path": "hooks/hooks.json",
+      "mode": "100644",
+      "part": "config",
+      "sha256": "1e4b05d7dc4c640d37295e99d9e16e7325786260338d6080238d3d649605a977"
+    },
+    {
+      "path": "scripts/start.sh",
+      "mode": "100755",
+      "part": "code",
+      "sha256": "bdd721eb0b2bed9c258b194af295c438c0847ef564c92f9a0f384e9a6a41239d"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "aih-trust-lint",
+      "version": "1.0.0",
+      "mode": "static",
+      "result": "fail",
+      "counts": {
+        "high": 2
+      }
+    },
+    {
+      "tool": "skillspector",
+      "version": "2.13.2",
+      "mode": "static",
+      "result": "not-run",
+      "reason": "unavailable",
+      "counts": {}
+    }
+  ],
+  "notAnalysed": [],
+  "sarif": [
+    {
+      "path": "sarif/f9154497de1aecd4d61ddb2f9d9685a60261146ec0291d02d8f586aca876d222.sarif",
+      "sha256": "f9154497de1aecd4d61ddb2f9d9685a60261146ec0291d02d8f586aca876d222"
+    }
+  ],
+  "dependencies": []
+}

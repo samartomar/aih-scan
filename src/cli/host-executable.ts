@@ -11,14 +11,14 @@ import { posix, win32 } from "node:path";
  * Scan records and spawns, and only a path resolved here may be spawned by Scan's runner.
  */
 
-export type HostExecutableNameV1 = "uv" | "docker";
+export type HostExecutableNameV1 = "skillspector" | "skill-scanner";
 
 export type HostExecutableV1 = Readonly<{
   name: HostExecutableNameV1;
   /** The real (symlink-resolved) absolute path that is spawned and recorded. */
   path: string;
-  /** Where the search found it. */
-  foundIn: "PATH" | "well-known-directory";
+  /** Where the search found it, or `selected` for a caller-named absolute path. */
+  foundIn: "PATH" | "well-known-directory" | "selected";
 }>;
 
 const registered = new Set<string>();
@@ -37,30 +37,16 @@ function home(env: Readonly<NodeJS.ProcessEnv>, platform: NodeJS.Platform): stri
 
 /** The fixed, OS-specific directories searched after `PATH`, in order. */
 export function wellKnownExecutableDirectoriesV1(
-  name: HostExecutableNameV1,
   env: Readonly<NodeJS.ProcessEnv>,
   platform: NodeJS.Platform = process.platform,
 ): readonly string[] {
   const user = home(env, platform);
   if (platform === "win32") {
-    const programFiles = env.ProgramFiles ?? env.PROGRAMFILES;
-    const localAppData = env.LOCALAPPDATA;
-    const directories = [
-      ...(user === undefined
+    return Object.freeze(
+      user === undefined
         ? []
-        : [win32.join(user, ".local", "bin"), win32.join(user, ".cargo", "bin")]),
-      ...(name === "docker"
-        ? [
-            ...(typeof programFiles === "string" && win32.isAbsolute(programFiles)
-              ? [win32.join(programFiles, "Docker", "Docker", "resources", "bin")]
-              : []),
-            ...(typeof localAppData === "string" && win32.isAbsolute(localAppData)
-              ? [win32.join(localAppData, "Programs", "DockerDesktop", "resources", "bin")]
-              : []),
-          ]
-        : []),
-    ];
-    return Object.freeze(directories);
+        : [win32.join(user, ".local", "bin"), win32.join(user, ".cargo", "bin")],
+    );
   }
   const shared =
     platform === "darwin"
@@ -70,13 +56,7 @@ export function wellKnownExecutableDirectoriesV1(
     user === undefined
       ? []
       : [posix.join(user, ".local", "bin"), posix.join(user, ".cargo", "bin")];
-  const docker =
-    name === "docker" && platform === "darwin"
-      ? ["/Applications/Docker.app/Contents/Resources/bin"]
-      : name === "docker"
-        ? ["/snap/bin"]
-        : [];
-  return Object.freeze([...userDirectories, ...shared, ...docker]);
+  return Object.freeze([...userDirectories, ...shared]);
 }
 
 /** The absolute directories of a declared `PATH`, in order; relative entries are skipped. */
@@ -125,7 +105,7 @@ export function resolveHostExecutableV1(
 ): HostExecutableV1 | undefined {
   for (const [directories, foundIn] of [
     [pathDirectoriesV1(env, platform), "PATH"],
-    [wellKnownExecutableDirectoriesV1(name, env, platform), "well-known-directory"],
+    [wellKnownExecutableDirectoriesV1(env, platform), "well-known-directory"],
   ] as const) {
     for (const directory of directories) {
       const path = candidate(directory, name, platform);
@@ -135,6 +115,31 @@ export function resolveHostExecutableV1(
     }
   }
   return undefined;
+}
+
+/**
+ * Accepts a caller-selected executable path (for example from an `AIH_SCAN_*` variable) under
+ * the same rules as a search hit: absolute, a regular file, executable on POSIX and `<name>.exe`
+ * on Windows. Returns `undefined` when it does not qualify; nothing is run.
+ */
+export function selectHostExecutableV1(
+  name: HostExecutableNameV1,
+  selected: string,
+  platform: NodeJS.Platform = process.platform,
+): HostExecutableV1 | undefined {
+  const absolute =
+    platform === "win32" ? /^[A-Za-z]:[\\/]/u.test(selected) : selected.startsWith("/");
+  if (!absolute || selected.includes("\0")) return undefined;
+  const base = platform === "win32" ? win32.basename(selected) : posix.basename(selected);
+  if (platform === "win32" && base.toLowerCase() !== `${name}.exe`) return undefined;
+  const path = candidate(
+    platform === "win32" ? win32.dirname(selected) : posix.dirname(selected),
+    platform === "win32" ? name : (base as HostExecutableNameV1),
+    platform,
+  );
+  if (path === undefined) return undefined;
+  if (platform === process.platform) registered.add(path);
+  return Object.freeze({ name, path, foundIn: "selected" as const });
 }
 
 /** `true` only for a path this module resolved; Scan's runner spawns nothing else by path. */

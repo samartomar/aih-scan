@@ -4,12 +4,10 @@ import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dockerRunner } from "../../src/cli/docker-runner.js";
-import {
-  BASELINE_DOCKER_EXECUTABLE_V1,
-  BASELINE_UV_EXECUTABLE_V1,
-  processRunner,
-} from "../../src/cli/process-runner.js";
+import { processRunner, spawnBoundedV1 } from "../../src/cli/process-runner.js";
+
+/** An absolute analyzer path; spawn is mocked, so nothing at this path ever runs. */
+const ANALYZER = "/opt/analyzers/bin/skillspector";
 
 const { spawnMock, windowsJobMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -54,16 +52,16 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-describe("dockerRunner", () => {
-  it("runs only the one absolute Docker executable the OCI profile gates, never a PATH lookup", () => {
+describe("processRunner", () => {
+  it("runs only a host executable Scan resolved itself, never a bare name or other path", () => {
     spawnMock.mockClear();
     for (const argv of [
-      ["docker", "version"],
-      ["/bin/docker", "version"],
-      ["docker.exe", "version"],
+      ["skillspector", "--version"],
+      [ANALYZER, "--version"],
+      ["skillspector.exe", "--version"],
+      [ANALYZER],
     ])
-      expect(() => dockerRunner(argv, options), argv[0]).toThrow("registered Docker argv");
-    expect(() => processRunner(["docker", "version"], options)).toThrow("registered process argv");
+      expect(() => processRunner(argv, options), argv[0]).toThrow("registered process argv");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -72,10 +70,10 @@ describe("dockerRunner", () => {
     const child = new FakeChild();
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
-    child.emit("error", new Error("docker unavailable"));
+    const completed = spawnBoundedV1([ANALYZER, "--version"], options);
+    child.emit("error", new Error("analyzer unavailable"));
 
-    await expect(completed).rejects.toThrow("docker unavailable");
+    await expect(completed).rejects.toThrow("analyzer unavailable");
     await vi.advanceTimersByTimeAsync(20);
     expect(child.kill).not.toHaveBeenCalled();
     child.emit("close", 0);
@@ -89,7 +87,7 @@ describe("dockerRunner", () => {
     ] as const) {
       const child = new FakeChild();
       spawnMock.mockReturnValue(child);
-      const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], {
+      const completed = spawnBoundedV1([ANALYZER, "--version"], {
         ...options,
         timeoutMs: 10_000,
       });
@@ -107,7 +105,7 @@ describe("dockerRunner", () => {
     const child = new FakeChild();
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
+    const completed = spawnBoundedV1([ANALYZER, "--version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
     const bounded = Promise.race([
       completed,
@@ -133,7 +131,7 @@ describe("dockerRunner", () => {
     });
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
+    const completed = spawnBoundedV1([ANALYZER, "--version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
 
     await expect(completed).resolves.toEqual({
@@ -152,7 +150,7 @@ describe("dockerRunner", () => {
     child.kill.mockReturnValue(true);
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
+    const completed = spawnBoundedV1([ANALYZER, "--version"], options);
     await vi.advanceTimersByTimeAsync(options.timeoutMs);
     const bounded = Promise.race([
       completed,
@@ -179,7 +177,7 @@ describe("dockerRunner", () => {
     child.kill.mockReturnValue(true);
     spawnMock.mockReturnValue(child);
 
-    const completed = dockerRunner([BASELINE_DOCKER_EXECUTABLE_V1, "version"], options);
+    const completed = spawnBoundedV1([ANALYZER, "--version"], options);
     child[stream].write(Buffer.alloc(options.maxStdoutBytes + 1));
 
     await expect(
@@ -198,7 +196,7 @@ describe("dockerRunner", () => {
   });
 });
 
-describe("processRunner process-group containment", () => {
+describe("process-group containment", () => {
   it("kills a residual analyzer process group before settling leader success", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const child = new FakeChild();
@@ -212,7 +210,7 @@ describe("processRunner process-group containment", () => {
       return true;
     });
 
-    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+    const completed = spawnBoundedV1([ANALYZER, "scan"], {
       ...options,
       containProcessTree: true,
     });
@@ -239,7 +237,7 @@ describe("processRunner process-group containment", () => {
       return true;
     });
 
-    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+    const completed = spawnBoundedV1([ANALYZER, "scan"], {
       ...options,
       containProcessTree: true,
     });
@@ -266,7 +264,7 @@ describe("processRunner process-group containment", () => {
     const controller = new AbortController();
 
     await expect(
-      processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+      spawnBoundedV1([ANALYZER, "scan"], {
         ...options,
         containProcessTree: true,
         signal: controller.signal,
@@ -274,7 +272,7 @@ describe("processRunner process-group containment", () => {
     ).resolves.toEqual({ code: 0, stdout: "job", stderr: "", truncated: false });
     expect(spawnMock).not.toHaveBeenCalled();
     expect(windowsJobMock).toHaveBeenCalledTimes(1);
-    expect(windowsJobMock.mock.calls[0]?.[0]).toEqual([BASELINE_UV_EXECUTABLE_V1, "run"]);
+    expect(windowsJobMock.mock.calls[0]?.[0]).toEqual([ANALYZER, "scan"]);
     expect(windowsJobMock.mock.calls[0]?.[1]).toMatchObject({
       containProcessTree: true,
       signal: controller.signal,
@@ -294,7 +292,7 @@ describe("processRunner process-group containment", () => {
     });
     const controller = new AbortController();
 
-    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+    const completed = spawnBoundedV1([ANALYZER, "scan"], {
       ...options,
       timeoutMs: 60_000,
       containProcessTree: true,
@@ -323,7 +321,7 @@ describe("processRunner process-group containment", () => {
       return true;
     });
 
-    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+    const completed = spawnBoundedV1([ANALYZER, "scan"], {
       ...options,
       timeoutMs: 60_000,
       containProcessTree: true,
@@ -343,7 +341,7 @@ describe("processRunner process-group containment", () => {
     // The group never exits, whatever it is sent.
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
 
-    const completed = processRunner([BASELINE_UV_EXECUTABLE_V1, "run"], {
+    const completed = spawnBoundedV1([ANALYZER, "scan"], {
       ...options,
       timeoutMs: 60_000,
       containProcessTree: true,
@@ -380,15 +378,12 @@ describe("aih-scan bin", () => {
       ],
       { cwd: process.cwd(), stdio: "pipe" },
     );
-    // The published package ships tools/baseline-analyzers next to dist (package.json
-    // "files"); the CLI reads its analyzer locks when it loads (D24 completion evidence).
-    symlinkSync(resolve("tools"), join(directory, "tools"), "junction");
     const binPath = join(directory, "aih-scan");
     symlinkSync(join(outputDirectory, "cli.js"), binPath, "file");
 
     const result = spawnSync(process.execPath, [binPath, "--help"], { encoding: "utf8" });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("baseline-sign");
+    expect(result.stdout).toContain("aih-scan advisories");
   });
 });

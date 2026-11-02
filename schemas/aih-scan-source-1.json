@@ -1,0 +1,148 @@
+{
+  "$id": "https://github.com/samartomar/aih-scan/schemas/aih-scan-source-1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "aih-scan-source/1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path"
+      ],
+      "properties": {
+        "format": {
+          "const": "aih-scan-source/1"
+        },
+        "type": {
+          "const": "folder"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "repo"
+      ],
+      "properties": {
+        "format": {
+          "const": "aih-scan-source/1"
+        },
+        "type": {
+          "const": "git"
+        },
+        "repo": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https://[^/@?#\\s\\u0000-\\u001f\\u007f]+(?:/[^?#\\s\\u0000-\\u001f\\u007f]*)?$"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "kind": {
+          "enum": [
+            "skill",
+            "agent",
+            "command",
+            "rule",
+            "hook",
+            "mcp"
+          ]
+        }
+      },
+      "dependencies": {
+        "kind": [
+          "path"
+        ]
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "package",
+        "version"
+      ],
+      "properties": {
+        "format": {
+          "const": "aih-scan-source/1"
+        },
+        "type": {
+          "const": "npm"
+        },
+        "package": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 214
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "mcp"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path"
+      ],
+      "properties": {
+        "format": {
+          "const": "aih-scan-source/1"
+        },
+        "type": {
+          "const": "npm-file"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "mcp"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "format": {
+          "const": "aih-scan-source/1"
+        },
+        "type": {
+          "const": "remote"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "kind": {
+          "const": "mcp"
+        }
+      }
+    }
+  ]
+}

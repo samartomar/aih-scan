@@ -6,12 +6,11 @@ import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const fullPlan = (reason) => ({ mode: "full", reason, coverage: true, python: true, refresh: true, tests: [] });
+const fullPlan = (reason) => ({ mode: "full", reason, coverage: true, analyzers: true, tests: [] });
 const docsPath = (path) => /^(?:docs\/.*\.md|[^/]+\.md)$/.test(path);
 
-// Follow local source imports, including type imports conservatively. Refresh loads
-// package exports dynamically, so its public contracts/read/host entries are explicit roots.
-// Analyzer locks/scripts and package/schema resources are handled separately below.
+// Follow local source imports, including type imports conservatively. The analyzer adapters
+// are the roots whose closure selects the real analyzer proofs; analyzer locks are handled below.
 function closure(entries) {
   const seen = new Set();
   const pending = [...entries];
@@ -47,35 +46,32 @@ function select(changes, explicitFull) {
   let coverage = false;
   for (const path of paths) {
     if (docsPath(path)) continue;
-    if (/^src\/(?:public|contract)\//.test(path) || /^src\/assessment\/(?:types|shapes|json)\.ts$/.test(path))
+    if (/^src\/(?:public|contracts|read|host|shared)\//.test(path))
       return fullPlan("shared-public-contract");
-    if (/^tools\/artifact\/[^/]+\.mjs$/.test(path)) tests.add("tests/artifact");
-    else if (/^tools\/refresh\/[^/]+\.(mjs|sh)$/.test(path)) tests.add("tests/refresh");
-    else if (/^src\/(artifact|material-change)\/.+\.ts$/.test(path)) {
-      tests.add(`tests/${path.split("/")[1]}`);
-      tests.add("tests/assessment");
-      tests.add("tests/package-install-v2.test.ts");
-      tests.add("tests/public-boundary.test.ts");
-    } else if (/^src\/.+\.ts$/.test(path)) coverage = true;
+    if (/^tools\/publisher\/[^/]+\.mjs$/.test(path)) tests.add("tests/publisher");
+    else if (/^src\/.+\.ts$/.test(path)) coverage = true;
     else if (/^tests\/(?!support\/|fixtures\/).+\.test\.ts$/.test(path)) tests.add(path);
-    else return fullPlan("shared-dependency-workflow-or-unknown");
+    else if (!/^tools\/analyzers\/[^/]+\/(?:pyproject\.toml|uv\.lock)$/.test(path))
+      return fullPlan("shared-dependency-workflow-or-unknown");
   }
-  let pythonDependencies, refreshDependencies;
+  let analyzerDependencies;
   try {
-    pythonDependencies = closure(["src/baseline/runtime-v1.ts"]);
-    refreshDependencies = closure([
-      "tools/refresh/refresh.mjs", "src/public/host.ts", "src/public/read.ts", "src/public/contracts.ts",
-    ]);
+    analyzerDependencies = closure(["src/host/skillspector.ts", "src/host/cisco.ts"]);
   } catch {
     return fullPlan("dependency-graph-unavailable");
   }
-  const runtimeData = (path) => path.startsWith("tools/baseline-analyzers/");
+  const analyzers = paths.some(
+    (path) =>
+      analyzerDependencies.has(path) ||
+      path.startsWith("tools/analyzers/") ||
+      path === "tests/host-v1/real-analyzers.test.ts",
+  );
+  if (analyzers) tests.add("tests/host-v1/analyzer-pins.test.ts");
   return {
     mode: paths.every(docsPath) ? "docs" : "focused",
     reason: "known-dependency-impact",
     coverage,
-    python: paths.some((path) => pythonDependencies.has(path) || path.startsWith("src/cli/") || runtimeData(path)),
-    refresh: paths.some((path) => path.startsWith("src/cli/") || refreshDependencies.has(path) || runtimeData(path) || path === "tests/refresh/operation.test.ts"),
+    analyzers,
     tests: coverage ? [] : [...tests].sort(),
   };
 }
@@ -112,6 +108,6 @@ if (args.includes("--run-tests")) {
   const plan = select(changes, args.includes("--full"));
   if (args.includes("--plan")) writeFileSync(value("--plan"), JSON.stringify(plan));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
-    `mode=${plan.mode}\npython=${plan.python}\nrefresh=${plan.refresh}\n`);
+    `mode=${plan.mode}\nanalyzers=${plan.analyzers}\n`);
   console.log(JSON.stringify(plan));
 }

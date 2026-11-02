@@ -1,0 +1,53 @@
+{
+  "format": "aih-scan-summary/1",
+  "scanKey": "git-sha1:f89c87f852aa9c4a23e4408283c1d6fd07bed8c8",
+  "revision": 1,
+  "origin": "local",
+  "scannedAt": "2026-11-01T00:30:00Z",
+  "scanner": "@aihq/scan 0.1.0",
+  "routing": "aih-scan-routing/1",
+  "scoring": "aih-risk/1",
+  "score": 0,
+  "label": "CAUTION",
+  "coverage": "partial",
+  "reason": "unavailable",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "mode": "100644",
+      "part": "text",
+      "sha256": "c126662ce1f1d107ad70ae3dfa58afebbe696454c8093868651e38840d88c3a0"
+    },
+    {
+      "path": "scripts/greet.py",
+      "mode": "100644",
+      "part": "code",
+      "sha256": "03e693d9f2f687e0f40e36a8df7fcb4d1c22974012b7c2a55c000eb30f305824"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "aih-trust-lint",
+      "version": "1.0.0",
+      "mode": "static",
+      "result": "pass",
+      "counts": {}
+    },
+    {
+      "tool": "skillspector",
+      "version": "2.13.2",
+      "mode": "static",
+      "result": "not-run",
+      "reason": "unavailable",
+      "counts": {}
+    }
+  ],
+  "notAnalysed": [],
+  "sarif": [
+    {
+      "path": "sarif/da6d4786cb86f2e7801982af637019ff654afcd6e6ab9b09e50834f6e043e4b0.sarif",
+      "sha256": "da6d4786cb86f2e7801982af637019ff654afcd6e6ab9b09e50834f6e043e4b0"
+    }
+  ],
+  "dependencies": []
+}

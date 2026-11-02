@@ -1,0 +1,35 @@
+{
+  "$id": "https://github.com/samartomar/aih-scan/schemas/aih-scan-withdrawn-1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "aih-scan-withdrawn/1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "scanKey",
+    "throughRevision",
+    "at",
+    "reason"
+  ],
+  "properties": {
+    "format": {
+      "const": "aih-scan-withdrawn/1"
+    },
+    "scanKey": {
+      "type": "string",
+      "pattern": "^git-(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$"
+    },
+    "throughRevision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

@@ -22,7 +22,7 @@ function directory(label: string): string {
 }
 
 /** Writes a file that counts as an executable for `name` on this host. */
-function executable(parent: string, name: "uv" | "docker"): string {
+function executable(parent: string, name: "skillspector" | "skill-scanner"): string {
   mkdirSync(parent, { recursive: true });
   const file = join(parent, process.platform === "win32" ? `${name}.exe` : name);
   writeFileSync(file, "not a real program\n");
@@ -40,59 +40,51 @@ describe("host executable resolution", () => {
   });
 
   it("lists the fixed well-known directories for each OS after PATH", () => {
-    expect(wellKnownExecutableDirectoriesV1("uv", { HOME: "/home/u" }, "linux")).toEqual([
+    expect(wellKnownExecutableDirectoriesV1({ HOME: "/home/u" }, "linux")).toEqual([
       "/home/u/.local/bin",
       "/home/u/.cargo/bin",
       "/usr/local/bin",
       "/usr/bin",
       "/home/linuxbrew/.linuxbrew/bin",
     ]);
-    expect(wellKnownExecutableDirectoriesV1("uv", { HOME: "/Users/u" }, "darwin")).toEqual([
+    expect(wellKnownExecutableDirectoriesV1({ HOME: "/Users/u" }, "darwin")).toEqual([
       "/Users/u/.local/bin",
       "/Users/u/.cargo/bin",
       "/opt/homebrew/bin",
       "/usr/local/bin",
     ]);
-    expect(wellKnownExecutableDirectoriesV1("docker", { HOME: "relative" }, "darwin")).toEqual([
+    expect(wellKnownExecutableDirectoriesV1({ HOME: "relative" }, "darwin")).toEqual([
       "/opt/homebrew/bin",
       "/usr/local/bin",
-      "/Applications/Docker.app/Contents/Resources/bin",
     ]);
-    expect(
-      wellKnownExecutableDirectoriesV1(
-        "docker",
-        {
-          USERPROFILE: "C:\\Users\\u",
-          ProgramFiles: "C:\\Program Files",
-          LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
-        },
-        "win32",
-      ),
-    ).toEqual([
+    expect(wellKnownExecutableDirectoriesV1({ USERPROFILE: "C:\\Users\\u" }, "win32")).toEqual([
       "C:\\Users\\u\\.local\\bin",
       "C:\\Users\\u\\.cargo\\bin",
-      "C:\\Program Files\\Docker\\Docker\\resources\\bin",
-      "C:\\Users\\u\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin",
     ]);
+    expect(wellKnownExecutableDirectoriesV1({}, "win32")).toEqual([]);
   });
 
   it("finds PATH before a well-known directory, records where, and resolves the real path", () => {
     const home = directory("home");
     const onPath = directory("path");
-    const wellKnown = executable(join(home, ".local", "bin"), "uv");
-    const first = executable(onPath, "uv");
+    const wellKnown = executable(join(home, ".local", "bin"), "skillspector");
+    const first = executable(onPath, "skillspector");
     const env =
       process.platform === "win32"
         ? { PATH: onPath, USERPROFILE: home }
         : { PATH: onPath, HOME: home };
 
-    expect(resolveHostExecutableV1("uv", env)).toEqual({
-      name: "uv",
+    expect(resolveHostExecutableV1("skillspector", env)).toEqual({
+      name: "skillspector",
       path: first,
       foundIn: "PATH",
     });
-    const fallback = resolveHostExecutableV1("uv", { ...env, PATH: directory("empty") });
-    expect(fallback).toEqual({ name: "uv", path: wellKnown, foundIn: "well-known-directory" });
+    const fallback = resolveHostExecutableV1("skillspector", { ...env, PATH: directory("empty") });
+    expect(fallback).toEqual({
+      name: "skillspector",
+      path: wellKnown,
+      foundIn: "well-known-directory",
+    });
   });
 
   it("returns nothing when the executable is on neither PATH nor a well-known directory", () => {
@@ -101,9 +93,9 @@ describe("host executable resolution", () => {
       process.platform === "win32"
         ? { PATH: directory("nopath"), USERPROFILE: home }
         : { PATH: directory("nopath"), HOME: home };
-    const found = resolveHostExecutableV1("uv", env);
-    // A host may have uv in a shared well-known directory (/usr/local/bin); only a private
-    // home and PATH are under this test's control.
+    const found = resolveHostExecutableV1("skillspector", env);
+    // A host may have the analyzer in a shared well-known directory (/usr/local/bin); only a
+    // private home and PATH are under this test's control.
     if (found !== undefined) expect(found.foundIn).toBe("well-known-directory");
     else expect(found).toBeUndefined();
   });
@@ -112,25 +104,28 @@ describe("host executable resolution", () => {
     "accepts only <name>.exe on Windows, never a shell shim",
     () => {
       const onPath = directory("shim");
-      writeFileSync(join(onPath, "uv.cmd"), "@echo off\n");
-      writeFileSync(join(onPath, "uv.bat"), "@echo off\n");
-      writeFileSync(join(onPath, "uv"), "#!/bin/sh\n");
-      const found = resolveHostExecutableV1("uv", { PATH: onPath, USERPROFILE: directory("h") });
+      writeFileSync(join(onPath, "skillspector.cmd"), "@echo off\n");
+      writeFileSync(join(onPath, "skillspector.bat"), "@echo off\n");
+      writeFileSync(join(onPath, "skillspector"), "#!/bin/sh\n");
+      const found = resolveHostExecutableV1("skillspector", {
+        PATH: onPath,
+        USERPROFILE: directory("h"),
+      });
       if (found !== undefined) expect(found.path.toLowerCase()).not.toContain(onPath.toLowerCase());
     },
   );
 
   it.runIf(process.platform !== "win32")("skips a file without an execute bit", () => {
     const onPath = directory("noexec");
-    writeFileSync(join(onPath, "uv"), "#!/bin/sh\n");
-    chmodSync(join(onPath, "uv"), 0o644);
-    const found = resolveHostExecutableV1("uv", { PATH: onPath, HOME: directory("h") });
+    writeFileSync(join(onPath, "skillspector"), "#!/bin/sh\n");
+    chmodSync(join(onPath, "skillspector"), 0o644);
+    const found = resolveHostExecutableV1("skillspector", { PATH: onPath, HOME: directory("h") });
     if (found !== undefined) expect(found.path).not.toContain(onPath);
   });
 
   it("lets Scan's runner spawn only a path this resolver returned", () => {
     const onPath = directory("registered");
-    const path = executable(onPath, "docker");
+    const path = executable(onPath, "skill-scanner");
     expect(isRegisteredHostExecutableV1(path)).toBe(false);
     expect(() =>
       processRunner([path, "version"], {
@@ -144,7 +139,7 @@ describe("host executable resolution", () => {
       process.platform === "win32"
         ? { PATH: onPath, USERPROFILE: directory("h") }
         : { PATH: onPath, HOME: directory("h") };
-    expect(resolveHostExecutableV1("docker", env)?.path).toBe(path);
+    expect(resolveHostExecutableV1("skill-scanner", env)?.path).toBe(path);
     expect(isRegisteredHostExecutableV1(path)).toBe(true);
   });
 });

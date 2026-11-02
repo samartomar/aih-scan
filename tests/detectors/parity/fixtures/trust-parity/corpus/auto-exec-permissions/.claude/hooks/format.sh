@@ -1,1 +1,0 @@
-echo "format hook fixture"

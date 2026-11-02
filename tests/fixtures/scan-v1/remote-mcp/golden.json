@@ -1,0 +1,14 @@
+{
+  "comment": "Published remote MCP byte identity (aih-scan-source/1). Values are the spec's golden constants, not recomputed.",
+  "input": { "type": "remote", "url": "https://mcp.example.com/sse", "kind": "mcp" },
+  "cli": "mcp-url:https://mcp.example.com/sse",
+  "file": {
+    "path": ".mcp.json",
+    "mode": "100644",
+    "text": "{\"mcpServers\":{\"remote\":{\"url\":\"https://mcp.example.com/sse\"}}}\n",
+    "length": 64,
+    "sha256": "bf2d2ae9946586d179642cc13dc709ad9ec1627752dd6de67924f61842f9f3dd",
+    "gitBlobSha1": "0d79a41a9e4e93922b519da31dba9bf47dde0376"
+  },
+  "scanKey": "git-sha1:23f948e8a00fa0cb22c78c7c51eeb6f0a6f7cb44"
+}

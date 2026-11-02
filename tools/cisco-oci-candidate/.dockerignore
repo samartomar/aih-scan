@@ -1,5 +1,0 @@
-*
-!Dockerfile
-!.dockerignore
-!pyproject.toml
-!uv.lock

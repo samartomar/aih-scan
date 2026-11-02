@@ -7,14 +7,14 @@ import { type ProcessRunnerOptions, spawnBoundedV1 } from "../../src/cli/process
 import {
   findProcessesReferencingV1,
   sweepResidualProcessesV1,
-} from "../../src/cli/residual-processes.js";
+} from "../support/residual-processes.js";
 
 /**
  * Real POSIX process trees (Linux and macOS) under Scan's process-group containment. The
  * tree is node -> node -> node. With "attach" every child stays in the leader's process
  * group, which is what the runner signals. With "detach" a child calls setsid() and leaves
- * the group: the runner cannot see it, and only the post-run residual sweep can, which is
- * why every host-process run ends with that sweep and fails closed on any survivor.
+ * the group: the runner cannot see it. The residual-process oracle (tests/support) finds and
+ * kills survivors so each case can assert what the containment left.
  */
 
 const tree = resolve(import.meta.dirname, "..", "fixtures", "process-tree", "tree.mjs");
@@ -156,111 +156,6 @@ describe.runIf(onPosix)("POSIX process-group containment (real processes)", () =
       const swept = await sweepResidualProcessesV1([id]);
       expect(swept.found.length).toBeGreaterThanOrEqual(1);
       expect(swept.surviving).toEqual([]);
-    },
-    REAL_TIMEOUT_MS,
-  );
-});
-
-/**
- * A leader that starts `/bin/sleep 600` in a new session (Node's `detached` is setsid())
- * with closed streams, prints the sleeper's pid and exits. The sleeper's command line names
- * no private directory, so only its inherited environment or its working directory can tie
- * it to the run.
- */
-const DETACH_SLEEPER = [
-  'import { spawn } from "node:child_process";',
-  "const env = JSON.parse(process.env.AIHM_SLEEPER_ENV);",
-  'const child = spawn("/bin/sleep", ["600"], { detached: true, stdio: "ignore", env, cwd: process.env.AIHM_SLEEPER_CWD });',
-  "child.unref();",
-  'process.stdout.write(String(child.pid) + "\\n");',
-].join("\n");
-
-async function detachSleeper(
-  sleeperEnv: Record<string, string>,
-  sleeperCwd: string,
-): Promise<number> {
-  const result = await spawnBoundedV1(
-    [process.execPath, "--input-type=module", "-e", DETACH_SLEEPER],
-    options({
-      env: {
-        PATH: "/usr/bin:/bin",
-        LANG: "C.UTF-8",
-        AIHM_SLEEPER_ENV: JSON.stringify(sleeperEnv),
-        AIHM_SLEEPER_CWD: sleeperCwd,
-      },
-    }),
-  );
-  expect(result.code).toBe(0);
-  const pid = Number(result.stdout.trim());
-  expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
-  await settle(300);
-  return pid;
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-describe.runIf(onPosix)("POSIX residual sweep of detached descendants (real processes)", () => {
-  it(
-    "catches a setsid sleeper whose only tie to the run is an inherited private environment value",
-    async () => {
-      const id = marker("environ");
-      const directory = join(tmpdir(), id);
-      const pid = await detachSleeper(
-        { PATH: "/usr/bin:/bin", HOME: join(directory, "h"), TMPDIR: join(directory, "t") },
-        "/",
-      );
-      try {
-        const swept = await sweepResidualProcessesV1([id]);
-        expect(swept.found.map((entry) => entry.pid)).toContain(pid);
-        expect(swept.surviving).toEqual([]);
-        expect(alive(pid)).toBe(false);
-      } finally {
-        if (alive(pid)) process.kill(pid, "SIGKILL");
-      }
-    },
-    REAL_TIMEOUT_MS,
-  );
-
-  it(
-    "catches a setsid sleeper with a clean environment whose working directory is run-private",
-    async () => {
-      const id = marker("cwd");
-      const pid = await detachSleeper({ PATH: "/usr/bin:/bin" }, join(tmpdir(), id));
-      try {
-        const swept = await sweepResidualProcessesV1([id]);
-        expect(swept.found.map((entry) => entry.pid)).toContain(pid);
-        expect(swept.surviving).toEqual([]);
-        expect(alive(pid)).toBe(false);
-      } finally {
-        if (alive(pid)) process.kill(pid, "SIGKILL");
-      }
-    },
-    REAL_TIMEOUT_MS,
-  );
-
-  it(
-    "cannot see a sleeper that left the session and cleared both its environment and its cwd (documented limit)",
-    async () => {
-      // This is the residual limit the host-process-uv-v1 profile document states: a
-      // descendant that deliberately drops every tie to the run is not detectable on POSIX.
-      // The Linux namespace profile is the containment option for that threat.
-      const id = marker("limit");
-      const pid = await detachSleeper({ PATH: "/usr/bin:/bin" }, "/");
-      try {
-        expect(alive(pid)).toBe(true);
-        expect((await findProcessesReferencingV1([id])).map((entry) => entry.pid)).not.toContain(
-          pid,
-        );
-      } finally {
-        if (alive(pid)) process.kill(pid, "SIGKILL");
-      }
     },
     REAL_TIMEOUT_MS,
   );
