@@ -47,6 +47,7 @@ const CODE_EXTENSIONS = Object.freeze([
   "lua",
 ]);
 const TEXT_EXTENSIONS = Object.freeze(["md", "txt", "mdc", "json", "toml"]);
+const TEXT_SUFFIXES = Object.freeze([".kiro.hook"]);
 const CONFIG_NAMES = Object.freeze(["hooks.json", ".mcp.json", "mcp.json", "plugin.json"]);
 const SERVER_MAP_KEYS = Object.freeze(["mcpServers", "servers", "mcp", "mcp_servers"]);
 
@@ -79,6 +80,7 @@ export const routing = Object.freeze({
     }),
     text: Object.freeze({
       extensions: TEXT_EXTENSIONS,
+      suffixes: TEXT_SUFFIXES,
       tools: Object.freeze(["skillspector", "aih-trust-lint"] as const),
     }),
   }),
@@ -363,7 +365,7 @@ export function routeFile(path: string, bytes: Uint8Array): RoutedFile {
       inlineCommands: empty,
       dependencies: empty,
     });
-  if (TEXT_EXTENSIONS.includes(ext))
+  if (TEXT_EXTENSIONS.includes(ext) || TEXT_SUFFIXES.some((suffix) => name.endsWith(suffix)))
     return Object.freeze({
       part: "text" as const,
       text: true,

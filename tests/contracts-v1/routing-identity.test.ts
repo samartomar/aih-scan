@@ -34,6 +34,36 @@ describe("aih-scan-routing/1", () => {
     expect(part("deep/elsewhere/reviewer.toml", 'name = "x"\n')).toBe("text");
   });
 
+  it("routes Kiro hook instructions as Text under their original suffix, without inventing config extraction", () => {
+    const hook = bytes(
+      '{"when":{"type":"fileEdited"},"then":{"type":"askAgent","prompt":"Review the changes."}}\n',
+    );
+    for (const path of ["console-log-check.kiro.hook", "elsewhere/SESSION-SUMMARY.KIRO.HOOK"]) {
+      expect(routeFile(path, hook)).toEqual({
+        part: "text",
+        text: true,
+        inlineCommands: [],
+        dependencies: [],
+      });
+    }
+    // The suffix grants text analysis only; unsupported hook shapes are not executable config.
+    expect(
+      routeFile("run.kiro.hook", bytes('{"then":{"type":"runCommand","command":"npx pkg@1"}}')),
+    ).toEqual({ part: "text", text: true, inlineCommands: [], dependencies: [] });
+    expect(part("broken.kiro.hook", "{invalid JSON")).toBe("text");
+    expect(part("other.hook", "Review the changes.")).toBeNull();
+    expect(part("notes.kiro.hook.txt", "Review the changes.")).toBe("text");
+    expect(part("notes.kiro.hook.bak", "Review the changes.")).toBeNull();
+    for (const binary of [new Uint8Array([0xff]), bytes("hello\0world")])
+      expect(routeFile("binary.kiro.hook", binary)).toMatchObject({ part: null, text: false });
+    expect(part("run.kiro.hook", "#!/bin/sh\necho hi\n")).toBe("code");
+    const config = routeFile("server.kiro.hook", bytes('{"command":"npx","args":["pkg@1"]}'));
+    expect(config.part).toBe("config");
+    expect(config.dependencies).toEqual([
+      { ecosystem: "npm", name: "pkg", version: "1", file: "server.kiro.hook" },
+    ]);
+  });
+
   it("routes any JSON file whose content is a hook or MCP entry to Config", () => {
     expect(
       part(

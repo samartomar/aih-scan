@@ -1,0 +1,49 @@
+{
+  "format": "aih-scan-summary/1",
+  "scanKey": "git-sha1:a0a96efdf33f29df5b03c223a8299887c5757594",
+  "revision": 1,
+  "origin": "local",
+  "scannedAt": "2026-11-01T00:30:00Z",
+  "scanner": "@aihq/scan 0.1.0",
+  "routing": "aih-scan-routing/1",
+  "scoring": "aih-risk/1",
+  "score": 20,
+  "label": "CAUTION",
+  "coverage": "partial",
+  "reason": "unavailable",
+  "files": [
+    {
+      "path": "session-summary.kiro.hook",
+      "mode": "100644",
+      "part": "text",
+      "sha256": "9b7344fd2dd0991aa8d50fcbc02d82dc81ee1bd536e383fa9fcd037fb9606eb4"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "aih-trust-lint",
+      "version": "1.0.0",
+      "mode": "static",
+      "result": "fail",
+      "counts": {
+        "high": 1
+      }
+    },
+    {
+      "tool": "skillspector",
+      "version": "2.13.2",
+      "mode": "static",
+      "result": "not-run",
+      "reason": "unavailable",
+      "counts": {}
+    }
+  ],
+  "notAnalysed": [],
+  "sarif": [
+    {
+      "path": "sarif/29eef732a8d3359633cf9c4d6677803034af02bea64f1b6ebc43954235ed8c2e.sarif",
+      "sha256": "29eef732a8d3359633cf9c4d6677803034af02bea64f1b6ebc43954235ed8c2e"
+    }
+  ],
+  "dependencies": []
+}

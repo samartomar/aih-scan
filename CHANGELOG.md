@@ -8,6 +8,9 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 
 ### Added
 
+- Text assessment of `.kiro.hook` instruction files without renaming them or changing
+  their bytes, modes or content keys; existing Config and Code routing takes precedence.
+
 - Three entry points: `@aihq/scan/host` (`scan`, `matchScan`), `@aihq/scan/read`
   (`readSummary`, `readFindings`, `verifySummary`, `matchScan`, `checkAdvisories`; browser
   safe) and `@aihq/scan/contracts` (formats, JSON Schemas, routing, scoring, codes, limits,
