@@ -477,67 +477,73 @@ describe.runIf(process.platform !== "win32")(
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MODEL_REGISTRY");
     }, 120000);
     it.each([
-      "fixture-secret-value-166",
-      " \tfixture-edge-whitespace-166\r\n",
-    ])("retains credential-redacted unsigned partial diagnostics in receipts and checkpoints only (%j)", async (secret) => {
-      const setup = await prepared({ item: skill });
-      const ss = fakeAnalyzer(setup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.3",
-        outputFlag: "--output",
-        report: skillSpectorReport([], {
-          llm: false,
-          ledgerExceptions: [
-            { reason_code: `fixture failure ${secret.trim()} ${secret.trim()}`, fatal: true },
-          ],
-        }),
-      });
-      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
-      vi.stubEnv("DEEPSEEK_API", secret);
-      const result = await scanPrepared(setup);
-      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
-      const record = receipt.results[setup.manifest.items[0]!.scanKey];
-      expect(record.status).toBe("incomplete");
-      expect(record.notes).toContain(
-        "SkillSpector reported partial inspection: fixture failure [REDACTED] [REDACTED]",
-      );
-      const checkpoint = JSON.parse(readFileSync(join(result.root, "checkpoint.json"), "utf8"));
-      expect(checkpoint.results[setup.manifest.items[0]!.scanKey].notes).toEqual(record.notes);
-      const attempt = join(result.root, record.summary.split("/").slice(0, 2).join("/"));
-      expect(JSON.parse(readFileSync(join(attempt, "result.json"), "utf8")).record.notes).toEqual(
-        record.notes,
-      );
-      for (const path of [
-        result.receiptPath,
-        join(result.root, "checkpoint.json"),
-        join(attempt, "result.json"),
-        join(attempt, "request.json"),
-      ])
-        expect(readFileSync(path, "utf8")).not.toContain(secret.trim());
-      const summary = readFileSync(join(result.root, record.summary), "utf8");
-      expect(summary).not.toContain("fixture failure");
-      expect(summary).not.toContain("[REDACTED]");
-      const items = setup.manifest.items;
-      expect(
-        (await verifyResult(result.root, record, items, setup.manifest, setup.content, runtime))
-          .eligible,
-      ).toBe(false);
-      for (const notes of ["bad", [5], ["x".repeat(4097)], ["bad\u0000note"]])
-        await expect(
-          verifyResult(
-            result.root,
-            { ...record, notes },
-            items,
-            setup.manifest,
-            setup.content,
-            runtime,
-          ),
-        ).rejects.toThrow("notes");
-      const { notes: _notes, ...legacy } = record;
-      expect(
-        (await verifyResult(result.root, legacy, items, setup.manifest, setup.content, runtime))
-          .eligible,
-      ).toBe(false);
-    }, 120000);
+      ["fixture-secret-value-166", "fixture-secret-value-166"],
+      [" \tfixture-edge-whitespace-166\r\n", "fixture-edge-whitespace-166"],
+      ["\u0085fixture-python-nel-166\u0085", "fixture-python-nel-166"],
+      ["\u001cfixture-python-separator-166\u001f", "fixture-python-separator-166"],
+    ])(
+      "retains credential-redacted unsigned partial diagnostics in receipts and checkpoints only (%j)",
+      async (secret, effectiveSecret) => {
+        const setup = await prepared({ item: skill });
+        const ss = fakeAnalyzer(setup.folder, "skillspector", {
+          versionText: "SkillSpector v2.13.3",
+          outputFlag: "--output",
+          report: skillSpectorReport([], {
+            llm: false,
+            ledgerExceptions: [
+              { reason_code: `fixture failure ${effectiveSecret} ${effectiveSecret}`, fatal: true },
+            ],
+          }),
+        });
+        vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+        vi.stubEnv("DEEPSEEK_API", secret);
+        const result = await scanPrepared(setup);
+        const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+        const record = receipt.results[setup.manifest.items[0]!.scanKey];
+        expect(record.status).toBe("incomplete");
+        expect(record.notes).toContain(
+          "SkillSpector reported partial inspection: fixture failure [REDACTED] [REDACTED]",
+        );
+        const checkpoint = JSON.parse(readFileSync(join(result.root, "checkpoint.json"), "utf8"));
+        expect(checkpoint.results[setup.manifest.items[0]!.scanKey].notes).toEqual(record.notes);
+        const attempt = join(result.root, record.summary.split("/").slice(0, 2).join("/"));
+        expect(JSON.parse(readFileSync(join(attempt, "result.json"), "utf8")).record.notes).toEqual(
+          record.notes,
+        );
+        for (const path of [
+          result.receiptPath,
+          join(result.root, "checkpoint.json"),
+          join(attempt, "result.json"),
+          join(attempt, "request.json"),
+        ])
+          expect(readFileSync(path, "utf8")).not.toContain(effectiveSecret);
+        const summary = readFileSync(join(result.root, record.summary), "utf8");
+        expect(summary).not.toContain("fixture failure");
+        expect(summary).not.toContain("[REDACTED]");
+        const items = setup.manifest.items;
+        expect(
+          (await verifyResult(result.root, record, items, setup.manifest, setup.content, runtime))
+            .eligible,
+        ).toBe(false);
+        for (const notes of ["bad", [5], ["x".repeat(4097)], ["bad\u0000note"]])
+          await expect(
+            verifyResult(
+              result.root,
+              { ...record, notes },
+              items,
+              setup.manifest,
+              setup.content,
+              runtime,
+            ),
+          ).rejects.toThrow("notes");
+        const { notes: _notes, ...legacy } = record;
+        expect(
+          (await verifyResult(result.root, legacy, items, setup.manifest, setup.content, runtime))
+            .eligible,
+        ).toBe(false);
+      },
+      120000,
+    );
     it("deduplicates, resumes pilot results into a larger manifest and imports only reviewed output bytes", async () => {
       const setup = await prepared({
         first: skill,
