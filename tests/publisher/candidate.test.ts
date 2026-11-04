@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   checkCandidateRun,
   selectSummaries,
+  validatePreparedImport,
   validateSources,
 } from "../../tools/publisher/candidate.mjs";
 
@@ -21,6 +22,37 @@ const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("reviewed local prepared import descriptor", () => {
+  const descriptor = {
+    format: "aih-scan-prepared-import/1",
+    url: "https://artifacts.example.com/reviewed.tar",
+    allowedHosts: ["artifacts.example.com"],
+    archiveSha256: "a".repeat(64),
+    manifestSha256: "b".repeat(64),
+    receiptSha256: "c".repeat(64),
+  };
+  const accept = (value: unknown) => {
+    const bytes = Buffer.from(JSON.stringify(value));
+    return validatePreparedImport(bytes, sha256(bytes));
+  };
+  it("binds archive and manifest/receipt digests without changing candidate workflow custody", () => {
+    expect(accept(descriptor)).toEqual(descriptor);
+  });
+  it("refuses another descriptor digest, implicit hosts, credentials, redirects via query and malformed hashes", () => {
+    const bytes = Buffer.from(JSON.stringify(descriptor));
+    expect(() => validatePreparedImport(bytes, "0".repeat(64))).toThrow("digest");
+    for (const changed of [
+      { ...descriptor, allowedHosts: [] },
+      { ...descriptor, allowedHosts: ["elsewhere.example.com"] },
+      { ...descriptor, url: "http://artifacts.example.com/reviewed.tar" },
+      { ...descriptor, url: "https://user:secret@artifacts.example.com/reviewed.tar" },
+      { ...descriptor, url: "https://artifacts.example.com/reviewed.tar?token=secret" },
+      { ...descriptor, receiptSha256: "not-a-digest" },
+    ])
+      expect(() => accept(changed)).toThrow();
+  });
 });
 const temporary = () => {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-publisher-"));

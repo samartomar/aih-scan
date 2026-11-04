@@ -21,3 +21,14 @@ export declare function selectSummaries(
   expectedSha256: string,
   out: string,
 ): { count: number; listing: string; paths: string[] };
+export interface PreparedImportDescriptor {
+  format: "aih-scan-prepared-import/1";
+  url: string;
+  allowedHosts: string[];
+  archiveSha256: string;
+  manifestSha256: string;
+  receiptSha256: string;
+}
+export declare function validatePreparedImport(bytes: Uint8Array, expectedSha256: string): PreparedImportDescriptor;
+export declare function importPreparedCandidate(bytes: Uint8Array, expectedSha256: string, consumer: string, out: string): Promise<{ execution: string; count: number; manifestSha256: string; receiptSha256: string }>;
+export declare function checkPreparedCandidate(candidate: string, consumer: string): Promise<{ execution: string; count: number }>;

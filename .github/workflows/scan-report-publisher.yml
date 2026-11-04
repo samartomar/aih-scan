@@ -89,6 +89,9 @@ jobs:
           SELECTION_SHA: ${{ vars.SCAN_REPORT_SELECTION_SHA256 }}
         run: |-
           set -euo pipefail
+          if [ -f candidate/prepared-import.json ]; then
+            node tools/publisher/candidate.mjs prepared-check candidate signer-runtime
+          fi
           node tools/publisher/candidate.mjs select candidate "$SELECTION_SHA" selected > selection.txt
           while read -r _digest path; do
             node dist/cli.js read "selected/$path" > /dev/null
