@@ -2,7 +2,9 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 /** A synthetic inference service: real SkillSpector parses these fixed responses; no model runs. */
-export async function compatibleAiServiceV1(options: { delayMs?: number } = {}) {
+export async function compatibleAiServiceV1(
+  options: { delayMs?: number; tp4Mismatch?: boolean } = {},
+) {
   const requests: Record<string, unknown>[] = [];
   let outcome: "complete" | "malformed" | "quota" | "unfinished" = "complete";
   const security = { started: 0, completed: 0, active: 0, maxActive: 0 };
@@ -55,7 +57,21 @@ export async function compatibleAiServiceV1(options: { delayMs?: number } = {}) 
                   type: "function",
                   function: {
                     name: choice?.function?.name ?? "LLMAnalysisResult",
-                    arguments: outcome === "malformed" ? "{" : '{"findings":[]}',
+                    arguments:
+                      outcome === "malformed"
+                        ? "{"
+                        : JSON.stringify(
+                            JSON.stringify(payload.messages).includes("Determine whether a skill")
+                              ? {
+                                  is_mismatch: options.tp4Mismatch ?? false,
+                                  confidence: 0.9,
+                                  declared_purpose_summary: "Calculations",
+                                  actual_behavior_summary: "Network",
+                                  mismatched_capabilities: [body.slice(-180)],
+                                  explanation: body.slice(-180),
+                                }
+                              : { findings: [] },
+                          ),
                   },
                 },
               ],

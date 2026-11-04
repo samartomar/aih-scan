@@ -61,3 +61,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 
 Historical published versions and tags are kept unchanged as release history; see
 [RELEASING.md](RELEASING.md).
+
+- Support an explicitly identified reproducible SkillSpector TP4 maintenance build with
+  configuration-bound source/finding capacity and strict installed artifact verification.
+  Preserve upstream defaults, completed producer identities and incomplete evidence.

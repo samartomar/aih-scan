@@ -1,0 +1,10 @@
+{
+  "upstream": "38a1dfe93325d2f8bfcd4f8d0241eed706334915",
+  "sourceSha256": "c503337dd2e0e3a600149a6ab33a7cfa3d88e9869c2cfaff3eb1dbb77e68e29e",
+  "patchSha256": "79578d6ea997a331d649bb17173818b84a893a4760142681557bb836db0b9407",
+  "runtimeLockSha256": "d219f0adcd836212b6b1053ffa98786813e771f8f2bf7248a0a035091f2967ba",
+  "buildLockSha256": "63eb9f0abd6ae0f8ea6aa36cc900c80a2f391b4f7ecd3b5b7d84320d7249a936",
+  "version": "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855",
+  "wheel": "skillspector-2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855-py3-none-any.whl",
+  "wheelSha256": "18a124e7bd0d368ddf87926d00b43692f73a4b05cee450531d6a93ad1163b751"
+}

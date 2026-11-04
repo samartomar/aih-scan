@@ -325,3 +325,40 @@ protecting the signing environment, dispatching either workflow and publishing s
 results are operations the owner authorizes separately. Clear the reviewed-head variable
 after an authorized operation reaches a terminal state. Withdrawals
 (`aih-scan-withdrawn/1`) are signed the same way with `aih-scan sign <withdrawn.json>`.
+
+### Explicit TP4 maintenance capacity and producer transition
+
+For the separately identified maintenance build described in
+`tools/analyzers/skillspector/maintenance/README.md`, an AI assessment may add:
+
+```json
+"skillspector": {
+  "version": "<exact version from maintenance/artifact.json>",
+  "wheelSha256": "<exact wheelSha256 from maintenance/artifact.json>",
+  "tp4": { "maxFiles": 512, "maxFindings": 512, "maxBatches": 512 }
+}
+```
+
+The version/wheel hash must match the reviewed artifact; capacities are positive integers
+up to 4096. Values above are examples, not guaranteed campaign sizing. Plan all relevant
+sources, chunks and bytes before requesting paid inference. No control is inferred from
+ambient variables; all three capacities and exact artifact identity are explicit and
+bound into the resume configuration. The helper requires the exact reviewed wheel in
+`AIH_SCAN_SKILLSPECTOR_WHEEL`, verifies its installed payload before running/reusing a
+maintenance profile, and forwards only requested settings. Upstream 2.13.3 cannot satisfy
+this profile. Omitted profiles retain upstream defaults and existing configuration
+identities. Incomplete results, findings/scoring and ten-minute tool deadline are unchanged.
+
+Completed outputs from an older producer remain unchanged under their original
+scanner/configuration identities. Use separate exact producer contexts: validate each
+archive with its original reviewed scanner tarball installed in its own isolated consumer
+and retain its original receipt/selection. A new producer's output gets a separate context
+and signing/admission selection. Do not merge cross-producer checkpoints, replace old
+scanner identity, substitute a hash allowlist for installed-package equality, or silently
+rescan all completed keys. The existing workflows bind candidate and signer runs to a
+reviewed main head, so separate historical producer validation alone does not establish
+that a future hosted run can publish it. Before publication, the operator must establish
+which reviewed-head contexts can actually run each selection, or record the precise
+custody blocker for an explicit operational decision. This tooling change does not
+activate workflows, choose archive ingress/store destinations, authorize signing or
+establish trusted admission.

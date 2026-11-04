@@ -158,6 +158,35 @@ const skill = {
 };
 
 describe("prepared manifest and exact inventory", () => {
+  it("binds maintenance identity and rejects invalid TP4 controls without requests", async () => {
+    const setup = await prepared({ item: skill });
+    const artifact = JSON.parse(
+      readFileSync(join(repo, "tools/analyzers/skillspector/maintenance/artifact.json"), "utf8"),
+    );
+    const valid = {
+      version: artifact.version,
+      wheelSha256: artifact.wheelSha256,
+      tp4: { maxFiles: 256, maxFindings: 256, maxBatches: 256 },
+    };
+    const validate = (skillspector: unknown) => {
+      const bytes = Buffer.from(
+        JSON.stringify({ ...setup.manifest, assessment: { ...assessment, skillspector } }),
+      );
+      return validateManifest(bytes, hash(bytes));
+    };
+    expect(validate(valid).assessment.skillspector).toEqual(valid);
+    for (const value of [0, -1, 1.5, "256", 4097, null])
+      expect(() => validate({ ...valid, tp4: { ...valid.tp4, maxFiles: value } })).toThrow(
+        "TP4 capacity",
+      );
+    expect(() => validate({ ...valid, version: "2.13.3" })).toThrow("identity");
+    expect(() => validate({ ...valid, wheelSha256: "0".repeat(64) })).toThrow("identity");
+    expect(
+      validateManifest(Buffer.from(JSON.stringify(setup.manifest)), setup.manifestSha256)
+        .assessment,
+    ).not.toHaveProperty("skillspector");
+  });
+
   it("durably records unsigned host refusal diagnostics when a child input disappears", async () => {
     const setup = await prepared({ item: skill });
     const attempt = join(setup.folder, "failed-state/attempts/one");
@@ -803,6 +832,7 @@ describe("prepared transport and eligibility", () => {
         { tool: "aih-trust-lint", result: "pass" },
         {
           tool: "skillspector",
+          version: "2.13.3",
           result: "pass",
           mode: "ai",
           ai: { via: "provider", provider: "openai_compatible", model: "deepseek-flash" },
@@ -836,3 +866,57 @@ describe("prepared transport and eligibility", () => {
     expect(digest(bytes)).toBe(hash(bytes));
   });
 });
+
+it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
+  "retains complete TP4 sources and findings through an explicit maintenance prepared profile",
+  async () => {
+    const service = await compatibleAiServiceV1({ tp4Mismatch: true });
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR_WHEEL", process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL!);
+    try {
+      const files: Record<string, string> = { ...skill };
+      for (let i = 0; i < 129; i++) files[`code-${i}.py`] = `print(${i})\n`;
+      const setup = await prepared({ item: files });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", process.env.AIH_SCAN_TEST_SKILLSPECTOR!);
+      vi.stubEnv("DEEPSEEK_API", "fixture-only-not-a-real-key");
+      const bytes = Buffer.from(
+        JSON.stringify({
+          ...setup.manifest,
+          assessment: {
+            ...assessment,
+            baseUrl: service.endpoint,
+            llmConcurrency: 24,
+            skillspector: {
+              version:
+                "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855",
+              wheelSha256: "18a124e7bd0d368ddf87926d00b43692f73a4b05cee450531d6a93ad1163b751",
+              tp4: { maxFiles: 256, maxFindings: 256, maxBatches: 256 },
+            },
+          },
+        }),
+      );
+      writeFileSync(setup.manifestPath, bytes);
+      const result = await scanPrepared({ ...setup, manifestSha256: hash(bytes) });
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const record = receipt.results[setup.manifest.items[0]!.scanKey];
+      expect(record.status, JSON.stringify(record)).toBe("complete-ai");
+      const summary = JSON.parse(readFileSync(join(result.root, record.summary), "utf8"));
+      expect(summary.files).toHaveLength(130);
+      expect(
+        summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector").version,
+      ).toBe("2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855");
+      const sarif = record.sarif
+        .map((entry: { path: string }) => readFileSync(join(result.root, entry.path), "utf8"))
+        .join("\n");
+      expect(sarif.match(/"ruleId"\s*:\s*"TP4"/g)?.length).toBeGreaterThan(64);
+      const requests = service.requests.length;
+      expect(await scanPrepared({ ...setup, manifestSha256: hash(bytes) })).toMatchObject({
+        reused: 1,
+        completed: 0,
+      });
+      expect(service.requests).toHaveLength(requests);
+    } finally {
+      await service.close();
+    }
+  },
+  180000,
+);
