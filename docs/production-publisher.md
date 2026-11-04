@@ -107,6 +107,44 @@ Python/Node loader, tracing, home configuration and credential environments are 
 inherited. Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
 requested, `AIH_SCAN_SKILL_SCANNER`; install them using the locked analyzer instructions.
 
+AI assessments may also set `llmConcurrency` to an explicit positive safe integer, for
+example `"llmConcurrency": 24`. The helper passes it only to its isolated scan child as
+SkillSpector's existing `SKILLSPECTOR_MAX_LLM_CONCURRENCY` setting. Omitting it preserves
+the upstream default of 10; an ambient parent setting is not inherited. This controls
+concurrent LLM requests within each item, separately from the per-key worker scheduling
+below. There is no model-specific cap or timeout change. Static assessments must omit
+all AI controls. The explicit value is part of the assessment/configuration identity:
+changing it creates a separate resume namespace, while returning to the same profile
+reuses its completed results. Older manifests without this optional field still work.
+
+AI assessments may supply `"modelTokenLimits": { "contextLength": 1048576,
+"maxOutputTokens": 131072 }`. Both fields are required positive safe integers, with
+`maxOutputTokens` no larger than `contextLength`. The operator must verify these values
+against the selected model's supported limits. They are model metadata, not a request to
+change the model, reasoning effort, response method or tool deadline.
+
+For each attempt the helper writes a nonsecret `model-registry.json` inside that child's
+isolated scratch directory, containing only the exact selected model and these limits.
+It passes the generated absolute path through upstream `SKILLSPECTOR_MODEL_REGISTRY`;
+caller registry paths are not accepted, and ambient registry settings are not inherited.
+The file is local attempt evidence, excluded from candidate archives. Omitting the
+control preserves the upstream registry/default and existing configuration identities.
+Supplying or changing either limit creates a distinct configuration; completed results
+are reused only when returning to the same profile. Static assessments reject it.
+
+SkillSpector budgets input at 75% of context and output at the smaller of 25% of context
+and `maxOutputTokens`, using integer truncation. The example gives an input budget of
+786432 tokens and an output budget of 131072 tokens. A context of 32768 and output cap
+of 16384 instead yields an output budget of 8192. Raising these limits may let the
+provider generate more output and increase output-token cost; it does not reserve or
+guarantee that output. For DeepSeek, verify current context/output capabilities with
+the [model metadata](https://api-docs.deepseek.com/api/list-models/) and
+[chat-completion controls](https://api-docs.deepseek.com/api/create-chat-completion/).
+The locked OpenAI-compatible adapter sends this budget as `max_completion_tokens`.
+DeepSeek documents `max_tokens` and can ignore the adapter's field, retaining its
+default output limit. Registry metadata alone therefore does not prove that a provider
+honors the requested budget; verify the actual transport before relying on it.
+
 ### Local validation, parallel scan and resume
 
 Install the reviewed scanner tarball in a fresh consumer with scripts disabled. The
@@ -126,6 +164,14 @@ publishing evidence. A clean risk label or process exit alone is insufficient. R
 tools must have completed or be explicitly not applicable; the primary AI tool must
 have actually run in AI mode with the selected provider/model and complete coverage.
 All risk labels are accepted; this is an evidence-completeness policy, not a risk gate.
+
+Incomplete or failed results retain available unsigned host diagnostic `notes` in local
+attempt receipts, checkpoints and execution receipts. The helper redacts the configured
+credential value before recording notes, replaces control characters with spaces and
+bounds them to 32 distinct notes of 4096 characters each. Notes explain partial outcomes;
+they do not affect summaries, scores, eligibility or cryptographic trust. They are not
+included in the completed-output candidate archive. Older records without notes remain
+valid. Worker stderr is not persisted as a diagnostic log.
 
 Concurrency defaults to available CPU parallelism. Optional arguments after concurrency
 are estimated MiB per worker (default 512) and memory reserve MiB (default the larger
