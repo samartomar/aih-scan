@@ -40,6 +40,196 @@ mode. It uploads the unsigned `scan-report-candidate` artifact (the output folde
 source's scan result, the sources and the scanner tarball's SHA-256). It has read-only
 repository permission and no OIDC token.
 
+## Prepared local content and completed AI outputs
+
+`tools/publisher/prepared.mjs` is maintainer tooling, separate from the published Scan API.
+It handles ordinary item roots, editions, bundles, plugins and extracted entries through
+the same explicit inventory. It never discovers a whole repository in place of an item,
+executes submitted files, signs results or publishes them. Source content remains in the
+operator's staging area; it is **not included in the candidate archive**.
+
+### Reviewed manifest
+
+Hash the exact UTF-8 JSON bytes as SHA-256. This tooling-only format does not change
+`aih-scan-request/1` or signed summaries:
+
+```json
+{
+  "format": "aih-scan-prepared/1",
+  "scanner": {
+    "name": "@aihq/scan",
+    "version": "0.1.0",
+    "tarballSha256": "<64 lowercase hexadecimal characters>"
+  },
+  "assessment": {
+    "mode": "ai",
+    "tools": ["aih-trust-lint", "skillspector"],
+    "provider": "openai_compatible",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-flash",
+    "reasoningEffort": "none",
+    "structuredOutputMethod": "function_calling",
+    "credentialVariable": "DEEPSEEK_API"
+  },
+  "items": [{
+    "path": "items/example",
+    "scanKey": "git-sha1:<40 lowercase hexadecimal characters>",
+    "files": [{ "path": "SKILL.md", "mode": "100644", "sha256": "<64 lowercase hexadecimal characters>" }],
+    "labels": { "caller": "unsigned producer reference" },
+    "source": { "locator": "https://example.com/immutable-source", "revision": "exact-source-revision" }
+  }]
+}
+```
+
+Each item root is relative to the staging content directory; each file path is relative
+to that root. Include the complete inventory, including support files, with `100644` or
+`100755` modes. Item roots must not overlap. Links, special files, traversal, changed
+bytes/modes, missing/extra files inside an item and wrong computed keys are refused.
+Unselected item roots may remain in a shared staging directory so a pilot/subset can
+later expand to the full manifest. On POSIX, actual executable bits must match; on
+Windows the explicit portable mode list supplies the executable information the disk
+cannot represent. Matching reads the actual bytes and uses the portable public reader.
+
+`labels` and `source` are optional unsigned caller metadata. They never enter signed
+summaries. Review them for public suitability before transferring a candidate. Different
+references may have the same key only when their full path/mode/hash inventories agree.
+
+The example is the DeepSeek non-thinking schema-response configuration described in
+[analyzers.md](analyzers.md#deepseek-flash-on-windows). Other explicitly selected
+`openai_compatible` HTTP models/endpoints and the analyzer's `function_calling`,
+`json_mode` or `json_schema` controls can be requested without a provider substitution.
+The operator must verify that those settings work together at that provider. No agent
+CLI transport is enabled. Endpoints require HTTPS, except explicit loopback HTTP.
+Credential values are read from `credentialVariable` (default
+`SKILLSPECTOR_COMPAT_API_KEY`) into each isolated child environment only; receipts and
+worker request files contain the variable name, never its value. Other provider,
+Python/Node loader, tracing, home configuration and credential environments are not
+inherited. Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
+requested, `AIH_SCAN_SKILL_SCANNER`; install them using the locked analyzer instructions.
+
+### Local validation, parallel scan and resume
+
+Install the reviewed scanner tarball in a fresh consumer with scripts disabled. The
+helper checks every installed package file against that exact tarball before importing
+only its public host/read/contracts modules. Use a supported Node version; no global
+runtime or provider configuration changes are required.
+
+```sh
+node tools/publisher/prepared.mjs validate manifest.json "$MANIFEST_SHA" content consumer scanner.tgz
+node tools/publisher/prepared.mjs scan manifest.json "$MANIFEST_SHA" content consumer scanner.tgz state 6
+```
+
+`scan` returns a new immutable receipt path/hash and completed, reused, pending, unique-key
+and reference counts. Keep that receipt and its state directory. A static fallback,
+failed/cancelled analysis or partial coverage stays visible but cannot become eligible AI
+publishing evidence. A clean risk label or process exit alone is insufficient. Requested
+tools must have completed or be explicitly not applicable; the primary AI tool must
+have actually run in AI mode with the selected provider/model and complete coverage.
+All risk labels are accepted; this is an evidence-completeness policy, not a risk gate.
+
+Concurrency defaults to available CPU parallelism. Optional arguments after concurrency
+are estimated MiB per worker (default 512) and memory reserve MiB (default the larger
+of 1 GiB or 10% of physical RAM). These are configurable scheduling estimates, not model
+limits or campaign-size caps. Each launch immediately reserves its estimate because RSS
+allocation lags process creation; subsequent waves recheck available memory. If memory
+cannot support another worker and none is active, the helper returns explicit pending
+keys for resume instead of waiting indefinitely. Measure the pilot's actual memory and
+throughput before choosing campaign concurrency; leave other active work responsive.
+
+Each distinct key uses a separate output/temp root. Finished entries are atomically
+checkpointed, with file data flushed before index replacement. Repeating the command,
+expanding a pilot into the full manifest or changing labels reuses successful unchanged
+keys after revalidating their summary, SARIF, configuration and actual inventory. Changed
+bytes/paths/modes invalidate the affected key; changed scanner/assessment configuration
+uses a separate cache namespace. Failed attempts remain in immutable attempt directories
+and may be retried; successful output is never overwritten. An active invocation owns
+the cache lock; a crashed same-host owner can be recovered after its PID is gone.
+
+If a checkpoint write was interrupted, preserve its temporary files and attempt output.
+Before another paid attempt, recover and revalidate any completed records without
+starting analyzers or making provider requests:
+
+```sh
+node tools/publisher/prepared.mjs recover manifest.json "$MANIFEST_SHA" content consumer scanner.tgz state
+```
+
+`recover` reports recovered keys and ignored incomplete temporary JSON. Valid completed
+temporary records are merged into the canonical checkpoint; conflicts are refused and
+all evidence remains. Normal `scan` also performs this recovery before deciding which
+keys need work.
+
+For two machines, scan disjoint subset manifests with the same scanner/assessment and
+copy each immutable receipt **with its relative output tree**, rather than copying a live
+checkpoint index. Use the full manifest and local source inventory to validate a merge:
+
+```sh
+# receipts.json is an explicit JSON array of copied receipt file paths.
+node tools/publisher/prepared.mjs merge manifest.json "$MANIFEST_SHA" content consumer scanner.tgz merged-state receipts.json
+node tools/publisher/prepared.mjs scan manifest.json "$MANIFEST_SHA" content consumer scanner.tgz merged-state 6
+```
+
+The final command reuses merged complete keys and scans only missing keys. Conflicting
+complete outputs for the same key are refused and retained for review. No shared service,
+credential transfer or mutable cross-machine index is introduced.
+
+### Output-only archive and checked hosted intake
+
+Export all requested keys, or name an explicit JSON array of selected keys for a smaller
+batch. No key is silently omitted:
+
+```sh
+node tools/publisher/prepared.mjs archive manifest.json "$MANIFEST_SHA" content consumer scanner.tgz "$RECEIPT_PATH" candidate.tar selected-keys.json
+```
+
+The returned archive, batch-manifest and receipt hashes bind the exact transfer. The
+batch manifest retains the parent manifest digest. Export rechecks actual local bytes
+with public `scanKeyOf` and portable `matchScan`, every summary, every referenced SARIF
+digest and findings, the installed scanner and AI eligibility. Its archive contains only
+that manifest, an unsigned `execution: local` receipt, the scanner tarball and selected
+summary/SARIF bytes. It excludes source content, worker requests, cache histories and
+credentials. Import accepts the helper's bounded regular-file-only ustar transport;
+links, special entries, duplicate/traversing paths, corrupted headers and unexpected
+files are refused before any output is eligible.
+
+The existing 512 MiB candidate archive bound remains. Scan's input limits apply per
+item/request (500 MiB, 50,000 files), and its ten-minute per-tool/item limit remains.
+The candidate job remains 120 minutes and signing jobs 30 minutes. Select explicit
+smaller batches as needed for bytes and measured signing time; there is no new fixed
+campaign or key-count cap. The legacy sources route retains its 64-descriptor limit.
+
+The operator selects an already-authorized transfer location; this software creates no
+release, tag or store. Hash and review this import descriptor, then provide its exact
+bytes as the candidate workflow's `prepared_json` input and set the reviewed
+`SCAN_REPORT_PREPARED_SHA256` variable under separate operation authority:
+
+```json
+{
+  "format": "aih-scan-prepared-import/1",
+  "url": "https://artifacts.example.com/immutable/candidate.tar",
+  "allowedHosts": ["artifacts.example.com"],
+  "archiveSha256": "<reviewed archive digest>",
+  "manifestSha256": "<exported batch manifest digest>",
+  "receiptSha256": "<exported receipt digest>"
+}
+```
+
+Intake requires a terminal public HTTPS URL on an explicit allowed host, no URL
+credentials/query parameters, and public DNS addresses pinned for the connection.
+Redirects are refused; supply the terminal URL. Downloads are bounded to 512 MiB and a
+two-minute socket timeout. No location or private ingress policy is chosen automatically.
+The workflow accepts exactly one of `sources_json` and `prepared_json`. Its prepared
+branch downloads, hashes and validates the output-only archive using a fresh installed
+scanner; it does not provision analyzers or repeat paid inference.
+
+Hosted validation checks the reviewed per-file path/mode/hash inventory against each
+summary, expected key, scanner/configuration and parsed SARIF. It cannot reconstruct
+untransferred source bytes or independently establish that local inference occurred.
+The unsigned receipt says `local`; owner review authorizes signing those bytes. It is
+never a claim of hosted analysis, a cryptographic signature or consumer trust by itself.
+The signing workflow revalidates the entire prepared inventory and AI eligibility before
+selection. The existing candidate workflow/run/artifact custody checks, reviewed selection
+digest, protected signer environment and default trusted signer identity remain in force.
+
 ## Signing: `scan-report-publisher.yml`
 
 Dispatched with the reviewed candidate run ID and the SHA-256 of the reviewed selection

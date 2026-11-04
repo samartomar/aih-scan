@@ -8,7 +8,13 @@ on:
     inputs:
       sources_json:
         description: Exact reviewed sources JSON (its SHA-256 must equal vars.SCAN_REPORT_SOURCES_SHA256)
-        required: true
+        required: false
+        default: ""
+        type: string
+      prepared_json:
+        description: Reviewed output-only local candidate import JSON (SHA-256 must equal vars.SCAN_REPORT_PREPARED_SHA256)
+        required: false
+        default: ""
         type: string
 permissions: {}
 concurrency:
@@ -16,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   candidate:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_SOURCES_SHA256 != ''
+    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && ((inputs.sources_json != '' && inputs.prepared_json == '' && vars.SCAN_REPORT_SOURCES_SHA256 != '') || (inputs.prepared_json != '' && inputs.sources_json == '' && vars.SCAN_REPORT_PREPARED_SHA256 != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -30,12 +36,15 @@ jobs:
         with:
           node-version: 24.15.0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        if: inputs.prepared_json == ''
         with:
           python-version: "3.13"
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        if: inputs.prepared_json == ''
         with:
           version: 0.12.13
       - name: Validate the reviewed sources
+        if: inputs.prepared_json == ''
         env:
           SOURCES_JSON: ${{ inputs.sources_json }}
           SOURCES_SHA256: ${{ vars.SCAN_REPORT_SOURCES_SHA256 }}
@@ -56,12 +65,14 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund --save-exact "$tarball"
           sha256sum "$tarball" | awk '{print $1}' > "$RUNNER_TEMP/scanner/tarball.sha256"
       - name: Provision the locked analyzer runtimes
+        if: inputs.prepared_json == ''
         run: |-
           set -euo pipefail
           runtimes="$RUNNER_TEMP/analyzers"
           UV_PROJECT_ENVIRONMENT="$runtimes/skillspector" uv sync --project tools/analyzers/skillspector --locked --no-install-project --python 3.13
           UV_PROJECT_ENVIRONMENT="$runtimes/cisco-skill-scanner" uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project --python 3.13
       - name: Scan every reviewed source with the installed CLI
+        if: inputs.prepared_json == ''
         env:
           AIH_SCAN_SKILLSPECTOR: ${{ runner.temp }}/analyzers/skillspector/bin/skillspector
           AIH_SCAN_SKILL_SCANNER: ${{ runner.temp }}/analyzers/cisco-skill-scanner/bin/skill-scanner
@@ -80,6 +91,15 @@ jobs:
           done
           cp "$RUNNER_TEMP/sources.json" "$candidate/sources.json"
           cp "$RUNNER_TEMP/scanner/tarball.sha256" "$candidate/scanner-tarball.sha256"
+      - name: Import and validate reviewed local AI outputs without rerunning their analysis
+        if: inputs.prepared_json != ''
+        env:
+          PREPARED_JSON: ${{ inputs.prepared_json }}
+          PREPARED_SHA256: ${{ vars.SCAN_REPORT_PREPARED_SHA256 }}
+        run: |-
+          set -euo pipefail
+          printf '%s' "$PREPARED_JSON" > "$RUNNER_TEMP/prepared-import.json"
+          node tools/publisher/candidate.mjs prepared-import "$RUNNER_TEMP/prepared-import.json" "$PREPARED_SHA256" "$RUNNER_TEMP/consumer" "$RUNNER_TEMP/candidate"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-report-candidate

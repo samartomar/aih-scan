@@ -6,7 +6,7 @@
 //   node tools/publisher/candidate.mjs check-run <run.json> <artifacts.json> <run-id> <head> <artifact-id> <artifact-digest>
 //   node tools/publisher/candidate.mjs select <candidate-dir> <expected-selection-sha256> <out-dir>
 import { createHash } from "node:crypto";
-import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -21,6 +21,36 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const fail = (message) => {
   throw new Error(message);
 };
+
+/** The URL is transport only: reviewed hashes and explicit public-host policy bind imported bytes. */
+export function validatePreparedImport(bytes, expectedSha256) {
+  if (!/^[0-9a-f]{64}$/.test(expectedSha256 ?? "") || sha256(bytes) !== expectedSha256)
+    fail("Reviewed prepared import digest mismatch");
+  const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  if (!value || Object.keys(value).sort().join(",") !== "allowedHosts,archiveSha256,format,manifestSha256,receiptSha256,url" || value.format !== "aih-scan-prepared-import/1" || !Array.isArray(value.allowedHosts) || value.allowedHosts.length === 0 || !value.allowedHosts.every((host) => typeof host === "string" && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host)) || ![value.archiveSha256, value.manifestSha256, value.receiptSha256].every((hash) => /^[0-9a-f]{64}$/.test(hash))) fail("Invalid prepared import descriptor");
+  const url = new URL(value.url);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !value.allowedHosts.includes(url.hostname)) fail("Prepared import URL policy refused");
+  return value;
+}
+
+export async function importPreparedCandidate(bytes, expectedSha256, consumer, out) {
+  const descriptor = validatePreparedImport(bytes, expectedSha256);
+  const { downloadArchive } = await import("./prepared-archive.mjs");
+  const { importCandidate } = await import("./prepared.mjs");
+  const archive = `${out}.download.tar`;
+  await downloadArchive({ ...descriptor, sha256: descriptor.archiveSha256 }, archive);
+  const checked = await importCandidate(archive, descriptor.archiveSha256, descriptor.manifestSha256, descriptor.receiptSha256, consumer, out);
+  writeFileSync(join(out, "prepared-import.json"), `${JSON.stringify({ execution: "local", archiveSha256: descriptor.archiveSha256, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256 })}\n`, { flag: "wx" });
+  return { execution: "local", count: checked.summaries.length, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256 };
+}
+
+export async function checkPreparedCandidate(candidate, consumer) {
+  const { verifyCandidate } = await import("./prepared.mjs");
+  const receipt = JSON.parse(readFileSync(join(candidate, "prepared-import.json"), "utf8"));
+  if (receipt.execution !== "local") fail("Prepared execution provenance refused");
+  const checked = await verifyCandidate(candidate, receipt.manifestSha256, receipt.receiptSha256, consumer, join(candidate, "scanner.tgz"));
+  return { execution: "local", count: checked.summaries.length };
+}
 
 /**
  * The reviewed sources of one candidate run: an exact JSON array whose SHA-256 the owner reviewed.
@@ -180,6 +210,12 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
         JSON.parse(readFileSync(artifactsPath, "utf8")),
         ...selectors,
       );
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } else if (command === "prepared-import" && args.length === 4) {
+      const result = await importPreparedCandidate(readFileSync(args[0]), args[1], args[2], args[3]);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } else if (command === "prepared-check" && args.length === 2) {
+      const result = await checkPreparedCandidate(args[0], args[1]);
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } else if (command === "select" && args.length === 3) {
       const result = selectSummaries(args[0], args[1], args[2]);
