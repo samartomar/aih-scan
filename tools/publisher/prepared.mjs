@@ -56,7 +56,7 @@ export function validateManifest(bytes, expectedSha256) {
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
   need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
   const assessment = manifest.assessment;
-  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable"]);
+  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
   if (assessment.mode === "ai") {
@@ -67,6 +67,7 @@ export function validateManifest(bytes, expectedSha256) {
     need(!endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash, "AI endpoint must not contain credentials or query parameters");
     need(typeof assessment.reasoningEffort === "string" && /^[a-z0-9_-]{1,64}$/i.test(assessment.reasoningEffort) && ["function_calling", "json_mode", "json_schema"].includes(assessment.structuredOutputMethod), "Invalid explicit AI response controls");
     if (assessment.credentialVariable !== undefined) need(/^[A-Z_][A-Z0-9_]*$/.test(assessment.credentialVariable), "Invalid credential variable name");
+    if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
   } else need(Object.keys(assessment).length === 2, "Static assessment must not name AI controls");
   need(Array.isArray(manifest.items) && manifest.items.length > 0, "Prepared manifest has no items");
   const roots = new Set();
@@ -146,7 +147,8 @@ export function aiEligible(summary, manifest) {
   return manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 }
 export async function verifyResult(root, record, items, manifest, content, runtime) {
-  keys(record, ["status", "summary", "summarySha256", "sarif", "elapsedMs"], ["detail"]);
+  keys(record, ["status", "summary", "summarySha256", "sarif", "elapsedMs"], ["detail", "notes"]);
+  if (record.notes !== undefined) need(Array.isArray(record.notes) && record.notes.length <= 32 && record.notes.every((note) => typeof note === "string" && note.length > 0 && note.length <= 4096 && plainText(note)), "Invalid unsigned diagnostic notes");
   safePath(record.summary); need(hash(record.summarySha256) && Array.isArray(record.sarif) && (record.elapsedMs === null || typeof record.elapsedMs === "number" && Number.isFinite(record.elapsedMs) && record.elapsedMs >= 0), "Invalid result receipt");
   const bytes = readRegular(join(root, ...record.summary.split("/")), runtime.contracts.limits.output.summaryBytes);
   need(digest(bytes) === record.summarySha256, "Summary digest mismatch");
@@ -177,6 +179,13 @@ export async function verifyResult(root, record, items, manifest, content, runti
   need(record.status === (eligible ? "complete-ai" : "incomplete"), "Result eligibility was misreported");
   return { summary, eligible };
 }
+function diagnosticNotes(item, assessment) {
+  const credential = assessment.mode === "ai" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
+  const notes = [...(item?.notes ?? []), ...(item?.status !== "ok" && item?.reason ? [`${item.reason}${item.detail ? `: ${item.detail}` : ""}`] : [])];
+  // Redact before normalizing or bounding text, so neither truncation nor a control
+  // character in a credential can leave part of its value in an unsigned receipt.
+  return [...new Set(notes.filter((note) => typeof note === "string").map((note) => [...(credential ? note.split(credential).join("[REDACTED]") : note)].map((character) => plainText(character) ? character : " ").join("").slice(0, 4096)).filter(Boolean))].slice(0, 32);
+}
 async function worker(requestPath) {
   const job = json(readRegular(requestPath));
   const runtime = await loadRuntime(job.consumer, job.tarball, job.scanner);
@@ -184,12 +193,17 @@ async function worker(requestPath) {
   const started = Date.now();
   const result = await runtime.host.scan({ format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] }, { outDir: job.out, signal: controller.signal });
   const item = result.results[0];
-  if (item?.status !== "ok") return { status: "failed", detail: result.status, elapsedMs: Date.now() - started };
-  const summary = runtime.read.readSummary(new Uint8Array(readRegular(item.summaryPath)));
-  need(summary.status === "ok", "Worker returned an invalid summary");
-  const record = { status: aiEligible(summary.summary, { assessment: job.assessment }) ? "complete-ai" : "incomplete", summary: item.summaryPath, summarySha256: digest(readRegular(item.summaryPath)), sarif: summary.summary.sarif.map((entry) => ({ path: join(dirname(item.summaryPath), ...entry.path.split("/")), sha256: entry.sha256 })), elapsedMs: Date.now() - started };
+  let record;
+  if (item?.status !== "ok") record = { status: "failed", detail: result.status, elapsedMs: Date.now() - started };
+  else {
+    const summary = runtime.read.readSummary(new Uint8Array(readRegular(item.summaryPath)));
+    need(summary.status === "ok", "Worker returned an invalid summary");
+    record = { status: aiEligible(summary.summary, { assessment: job.assessment }) ? "complete-ai" : "incomplete", summary: item.summaryPath, summarySha256: digest(readRegular(item.summaryPath)), sarif: summary.summary.sarif.map((entry) => ({ path: join(dirname(item.summaryPath), ...entry.path.split("/")), sha256: entry.sha256 })), elapsedMs: Date.now() - started };
+  }
+  const notes = record.status === "complete-ai" ? [] : diagnosticNotes(item, job.assessment);
+  if (notes.length) record.notes = notes;
   const stateRoot = resolve(dirname(requestPath), "../..");
-  const durable = { ...record, summary: relative(stateRoot, record.summary).split(sep).join("/"), sarif: record.sarif.map((entry) => ({ ...entry, path: relative(stateRoot, entry.path).split(sep).join("/") })) };
+  const durable = record.summary ? { ...record, summary: relative(stateRoot, record.summary).split(sep).join("/"), sarif: record.sarif.map((entry) => ({ ...entry, path: relative(stateRoot, entry.path).split(sep).join("/") })) } : record;
   const receiptPath = join(dirname(requestPath), "result.json");
   need(!existsSync(receiptPath), "Attempt result already exists");
   writeCheckpointAtomic(receiptPath, { format: "aih-scan-prepared-attempt/1", configSha256: fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment }, runtime)), scanKey: job.item.scanKey, record: durable });
@@ -204,6 +218,7 @@ function childEnvironment(assessment, scratch) {
     const variable = assessment.credentialVariable ?? "SKILLSPECTOR_COMPAT_API_KEY";
     need(typeof process.env[variable] === "string" && process.env[variable].trim(), `${variable} is not set; no AI request started`);
     Object.assign(env, { SKILLSPECTOR_PROVIDER: assessment.provider, SKILLSPECTOR_COMPAT_BASE_URL: assessment.baseUrl, SKILLSPECTOR_COMPAT_API_KEY: process.env[variable], SKILLSPECTOR_MODEL: assessment.model, SKILLSPECTOR_REASONING_EFFORT: assessment.reasoningEffort, SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: assessment.structuredOutputMethod });
+    if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
   }
   return env;
 }
@@ -444,6 +459,7 @@ export async function exportCandidate({ manifestPath, manifestSha256, content, c
     await verifyResult(root, record, groups.get(key), original, content, runtime);
     const prefix = `targets/${runtime.contracts.keyFolderName(key)}`;
     const exported = { ...record, summary: `${prefix}/summary.json`, sarif: record.sarif.map((entry) => ({ path: `${prefix}/sarif/${entry.path.split("/").at(-1)}`, sha256: entry.sha256 })) };
+    delete exported.notes;
     results[key] = exported;
     const summaryBytes = readRegular(join(root, ...record.summary.split("/"))); need(digest(summaryBytes) === record.summarySha256, "Summary changed during export");
     entries.push({ path: exported.summary, bytes: summaryBytes });

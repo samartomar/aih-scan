@@ -107,6 +107,16 @@ Python/Node loader, tracing, home configuration and credential environments are 
 inherited. Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
 requested, `AIH_SCAN_SKILL_SCANNER`; install them using the locked analyzer instructions.
 
+AI assessments may also set `llmConcurrency` to an explicit positive safe integer, for
+example `"llmConcurrency": 24`. The helper passes it only to its isolated scan child as
+SkillSpector's existing `SKILLSPECTOR_MAX_LLM_CONCURRENCY` setting. Omitting it preserves
+the upstream default of 10; an ambient parent setting is not inherited. This controls
+concurrent LLM requests within each item, separately from the per-key worker scheduling
+below. There is no model-specific cap or timeout change. Static assessments must omit
+all AI controls. The explicit value is part of the assessment/configuration identity:
+changing it creates a separate resume namespace, while returning to the same profile
+reuses its completed results. Older manifests without this optional field still work.
+
 ### Local validation, parallel scan and resume
 
 Install the reviewed scanner tarball in a fresh consumer with scripts disabled. The
@@ -126,6 +136,14 @@ publishing evidence. A clean risk label or process exit alone is insufficient. R
 tools must have completed or be explicitly not applicable; the primary AI tool must
 have actually run in AI mode with the selected provider/model and complete coverage.
 All risk labels are accepted; this is an evidence-completeness policy, not a risk gate.
+
+Incomplete or failed results retain available unsigned host diagnostic `notes` in local
+attempt receipts, checkpoints and execution receipts. The helper redacts the configured
+credential value before recording notes, replaces control characters with spaces and
+bounds them to 32 distinct notes of 4096 characters each. Notes explain partial outcomes;
+they do not affect summaries, scores, eligibility or cryptographic trust. They are not
+included in the completed-output candidate archive. Older records without notes remain
+valid. Worker stderr is not persisted as a diagnostic log.
 
 Concurrency defaults to available CPU parallelism. Optional arguments after concurrency
 are estimated MiB per worker (default 512) and memory reserve MiB (default the larger

@@ -38,6 +38,7 @@ import {
   writeArchive,
 } from "../../tools/publisher/prepared-archive.mjs";
 import { fakeAnalyzer, skillSpectorReport } from "../support/analyzer-cli-v1.js";
+import { compatibleAiServiceV1 } from "../support/compatible-ai-service-v1.js";
 import { readPackedPackage } from "../support/npm-pack-output.js";
 
 const repo = resolve(import.meta.dirname, "../..");
@@ -56,34 +57,37 @@ const assessment = {
   structuredOutputMethod: "function_calling",
 };
 beforeAll(async () => {
-  const staging = join(root, "package");
-  mkdirSync(staging);
-  execFileSync(
-    process.execPath,
-    [
-      join(repo, "node_modules/typescript/bin/tsc"),
-      "-p",
-      join(repo, "tsconfig.build.json"),
-      "--outDir",
-      join(staging, "dist"),
-    ],
-    { windowsHide: true },
-  );
-  const manifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
-  for (const path of ["package.json", "README.md", "LICENSE", ...manifest.files])
-    if (path !== "dist") cpSync(join(repo, path), join(staging, path), { recursive: true });
   const npm = join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
   const npmPath = existsSync(npm)
     ? npm
     : resolve(dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js");
-  const packed = readPackedPackage(
+  if (process.env.AIH_SCAN_PACKED_TARBALL) tarball = resolve(process.env.AIH_SCAN_PACKED_TARBALL);
+  else {
+    const staging = join(root, "package");
+    mkdirSync(staging);
     execFileSync(
       process.execPath,
-      [npmPath, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
-      { cwd: staging, encoding: "utf8", windowsHide: true },
-    ),
-  );
-  tarball = join(root, packed.filename);
+      [
+        join(repo, "node_modules/typescript/bin/tsc"),
+        "-p",
+        join(repo, "tsconfig.build.json"),
+        "--outDir",
+        join(staging, "dist"),
+      ],
+      { windowsHide: true },
+    );
+    const manifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
+    for (const path of ["package.json", "README.md", "LICENSE", ...manifest.files])
+      if (path !== "dist") cpSync(join(repo, path), join(staging, path), { recursive: true });
+    const packed = readPackedPackage(
+      execFileSync(
+        process.execPath,
+        [npmPath, "pack", "--ignore-scripts", "--json", "--pack-destination", root],
+        { cwd: staging, encoding: "utf8", windowsHide: true },
+      ),
+    );
+    tarball = join(root, packed.filename);
+  }
   scanner.tarballSha256 = hash(readFileSync(tarball));
   consumer = join(root, "consumer");
   mkdirSync(consumer);
@@ -154,6 +158,53 @@ const skill = {
 };
 
 describe("prepared manifest and exact inventory", () => {
+  it("durably records unsigned host refusal diagnostics when a child input disappears", async () => {
+    const setup = await prepared({ item: skill });
+    const attempt = join(setup.folder, "failed-state/attempts/one");
+    mkdirSync(attempt, { recursive: true });
+    const request = join(attempt, "request.json");
+    writeFileSync(
+      request,
+      JSON.stringify({
+        scanner,
+        assessment: { mode: "static", tools: assessment.tools },
+        consumer,
+        tarball,
+        folder: join(setup.folder, "missing-input"),
+        item: setup.manifest.items[0],
+        out: join(attempt, "output"),
+      }),
+    );
+    execFileSync(
+      process.execPath,
+      [join(repo, "tools/publisher/prepared.mjs"), "worker", request],
+      {
+        windowsHide: true,
+      },
+    );
+    const receipt = JSON.parse(readFileSync(join(attempt, "result.json"), "utf8"));
+    expect(receipt.record).toMatchObject({ status: "failed", detail: "refused" });
+    expect(receipt.record.notes).toEqual([
+      "not-a-folder: the folder does not exist or cannot be read",
+    ]);
+    expect(receipt.record).not.toHaveProperty("summary");
+  });
+  it("accepts only explicit positive safe integer AI concurrency and keeps static controls empty", async () => {
+    const setup = await prepared({ item: skill });
+    const validate = (controls: Record<string, unknown>) => {
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, assessment: controls }));
+      return validateManifest(bytes, hash(bytes));
+    };
+    expect(validate({ ...assessment, llmConcurrency: 24 }).assessment).toMatchObject({
+      llmConcurrency: 24,
+    });
+    expect(validate(assessment).assessment).not.toHaveProperty("llmConcurrency");
+    for (const value of [0, -1, 1.5, "10", null, Number.MAX_SAFE_INTEGER + 1])
+      expect(() => validate({ ...assessment, llmConcurrency: value })).toThrow("concurrency");
+    expect(() => validate({ mode: "static", tools: assessment.tools, llmConcurrency: 2 })).toThrow(
+      "Static assessment",
+    );
+  });
   it("atomically flushes and replaces a native checkpoint using a writable descriptor", () => {
     const path = join(root, "native-checkpoint.json");
     writeCheckpointAtomic(path, { completed: ["first"] });
@@ -300,6 +351,109 @@ describe.runIf(process.platform !== "win32")(
         }),
       });
     }
+    it("binds explicit child LLM concurrency to reuse while omission and static mode scrub ambient controls", async () => {
+      const setup = await prepared({ item: skill });
+      const ss = analyzer(setup.folder);
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
+      vi.stubEnv("SKILLSPECTOR_MAX_LLM_CONCURRENCY", "999");
+      const first = await scanPrepared(setup);
+      expect((await scanPrepared(setup)).reused).toBe(1);
+      expect(ss.calls().find((call) => call.args[0] === "scan")!.env).not.toHaveProperty(
+        "SKILLSPECTOR_MAX_LLM_CONCURRENCY",
+      );
+      const bytes = Buffer.from(
+        JSON.stringify({
+          ...setup.manifest,
+          assessment: { ...assessment, llmConcurrency: 24 },
+        }),
+      );
+      writeFileSync(setup.manifestPath, bytes);
+      const explicit = { ...setup, manifestSha256: hash(bytes) };
+      const changed = await scanPrepared(explicit);
+      expect(changed).toMatchObject({ reused: 0, completed: 1 });
+      expect(changed.root).not.toBe(first.root);
+      expect((await scanPrepared(explicit)).reused).toBe(1);
+      const scans = ss.calls().filter((call) => call.args[0] === "scan");
+      expect(scans).toHaveLength(2);
+      expect(scans[1]!.env.SKILLSPECTOR_MAX_LLM_CONCURRENCY).toBe("24");
+      const receipt = JSON.parse(readFileSync(changed.receiptPath, "utf8"));
+      expect(receipt.config.assessment.llmConcurrency).toBe(24);
+      expect(receipt.scheduler.concurrency).toBe(2);
+      const staticBytes = Buffer.from(
+        JSON.stringify({
+          ...setup.manifest,
+          assessment: { mode: "static", tools: assessment.tools },
+        }),
+      );
+      writeFileSync(setup.manifestPath, staticBytes);
+      await scanPrepared({ ...setup, manifestSha256: hash(staticBytes) });
+      const staticCall = ss
+        .calls()
+        .filter((call) => call.args[0] === "scan")
+        .at(-1)!;
+      expect(staticCall.args).toContain("--no-llm");
+      expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MAX_LLM_CONCURRENCY");
+      expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_API_KEY");
+    }, 120000);
+    it("retains credential-redacted unsigned partial diagnostics in receipts and checkpoints only", async () => {
+      const setup = await prepared({ item: skill });
+      const secret = "fixture-secret-value-166";
+      const ss = fakeAnalyzer(setup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.3",
+        outputFlag: "--output",
+        report: skillSpectorReport([], {
+          llm: false,
+          ledgerExceptions: [{ reason_code: `fixture failure ${secret} ${secret}`, fatal: true }],
+        }),
+      });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      vi.stubEnv("DEEPSEEK_API", secret);
+      const result = await scanPrepared(setup);
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const record = receipt.results[setup.manifest.items[0]!.scanKey];
+      expect(record.status).toBe("incomplete");
+      expect(record.notes).toContain(
+        "SkillSpector reported partial inspection: fixture failure [REDACTED] [REDACTED]",
+      );
+      const checkpoint = JSON.parse(readFileSync(join(result.root, "checkpoint.json"), "utf8"));
+      expect(checkpoint.results[setup.manifest.items[0]!.scanKey].notes).toEqual(record.notes);
+      const attempt = join(result.root, record.summary.split("/").slice(0, 2).join("/"));
+      expect(JSON.parse(readFileSync(join(attempt, "result.json"), "utf8")).record.notes).toEqual(
+        record.notes,
+      );
+      for (const path of [
+        result.receiptPath,
+        join(result.root, "checkpoint.json"),
+        join(attempt, "result.json"),
+        join(attempt, "request.json"),
+      ])
+        expect(readFileSync(path, "utf8")).not.toContain(secret);
+      const summary = readFileSync(join(result.root, record.summary), "utf8");
+      expect(summary).not.toContain("fixture failure");
+      expect(summary).not.toContain("[REDACTED]");
+      const items = setup.manifest.items;
+      expect(
+        (await verifyResult(result.root, record, items, setup.manifest, setup.content, runtime))
+          .eligible,
+      ).toBe(false);
+      for (const notes of ["bad", [5], ["x".repeat(4097)], ["bad\u0000note"]])
+        await expect(
+          verifyResult(
+            result.root,
+            { ...record, notes },
+            items,
+            setup.manifest,
+            setup.content,
+            runtime,
+          ),
+        ).rejects.toThrow("notes");
+      const { notes: _notes, ...legacy } = record;
+      expect(
+        (await verifyResult(result.root, legacy, items, setup.manifest, setup.content, runtime))
+          .eligible,
+      ).toBe(false);
+    }, 120000);
     it("deduplicates, resumes pilot results into a larger manifest and imports only reviewed output bytes", async () => {
       const setup = await prepared({
         first: skill,
@@ -347,9 +501,14 @@ describe.runIf(process.platform !== "win32")(
       writeFileSync(mergedCheckpointPath, JSON.stringify(mergedCheckpoint));
       await expect(recoverPrepared(combined)).rejects.toThrow("Summary digest");
       const archive = join(setup.folder, "candidate.tar");
+      const withNotes = JSON.parse(readFileSync(full.receiptPath, "utf8"));
+      for (const record of Object.values(withNotes.results) as { notes?: string[] }[])
+        record.notes = ["unsigned local diagnostic"];
+      const notedReceipt = join(full.root, "with-notes.json");
+      writeFileSync(notedReceipt, JSON.stringify(withNotes));
       const exported = await exportCandidate({
         ...setup,
-        receiptPath: full.receiptPath,
+        receiptPath: notedReceipt,
         out: archive,
       });
       const importedCli = join(setup.folder, "imported-cli");
@@ -381,6 +540,9 @@ describe.runIf(process.platform !== "win32")(
         imported,
       );
       expect(verified.summaries).toHaveLength(2);
+      expect(readFileSync(join(imported, "receipt.json"), "utf8")).not.toContain(
+        "unsigned local diagnostic",
+      );
       const paths = [...readArchive(readFileSync(archive)).keys()];
       expect(paths.some((path) => path.startsWith("content/"))).toBe(false);
       for (const path of verified.summaries)
@@ -417,6 +579,60 @@ describe.runIf(process.platform !== "win32")(
       expect((await scanPrepared(setup)).completed).toBe(1);
     }, 120000);
   },
+);
+
+it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
+  "uses the locked real SkillSpector concurrency control through prepared children and reuses each profile",
+  async () => {
+    const service = await compatibleAiServiceV1({ delayMs: 150 });
+    try {
+      const files = { ...skill } as Record<string, string>;
+      for (let index = 0; index < 6; index++)
+        files[`notes/topic-${index}.md`] =
+          `# Topic ${index}\n\nSummarise the supplied text carefully.\n`;
+      const setup = await prepared({ item: files });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", process.env.AIH_SCAN_TEST_SKILLSPECTOR!);
+      vi.stubEnv("DEEPSEEK_API", "fixture-only-not-a-real-key");
+      const profile = (llmConcurrency: number) => {
+        const bytes = Buffer.from(
+          JSON.stringify({
+            ...setup.manifest,
+            assessment: { ...assessment, baseUrl: service.endpoint, llmConcurrency },
+          }),
+        );
+        writeFileSync(setup.manifestPath, bytes);
+        return { ...setup, manifestSha256: hash(bytes), concurrency: 1 };
+      };
+      const serial = await scanPrepared(profile(1));
+      const serialReceipt = JSON.parse(readFileSync(serial.receiptPath, "utf8"));
+      expect(serialReceipt.results[setup.manifest.items[0]!.scanKey].status).toBe("complete-ai");
+      expect(service.security).toEqual({ started: 7, completed: 7, active: 0, maxActive: 1 });
+      const parallel = await scanPrepared(profile(3));
+      expect(parallel).toMatchObject({ reused: 0, completed: 1 });
+      expect(parallel.root).not.toBe(serial.root);
+      const receipt = JSON.parse(readFileSync(parallel.receiptPath, "utf8"));
+      expect(receipt.results[setup.manifest.items[0]!.scanKey].status).toBe("complete-ai");
+      expect(service.security).toEqual({ started: 14, completed: 14, active: 0, maxActive: 3 });
+      for (const path of Object.keys(files))
+        expect(
+          service.requests.filter(
+            (request) =>
+              JSON.stringify(request.messages).includes("intent and attack-phrasing risks") &&
+              JSON.stringify(request.messages).includes(path),
+          ),
+        ).toHaveLength(2);
+      const requests = service.requests.length;
+      expect(await scanPrepared(profile(3))).toMatchObject({ reused: 1, completed: 0 });
+      expect(await scanPrepared(profile(1))).toMatchObject({ reused: 1, completed: 0 });
+      expect(service.requests).toHaveLength(requests);
+      expect(readFileSync(parallel.receiptPath, "utf8")).not.toContain(
+        "fixture-only-not-a-real-key",
+      );
+    } finally {
+      await service.close();
+    }
+  },
+  180000,
 );
 
 describe("prepared transport and eligibility", () => {
