@@ -49,7 +49,7 @@ const callerEnv = (extra: Record<string, string> = {}) => ({
 
 function skillspector(report: unknown, extra: Partial<Parameters<typeof fakeAnalyzer>[2]> = {}) {
   return fakeAnalyzer(fixture.root, "skillspector", {
-    versionText: "SkillSpector v2.13.2",
+    versionText: "SkillSpector v2.13.3",
     outputFlag: "--output",
     report,
     ...extra,
@@ -143,7 +143,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     expect(call.env.HOME).not.toBe(callerEnv().HOME);
     expect(toolOf(summary, "skillspector")).toEqual({
       tool: "skillspector",
-      version: "2.13.2",
+      version: "2.13.3",
       mode: "static",
       result: "fail",
       counts: { high: 2, medium: 1 },
@@ -210,7 +210,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     const old = skillspector(skillSpectorReport([]), { versionText: "SkillSpector v2.12.0" });
     const wrong = await run(folder, old);
     expect(wrong.entry).toMatchObject({
-      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.2"],
+      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.3"],
     });
     expect(old.calls().filter((call) => call.args[0] === "scan")).toHaveLength(0);
   });

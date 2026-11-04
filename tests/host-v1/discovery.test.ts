@@ -24,9 +24,9 @@ const sourceRequest = (path: string, extra: Record<string, unknown> = {}) => ({
 /** A SkillSpector stand-in that ran with no findings, so coverage can be complete. */
 const ranSkillSpector: ToolAdapter = {
   id: "skillspector",
-  version: "2.13.2",
+  version: "2.13.3",
   async run() {
-    return { status: "ran", version: "2.13.2", mode: "static", findings: [] };
+    return { status: "ran", version: "2.13.3", mode: "static", findings: [] };
   },
 };
 const complete = { adapters: { skillspector: ranSkillSpector }, now: fixedNow };

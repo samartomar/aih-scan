@@ -28,7 +28,7 @@ npm install --save-exact @aihq/scan@0.1.0
 ```
 
 Node `>=24.15.0 <25 || >=26.12.1 <27`. The built-in aih-trust-lint baseline needs nothing
-else. SkillSpector 2.13.2 (primary) and the optional Cisco skill-scanner 2.3.2 run as
+else. SkillSpector 2.13.3 (primary) and the optional Cisco skill-scanner 2.3.2 run as
 installed native CLIs; [docs/analyzers.md](docs/analyzers.md) has the pinned installs.
 Without SkillSpector a scan still completes, reports SkillSpector as `not-run`
 (`unavailable`) and its coverage as `partial`.

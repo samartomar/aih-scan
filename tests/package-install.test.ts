@@ -391,7 +391,7 @@ describe("the installed public entries", () => {
       assert.deepEqual(read.summary.notAnalysed, []);
       assert.equal(read.summary.coverage, "partial");
       assert.deepEqual(read.summary.tools.find(t => t.tool === "skillspector"), {
-        tool: "skillspector", version: "2.13.2", mode: "static", result: "not-run",
+        tool: "skillspector", version: "2.13.3", mode: "static", result: "not-run",
         reason: "unavailable", counts: {} });
       assert.deepEqual(new Uint8Array(readFileSync(item + "/" + path)), bytes);
       console.log("installed-kiro-ok");
@@ -845,7 +845,7 @@ describe("the installed aih-scan CLI", () => {
     "cancels on SIGINT with exit 130 and ends the analyzer's process tree",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.2",
+        versionText: "SkillSpector v2.13.3",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -876,7 +876,7 @@ describe("the installed aih-scan CLI", () => {
     "stops at once on a second SIGINT, still ending the analyzer tree and removing Scan's temporary folders",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.2",
+        versionText: "SkillSpector v2.13.3",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -930,7 +930,7 @@ describe.runIf(skillspector !== undefined)(
       const service = await compatibleAiServiceV1();
       servers.push(service);
       const skill = folder(`compatible-ai-${name}`, { [path]: text });
-      for (const outcome of ["complete", "malformed", "quota"] as const) {
+      for (const outcome of ["complete", "malformed", "quota", "unfinished"] as const) {
         service.setOutcome(outcome);
         const run = await cli(
           [
@@ -1008,11 +1008,65 @@ describe.runIf(skillspector !== undefined)(
         );
       }
     }, 180_000);
+
+    it("completes every semantic security file with bounded concurrent HTTP requests", async () => {
+      const service = await compatibleAiServiceV1({ delayMs: 100 });
+      servers.push(service);
+      const files: Record<string, string> = { "SKILL.md": cleanSkill["SKILL.md"] };
+      for (let index = 0; index < 6; index++)
+        files[`notes/topic-${index}.md`] =
+          `# Topic ${index}\n\nSummarise the supplied text carefully.\n`;
+      const skill = folder("compatible-parallel", files);
+      const run = await cli(
+        ["scan", skill, "--mode", "ai", "--json", "--out", outFolder("compatible-parallel")],
+        {
+          env: {
+            AIH_SCAN_SKILLSPECTOR: skillspector!,
+            SKILLSPECTOR_PROVIDER: "openai_compatible",
+            SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
+            SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
+            SKILLSPECTOR_MODEL: "deepseek-flash",
+            SKILLSPECTOR_REASONING_EFFORT: "none",
+            SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
+            SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
+          },
+        },
+      );
+      expect(run.code, run.stderr).toBe(0);
+      const scanned = json(run).targets[0].results[0];
+      const summary = JSON.parse(readFileSync(scanned.summaryPath, "utf8"));
+      expect(summary.coverage, JSON.stringify(scanned)).toBe("complete");
+      expect(summary.files).toEqual(
+        Object.entries(files)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([path, text]) => ({
+            path,
+            mode: "100644",
+            part: "text",
+            sha256: sha256Of(Buffer.from(text)),
+          })),
+      );
+      expect(summary.notAnalysed).toEqual([]);
+      expect(service.security).toEqual({
+        started: 7,
+        completed: 7,
+        active: 0,
+        maxActive: 2,
+      });
+      for (const path of Object.keys(files))
+        expect(
+          service.requests
+            .filter((request) =>
+              JSON.stringify(request.messages).includes("intent and attack-phrasing risks"),
+            )
+            .filter((request) => JSON.stringify(request.messages).includes(path)),
+        ).toHaveLength(1);
+    }, 180_000);
   },
 );
 
 describe.runIf((skillspector !== undefined && skillScanner !== undefined) || required)(
-  "the installed CLI with the real SkillSpector 2.13.2 and Cisco skill-scanner 2.3.2",
+  "the installed CLI with the real SkillSpector 2.13.3 and Cisco skill-scanner 2.3.2",
   () => {
     it("runs both natively in static mode, without a network when unshare is available, executing nothing", async () => {
       expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
@@ -1064,7 +1118,7 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       ).toEqual([
         "aih-trust-lint 1.0.0 static",
         "cisco 2.3.2 static",
-        "skillspector 2.13.2 static",
+        "skillspector 2.13.3 static",
       ]);
       expect(summary.coverage).toBe("complete");
       const findings = await cli(["findings", skill.summaryPath, "--key", skill.scanKey]);

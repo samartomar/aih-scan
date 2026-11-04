@@ -283,7 +283,7 @@ describe.runIf(process.platform !== "win32")(
   () => {
     function analyzer(folder: string, complete = true) {
       return fakeAnalyzer(folder, "skillspector", {
-        versionText: "SkillSpector v2.13.2",
+        versionText: "SkillSpector v2.13.3",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           llm: complete,

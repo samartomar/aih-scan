@@ -6,16 +6,16 @@ import { SKILLSPECTOR_VERSION } from "../../src/host/skillspector.js";
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
 describe("pinned analyzer runtimes", () => {
-  it("locks SkillSpector to the v2.13.2 tag commit the adapter requires", () => {
-    expect(SKILLSPECTOR_VERSION).toBe("2.13.2");
-    const commit = "abd82935b67f765a9541013c0866c6349251dcdf";
+  it("locks SkillSpector to the v2.13.3 tag commit the adapter requires", () => {
+    expect(SKILLSPECTOR_VERSION).toBe("2.13.3");
+    const commit = "38a1dfe93325d2f8bfcd4f8d0241eed706334915";
     expect(read("tools/analyzers/skillspector/pyproject.toml")).toContain(
       `skillspector @ git+https://github.com/NVIDIA/SkillSpector@${commit}`,
     );
     const lock = read("tools/analyzers/skillspector/uv.lock");
     expect(lock).toMatch(
       new RegExp(
-        `name = "skillspector"\\nversion = "2\\.13\\.2"\\nsource = \\{ git = "https://github\\.com/NVIDIA/SkillSpector\\?rev=${commit}#${commit}" \\}`,
+        `name = "skillspector"\\nversion = "2\\.13\\.3"\\nsource = \\{ git = "https://github\\.com/NVIDIA/SkillSpector\\?rev=${commit}#${commit}" \\}`,
       ),
     );
   });
