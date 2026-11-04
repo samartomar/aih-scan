@@ -89,7 +89,8 @@ async function runWithLimit(
   try {
     const first = await Promise.race([running, stopped]);
     if (first !== "stopped") {
-      if (context.signal.aborted && first.status !== "not-run") return ended("cancelled");
+      if (context.signal.aborted && first.status !== "not-run")
+        return Object.freeze({ ...ended("cancelled"), version: first.version });
       return first;
     }
     // Let the adapter end its process tree (bounded) before the working copy is removed.
