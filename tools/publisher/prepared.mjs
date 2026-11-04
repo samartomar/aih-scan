@@ -187,10 +187,11 @@ export async function verifyResult(root, record, items, manifest, content, runti
 }
 function diagnosticNotes(item, assessment) {
   const credential = assessment.mode === "ai" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
+  const credentials = [...new Set([credential, credential?.trim()].filter(Boolean))];
   const notes = [...(item?.notes ?? []), ...(item?.status !== "ok" && item?.reason ? [`${item.reason}${item.detail ? `: ${item.detail}` : ""}`] : [])];
   // Redact before normalizing or bounding text, so neither truncation nor a control
   // character in a credential can leave part of its value in an unsigned receipt.
-  return [...new Set(notes.filter((note) => typeof note === "string").map((note) => [...(credential ? note.split(credential).join("[REDACTED]") : note)].map((character) => plainText(character) ? character : " ").join("").slice(0, 4096)).filter(Boolean))].slice(0, 32);
+  return [...new Set(notes.filter((note) => typeof note === "string").map((note) => [...credentials.reduce((text, secret) => text.split(secret).join("[REDACTED]"), note)].map((character) => plainText(character) ? character : " ").join("").slice(0, 4096)).filter(Boolean))].slice(0, 32);
 }
 async function worker(requestPath) {
   const job = json(readRegular(requestPath));

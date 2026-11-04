@@ -476,15 +476,19 @@ describe.runIf(process.platform !== "win32")(
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_API_KEY");
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MODEL_REGISTRY");
     }, 120000);
-    it("retains credential-redacted unsigned partial diagnostics in receipts and checkpoints only", async () => {
+    it.each([
+      "fixture-secret-value-166",
+      " \tfixture-edge-whitespace-166\r\n",
+    ])("retains credential-redacted unsigned partial diagnostics in receipts and checkpoints only (%j)", async (secret) => {
       const setup = await prepared({ item: skill });
-      const secret = "fixture-secret-value-166";
       const ss = fakeAnalyzer(setup.folder, "skillspector", {
         versionText: "SkillSpector v2.13.3",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           llm: false,
-          ledgerExceptions: [{ reason_code: `fixture failure ${secret} ${secret}`, fatal: true }],
+          ledgerExceptions: [
+            { reason_code: `fixture failure ${secret.trim()} ${secret.trim()}`, fatal: true },
+          ],
         }),
       });
       vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
@@ -508,7 +512,7 @@ describe.runIf(process.platform !== "win32")(
         join(attempt, "result.json"),
         join(attempt, "request.json"),
       ])
-        expect(readFileSync(path, "utf8")).not.toContain(secret);
+        expect(readFileSync(path, "utf8")).not.toContain(secret.trim());
       const summary = readFileSync(join(result.root, record.summary), "utf8");
       expect(summary).not.toContain("fixture failure");
       expect(summary).not.toContain("[REDACTED]");

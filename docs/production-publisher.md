@@ -140,6 +140,10 @@ provider generate more output and increase output-token cost; it does not reserv
 guarantee that output. For DeepSeek, verify current context/output capabilities with
 the [model metadata](https://api-docs.deepseek.com/api/list-models/) and
 [chat-completion controls](https://api-docs.deepseek.com/api/create-chat-completion/).
+The locked OpenAI-compatible adapter sends this budget as `max_completion_tokens`.
+DeepSeek documents `max_tokens` and can ignore the adapter's field, retaining its
+default output limit. Registry metadata alone therefore does not prove that a provider
+honors the requested budget; verify the actual transport before relying on it.
 
 ### Local validation, parallel scan and resume
 
