@@ -357,6 +357,55 @@ describe("the installed public entries", () => {
     servers.push(osv);
   });
 
+  it("preserves prepared Kiro hook paths, bytes, modes and keys through the public package", () => {
+    const path = "session-summary.kiro.hook";
+    const text =
+      '{"when":{"type":"userTriggered"},"then":{"type":"askAgent","prompt":"Summarise the session."}}\n';
+    const item = folder("prepared-kiro", { [path]: text }, [path]);
+    const script = join(consumer, "kiro-consumer.mjs");
+    writeFileSync(
+      script,
+      `
+      import assert from "node:assert/strict";
+      import { readFileSync } from "node:fs";
+      import { createHash } from "node:crypto";
+      import { scan } from "@aihq/scan/host";
+      import { readSummary } from "@aihq/scan/read";
+      import { routeFile, scanKeyOf } from "@aihq/scan/contracts";
+      const [item, out, path] = process.argv.slice(2);
+      const bytes = new Uint8Array(readFileSync(item + "/" + path));
+      assert.equal(routeFile(path, bytes).part, "text");
+      const key = await scanKeyOf([{ path, mode: "100755", bytes }]);
+      assert.equal(key.status, "ok");
+      const result = await scan({ format: "aih-scan-request/1", origin: "local",
+        items: [{ path: item, executable: [path] }] }, { outDir: out });
+      assert.equal(result.status, "ok");
+      const entry = result.results[0];
+      assert.equal(entry.status, "ok");
+      assert.equal(entry.scanKey, key.scanKey);
+      const read = readSummary(new Uint8Array(readFileSync(entry.summaryPath)));
+      assert.equal(read.status, "ok");
+      assert.deepEqual(read.summary.files, [{ path, mode: "100755", part: "text",
+        sha256: createHash("sha256").update(bytes).digest("hex") }]);
+      assert.deepEqual(read.summary.dependencies, []);
+      assert.deepEqual(read.summary.notAnalysed, []);
+      assert.equal(read.summary.coverage, "partial");
+      assert.deepEqual(read.summary.tools.find(t => t.tool === "skillspector"), {
+        tool: "skillspector", version: "2.13.2", mode: "static", result: "not-run",
+        reason: "unavailable", counts: {} });
+      assert.deepEqual(new Uint8Array(readFileSync(item + "/" + path)), bytes);
+      console.log("installed-kiro-ok");
+    `,
+    );
+    const run = spawnSync(process.execPath, [script, item, outFolder("prepared-kiro"), path], {
+      cwd: consumer,
+      encoding: "utf8",
+      env: { ...process.env, AIH_SCAN_SKILLSPECTOR: "none", AIH_SCAN_SKILL_SCANNER: "none" },
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toBe("installed-kiro-ok\n");
+  });
+
   it("scan, read, match, verify and check advisories through host/read/contracts only", async () => {
     const script = join(consumer, "installed-consumer.mjs");
     copyFileSync(join(support, "installed-consumer.mjs"), script);
@@ -866,14 +915,33 @@ const required = process.env.AIH_SCAN_REQUIRE_REAL_ANALYZERS === "1";
 describe.runIf(skillspector !== undefined)(
   "the installed CLI with real SkillSpector and a synthetic compatible inference service",
   () => {
-    it("preserves the selected model and schema-only HTTP controls, and refuses incomplete AI responses", async () => {
+    it.each([
+      { name: "skill", path: "SKILL.md", text: cleanSkill["SKILL.md"] },
+      {
+        name: "kiro-hook",
+        path: "session-summary.kiro.hook",
+        text: '{"when":{"type":"userTriggered"},"then":{"type":"askAgent","prompt":"Summarise this Kiro session carefully."}}\n',
+      },
+    ])("preserves the selected model and schema-only HTTP controls for $name, and refuses incomplete AI responses", async ({
+      name,
+      path,
+      text,
+    }) => {
       const service = await compatibleAiServiceV1();
       servers.push(service);
-      const skill = folder("compatible-ai", { "SKILL.md": cleanSkill["SKILL.md"] });
+      const skill = folder(`compatible-ai-${name}`, { [path]: text });
       for (const outcome of ["complete", "malformed", "quota"] as const) {
         service.setOutcome(outcome);
         const run = await cli(
-          ["scan", skill, "--mode", "ai", "--json", "--out", outFolder(`compatible-${outcome}`)],
+          [
+            "scan",
+            skill,
+            "--mode",
+            "ai",
+            "--json",
+            "--out",
+            outFolder(`compatible-${name}-${outcome}`),
+          ],
           {
             env: {
               AIH_SCAN_SKILLSPECTOR: skillspector!,
@@ -890,6 +958,11 @@ describe.runIf(skillspector !== undefined)(
         const scanned = json(run).targets[0].results[0];
         expect(scanned.status).toBe("ok");
         const summary = JSON.parse(readFileSync(scanned.summaryPath, "utf8"));
+        expect(summary.files).toEqual([
+          { path, mode: "100644", part: "text", sha256: sha256Of(Buffer.from(text)) },
+        ]);
+        expect(summary.notAnalysed).toEqual([]);
+        expect(summary.dependencies).toEqual([]);
         expect(summary.coverage, JSON.stringify(scanned)).toBe(
           outcome === "complete" ? "complete" : "partial",
         );
@@ -906,6 +979,12 @@ describe.runIf(skillspector !== undefined)(
           });
         }
         expect(service.requests.length).toBeGreaterThan(0);
+        if (name === "kiro-hook") {
+          expect(JSON.stringify(service.requests)).toContain(
+            "Summarise this Kiro session carefully.",
+          );
+          expect(JSON.stringify(service.requests)).toContain(path);
+        }
         for (const request of service.requests) {
           expect(request.model).toBe("deepseek-flash");
           expect(request.reasoning_effort).toBe("none");

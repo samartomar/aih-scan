@@ -5,6 +5,15 @@ primary external analyzer. Cisco skill-scanner is an optional second opinion tha
 only when a request names it. `aih-trust-lint` is built in and always runs. Both external
 analyzers are installed by you; Scan never downloads or installs them.
 
+Valid UTF-8 files ending in `.kiro.hook` (case-insensitive, without NUL bytes) receive
+Text analysis under their original paths, bytes and modes. Existing Config and Code
+matches take precedence. Kiro `when`/`then` instructions are inspected as text; Scan
+does not execute their actions or extract commands or dependencies from those fields.
+Malformed JSON can still receive Text analysis, as other text files do; this does not
+establish valid hook configuration. Binary files receive no analysis part. The suffix
+does not add a source-discovery layout: use caller-prepared items for a hook item, or
+find these files within an owning item or the source's remaining files.
+
 | Tool | Pinned release | Runs | Counts for coverage |
 |---|---|---|---|
 | SkillSpector | 2.13.2 (NVIDIA/SkillSpector tag `v2.13.2`, commit `abd82935b67f765a9541013c0866c6349251dcdf`) | by default | yes |
