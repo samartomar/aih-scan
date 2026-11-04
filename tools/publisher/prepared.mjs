@@ -188,7 +188,12 @@ export async function verifyResult(root, record, items, manifest, content, runti
 function diagnosticNotes(item, assessment) {
   const credential = assessment.mode === "ai" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
   // Python's str.strip also removes NEL and the four ASCII information separators.
-  const strippedCredential = credential?.replace(/^[\s\u001c-\u001f\u0085]+|[\s\u001c-\u001f\u0085]+$/gu, "");
+  const whitespace = (character) => character.trim() === "" || character === "\u0085" || character.codePointAt(0) >= 28 && character.codePointAt(0) <= 31;
+  const characters = [...(credential ?? "")];
+  let start = 0, end = characters.length;
+  while (start < end && whitespace(characters[start])) start++;
+  while (end > start && whitespace(characters[end - 1])) end--;
+  const strippedCredential = characters.slice(start, end).join("");
   const credentials = [...new Set([credential, strippedCredential].filter(Boolean))];
   const notes = [...(item?.notes ?? []), ...(item?.status !== "ok" && item?.reason ? [`${item.reason}${item.detail ? `: ${item.detail}` : ""}`] : [])];
   // Redact before normalizing or bounding text, so neither truncation nor a control
