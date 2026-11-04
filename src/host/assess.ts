@@ -89,7 +89,8 @@ async function runWithLimit(
   try {
     const first = await Promise.race([running, stopped]);
     if (first !== "stopped") {
-      if (context.signal.aborted && first.status !== "not-run") return ended("cancelled");
+      if (context.signal.aborted && first.status !== "not-run")
+        return Object.freeze({ ...ended("cancelled"), version: first.version });
       return first;
     }
     // Let the adapter end its process tree (bounded) before the working copy is removed.
@@ -102,7 +103,10 @@ async function runWithLimit(
     ]);
     if (grace !== undefined) clearTimeout(grace);
     const notes = run?.notes;
-    const outcome = ended(timedOut && !context.signal.aborted ? "timeout" : "cancelled");
+    const outcome = Object.freeze({
+      ...ended(timedOut && !context.signal.aborted ? "timeout" : "cancelled"),
+      version: run?.version ?? adapter.version,
+    });
     return notes === undefined ? outcome : Object.freeze({ ...outcome, notes });
   } finally {
     if (timer !== undefined) clearTimeout(timer);

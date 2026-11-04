@@ -247,3 +247,14 @@ locked runtime and a synthetic local HTTP service, including malformed responses
 quota errors. This fixture verifies transport and parsing; it does not establish live
 provider availability or assessment quality. The real static analyzers have also been
 exercised on Linux x64.
+
+## Optional TP4 maintenance build
+
+Upstream 2.13.3 retains fixed 128-source/64-finding TP4 limits. Scan also supports the
+separately identified reproducible maintenance artifact in
+`tools/analyzers/skillspector/maintenance/README.md`. It preserves those defaults and
+makes capacities explicit without editing an installed analyzer. Prepared profiles bind
+the exact maintenance version/wheel and requested capacities; report and probe identities
+must agree. Existing upstream installations remain supported. Building/installing the
+maintenance artifact and increasing capacities are explicit operator choices; more
+source/batch work can cost more and does not guarantee complete inspection.

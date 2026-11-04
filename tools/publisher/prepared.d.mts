@@ -1,7 +1,7 @@
 export interface PreparedFile { path: string; mode: string; sha256: string }
 export interface PreparedItem { path: string; scanKey: string; files: PreparedFile[]; labels?: Record<string, string>; source?: { locator: string; revision: string } }
 export interface PreparedScanner { name: string; version: string; tarballSha256: string }
-export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number } }
+export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number }; skillspector?: { version: string; wheelSha256: string; tp4: { maxFiles: number; maxFindings: number; maxBatches: number } } }
 export interface PreparedManifest { format: string; scanner: PreparedScanner; assessment: PreparedAssessment; items: PreparedItem[]; parentManifestSha256?: string }
 export interface PreparedRuntime {
   host: typeof import("../../src/public/host.js");
@@ -24,3 +24,5 @@ export function verifyResult(root: string, record: PreparedRecord, items: Prepar
 export function exportCandidate(options: PreparedOptions & { receiptPath: string; selection?: string[] }): Promise<{ archiveSha256: string; manifestSha256: string; receiptSha256: string; bytes: number; keys: number; references: number }>;
 export function importCandidate(archive: string, archiveSha256: string, manifestSha256: string, receiptSha256: string, consumer: string, out: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 export function verifyCandidate(candidate: string, manifestSha256: string, receiptSha256: string, consumer: string, tarball: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
+
+export function maintenancePythonPath(executable: string, platform?: string): string;

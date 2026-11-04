@@ -19,6 +19,9 @@ import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from 
 
 /** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.3). */
 export const SKILLSPECTOR_VERSION = "2.13.3";
+/** Exact source/archive/patch/runtime-lock/build-lock maintenance identity. */
+export const SKILLSPECTOR_MAINTENANCE_VERSION =
+  "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855";
 /** Selects an exact SkillSpector executable, or `none` to disable it. */
 export const SKILLSPECTOR_VARIABLE = "AIH_SCAN_SKILLSPECTOR";
 
@@ -324,9 +327,18 @@ export function skillSpectorRun(
 ): ToolRun {
   const document = objectOf(report);
   const metadata = objectOf(document?.metadata);
+  const acceptedVersion = [SKILLSPECTOR_VERSION, SKILLSPECTOR_MAINTENANCE_VERSION].includes(
+    String(metadata?.skillspector_version),
+  )
+    ? String(metadata?.skillspector_version)
+    : SKILLSPECTOR_VERSION;
   if (document === undefined || metadata === undefined || !Array.isArray(document.issues))
-    return notRun("failed", mode, SKILLSPECTOR_VERSION, "SkillSpector wrote no readable report");
-  if (metadata.skillspector_version !== SKILLSPECTOR_VERSION)
+    return notRun("failed", mode, acceptedVersion, "SkillSpector wrote no readable report");
+  if (
+    ![SKILLSPECTOR_VERSION, SKILLSPECTOR_MAINTENANCE_VERSION].includes(
+      String(metadata.skillspector_version),
+    )
+  )
     return notRun("failed", mode, SKILLSPECTOR_VERSION, "SkillSpector reported another version");
   const completeness = objectOf(document.analysis_completeness);
   if (
@@ -334,7 +346,12 @@ export function skillSpectorRun(
     completeness === undefined ||
     completeness.status === "failed"
   )
-    return notRun("failed", mode, SKILLSPECTOR_VERSION, "SkillSpector reported a failed analysis");
+    return notRun(
+      "failed",
+      mode,
+      String(metadata.skillspector_version),
+      "SkillSpector reported a failed analysis",
+    );
   const findings: ToolFinding[] = [];
   const rules: Record<string, string> = {};
   for (const raw of document.issues) {
@@ -379,7 +396,7 @@ export function skillSpectorRun(
       : inspected.aiFailure;
   return Object.freeze({
     status: "ran" as const,
-    version: SKILLSPECTOR_VERSION,
+    version: String(metadata.skillspector_version),
     mode,
     ...(mode === "ai" && setup?.available === true ? { ai: aiProvenance(metadata, setup) } : {}),
     findings: Object.freeze(findings),
@@ -461,11 +478,11 @@ async function runInstalled(
     executable,
     probeEnv,
     settings.scratch,
-    /SkillSpector v?(\d+\.\d+\.\d+)/u,
+    /SkillSpector v?(\d+\.\d+\.\d+(?:\+[0-9a-z.]+)?)(?:\s|$)/u,
     context.signal,
   );
-  if (context.signal.aborted) return notRun("cancelled", mode, SKILLSPECTOR_VERSION);
-  if (version !== SKILLSPECTOR_VERSION)
+  if (context.signal.aborted) return notRun("cancelled", mode, version ?? SKILLSPECTOR_VERSION);
+  if (version !== SKILLSPECTOR_VERSION && version !== SKILLSPECTOR_MAINTENANCE_VERSION)
     return notRun(
       "unavailable",
       mode,
@@ -491,17 +508,43 @@ async function runInstalled(
     signal: context.signal,
     ...(settings.platform === "win32" ? { maxStdoutBytes: ANALYZER_REPORT_MAX_BYTES } : {}),
   });
-  if (result.termination === "timeout") return notRun("timeout", mode, SKILLSPECTOR_VERSION);
+  if (result.termination === "timeout") return notRun("timeout", mode, version);
   if (result.termination === "abort")
-    return notRun(context.signal.aborted ? "cancelled" : "timeout", mode, SKILLSPECTOR_VERSION);
+    return notRun(context.signal.aborted ? "cancelled" : "timeout", mode, version);
   if (result.termination !== undefined)
-    return notRun("failed", mode, SKILLSPECTOR_VERSION, `SkillSpector ${result.termination}`);
+    return notRun("failed", mode, version, `SkillSpector ${result.termination}`);
   // Exit 1 means SkillSpector's own risk threshold was crossed: a finished run.
   if (result.code !== 0 && result.code !== 1)
-    return notRun("failed", mode, SKILLSPECTOR_VERSION, `SkillSpector exited ${result.code}`);
+    return notRun("failed", mode, version, `SkillSpector exited ${result.code}`);
   const document =
     settings.platform === "win32"
       ? readJsonStdout(result)
       : readJsonReport(report, "SkillSpector report");
+  const metadata = objectOf(objectOf(document)?.metadata);
+  if (metadata?.skillspector_version !== version)
+    return notRun("failed", mode, version, "SkillSpector probe/report identity mismatch");
+  if (version === SKILLSPECTOR_MAINTENANCE_VERSION) {
+    const actual = objectOf(metadata?.aih_scan_tp4_limits);
+    const expected = {
+      maxFiles: invocation.env.SKILLSPECTOR_TP4_MAX_FILES ?? "128",
+      maxFindings: invocation.env.SKILLSPECTOR_TP4_MAX_FINDINGS ?? "64",
+      maxBatches: invocation.env.SKILLSPECTOR_TP4_MAX_BATCHES ?? "256",
+    };
+    if (
+      actual === undefined ||
+      Object.entries(expected).some(([key, value]) => actual[key] !== Number(value))
+    )
+      return notRun("failed", mode, version, "SkillSpector effective TP4 limits mismatch");
+  } else if (
+    ["SKILLSPECTOR_TP4_MAX_FILES", "SKILLSPECTOR_TP4_MAX_FINDINGS"].some(
+      (key) => invocation.env[key] !== undefined,
+    )
+  )
+    return notRun(
+      "failed",
+      mode,
+      version,
+      "Configured TP4 capacity requires the maintenance build",
+    );
   return skillSpectorRun(document, item, mode, settings.ai);
 }

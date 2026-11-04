@@ -1,14 +1,15 @@
 // Tooling-only prepared-content handoff. Caller labels and local execution receipts are unsigned.
-import { fork } from "node:child_process";
+import { execFileSync, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, freemem, hostname, totalmem } from "node:os";
 import { isIP } from "node:net";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, relative, resolve, sep, win32, posix } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive, safePath, writeArchive } from "./prepared-archive.mjs";
 
+const maintenanceArtifact = JSON.parse(readFileSync(new URL("../analyzers/skillspector/maintenance/artifact.json", import.meta.url), "utf8"));
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
 const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
@@ -56,7 +57,7 @@ export function validateManifest(bytes, expectedSha256) {
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
   need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
   const assessment = manifest.assessment;
-  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits"]);
+  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
   if (assessment.mode === "ai") {
@@ -67,6 +68,12 @@ export function validateManifest(bytes, expectedSha256) {
     need(!endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash, "AI endpoint must not contain credentials or query parameters");
     need(typeof assessment.reasoningEffort === "string" && /^[a-z0-9_-]{1,64}$/i.test(assessment.reasoningEffort) && ["function_calling", "json_mode", "json_schema"].includes(assessment.structuredOutputMethod), "Invalid explicit AI response controls");
     if (assessment.credentialVariable !== undefined) need(/^[A-Z_][A-Z0-9_]*$/.test(assessment.credentialVariable), "Invalid credential variable name");
+    if (assessment.skillspector !== undefined) {
+      keys(assessment.skillspector, ["version", "wheelSha256", "tp4"]);
+      need(assessment.skillspector.version === maintenanceArtifact.version && assessment.skillspector.wheelSha256 === maintenanceArtifact.wheelSha256, "Unsupported maintenance analyzer identity");
+      keys(assessment.skillspector.tp4, ["maxFiles", "maxFindings", "maxBatches"]);
+      need(Object.values(assessment.skillspector.tp4).every((value) => Number.isSafeInteger(value) && value > 0 && value <= 4096), "Invalid TP4 capacity; expected integers from 1 to 4096");
+    }
     if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
     if (assessment.modelTokenLimits !== undefined) {
       const limits = assessment.modelTokenLimits;
@@ -149,7 +156,7 @@ export function aiEligible(summary, manifest) {
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
   const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
   const via = loopbackHost(host) ? "local" : "provider";
-  if (primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? "2.13.3") || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
   return manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 }
 export async function verifyResult(root, record, items, manifest, content, runtime) {
@@ -232,6 +239,10 @@ function childEnvironment(assessment, scratch) {
     const variable = assessment.credentialVariable ?? "SKILLSPECTOR_COMPAT_API_KEY";
     need(typeof process.env[variable] === "string" && process.env[variable].trim(), `${variable} is not set; no AI request started`);
     Object.assign(env, { SKILLSPECTOR_PROVIDER: assessment.provider, SKILLSPECTOR_COMPAT_BASE_URL: assessment.baseUrl, SKILLSPECTOR_COMPAT_API_KEY: process.env[variable], SKILLSPECTOR_MODEL: assessment.model, SKILLSPECTOR_REASONING_EFFORT: assessment.reasoningEffort, SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: assessment.structuredOutputMethod });
+    if (assessment.skillspector !== undefined) {
+      const { maxFiles, maxFindings, maxBatches } = assessment.skillspector.tp4;
+      Object.assign(env, { SKILLSPECTOR_TP4_MAX_FILES: String(maxFiles), SKILLSPECTOR_TP4_MAX_FINDINGS: String(maxFindings), SKILLSPECTOR_TP4_MAX_BATCHES: String(maxBatches) });
+    }
     if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
     if (assessment.modelTokenLimits !== undefined) {
       const registryPath = resolve(scratch, "model-registry.json");
@@ -336,11 +347,27 @@ export async function recoverPrepared({ manifestPath, manifestSha256, content, c
 export function workerLaunchBudget(freeMiB, reserveMiB, poolCapacityMiB, reservedMiB) {
   return Math.max(0, Math.min(freeMiB - reserveMiB, poolCapacityMiB - reservedMiB));
 }
+export function maintenancePythonPath(executable, platform = process.platform) {
+  const path = platform === "win32" ? win32 : posix;
+  return path.join(path.dirname(executable), platform === "win32" ? "python.exe" : "python");
+}
+function verifyMaintenanceRuntime(assessment) {
+  if (assessment.skillspector === undefined) return;
+  const executable = process.env.AIH_SCAN_SKILLSPECTOR, wheel = process.env.AIH_SCAN_SKILLSPECTOR_WHEEL;
+  need(typeof executable === "string" && typeof wheel === "string", "Maintenance executable and reviewed wheel paths are required");
+  const binary = resolve(executable);
+  need(binary === executable && digest(readRegular(wheel)) === assessment.skillspector.wheelSha256, "Maintenance wheel digest mismatch");
+  const python = maintenancePythonPath(binary);
+  const env = {};
+  for (const name of ["PATH", "SYSTEMROOT", "WINDIR"]) if (process.env[name] !== undefined) env[name] = process.env[name];
+  execFileSync(python, ["-I", fileURLToPath(new URL("../analyzers/skillspector/maintenance/verify.py", import.meta.url)), resolve(wheel), assessment.skillspector.wheelSha256, assessment.skillspector.version], { env, windowsHide: true, timeout: 30000, stdio: "pipe" });
+}
 export async function scanPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, concurrency = availableParallelism(), workerMemoryMiB = 512, reserveMemoryMiB = Math.ceil(Math.max(1024 ** 3, totalmem() / 10) / 1024 ** 2), signal = new AbortController().signal }) {
   const bytes = readRegular(manifestPath); const manifest = validateManifest(bytes, manifestSha256);
   const runtime = await loadRuntime(consumer, tarball, manifest.scanner);
   const groups = await validateContent(manifest, content, runtime);
   need(Number.isSafeInteger(concurrency) && concurrency > 0 && Number.isFinite(workerMemoryMiB) && workerMemoryMiB > 0 && Number.isFinite(reserveMemoryMiB) && reserveMemoryMiB >= 0, "Invalid concurrency or memory settings");
+  verifyMaintenanceRuntime(manifest.assessment);
   const config = configIdentity(manifest, runtime), configSha256 = fingerprint(config);
   const root = join(resolve(out), "configs", configSha256); mkdirSync(root, { recursive: true });
   const lock = acquireLock(root), checkpointPath = join(root, "checkpoint.json");
