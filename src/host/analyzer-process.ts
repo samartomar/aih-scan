@@ -66,13 +66,14 @@ export function runAnalyzer(
     env: Readonly<Record<string, string>>;
     signal: AbortSignal;
     timeoutMs?: number;
+    maxStdoutBytes?: number;
   }>,
 ): Promise<ProcessRunnerResult> {
   return processRunner(argv, {
     cwd: options.cwd,
     env: options.env,
     timeoutMs: options.timeoutMs ?? limits.tool.timeoutMs,
-    maxStdoutBytes: STDOUT_MAX_BYTES,
+    maxStdoutBytes: options.maxStdoutBytes ?? STDOUT_MAX_BYTES,
     maxStderrBytes: STDERR_MAX_BYTES,
     containProcessTree: true,
     signal: options.signal,
@@ -128,6 +129,18 @@ export function readJsonReport(path: string, label: string): unknown {
       return undefined;
     if (error instanceof TypeError) return undefined;
     throw error;
+  }
+}
+
+/** A stdout report is accepted only as complete, well-formed UTF-8 JSON. */
+export function readJsonStdout(
+  result: Pick<ProcessRunnerResult, "stdout" | "stdoutMalformedUtf8" | "truncated">,
+): unknown {
+  if (result.stdoutMalformedUtf8 === true || result.truncated) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return undefined;
   }
 }
 

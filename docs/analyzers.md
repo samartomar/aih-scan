@@ -55,8 +55,13 @@ with a size bound, and removed.
 ### SkillSpector
 
 ```
-skillspector scan <working-copy> --format json --output <scratch>/report.json [--no-llm]
+skillspector scan <working-copy> --format json [--output <scratch>/report.json] [--no-llm]
 ```
+
+On Windows Scan omits `--output`: the pinned SkillSpector does not support safe file
+output there. Scan reads its JSON from bounded stdout instead, with the same 64 MiB
+report limit and strict UTF-8/JSON validation. Other platforms retain the private report
+file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is refused.
 
 - **Static (default).** `--no-llm`, and a scrubbed environment: only what Python needs
   to start, a private HOME/TEMP, no proxy, credential, provider or Python loader
@@ -80,7 +85,7 @@ skillspector scan <working-copy> --format json --output <scratch>/report.json [-
   |---|---|---|
   | `claude_cli`, `gemini_cli`, `opencode_cli` | cli | the `claude`, `gemini` or `opencode` CLI on PATH, signed in |
   | `ollama` | local | a local Ollama service |
-  | `openai_compatible` | local for a loopback `SKILLSPECTOR_COMPAT_BASE_URL`, else provider | `SKILLSPECTOR_COMPAT_BASE_URL` |
+  | `openai_compatible` | local for a loopback `SKILLSPECTOR_COMPAT_BASE_URL`, else provider | `SKILLSPECTOR_COMPAT_BASE_URL` and `SKILLSPECTOR_COMPAT_API_KEY` (both required, including for a local service) |
   | `openai`, `anthropic`, `anthropic_proxy`, `azure_openai`, `bedrock`, `nv_build`, `nv_inference` | provider | the provider's key or profile variables |
 
   Scan never picks a provider for you: with `SKILLSPECTOR_PROVIDER` unset (or naming an
@@ -97,6 +102,50 @@ skillspector scan <working-copy> --format json --output <scratch>/report.json [-
   version are `not-run`, reason `failed`. When SkillSpector reports that it could not fully
   inspect a routed file, the result carries an unsigned note; gaps on files no tool is
   routed (binaries, dependency manifests) are not reported as gaps.
+
+### DeepSeek Flash on Windows
+
+Use SkillSpector's existing `openai_compatible` HTTP provider with the exact model
+`deepseek-flash` and endpoint `https://api.deepseek.com`, as specified by
+[DeepSeek's API guide](https://api-docs.deepseek.com/quick_start/agent_integrations/).
+This uses your DeepSeek API key and API billing, rather than a ChatGPT subscription.
+Static analysis stays on your PC; SkillSpector sends the content for its AI pass to DeepSeek.
+No agent CLI or model-driven host command executor is involved.
+
+The pinned SkillSpector uses LangChain's schema-bound response parser. DeepSeek does not
+support its default `json_schema` response format. Select `function_calling` explicitly:
+the functions describe the findings response schema; SkillSpector parses the returned
+arguments as data and does not execute them. Also select reasoning effort `none`, which
+disables thinking so DeepSeek accepts the forced schema function. This is the
+non-thinking route; it changes DeepSeek's default thinking behavior. See
+[DeepSeek's request contract](https://api-docs.deepseek.com/api/create-chat-completion/).
+Keep other reasoning modes on a separately verified integration; `json_mode` alone does
+not add the schema instructions that this pinned analyzer's prompts require.
+
+After installing the locked SkillSpector runtime above and making your key available in
+the current terminal as `DEEPSEEK_API_KEY`, run this in PowerShell. Replace the executable,
+input and output paths with your own. These settings affect this terminal and its child
+processes only; they do not change global defaults or write a credential file.
+
+```powershell
+if ([string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)) { throw 'DEEPSEEK_API_KEY is not set' }
+$env:AIH_SCAN_SKILLSPECTOR = 'C:\tools\skillspector\Scripts\skillspector.exe'
+$env:SKILLSPECTOR_PROVIDER = 'openai_compatible'
+$env:SKILLSPECTOR_COMPAT_BASE_URL = 'https://api.deepseek.com'
+$env:SKILLSPECTOR_COMPAT_API_KEY = $env:DEEPSEEK_API_KEY
+$env:SKILLSPECTOR_MODEL = 'deepseek-flash'
+$env:SKILLSPECTOR_REASONING_EFFORT = 'none'
+$env:SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD = 'function_calling'
+aih-scan scan 'C:\skills\example' --mode ai --out 'C:\scan-output\example' --json
+```
+
+Remove any existing `SKILLSPECTOR_MODEL_<SLOT>` overrides if you intend every analyzer
+to use `deepseek-flash`; SkillSpector otherwise honors those more-specific caller settings.
+Scan does not select another model or a paid fallback. Having the endpoint and key set
+establishes configuration readiness; authentication, balance, quota and parsed findings
+are established only by the run. A failed or malformed AI response keeps the static
+findings and reports partial coverage with reason `failed`; inspect the summary and notes
+instead of treating exit zero or an available configuration as proof of complete AI analysis.
 
 ### Cisco skill-scanner
 
@@ -168,6 +217,9 @@ tarballs can be scanned and the AI mode has no provider).
 
 ## Platform notes
 
-Native Windows runs use the same command lines with `.exe` entry points and a Windows Job
-Object. The command construction is covered by unit tests; the real analyzers have been
-exercised on Linux x64 only.
+Native Windows runs use `.exe` entry points and a Windows Job Object. SkillSpector's
+Windows JSON stdout transport is exercised through the installed package with its real
+locked runtime and a synthetic local HTTP service, including malformed responses and
+quota errors. This fixture verifies transport and parsing; it does not establish live
+provider availability or assessment quality. The real static analyzers have also been
+exercised on Linux x64.

@@ -3,10 +3,12 @@ import { posix, win32 } from "node:path";
 import type { HostExecutableV1 } from "../cli/host-executable.js";
 import type { ScanMode } from "../contracts/validate.js";
 import {
+  ANALYZER_REPORT_MAX_BYTES,
   type HostEnv,
   PYTHON_LOADER_VARIABLES,
   probeVersion,
   readJsonReport,
+  readJsonStdout,
   runAnalyzer,
   scratchFolder,
   selectAnalyzer,
@@ -54,7 +56,10 @@ const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
     via: "provider",
     variables: [["AZURE_OPENAI_API_KEY"], ["AZURE_OPENAI_ENDPOINT"]],
   },
-  openai_compatible: { via: "provider", variables: [["SKILLSPECTOR_COMPAT_BASE_URL"]] },
+  openai_compatible: {
+    via: "provider",
+    variables: [["SKILLSPECTOR_COMPAT_BASE_URL"], ["SKILLSPECTOR_COMPAT_API_KEY"]],
+  },
   ollama: { via: "local" },
   claude_cli: { via: "cli", cli: "claude" },
   gemini_cli: { via: "cli", cli: "gemini" },
@@ -157,7 +162,7 @@ export interface SkillSpectorInvocation {
 
 /**
  * Builds one native, shell-free SkillSpector run over Scan's working copy `input`, writing its
- * JSON report to `report`. Static mode adds `--no-llm` and a scrubbed environment (no provider,
+ * JSON report to `report` (stdout on Windows). Static mode adds `--no-llm` and a scrubbed environment (no provider,
  * credential or proxy variables; a private HOME). AI mode passes the caller's environment through
  * unchanged except Python loader variables. Both disable SkillSpector's live OSV lookup
  * (`SKILLSPECTOR_OSV_TIMEOUT=0`): known vulnerabilities come only from `checkAdvisories`.
@@ -180,8 +185,9 @@ export function skillSpectorInvocation(
     input.folder,
     "--format",
     "json",
-    "--output",
-    input.report,
+    // Upstream safe file output is unavailable on Windows; its supported JSON stdout
+    // path stays inside the same bounded, hidden Job Object process transport.
+    ...(input.platform === "win32" ? [] : ["--output", input.report]),
     ...(input.mode === "static" ? ["--no-llm"] : []),
   ];
   const fixed = {
@@ -483,6 +489,7 @@ async function runInstalled(
     cwd: invocation.cwd,
     env: invocation.env,
     signal: context.signal,
+    ...(settings.platform === "win32" ? { maxStdoutBytes: ANALYZER_REPORT_MAX_BYTES } : {}),
   });
   if (result.termination === "timeout") return notRun("timeout", mode, SKILLSPECTOR_VERSION);
   if (result.termination === "abort")
@@ -492,5 +499,9 @@ async function runInstalled(
   // Exit 1 means SkillSpector's own risk threshold was crossed: a finished run.
   if (result.code !== 0 && result.code !== 1)
     return notRun("failed", mode, SKILLSPECTOR_VERSION, `SkillSpector exited ${result.code}`);
-  return skillSpectorRun(readJsonReport(report, "SkillSpector report"), item, mode, settings.ai);
+  const document =
+    settings.platform === "win32"
+      ? readJsonStdout(result)
+      : readJsonReport(report, "SkillSpector report");
+  return skillSpectorRun(document, item, mode, settings.ai);
 }

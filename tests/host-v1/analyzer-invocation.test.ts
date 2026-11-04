@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { selectAnalyzer } from "../../src/host/analyzer-process.js";
+import { readJsonStdout, selectAnalyzer } from "../../src/host/analyzer-process.js";
 import { ciscoInvocation } from "../../src/host/cisco.js";
 import { skillSpectorAiSetup, skillSpectorInvocation } from "../../src/host/skillspector.js";
 
-// Windows native runs are not executed on this platform; these tests pin the command
-// construction Scan hands to its Windows Job Object runner.
+// Command construction runs on every platform; installed-analyzer tests exercise the
+// actual native transport when the pinned executables are provided.
 
 const windowsEnv = {
   Path: "C:\\Users\\dev\\.local\\bin;C:\\Windows\\System32",
@@ -20,6 +20,15 @@ const windowsEnv = {
 };
 
 describe("SkillSpector command construction", () => {
+  it("accepts only complete UTF-8 JSON stdout reports", () => {
+    expect(readJsonStdout({ stdout: '{"issues":[]}', truncated: false })).toEqual({ issues: [] });
+    for (const stdout of ["", "{", 'progress\n{"issues":[]}'])
+      expect(readJsonStdout({ stdout, truncated: false })).toBeUndefined();
+    expect(readJsonStdout({ stdout: "{}", truncated: true })).toBeUndefined();
+    expect(
+      readJsonStdout({ stdout: "{}", truncated: false, stdoutMalformedUtf8: true }),
+    ).toBeUndefined();
+  });
   it("builds a shell-free Windows static run: .exe path, working copy input, --no-llm, scrubbed env", () => {
     const invocation = skillSpectorInvocation({
       executable: "C:\\Users\\dev\\.local\\bin\\skillspector.exe",
@@ -36,8 +45,6 @@ describe("SkillSpector command construction", () => {
       "C:\\Temp\\aih-scan-snapshot-x\\item",
       "--format",
       "json",
-      "--output",
-      "C:\\Temp\\aih-scan-skillspector-y\\skillspector-report.json",
       "--no-llm",
     ]);
     expect(invocation.cwd).toBe("C:\\Temp\\aih-scan-skillspector-y");
@@ -153,6 +160,18 @@ describe("SkillSpector AI setup (reads which settings exist, never their values)
     ],
     [{ SKILLSPECTOR_PROVIDER: "openai" }, "OPENAI_API_KEY is not set for provider openai"],
     [
+      {
+        SKILLSPECTOR_PROVIDER: "openai_compatible",
+        SKILLSPECTOR_COMPAT_BASE_URL: "https://api.deepseek.com",
+        SKILLSPECTOR_MODEL: "deepseek-flash",
+      },
+      "SKILLSPECTOR_COMPAT_API_KEY is not set for provider openai_compatible",
+    ],
+    [
+      { SKILLSPECTOR_PROVIDER: "openai_compatible", SKILLSPECTOR_COMPAT_API_KEY: "not-a-real-key" },
+      "SKILLSPECTOR_COMPAT_BASE_URL is not set for provider openai_compatible",
+    ],
+    [
       { SKILLSPECTOR_PROVIDER: "azure_openai", AZURE_OPENAI_API_KEY: "x" },
       "AZURE_OPENAI_ENDPOINT is not set for provider azure_openai",
     ],
@@ -187,6 +206,7 @@ describe("SkillSpector AI setup (reads which settings exist, never their values)
       skillSpectorAiSetup(
         {
           SKILLSPECTOR_PROVIDER: "openai_compatible",
+          SKILLSPECTOR_COMPAT_API_KEY: "local-placeholder",
           SKILLSPECTOR_COMPAT_BASE_URL: "http://127.0.0.1:8080/v1",
         },
         "linux",
@@ -196,10 +216,40 @@ describe("SkillSpector AI setup (reads which settings exist, never their values)
       skillSpectorAiSetup(
         {
           SKILLSPECTOR_PROVIDER: "openai_compatible",
+          SKILLSPECTOR_COMPAT_API_KEY: "not-a-real-key",
           SKILLSPECTOR_COMPAT_BASE_URL: "https://api.example.com/v1",
         },
         "linux",
       ),
     ).toMatchObject({ available: true, via: "provider" });
+  });
+
+  it("keeps the selected DeepSeek model and caller controls in a native HTTP-provider invocation", () => {
+    const settings = {
+      SKILLSPECTOR_PROVIDER: "openai_compatible",
+      SKILLSPECTOR_COMPAT_BASE_URL: "https://api.deepseek.com",
+      SKILLSPECTOR_COMPAT_API_KEY: "not-a-real-key",
+      SKILLSPECTOR_MODEL: "deepseek-flash",
+      SKILLSPECTOR_REASONING_EFFORT: "none",
+      SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
+    };
+    const env = { ...windowsEnv, ...settings };
+    expect(skillSpectorAiSetup(env, "win32")).toEqual({
+      available: true,
+      provider: "openai_compatible",
+      via: "provider",
+      model: "deepseek-flash",
+    });
+    const invocation = skillSpectorInvocation({
+      executable: "C:\\tools\\skillspector.exe",
+      mode: "ai",
+      folder: "C:\\Temp\\snapshot\\item",
+      report: "C:\\Temp\\report.json",
+      scratch: "C:\\Temp\\scratch",
+      env,
+      platform: "win32",
+    });
+    expect(invocation.env).toMatchObject(settings);
+    expect(invocation.argv).not.toContain("--no-llm");
   });
 });

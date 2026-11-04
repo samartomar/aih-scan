@@ -15,8 +15,10 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { alive, fakeAnalyzer } from "./support/analyzer-cli-v1.js";
+import { compatibleAiServiceV1 } from "./support/compatible-ai-service-v1.js";
 import { gitRepository } from "./support/git-fixture-v1.js";
 import { readPackedPackage } from "./support/npm-pack-output.js";
 import { integrityOf, npmTarball, sha256Of } from "./support/npm-tarball-v1.js";
@@ -165,12 +167,20 @@ function cli(
       : { AIH_SCAN_TEST_GIT_FIXTURE: options.git.fixture, AIH_SCAN_TEST_GIT_LOG: options.git.log }),
     ...options.env,
   };
-  const argv = [...(options.wrap ?? []), process.execPath, "--import", preload, bin, ...args];
+  const argv = [
+    ...(options.wrap ?? []),
+    process.execPath,
+    "--import",
+    pathToFileURL(preload).href,
+    bin,
+    ...args,
+  ];
   return new Promise((resolvePromise, reject) => {
     const child = spawn(argv[0] as string, argv.slice(1), {
       cwd: options.cwd ?? work,
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     let stdout = "";
     let stderr = "";
@@ -231,7 +241,11 @@ beforeAll(() => {
   } else tarball = packCurrentSource();
   consumer = installConsumer("consumer");
   packageDir = join(consumer, "node_modules", "@aihq", "scan");
-  bin = join(consumer, "node_modules", ".bin", "aih-scan");
+  const installedManifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as {
+    bin: { "aih-scan": string };
+  };
+  // npm's Windows .bin entry is a shell shim; run its declared JS target without a shell.
+  bin = join(packageDir, installedManifest.bin["aih-scan"]);
   mkdirSync(join(work, "out"));
 }, 600_000);
 
@@ -848,6 +862,75 @@ describe("the installed aih-scan CLI", () => {
 const skillspector = process.env.AIH_SCAN_TEST_SKILLSPECTOR;
 const skillScanner = process.env.AIH_SCAN_TEST_SKILL_SCANNER;
 const required = process.env.AIH_SCAN_REQUIRE_REAL_ANALYZERS === "1";
+
+describe.runIf(skillspector !== undefined)(
+  "the installed CLI with real SkillSpector and a synthetic compatible inference service",
+  () => {
+    it("preserves the selected model and schema-only HTTP controls, and refuses incomplete AI responses", async () => {
+      const service = await compatibleAiServiceV1();
+      servers.push(service);
+      const skill = folder("compatible-ai", { "SKILL.md": cleanSkill["SKILL.md"] });
+      for (const outcome of ["complete", "malformed", "quota"] as const) {
+        service.setOutcome(outcome);
+        const run = await cli(
+          ["scan", skill, "--mode", "ai", "--json", "--out", outFolder(`compatible-${outcome}`)],
+          {
+            env: {
+              AIH_SCAN_SKILLSPECTOR: skillspector!,
+              SKILLSPECTOR_PROVIDER: "openai_compatible",
+              SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
+              SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
+              SKILLSPECTOR_MODEL: "deepseek-flash",
+              SKILLSPECTOR_REASONING_EFFORT: "none",
+              SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
+            },
+          },
+        );
+        expect(run.code, run.stderr).toBe(0);
+        const scanned = json(run).targets[0].results[0];
+        expect(scanned.status).toBe("ok");
+        const summary = JSON.parse(readFileSync(scanned.summaryPath, "utf8"));
+        expect(summary.coverage, JSON.stringify(scanned)).toBe(
+          outcome === "complete" ? "complete" : "partial",
+        );
+        if (outcome !== "complete") expect(summary.reason).toBe("failed");
+        const tool = summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector");
+        if (outcome === "quota") {
+          expect(tool).toMatchObject({ mode: "ai", result: "not-run", reason: "failed" });
+        } else {
+          expect(tool).toMatchObject({
+            mode: "ai",
+            ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
+            // The finding result is independent of coverage: these responses add no findings.
+            result: "pass",
+          });
+        }
+        expect(service.requests.length).toBeGreaterThan(0);
+        for (const request of service.requests) {
+          expect(request.model).toBe("deepseek-flash");
+          expect(request.reasoning_effort).toBe("none");
+          expect(request.response_format).toBeUndefined();
+          expect(request.tool_choice).toMatchObject({
+            type: "function",
+            function: { name: "LLMAnalysisResult" },
+          });
+          // These declarations describe a response object. There is no host-tool dispatcher.
+          expect(request.tools).toMatchObject([
+            { type: "function", function: { name: "LLMAnalysisResult" } },
+          ]);
+          expect(
+            (request.messages as { role: string }[]).every(
+              (message) => message.role === "user" || message.role === "system",
+            ),
+          ).toBe(true);
+        }
+        expect(JSON.stringify(summary) + run.stdout + run.stderr).not.toContain(
+          "fixture-only-not-a-real-key",
+        );
+      }
+    }, 180_000);
+  },
+);
 
 describe.runIf((skillspector !== undefined && skillScanner !== undefined) || required)(
   "the installed CLI with the real SkillSpector 2.13.2 and Cisco skill-scanner 2.3.2",
