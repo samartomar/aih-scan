@@ -267,13 +267,37 @@ bytes as the candidate workflow's `prepared_json` input and set the reviewed
 }
 ```
 
-Intake requires a terminal public HTTPS URL on an explicit allowed host, no URL
-credentials/query parameters, and public DNS addresses pinned for the connection.
-Redirects are refused; supply the terminal URL. Downloads are bounded to 512 MiB and a
-two-minute socket timeout. No location or private ingress policy is chosen automatically.
-The workflow accepts exactly one of `sources_json` and `prepared_json`. Its prepared
-branch downloads, hashes and validates the output-only archive using a fresh installed
-scanner; it does not provision analyzers or repeat paid inference.
+The terminal-URL form retains its explicit host policy: public HTTPS, no URL
+credentials/query parameters, public DNS answers pinned for the connection, and no
+redirects. For a public GitHub Release asset, use this alternative transport in the
+same `aih-scan-prepared-import/1` descriptor, replacing `url` and `allowedHosts`:
+
+```json
+"githubRelease": {
+  "repository": "samartomar/aih-scan",
+  "assetId": 123456789,
+  "name": "reviewed-candidate.tar"
+}
+```
+
+Select the actual immutable asset ID and name after separately authorized publication;
+these example values are not an existing ingress. Intake fetches public asset metadata
+without authentication, checks the repository-bound API URL, ID, name, uploaded state
+and size, and accepts only the matching repository's GitHub browser-download path. It
+allows at most one redirect to the GitHub release-assets download endpoint. The terminal
+signed URL may contain a query, but URL credentials, fragments, non-443 ports, other
+hosts, further redirects and private DNS answers remain refused. No token or cookie is
+sent on any hop, and transport errors omit supplied URL/query values. The reviewed
+archive digest and metadata size must match the downloaded bytes. `prepared-download
+<descriptor.json> <descriptor-sha256> <new-archive-path>` on `candidate.mjs` supports a
+read-only acquisition preflight without importing or executing archive code.
+
+Both forms keep the existing 512 MiB archive bound and two-minute transport budget.
+The budget now covers the whole acquisition, including metadata and the redirect,
+so additional requests cannot each restart the existing timeout. Metadata is bounded
+to 64 KiB. No location or private ingress policy is chosen automatically. The workflow
+accepts exactly one of `sources_json` and `prepared_json`; its prepared branch validates
+output bytes without provisioning analyzers or repeating paid inference.
 
 Hosted validation checks the reviewed per-file path/mode/hash inventory against each
 summary, expected key, scanner/configuration and parsed SARIF. It cannot reconstruct
@@ -350,15 +374,54 @@ this profile. Omitted profiles retain upstream defaults and existing configurati
 identities. Incomplete results, findings/scoring and ten-minute tool deadline are unchanged.
 
 Completed outputs from an older producer remain unchanged under their original
-scanner/configuration identities. Use separate exact producer contexts: validate each
-archive with its original reviewed scanner tarball installed in its own isolated consumer
-and retain its original receipt/selection. A new producer's output gets a separate context
-and signing/admission selection. Do not merge cross-producer checkpoints, replace old
-scanner identity, substitute a hash allowlist for installed-package equality, or silently
-rescan all completed keys. The existing workflows bind candidate and signer runs to a
-reviewed main head, so separate historical producer validation alone does not establish
-that a future hosted run can publish it. Before publication, the operator must establish
-which reviewed-head contexts can actually run each selection, or record the precise
-custody blocker for an explicit operational decision. This tooling change does not
-activate workflows, choose archive ingress/store destinations, authorize signing or
-establish trusted admission.
+scanner/configuration identities. The default workflows still use the scanner built
+from the reviewed current main head. To validate one historical producer, supply the
+same optional `producer_json` input to **both** workflows and independently set
+`SCAN_REPORT_PRODUCER_SHA256` to the SHA-256 of those exact JSON bytes. Omit both the
+input and variable for the original single-producer behavior. Each candidate run uses
+one context; separate producers or assessment profiles retain separate runs and
+selections. Do not merge cross-producer checkpoints or rewrite older results.
+
+A reviewed context is:
+
+```json
+{
+  "format": "aih-scan-producer-context/1",
+  "sourceCommit": "<full reviewed Scan source commit>",
+  "packageSha256": "<exact reviewed npm tarball digest>",
+  "lockSha256": "<exact source package-lock.json digest>",
+  "archiveSha256": "<output-only archive digest>",
+  "manifestSha256": "<exported batch manifest digest>",
+  "receiptSha256": "<exported receipt digest>",
+  "selectionSha256": "<reviewed summary listing digest>"
+}
+```
+
+This independent approval authorizes validation code from that exact source context;
+it is not an allowlist of candidate-supplied executable packages. Before downloading a
+candidate, each workflow checks out the named commit from this fixed Scan repository,
+checks its origin, exact clean HEAD and lock digest, then builds and packs it in isolation.
+A private home/cache and empty user/global npm and Git configurations keep ambient
+GitHub, OIDC, SSH, provider credentials and Node loaders out of producer commands.
+Dependencies use `npm ci --ignore-scripts`; only the reviewed `build` script runs, with
+pre/post lifecycle hooks disabled. The built tarball must exactly match the reviewed
+package digest. Runtime dependencies are installed from the same reviewed lock with
+scripts disabled, and the installed package and dependency file inventory is sealed
+and checked again before validation. A nonreproducible or mismatched package stops
+intake; the helper does not substitute the archive's scanner.
+
+Candidate import retains the independently approved context digest as provenance.
+Publisher prepared-check requires the independently supplied matching context and
+rechecks the original archive/manifest/receipt/package/selection identities, every
+installed package file, dependency inventory, configuration and complete AI evidence.
+Unknown contexts, changed runtime files or metadata swapped between phases fail closed.
+The archived scanner is compared with the independent installed package before any of
+its public modules are imported. The publisher always prepares the **current reviewed
+main CLI** separately for reading, signing and default-signer verification. Historical
+producer code never enters the protected OIDC signer job. The reviewed-main, maintainer,
+first-attempt, candidate-run/artifact-digest, selection and environment checks remain.
+
+This software does not upload assets, choose a result store, enable or dispatch
+workflows, change protections, sign reports or establish trusted admission. Source,
+package, transport and report selections still require concrete operator review;
+production activation and protected human signing approval remain separately authorized.

@@ -23,12 +23,16 @@ export declare function selectSummaries(
 ): { count: number; listing: string; paths: string[] };
 export interface PreparedImportDescriptor {
   format: "aih-scan-prepared-import/1";
-  url: string;
-  allowedHosts: string[];
+  url?: string;
+  allowedHosts?: string[];
+  githubRelease?: { repository: string; assetId: number; name: string };
   archiveSha256: string;
   manifestSha256: string;
   receiptSha256: string;
 }
 export declare function validatePreparedImport(bytes: Uint8Array, expectedSha256: string): PreparedImportDescriptor;
-export declare function importPreparedCandidate(bytes: Uint8Array, expectedSha256: string, consumer: string, out: string): Promise<{ execution: string; count: number; manifestSha256: string; receiptSha256: string }>;
-export declare function checkPreparedCandidate(candidate: string, consumer: string): Promise<{ execution: string; count: number }>;
+export declare function importPreparedCandidate(bytes: Uint8Array, expectedSha256: string, consumer: string, out: string, producer?: { bytes: Uint8Array; sha256: string }): Promise<{ execution: string; count: number; manifestSha256: string; receiptSha256: string }>;
+export declare function checkPreparedCandidate(candidate: string, consumer: string, producer?: { bytes: Uint8Array; sha256: string }): Promise<{ execution: string; count: number }>;
+
+export interface ProducerContext { format: "aih-scan-producer-context/1"; sourceCommit: string; packageSha256: string; lockSha256: string; archiveSha256: string; manifestSha256: string; receiptSha256: string; selectionSha256: string; }
+export declare function validateProducerContext(bytes: Uint8Array, expectedSha256: string): ProducerContext;

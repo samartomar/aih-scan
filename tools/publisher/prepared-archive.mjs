@@ -97,28 +97,67 @@ const publicAddress = (address) => {
   const [a, b, c] = address.split(".").map(Number);
   return a > 0 && a < 224 && a !== 10 && a !== 127 && !(a === 169 && b === 254) && !(a === 172 && b >= 16 && b <= 31) && !(a === 192 && (b === 168 || b === 0 || b === 2)) && !(a === 100 && b >= 64 && b <= 127) && !(a === 198 && (b === 18 || b === 19 || b === 51 && c === 100)) && !(a === 203 && b === 0 && c === 113);
 };
-export async function downloadArchive(descriptor, out) {
-  const url = new URL(descriptor.url);
-  need(url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && (url.port === "" || url.port === "443"), "Import needs a public terminal HTTPS URL without credentials or query parameters");
-  need(Array.isArray(descriptor.allowedHosts) && descriptor.allowedHosts.includes(url.hostname), "Import host is not explicitly allowed");
+export function validateReleaseAsset(value) {
+  need(value && Object.keys(value).sort().join(",") === "assetId,name,repository" && /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(value.repository) && value.repository.split("/").every((part) => part !== "." && part !== "..") && Number.isSafeInteger(value.assetId) && value.assetId > 0 && /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/.test(value.name), "Invalid public release asset identity");
+}
+function publicUrl(value, allowQuery = false) {
+  let url;
+  try { url = new URL(value); } catch { throw new Error("Import URL policy refused"); }
+  need(url.protocol === "https:" && !url.username && !url.password && (allowQuery || !url.search) && !url.hash && (!url.port || url.port === "443"), "Import needs a public terminal HTTPS URL without credentials or query parameters");
   const literal = url.hostname.replace(/^\[|\]$/g, "");
   need(!isIP(literal) || publicAddress(literal), "Non-public import address refused");
-  need(/^[0-9a-f]{64}$/.test(descriptor.sha256), "Invalid archive digest");
-  const bytes = await new Promise((resolveBytes, reject) => {
-    const child = request(url, { timeout: 120000, lookup(host, options, callback) {
+  return url;
+}
+// No authorization/cookies are sent. Each connection pins only public DNS answers.
+function responseBytes(url, maxBytes, deadline, allowRedirect = false, accept = "application/octet-stream") {
+  return new Promise((resolveBytes, reject) => {
+    const fail = (message) => reject(new Error(message));
+    const child = request(url, { headers: { "user-agent": "aih-scan-prepared-import", accept }, timeout: Math.max(1, deadline - Date.now()), lookup(host, options, callback) {
       lookup(host, { all: true, verbatim: true }, (error, answers) => {
-        if (error) { callback(error); return; }
-        if (!answers.length || answers.some(({ address }) => !publicAddress(address))) { callback(new Error("Non-public import address refused")); return; }
+        if (error || !answers?.length || answers.some(({ address }) => !publicAddress(address))) { callback(new Error("Non-public import address or DNS failure")); return; }
         if (options.all) callback(null, answers); else callback(null, answers[0].address, answers[0].family);
       });
     } }, (response) => {
-      if (response.statusCode !== 200) { response.destroy(); reject(new Error("Import response refused (redirects are not followed)")); return; }
+      if (allowRedirect && [302, 303, 307, 308].includes(response.statusCode)) {
+        const location = response.headers.location; response.destroy(); clearTimeout(timer); resolveBytes({ location }); return;
+      }
+      if (response.statusCode !== 200) { response.destroy(); fail("Import response refused (redirects are not followed)"); return; }
       let size = 0; const chunks = [];
-      response.on("data", (chunk) => { size += chunk.length; if (size > MAX_ARCHIVE_BYTES) response.destroy(new Error("Candidate archive exceeds 512 MiB")); else chunks.push(chunk); });
-      response.once("error", reject); response.once("end", () => resolveBytes(Buffer.concat(chunks)));
+      response.on("data", (chunk) => { size += chunk.length; if (size > maxBytes) response.destroy(new Error("Import response exceeds byte bound")); else chunks.push(chunk); });
+      response.once("error", () => fail("Import response failed or exceeded byte bound"));
+      response.once("end", () => { clearTimeout(timer); resolveBytes({ bytes: Buffer.concat(chunks) }); });
     });
-    child.once("timeout", () => child.destroy(new Error("Import download timed out"))); child.once("error", reject); child.end();
+    const timer = setTimeout(() => child.destroy(new Error("Import download timed out")), Math.max(1, deadline - Date.now()));
+    child.once("timeout", () => child.destroy());
+    child.once("error", () => { clearTimeout(timer); fail("Import transport failed"); });
+    child.once("close", () => clearTimeout(timer)); child.end();
   });
+}
+export async function downloadArchive(descriptor, out) {
+  need(/^[0-9a-f]{64}$/.test(descriptor.sha256), "Invalid archive digest");
+  const deadline = Date.now() + 120000;
+  let bytes;
+  if (descriptor.githubRelease) {
+    validateReleaseAsset(descriptor.githubRelease);
+    const asset = descriptor.githubRelease;
+    const api = `https://api.github.com/repos/${asset.repository}/releases/assets/${asset.assetId}`;
+    const metadata = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode((await responseBytes(publicUrl(api), 65536, deadline, false, "application/vnd.github+json")).bytes));
+    need(metadata.id === asset.assetId && metadata.name === asset.name && metadata.state === "uploaded" && metadata.url === api && Number.isSafeInteger(metadata.size) && metadata.size > 0 && metadata.size <= MAX_ARCHIVE_BYTES, "Public release asset metadata mismatch");
+    const browser = publicUrl(metadata.browser_download_url);
+    const prefix = `/${asset.repository}/releases/download/`;
+    need(browser.hostname === "github.com" && browser.pathname.startsWith(prefix) && browser.pathname.slice(prefix.length).split("/").length === 2 && browser.pathname.endsWith(`/${asset.name}`), "Public release asset download identity mismatch");
+    const first = await responseBytes(browser, MAX_ARCHIVE_BYTES, deadline, true);
+    if (first.location !== undefined) {
+      const terminal = publicUrl(first.location, true);
+      need(terminal.hostname === "release-assets.githubusercontent.com" && /^\/github-production-release-asset\/[^/]+\/[^/]+$/.test(terminal.pathname), "Release asset redirect refused");
+      bytes = (await responseBytes(terminal, MAX_ARCHIVE_BYTES, deadline)).bytes;
+    } else bytes = first.bytes;
+    need(bytes.length === metadata.size, "Public release asset size mismatch");
+  } else {
+    const url = publicUrl(descriptor.url);
+    need(Array.isArray(descriptor.allowedHosts) && descriptor.allowedHosts.includes(url.hostname), "Import host is not explicitly allowed");
+    bytes = (await responseBytes(url, MAX_ARCHIVE_BYTES, deadline)).bytes;
+  }
   need(digest(bytes) === descriptor.sha256, "Import archive digest mismatch");
   need(lstatSync(dirname(out)).isDirectory(), "Import parent is not a directory");
   writeFileSync(out, bytes, { flag: "wx" });

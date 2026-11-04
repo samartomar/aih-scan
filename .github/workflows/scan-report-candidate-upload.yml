@@ -6,6 +6,11 @@ name: Scan report candidate
 on:
   workflow_dispatch:
     inputs:
+      producer_json:
+        description: Optional reviewed producer context JSON (SHA-256 must equal vars.SCAN_REPORT_PRODUCER_SHA256)
+        required: false
+        default: ""
+        type: string
       sources_json:
         description: Exact reviewed sources JSON (its SHA-256 must equal vars.SCAN_REPORT_SOURCES_SHA256)
         required: false
@@ -22,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   candidate:
-    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && ((inputs.sources_json != '' && inputs.prepared_json == '' && vars.SCAN_REPORT_SOURCES_SHA256 != '') || (inputs.prepared_json != '' && inputs.sources_json == '' && vars.SCAN_REPORT_PREPARED_SHA256 != ''))
+    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-candidate-upload.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && ((inputs.sources_json != '' && inputs.prepared_json == '' && vars.SCAN_REPORT_SOURCES_SHA256 != '') || (inputs.prepared_json != '' && inputs.sources_json == '' && vars.SCAN_REPORT_PREPARED_SHA256 != '')) && (inputs.producer_json == '' || inputs.prepared_json != '') && ((inputs.producer_json == '' && vars.SCAN_REPORT_PRODUCER_SHA256 == '') || (inputs.producer_json != '' && vars.SCAN_REPORT_PRODUCER_SHA256 != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -64,6 +69,30 @@ jobs:
           printf '{"name":"scan-report-consumer","version":"0.0.0","private":true,"type":"module"}\n' > package.json
           npm install --ignore-scripts --no-audit --no-fund --save-exact "$tarball"
           sha256sum "$tarball" | awk '{print $1}' > "$RUNNER_TEMP/scanner/tarball.sha256"
+      - name: Validate the independent reviewed producer context
+        if: inputs.producer_json != '' && inputs.prepared_json != ''
+        id: producer
+        env:
+          PRODUCER_JSON: ${{ inputs.producer_json }}
+          PRODUCER_SHA256: ${{ vars.SCAN_REPORT_PRODUCER_SHA256 }}
+        run: |-
+          set -euo pipefail
+          printf '%s' "$PRODUCER_JSON" > "$RUNNER_TEMP/producer.json"
+          echo "source_commit=$(node tools/publisher/candidate.mjs producer-source "$RUNNER_TEMP/producer.json" "$PRODUCER_SHA256")" >> "$GITHUB_OUTPUT"
+      - name: Check out only the independently reviewed producer source
+        if: inputs.producer_json != '' && inputs.prepared_json != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.producer.outputs.source_commit }}
+          path: reviewed-producer
+          persist-credentials: false
+      - name: Build the isolated producer with its exact reviewed lock and package
+        if: inputs.producer_json != '' && inputs.prepared_json != ''
+        env:
+          PRODUCER_SHA256: ${{ vars.SCAN_REPORT_PRODUCER_SHA256 }}
+        run: |-
+          set -euo pipefail
+          node tools/publisher/candidate.mjs producer-build "$RUNNER_TEMP/producer.json" "$PRODUCER_SHA256" reviewed-producer "$RUNNER_TEMP/producer-consumer"
       - name: Provision the locked analyzer runtimes
         if: inputs.prepared_json == ''
         run: |-
@@ -96,10 +125,17 @@ jobs:
         env:
           PREPARED_JSON: ${{ inputs.prepared_json }}
           PREPARED_SHA256: ${{ vars.SCAN_REPORT_PREPARED_SHA256 }}
+          PRODUCER_SHA256: ${{ vars.SCAN_REPORT_PRODUCER_SHA256 }}
         run: |-
           set -euo pipefail
           printf '%s' "$PREPARED_JSON" > "$RUNNER_TEMP/prepared-import.json"
-          node tools/publisher/candidate.mjs prepared-import "$RUNNER_TEMP/prepared-import.json" "$PREPARED_SHA256" "$RUNNER_TEMP/consumer" "$RUNNER_TEMP/candidate"
+          consumer="$RUNNER_TEMP/consumer"
+          producer_args=()
+          if [ -n "$PRODUCER_SHA256" ]; then
+            consumer="$RUNNER_TEMP/producer-consumer"
+            producer_args=("$RUNNER_TEMP/producer.json" "$PRODUCER_SHA256")
+          fi
+          node tools/publisher/candidate.mjs prepared-import "$RUNNER_TEMP/prepared-import.json" "$PREPARED_SHA256" "$consumer" "$RUNNER_TEMP/candidate" "${producer_args[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: scan-report-candidate

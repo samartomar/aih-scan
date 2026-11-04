@@ -18,13 +18,15 @@ const fingerprint = (value) => digest(canonical(value));
 function keys(value, required, optional = []) {
   need(object(value) && required.every((key) => Object.hasOwn(value, key)) && Object.keys(value).every((key) => [...required, ...optional].includes(key)), "Unexpected or missing manifest fields");
 }
-export function regularFiles(root) {
+export function regularFiles(root, excluded = new Set()) {
   const result = [];
   const rootStat = lstatSync(root);
   need(rootStat.isDirectory() && !rootStat.isSymbolicLink(), "Expected a real directory");
   const walk = (folder) => {
     for (const entry of readdirSync(folder).sort()) {
-      const path = join(folder, entry), stat = lstatSync(path);
+      const path = join(folder, entry);
+      if (excluded.has(relative(root, path).split(sep).join("/"))) continue;
+      const stat = lstatSync(path);
       if (stat.isDirectory() && !stat.isSymbolicLink()) walk(path);
       else { need(stat.isFile() && stat.nlink === 1 && !stat.isSymbolicLink(), "Links and special files are refused"); result.push({ path: relative(root, path).split(sep).join("/"), file: path, stat }); }
     }
@@ -437,7 +439,8 @@ export async function verifyCandidate(candidate, manifestSha256, receiptSha256, 
   const expected = new Set(["manifest.json", "receipt.json", "scanner.tgz"]);
   if (existsSync(join(candidate, "prepared-import.json"))) {
     const imported = json(readRegular(join(candidate, "prepared-import.json")));
-    keys(imported, ["execution", "archiveSha256", "manifestSha256", "receiptSha256"]);
+    keys(imported, ["execution", "archiveSha256", "manifestSha256", "receiptSha256"], ["producerSha256"]);
+    if (imported.producerSha256 !== undefined) need(hash(imported.producerSha256), "Invalid producer context digest");
     need(imported.execution === "local" && hash(imported.archiveSha256) && imported.manifestSha256 === manifestSha256 && imported.receiptSha256 === receiptSha256, "Prepared import receipt mismatch");
     expected.add("prepared-import.json");
   }
