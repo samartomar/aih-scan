@@ -135,6 +135,9 @@ allocation lags process creation; subsequent waves recheck available memory. If 
 cannot support another worker and none is active, the helper returns explicit pending
 keys for resume instead of waiting indefinitely. Measure the pilot's actual memory and
 throughput before choosing campaign concurrency; leave other active work responsive.
+Outstanding worker estimates remain reserved across refill waves, bounded by the
+pool's observed starting headroom and current free memory. Taking the smaller budget
+avoids subtracting all resident memory twice. A fully drained pool refreshes its headroom.
 
 Each distinct key uses a separate output/temp root. Finished entries are atomically
 checkpointed, with file data flushed before index replacement. Repeating the command,
@@ -157,6 +160,11 @@ node tools/publisher/prepared.mjs recover manifest.json "$MANIFEST_SHA" content 
 temporary records are merged into the canonical checkpoint; conflicts are refused and
 all evidence remains. Normal `scan` also performs this recovery before deciding which
 keys need work.
+Workers also persist an atomic per-attempt result receipt before sending the parent its
+completion message. Recovery validates these receipts before scheduling paid work. For
+older orphan attempts lacking a receipt, it can validate the original request's exact
+configuration and actual completed summary/SARIF against the current inventory; missing
+or partial output never establishes success. Unavailable legacy timing stays unknown.
 
 For two machines, scan disjoint subset manifests with the same scanner/assessment and
 copy each immutable receipt **with its relative output tree**, rather than copying a live

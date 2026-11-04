@@ -8,7 +8,7 @@ export interface PreparedRuntime {
   read: typeof import("../../src/public/read.js");
   contracts: typeof import("../../src/public/contracts.js");
 }
-export interface PreparedRecord { status: string; summary: string; summarySha256: string; sarif: readonly { path: string; sha256: string }[]; elapsedMs: number }
+export interface PreparedRecord { status: string; summary: string; summarySha256: string; sarif: readonly { path: string; sha256: string }[]; elapsedMs: number | null }
 export interface PreparedReceipt { results: Record<string, PreparedRecord> }
 export interface PreparedOptions { manifestPath: string; manifestSha256: string; content: string; consumer: string; tarball: string; out: string; concurrency?: number; workerMemoryMiB?: number; reserveMemoryMiB?: number; signal?: AbortSignal }
 export function validateManifest(bytes: Uint8Array, expectedSha256: string): PreparedManifest;
@@ -17,6 +17,7 @@ export function validateContent(manifest: PreparedManifest, content: string, run
 export function aiEligible(summary: unknown, manifest: { assessment: PreparedAssessment }): boolean;
 export function scanPrepared(options: PreparedOptions): Promise<{ receiptPath: string; receiptSha256: string; root: string; reused: number; completed: number; pending: number; uniqueKeys: number; references: number; cancelled: boolean }>;
 export function writeCheckpointAtomic(path: string, value: unknown): void;
+export function workerLaunchBudget(freeMiB: number, reserveMiB: number, poolCapacityMiB: number, reservedMiB: number): number;
 export function recoverPrepared(options: PreparedOptions): Promise<{ root: string; recovered: number; ignored: number; completedKeys: string[] }>;
 export function mergePrepared(options: PreparedOptions & { receipts: string[] }): Promise<{ root: string; imported: number; configSha256: string }>;
 export function verifyResult(root: string, record: PreparedRecord, items: PreparedItem[], manifest: PreparedManifest, content: string | undefined, runtime: PreparedRuntime): Promise<{ summary: import("../../src/public/contracts.js").Summary; eligible: boolean }>;

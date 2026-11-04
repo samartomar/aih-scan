@@ -3,6 +3,7 @@ import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, freemem, hostname, totalmem } from "node:os";
+import { isIP } from "node:net";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -10,6 +11,7 @@ import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive
 
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
+const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
 const canonical = (value) => JSON.stringify(Array.isArray(value) ? value.map((entry) => JSON.parse(canonical(entry))) : object(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, JSON.parse(canonical(value[key]))])) : value);
 const fingerprint = (value) => digest(canonical(value));
 function keys(value, required, optional = []) {
@@ -60,7 +62,7 @@ export function validateManifest(bytes, expectedSha256) {
   if (assessment.mode === "ai") {
     need(assessment.provider === "openai_compatible" && typeof assessment.model === "string" && assessment.model.length > 0 && assessment.model.length <= 256 && plainText(assessment.model), "Prepared AI requires an explicitly selected HTTP provider/model; no agent CLI or model fallback");
     const endpoint = new URL(assessment.baseUrl);
-    const loopback = endpoint.hostname === "localhost" || endpoint.hostname === "[::1]" || /^127\./.test(endpoint.hostname);
+    const loopback = loopbackHost(endpoint.hostname);
     need(endpoint.protocol === "https:" || endpoint.protocol === "http:" && loopback, "AI endpoint must be HTTPS or loopback HTTP");
     need(!endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash, "AI endpoint must not contain credentials or query parameters");
     need(typeof assessment.reasoningEffort === "string" && /^[a-z0-9_-]{1,64}$/i.test(assessment.reasoningEffort) && ["function_calling", "json_mode", "json_schema"].includes(assessment.structuredOutputMethod), "Invalid explicit AI response controls");
@@ -139,13 +141,13 @@ export function aiEligible(summary, manifest) {
   if (manifest.assessment.mode !== "ai" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
   const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
-  const via = host === "localhost" || host === "[::1]" || /^127\./.test(host) ? "local" : "provider";
+  const via = loopbackHost(host) ? "local" : "provider";
   if (primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
   return manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 }
 export async function verifyResult(root, record, items, manifest, content, runtime) {
   keys(record, ["status", "summary", "summarySha256", "sarif", "elapsedMs"], ["detail"]);
-  safePath(record.summary); need(hash(record.summarySha256) && Array.isArray(record.sarif) && typeof record.elapsedMs === "number" && Number.isFinite(record.elapsedMs) && record.elapsedMs >= 0, "Invalid result receipt");
+  safePath(record.summary); need(hash(record.summarySha256) && Array.isArray(record.sarif) && (record.elapsedMs === null || typeof record.elapsedMs === "number" && Number.isFinite(record.elapsedMs) && record.elapsedMs >= 0), "Invalid result receipt");
   const bytes = readRegular(join(root, ...record.summary.split("/")), runtime.contracts.limits.output.summaryBytes);
   need(digest(bytes) === record.summarySha256, "Summary digest mismatch");
   const read = runtime.read.readSummary(new Uint8Array(bytes)); need(read.status === "ok", "Invalid result summary");
@@ -185,7 +187,13 @@ async function worker(requestPath) {
   if (item?.status !== "ok") return { status: "failed", detail: result.status, elapsedMs: Date.now() - started };
   const summary = runtime.read.readSummary(new Uint8Array(readRegular(item.summaryPath)));
   need(summary.status === "ok", "Worker returned an invalid summary");
-  return { status: aiEligible(summary.summary, { assessment: job.assessment }) ? "complete-ai" : "incomplete", summary: item.summaryPath, summarySha256: digest(readRegular(item.summaryPath)), sarif: summary.summary.sarif.map((entry) => ({ path: join(dirname(item.summaryPath), ...entry.path.split("/")), sha256: entry.sha256 })), elapsedMs: Date.now() - started };
+  const record = { status: aiEligible(summary.summary, { assessment: job.assessment }) ? "complete-ai" : "incomplete", summary: item.summaryPath, summarySha256: digest(readRegular(item.summaryPath)), sarif: summary.summary.sarif.map((entry) => ({ path: join(dirname(item.summaryPath), ...entry.path.split("/")), sha256: entry.sha256 })), elapsedMs: Date.now() - started };
+  const stateRoot = resolve(dirname(requestPath), "../..");
+  const durable = { ...record, summary: relative(stateRoot, record.summary).split(sep).join("/"), sarif: record.sarif.map((entry) => ({ ...entry, path: relative(stateRoot, entry.path).split(sep).join("/") })) };
+  const receiptPath = join(dirname(requestPath), "result.json");
+  need(!existsSync(receiptPath), "Attempt result already exists");
+  writeCheckpointAtomic(receiptPath, { format: "aih-scan-prepared-attempt/1", configSha256: fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment }, runtime)), scanKey: job.item.scanKey, record: durable });
+  return record;
 }
 function childEnvironment(assessment, scratch) {
   const allowed = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "LANG", "LC_ALL", "LC_CTYPE", "AIH_SCAN_SKILLSPECTOR", "AIH_SCAN_SKILL_SCANNER"]);
@@ -227,20 +235,51 @@ function acquireLock(folder) {
 }
 async function recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime) {
   let recovered = 0, ignored = 0;
+  const adopt = async (key, record) => {
+    if (!groups.has(key) || record.status !== "complete-ai") return;
+    await verifyResult(root, record, groups.get(key), manifest, content, runtime);
+    const prior = checkpoint.results[key];
+    if (prior?.status === "complete-ai") {
+      await verifyResult(root, prior, groups.get(key), manifest, content, runtime);
+      need(prior.summarySha256 === record.summarySha256, "Conflicting completed checkpoint records; retain both for review");
+    } else { checkpoint.results[key] = record; recovered++; }
+  };
   for (const name of readdirSync(root).sort()) {
     if (!name.startsWith("checkpoint.json.") || !name.endsWith(".tmp")) continue;
     let temporary;
     try { temporary = json(readRegular(join(root, name))); } catch { ignored++; continue; }
     if (temporary.format !== "aih-scan-prepared-checkpoint/1" || temporary.configSha256 !== checkpoint.configSha256 || !object(temporary.results)) { ignored++; continue; }
     for (const [key, record] of Object.entries(temporary.results)) {
-      if (!groups.has(key) || record.status !== "complete-ai") continue;
-      await verifyResult(root, record, groups.get(key), manifest, content, runtime);
-      const prior = checkpoint.results[key];
-      if (prior?.status === "complete-ai") {
-        await verifyResult(root, prior, groups.get(key), manifest, content, runtime);
-        need(prior.summarySha256 === record.summarySha256, "Conflicting completed checkpoint records; retain both for review");
-      } else { checkpoint.results[key] = record; recovered++; }
+      await adopt(key, record);
     }
+  }
+  const attempts = join(root, "attempts");
+  if (existsSync(attempts)) for (const name of readdirSync(attempts).sort()) {
+    safePath(name);
+    const attempt = join(attempts, name), stat = lstatSync(attempt);
+    need(stat.isDirectory() && !stat.isSymbolicLink(), "Attempt directory is not a real directory");
+    let foundDurable = false;
+    for (const resultName of readdirSync(attempt).sort()) {
+      if (resultName !== "result.json" && !(resultName.startsWith("result.json.") && resultName.endsWith(".tmp"))) continue;
+      let value;
+      try { value = json(readRegular(join(attempt, resultName))); } catch { ignored++; continue; }
+      keys(value, ["format", "configSha256", "scanKey", "record"]);
+      need(value.format === "aih-scan-prepared-attempt/1" && value.configSha256 === checkpoint.configSha256, "Attempt receipt configuration mismatch");
+      await adopt(value.scanKey, value.record); foundDurable = true;
+    }
+    if (foundDurable || !existsSync(join(attempt, "request.json"))) continue;
+    // Older or interrupted workers may have written complete output before their
+    // durable receipt. Validate original configuration, actual bytes and complete
+    // analyzer outcomes; file presence or requested AI alone never establishes success.
+    const job = json(readRegular(join(attempt, "request.json"))), key = job.item?.scanKey;
+    if (!groups.has(key)) continue;
+    need(fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment }, runtime)) === checkpoint.configSha256, "Orphan attempt configuration mismatch");
+    const summaryPath = join(attempt, "output", runtime.contracts.keyFolderName(key), "summary.json");
+    if (!existsSync(summaryPath)) continue;
+    const bytes = readRegular(summaryPath), read = runtime.read.readSummary(new Uint8Array(bytes));
+    need(read.status === "ok", "Orphan attempt has an invalid summary");
+    const record = { status: aiEligible(read.summary, manifest) ? "complete-ai" : "incomplete", summary: relative(root, summaryPath).split(sep).join("/"), summarySha256: digest(bytes), sarif: read.summary.sarif.map((entry) => ({ path: relative(root, join(dirname(summaryPath), ...entry.path.split("/"))).split(sep).join("/"), sha256: entry.sha256 })), elapsedMs: null, detail: "Recovered completed output; original worker elapsed time is unavailable" };
+    await adopt(key, record);
   }
   if (recovered) atomicJson(join(root, "checkpoint.json"), checkpoint);
   return { recovered, ignored };
@@ -255,8 +294,13 @@ export async function recoverPrepared({ manifestPath, manifestSha256, content, c
     const checkpoint = existsSync(path) ? json(readRegular(path)) : { format: "aih-scan-prepared-checkpoint/1", configSha256, results: {} };
     need(checkpoint.format === "aih-scan-prepared-checkpoint/1" && checkpoint.configSha256 === configSha256 && object(checkpoint.results), "Invalid checkpoint configuration");
     const recovery = await recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime);
+    for (const [key, items] of groups) if (checkpoint.results[key]?.status === "complete-ai") await verifyResult(root, checkpoint.results[key], items, manifest, content, runtime);
     return { root, ...recovery, completedKeys: [...groups.keys()].filter((key) => checkpoint.results[key]?.status === "complete-ai") };
   } finally { lock.release(); }
+}
+/** Outstanding estimates persist across refill waves; resident usage is not subtracted twice. */
+export function workerLaunchBudget(freeMiB, reserveMiB, poolCapacityMiB, reservedMiB) {
+  return Math.max(0, Math.min(freeMiB - reserveMiB, poolCapacityMiB - reservedMiB));
 }
 export async function scanPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, concurrency = availableParallelism(), workerMemoryMiB = 512, reserveMemoryMiB = Math.ceil(Math.max(1024 ** 3, totalmem() / 10) / 1024 ** 2), signal = new AbortController().signal }) {
   const bytes = readRegular(manifestPath); const manifest = validateManifest(bytes, manifestSha256);
@@ -283,10 +327,13 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
         await verifyResult(root, record, items, manifest, content, runtime); reused++;
       } else pending.push([key, items]);
     }
+    let poolCapacityMiB = Math.max(0, freemem() / 1024 ** 2 - reserveMemoryMiB);
     while ((pending.length || active.size) && !signal.aborted) {
       // Reserve each launch estimate immediately: child RSS rises after fork, so a fresh
       // freemem reading for every launch would otherwise overcommit a whole wave.
-      let launchBudgetMiB = freemem() / 1024 ** 2 - reserveMemoryMiB;
+      const freeMiB = freemem() / 1024 ** 2;
+      if (!active.size) poolCapacityMiB = Math.max(0, freeMiB - reserveMemoryMiB);
+      let launchBudgetMiB = workerLaunchBudget(freeMiB, reserveMemoryMiB, poolCapacityMiB, active.size * workerMemoryMiB);
       while (pending.length && active.size < concurrency && launchBudgetMiB >= workerMemoryMiB) {
         launchBudgetMiB -= workerMemoryMiB;
         const [key, items] = pending.shift(), item = items[0];
@@ -425,7 +472,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       else if (command === "archive" && args.length >= 7 && args.length <= 8) { const [manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, selectionPath] = args; result = await exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, ...(selectionPath ? { selection: json(readRegular(selectionPath)) } : {}) }); }
       else if (command === "merge" && args.length === 7) { const [manifestPath, manifestSha256, content, consumer, tarball, out, receiptList] = args; result = await mergePrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, receipts: json(readRegular(receiptList)) }); }
       else if (command === "recover" && args.length === 6) { const [manifestPath, manifestSha256, content, consumer, tarball, out] = args; result = await recoverPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out }); }
-      else if (command === "import" && args.length === 7) { const verified = await importCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
+      else if (command === "import" && args.length === 6) { const verified = await importCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
       else throw new Error("usage: prepared.mjs validate|scan|verify|archive|import <documented positional arguments>");
       process.stdout.write(`${JSON.stringify(result)}\n`);
     }

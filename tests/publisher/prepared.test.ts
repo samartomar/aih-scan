@@ -21,11 +21,13 @@ import {
   loadRuntime,
   mergePrepared,
   type PreparedRuntime,
+  recoverPrepared,
   scanPrepared,
   validateContent,
   validateManifest,
   verifyCandidate,
   verifyResult,
+  workerLaunchBudget,
   writeCheckpointAtomic,
 } from "../../tools/publisher/prepared.mjs";
 import {
@@ -158,6 +160,16 @@ describe("prepared manifest and exact inventory", () => {
     writeCheckpointAtomic(path, { completed: ["first", "second"] });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ completed: ["first", "second"] });
   });
+  it("retains outstanding worker reservations across refill waves without double-counting resident memory", () => {
+    // Initial headroom is 800 MiB. Three unallocated 200 MiB workers remain after
+    // a fast peer finishes; only one replacement can be reserved, even if RSS lags.
+    expect(workerLaunchBudget(1000, 200, 800, 600)).toBe(200);
+    expect(workerLaunchBudget(1000, 200, 800, 800)).toBe(0);
+    // If those residents are reflected in free RAM, do not subtract their whole
+    // reservation from free RAM again: the remaining estimate still permits one.
+    expect(workerLaunchBudget(400, 200, 800, 600)).toBe(200);
+    expect(workerLaunchBudget(150, 200, 800, 600)).toBe(0);
+  });
   it("binds bytes, paths, modes and keys, across unrelated content families", async () => {
     const setup = await prepared({
       "plain-skill": skill,
@@ -182,6 +194,14 @@ describe("prepared manifest and exact inventory", () => {
     changed.items[0]!.path = "../escape";
     const unsafe = Buffer.from(JSON.stringify(changed));
     expect(() => validateManifest(unsafe, hash(unsafe))).toThrow("relative path");
+    const notLoopback = {
+      ...setup.manifest,
+      assessment: { ...assessment, baseUrl: "http://127.example.com" },
+    };
+    const notLoopbackBytes = Buffer.from(JSON.stringify(notLoopback));
+    expect(() => validateManifest(notLoopbackBytes, hash(notLoopbackBytes))).toThrow(
+      "HTTPS or loopback",
+    );
     changed.items[0]!.path = "item";
     changed.items[0]!.scanKey = `git-sha1:${"a".repeat(40)}`;
     await expect(validateContent(changed, setup.content, runtime)).rejects.toThrow("key mismatch");
@@ -299,8 +319,18 @@ describe.runIf(process.platform !== "win32")(
       expect(first.completed).toBe(1);
       expect(first.uniqueKeys).toBe(1);
       const checkpointPath = join(first.root, "checkpoint.json");
-      writeFileSync(`${checkpointPath}.interrupted.tmp`, readFileSync(checkpointPath));
       rmSync(checkpointPath);
+      const orphan = await recoverPrepared({ ...setup, manifestSha256: hash(bytes) });
+      expect(orphan.recovered).toBe(1);
+      expect(orphan.completedKeys).toHaveLength(1);
+      // Older workers may have no durable result receipt at all. The original
+      // request and actual completed output still permit verified recovery.
+      const firstCheckpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
+      const firstRecord = Object.values(firstCheckpoint.results)[0] as { summary: string };
+      const attemptPath = resolve(first.root, firstRecord.summary.split("/").slice(0, 2).join("/"));
+      rmSync(join(attemptPath, "result.json"));
+      rmSync(checkpointPath);
+      expect((await recoverPrepared({ ...setup, manifestSha256: hash(bytes) })).recovered).toBe(1);
       writeFileSync(setup.manifestPath, JSON.stringify(setup.manifest));
       const interrupted = await scanPrepared({ ...setup, signal: AbortSignal.abort() });
       expect(interrupted).toMatchObject({ reused: 1, completed: 0, pending: 1, cancelled: true });
@@ -308,14 +338,39 @@ describe.runIf(process.platform !== "win32")(
       expect(full).toMatchObject({ completed: 1, reused: 1, uniqueKeys: 2, references: 3 });
       expect(ss.calls().filter((call) => call.args[0] === "scan")).toHaveLength(2);
       const combined = { ...setup, out: join(setup.folder, "merged-state") };
-      expect((await mergePrepared({ ...combined, receipts: [full.receiptPath] })).imported).toBe(2);
+      const merged = await mergePrepared({ ...combined, receipts: [full.receiptPath] });
+      expect(merged.imported).toBe(2);
       expect(await scanPrepared(combined)).toMatchObject({ reused: 2, completed: 0 });
+      const mergedCheckpointPath = join(merged.root, "checkpoint.json");
+      const mergedCheckpoint = JSON.parse(readFileSync(mergedCheckpointPath, "utf8"));
+      mergedCheckpoint.results[setup.manifest.items[0]!.scanKey].summarySha256 = "0".repeat(64);
+      writeFileSync(mergedCheckpointPath, JSON.stringify(mergedCheckpoint));
+      await expect(recoverPrepared(combined)).rejects.toThrow("Summary digest");
       const archive = join(setup.folder, "candidate.tar");
       const exported = await exportCandidate({
         ...setup,
         receiptPath: full.receiptPath,
         out: archive,
       });
+      const importedCli = join(setup.folder, "imported-cli");
+      const cliResult = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [
+            join(repo, "tools/publisher/prepared.mjs"),
+            "import",
+            archive,
+            exported.archiveSha256,
+            exported.manifestSha256,
+            exported.receiptSha256,
+            consumer,
+            importedCli,
+          ],
+          { encoding: "utf8", windowsHide: true },
+        ),
+      );
+      expect(cliResult.execution).toBe("local");
+      expect(cliResult.summaries).toHaveLength(2);
       const imported = join(setup.folder, "imported");
       const verified = await importCandidate(
         archive,
