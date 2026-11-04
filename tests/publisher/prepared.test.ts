@@ -19,6 +19,7 @@ import {
   exportCandidate,
   importCandidate,
   loadRuntime,
+  maintenancePythonPath,
   mergePrepared,
   type PreparedRuntime,
   recoverPrepared,
@@ -158,6 +159,14 @@ const skill = {
 };
 
 describe("prepared manifest and exact inventory", () => {
+  it("locates the maintenance verifier interpreter beside the selected executable", () => {
+    expect(maintenancePythonPath("C:\\tools\\venv\\Scripts\\skillspector.exe", "win32")).toBe(
+      "C:\\tools\\venv\\Scripts\\python.exe",
+    );
+    expect(maintenancePythonPath("/tmp/venv/bin/skillspector", "linux")).toBe(
+      "/tmp/venv/bin/python",
+    );
+  });
   it("binds maintenance identity and rejects invalid TP4 controls without requests", async () => {
     const setup = await prepared({ item: skill });
     const artifact = JSON.parse(

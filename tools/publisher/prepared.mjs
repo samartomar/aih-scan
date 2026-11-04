@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, freemem, hostname, totalmem } from "node:os";
 import { isIP } from "node:net";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep, win32, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive, safePath, writeArchive } from "./prepared-archive.mjs";
@@ -347,13 +347,17 @@ export async function recoverPrepared({ manifestPath, manifestSha256, content, c
 export function workerLaunchBudget(freeMiB, reserveMiB, poolCapacityMiB, reservedMiB) {
   return Math.max(0, Math.min(freeMiB - reserveMiB, poolCapacityMiB - reservedMiB));
 }
+export function maintenancePythonPath(executable, platform = process.platform) {
+  const path = platform === "win32" ? win32 : posix;
+  return path.join(path.dirname(executable), platform === "win32" ? "python.exe" : "python");
+}
 function verifyMaintenanceRuntime(assessment) {
   if (assessment.skillspector === undefined) return;
   const executable = process.env.AIH_SCAN_SKILLSPECTOR, wheel = process.env.AIH_SCAN_SKILLSPECTOR_WHEEL;
   need(typeof executable === "string" && typeof wheel === "string", "Maintenance executable and reviewed wheel paths are required");
   const binary = resolve(executable);
   need(binary === executable && digest(readRegular(wheel)) === assessment.skillspector.wheelSha256, "Maintenance wheel digest mismatch");
-  const python = process.platform === "win32" ? resolve(dirname(binary), "../python.exe") : join(dirname(binary), "python");
+  const python = maintenancePythonPath(binary);
   const env = {};
   for (const name of ["PATH", "SYSTEMROOT", "WINDIR"]) if (process.env[name] !== undefined) env[name] = process.env[name];
   execFileSync(python, ["-I", fileURLToPath(new URL("../analyzers/skillspector/maintenance/verify.py", import.meta.url)), resolve(wheel), assessment.skillspector.wheelSha256, assessment.skillspector.version], { env, windowsHide: true, timeout: 30000, stdio: "pipe" });

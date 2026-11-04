@@ -24,3 +24,5 @@ export function verifyResult(root: string, record: PreparedRecord, items: Prepar
 export function exportCandidate(options: PreparedOptions & { receiptPath: string; selection?: string[] }): Promise<{ archiveSha256: string; manifestSha256: string; receiptSha256: string; bytes: number; keys: number; references: number }>;
 export function importCandidate(archive: string, archiveSha256: string, manifestSha256: string, receiptSha256: string, consumer: string, out: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 export function verifyCandidate(candidate: string, manifestSha256: string, receiptSha256: string, consumer: string, tarball: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
+
+export function maintenancePythonPath(executable: string, platform?: string): string;
