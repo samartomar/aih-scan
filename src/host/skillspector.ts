@@ -17,8 +17,8 @@ import {
 import { analyzerFinding, notRun, objectOf } from "./analyzer-report.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
-/** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.2). */
-export const SKILLSPECTOR_VERSION = "2.13.2";
+/** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.3). */
+export const SKILLSPECTOR_VERSION = "2.13.3";
 /** Selects an exact SkillSpector executable, or `none` to disable it. */
 export const SKILLSPECTOR_VARIABLE = "AIH_SCAN_SKILLSPECTOR";
 
@@ -41,7 +41,7 @@ type Requirement = Readonly<{
   cli?: string;
 }>;
 
-/** The SkillSpector 2.13.2 providers Scan passes through, and what each needs to be set up. */
+/** The SkillSpector 2.13.3 providers Scan passes through, and what each needs to be set up. */
 const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
   openai: { via: "provider", variables: [["OPENAI_API_KEY"]] },
   anthropic: { via: "provider", variables: [["ANTHROPIC_API_KEY"]] },
@@ -310,7 +310,7 @@ function aiProvenance(
 }
 
 /**
- * Turns one SkillSpector 2.13.2 JSON report into Scan's tool run. Findings keep SkillSpector's
+ * Turns one SkillSpector 2.13.3 JSON report into Scan's tool run. Findings keep SkillSpector's
  * rule id, severity and confidence; each is placed at its primary location's file and line,
  * which must be an item file routed to SkillSpector (Text, Code or Config). SC4 (known
  * vulnerable dependency) is dropped: advisories are a separate call. SkillSpector's own risk
@@ -400,7 +400,7 @@ export interface SkillSpectorOptions {
 }
 
 /**
- * The SkillSpector adapter: runs the installed SkillSpector 2.13.2 CLI natively (Windows
+ * The SkillSpector adapter: runs the installed SkillSpector 2.13.3 CLI natively (Windows
  * included) over Scan's read-only working copy, under the tool time limit and the caller's
  * cancellation, with its whole process tree contained and removed.
  */

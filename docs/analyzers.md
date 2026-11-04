@@ -16,7 +16,7 @@ find these files within an owning item or the source's remaining files.
 
 | Tool | Pinned release | Runs | Counts for coverage |
 |---|---|---|---|
-| SkillSpector | 2.13.2 (NVIDIA/SkillSpector tag `v2.13.2`, commit `abd82935b67f765a9541013c0866c6349251dcdf`) | by default | yes |
+| SkillSpector | 2.13.3 (NVIDIA/SkillSpector tag `v2.13.3`, commit `38a1dfe93325d2f8bfcd4f8d0241eed706334915`) | by default | yes |
 | Cisco skill-scanner | 2.3.2 (PyPI `cisco-ai-skill-scanner==2.3.2`) | only with `--tools …,cisco` | never |
 
 ## Installing
@@ -31,7 +31,7 @@ UV_PROJECT_ENVIRONMENT=$HOME/.aih-scan/cisco \
   uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project
 ```
 
-Without the repository, `uv tool install "skillspector @ git+https://github.com/NVIDIA/SkillSpector@abd82935b67f765a9541013c0866c6349251dcdf"`
+Without the repository, `uv tool install "skillspector @ git+https://github.com/NVIDIA/SkillSpector@38a1dfe93325d2f8bfcd4f8d0241eed706334915"`
 and `uv tool install cisco-ai-skill-scanner==2.3.2` put the commands in `~/.local/bin`
 (unlocked transitive dependencies).
 
@@ -105,6 +105,12 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   findings. If the whole SkillSpector process or report fails, Scan reports the tool
   `not-run` / `failed` and does not retain that failed report's findings; findings from
   other completed tools remain.
+  SkillSpector 2.13.3 runs semantic security batches asynchronously through its shared
+  concurrency control (`SKILLSPECTOR_MAX_LLM_CONCURRENCY`), preserving batch result
+  order. Refused, unfinished or invalid AI responses remain incomplete inspection.
+  Scan's ten-minute per-tool deadline remains the outer bound, even though this
+  upstream release defaults to an eighteen-minute workflow deadline. Large inputs can
+  still time out; parallel execution does not guarantee completion within Scan's limit.
 - **Results.** SkillSpector's rule id, severity and confidence are kept; each finding is
   placed at its primary location's file and line, which must be a file of the item routed
   to SkillSpector. Codes come from `aih-codes/1` (`codes.tools.skillspector`), SkillSpector's

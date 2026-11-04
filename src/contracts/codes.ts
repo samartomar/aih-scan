@@ -47,7 +47,7 @@ export const toolRuleCodes: Readonly<Record<string, Readonly<Record<string, Scan
       "trust.unpinned-dependency": "trust.unpinned-dependency",
     } satisfies Record<string, ScanCode>),
     /**
-     * SkillSpector 2.13.2 rule ids. SC4 (known vulnerable dependency) is not a scan finding:
+     * SkillSpector 2.13.3 rule ids. SC4 (known vulnerable dependency) is not a scan finding:
      * known vulnerabilities come only from `checkAdvisories`. Rules without a clear code
      * (for example SC5, OH2, OH3, TR1-TR3, AE1, AE7) stay `trust.unmapped-rule`.
      */

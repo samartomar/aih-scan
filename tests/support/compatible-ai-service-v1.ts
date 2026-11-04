@@ -2,9 +2,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 /** A synthetic inference service: real SkillSpector parses these fixed responses; no model runs. */
-export async function compatibleAiServiceV1() {
+export async function compatibleAiServiceV1(options: { delayMs?: number } = {}) {
   const requests: Record<string, unknown>[] = [];
-  let outcome: "complete" | "malformed" | "quota" = "complete";
+  let outcome: "complete" | "malformed" | "quota" | "unfinished" = "complete";
+  const security = { started: 0, completed: 0, active: 0, maxActive: 0 };
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
@@ -14,6 +15,17 @@ export async function compatibleAiServiceV1() {
     }
     const payload = JSON.parse(body) as Record<string, unknown>;
     requests.push(payload);
+    const semantic = JSON.stringify(payload.messages).includes("intent and attack-phrasing risks");
+    if (semantic) {
+      security.started++;
+      security.active++;
+      security.maxActive = Math.max(security.maxActive, security.active);
+    }
+    if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+    if (semantic) {
+      security.active--;
+      security.completed++;
+    }
     response.setHeader("Content-Type", "application/json");
     if (outcome === "quota") {
       response.writeHead(402).end(
@@ -33,7 +45,7 @@ export async function compatibleAiServiceV1() {
         choices: [
           {
             index: 0,
-            finish_reason: "tool_calls",
+            finish_reason: outcome === "unfinished" ? "length" : "tool_calls",
             message: {
               role: "assistant",
               content: null,
@@ -58,6 +70,7 @@ export async function compatibleAiServiceV1() {
   return {
     endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
+    security,
     setOutcome(value: typeof outcome) {
       outcome = value;
       requests.length = 0;

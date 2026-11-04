@@ -11,7 +11,7 @@ import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fix
  * Real static runs of the installed analyzers on small benign temporary fixtures. They run only
  * when the analyzer executables are provided (see docs/analyzers.md for the pinned installs):
  *
- *   AIH_SCAN_TEST_SKILLSPECTOR=<path to skillspector 2.13.2>
+ *   AIH_SCAN_TEST_SKILLSPECTOR=<path to skillspector 2.13.3>
  *   AIH_SCAN_TEST_SKILL_SCANNER=<path to skill-scanner 2.3.2>
  *
  * No AI provider is configured or contacted here; live AI is not part of these tests.
@@ -137,7 +137,7 @@ async function scanOnce(folder: string, env: Record<string, string>, tools?: str
 
 const noSentinels = () => expect(readdirSync(sentinels)).toEqual([]);
 
-describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.2 (static, --no-llm)", () => {
+describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.3 (static, --no-llm)", () => {
   it("inspects Kiro hook instructions under their original filename without executing hook actions", async () => {
     if (skillspector === undefined) throw new Error("SkillSpector runtime required");
     const path = "session-summary.kiro.hook";
@@ -176,7 +176,7 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.2 (static, -
     const { summary } = await scanOnce(benignFixture(), { AIH_SCAN_SKILLSPECTOR: executable });
     expect(summary.tools.find((tool) => tool.tool === "skillspector")).toEqual({
       tool: "skillspector",
-      version: "2.13.2",
+      version: "2.13.3",
       mode: "static",
       result: "pass",
       counts: {},
@@ -210,7 +210,7 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.2 (static, -
 });
 
 describe.skipIf(skillspector === undefined)(
-  "real SkillSpector 2.13.2 in CLI AI mode with a controlled `claude` CLI",
+  "real SkillSpector 2.13.3 in CLI AI mode with a controlled `claude` CLI",
   () => {
     // The `claude` here is a fixture that records its calls and answers with a fixed text; it is
     // not Claude and no provider is contacted. The run proves the native CLI-mode subprocess path.

@@ -47,9 +47,9 @@ function ranSkillSpector(
 ): ToolAdapter {
   return {
     id: "skillspector",
-    version: "2.13.2",
+    version: "2.13.3",
     async run() {
-      return { status: "ran", version: "2.13.2", mode: "static", findings: findings as never };
+      return { status: "ran", version: "2.13.3", mode: "static", findings: findings as never };
     },
   };
 }
@@ -99,7 +99,7 @@ describe("scan(request, { outDir }) for items", () => {
       }),
       {
         tool: "skillspector",
-        version: "2.13.2",
+        version: "2.13.3",
         mode: "static",
         result: "not-run",
         reason: "unavailable",
@@ -623,7 +623,7 @@ describe("routing, coverage and labels", () => {
     const item = fixture.folder("item", cleanSkill);
     const hanging: ToolAdapter = {
       id: "skillspector",
-      version: "2.13.2",
+      version: "2.13.3",
       run: () => new Promise(() => {}),
     };
     const result = await scanWith(
@@ -721,10 +721,10 @@ describe("request and output handling", () => {
     const controller = new AbortController();
     const cancelling: ToolAdapter = {
       id: "skillspector",
-      version: "2.13.2",
+      version: "2.13.3",
       async run() {
         controller.abort();
-        return { status: "ran", version: "2.13.2", mode: "static", findings: [] };
+        return { status: "ran", version: "2.13.3", mode: "static", findings: [] };
       },
     };
     let calls = 0;
