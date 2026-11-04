@@ -117,6 +117,30 @@ all AI controls. The explicit value is part of the assessment/configuration iden
 changing it creates a separate resume namespace, while returning to the same profile
 reuses its completed results. Older manifests without this optional field still work.
 
+AI assessments may supply `"modelTokenLimits": { "contextLength": 1048576,
+"maxOutputTokens": 131072 }`. Both fields are required positive safe integers, with
+`maxOutputTokens` no larger than `contextLength`. The operator must verify these values
+against the selected model's supported limits. They are model metadata, not a request to
+change the model, reasoning effort, response method or tool deadline.
+
+For each attempt the helper writes a nonsecret `model-registry.json` inside that child's
+isolated scratch directory, containing only the exact selected model and these limits.
+It passes the generated absolute path through upstream `SKILLSPECTOR_MODEL_REGISTRY`;
+caller registry paths are not accepted, and ambient registry settings are not inherited.
+The file is local attempt evidence, excluded from candidate archives. Omitting the
+control preserves the upstream registry/default and existing configuration identities.
+Supplying or changing either limit creates a distinct configuration; completed results
+are reused only when returning to the same profile. Static assessments reject it.
+
+SkillSpector budgets input at 75% of context and output at the smaller of 25% of context
+and `maxOutputTokens`, using integer truncation. The example gives an input budget of
+786432 tokens and an output budget of 131072 tokens. A context of 32768 and output cap
+of 16384 instead yields an output budget of 8192. Raising these limits may let the
+provider generate more output and increase output-token cost; it does not reserve or
+guarantee that output. For DeepSeek, verify current context/output capabilities with
+the [model metadata](https://api-docs.deepseek.com/api/list-models/) and
+[chat-completion controls](https://api-docs.deepseek.com/api/create-chat-completion/).
+
 ### Local validation, parallel scan and resume
 
 Install the reviewed scanner tarball in a fresh consumer with scripts disabled. The

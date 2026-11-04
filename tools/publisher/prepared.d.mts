@@ -1,7 +1,7 @@
 export interface PreparedFile { path: string; mode: string; sha256: string }
 export interface PreparedItem { path: string; scanKey: string; files: PreparedFile[]; labels?: Record<string, string>; source?: { locator: string; revision: string } }
 export interface PreparedScanner { name: string; version: string; tarballSha256: string }
-export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number }
+export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number } }
 export interface PreparedManifest { format: string; scanner: PreparedScanner; assessment: PreparedAssessment; items: PreparedItem[]; parentManifestSha256?: string }
 export interface PreparedRuntime {
   host: typeof import("../../src/public/host.js");

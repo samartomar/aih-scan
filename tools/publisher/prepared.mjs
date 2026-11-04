@@ -56,7 +56,7 @@ export function validateManifest(bytes, expectedSha256) {
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
   need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
   const assessment = manifest.assessment;
-  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency"]);
+  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
   if (assessment.mode === "ai") {
@@ -68,6 +68,12 @@ export function validateManifest(bytes, expectedSha256) {
     need(typeof assessment.reasoningEffort === "string" && /^[a-z0-9_-]{1,64}$/i.test(assessment.reasoningEffort) && ["function_calling", "json_mode", "json_schema"].includes(assessment.structuredOutputMethod), "Invalid explicit AI response controls");
     if (assessment.credentialVariable !== undefined) need(/^[A-Z_][A-Z0-9_]*$/.test(assessment.credentialVariable), "Invalid credential variable name");
     if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
+    if (assessment.modelTokenLimits !== undefined) {
+      const limits = assessment.modelTokenLimits;
+      keys(limits, ["contextLength", "maxOutputTokens"]);
+      need([limits.contextLength, limits.maxOutputTokens].every((value) => Number.isSafeInteger(value) && value > 0), "Invalid model token limits; expected positive safe integers");
+      need(limits.maxOutputTokens <= limits.contextLength, "Model output token limit exceeds its context length");
+    }
   } else need(Object.keys(assessment).length === 2, "Static assessment must not name AI controls");
   need(Array.isArray(manifest.items) && manifest.items.length > 0, "Prepared manifest has no items");
   const roots = new Set();
@@ -219,6 +225,11 @@ function childEnvironment(assessment, scratch) {
     need(typeof process.env[variable] === "string" && process.env[variable].trim(), `${variable} is not set; no AI request started`);
     Object.assign(env, { SKILLSPECTOR_PROVIDER: assessment.provider, SKILLSPECTOR_COMPAT_BASE_URL: assessment.baseUrl, SKILLSPECTOR_COMPAT_API_KEY: process.env[variable], SKILLSPECTOR_MODEL: assessment.model, SKILLSPECTOR_REASONING_EFFORT: assessment.reasoningEffort, SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: assessment.structuredOutputMethod });
     if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
+    if (assessment.modelTokenLimits !== undefined) {
+      const registryPath = resolve(scratch, "model-registry.json");
+      writeJson(registryPath, { models: { [assessment.model]: { context_length: assessment.modelTokenLimits.contextLength, max_output_tokens: assessment.modelTokenLimits.maxOutputTokens } } });
+      env.SKILLSPECTOR_MODEL_REGISTRY = registryPath;
+    }
   }
   return env;
 }

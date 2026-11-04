@@ -205,6 +205,49 @@ describe("prepared manifest and exact inventory", () => {
       "Static assessment",
     );
   });
+  it("validates explicit model token metadata without accepting a caller registry path", async () => {
+    const setup = await prepared({ item: skill });
+    const validate = (controls: Record<string, unknown>) => {
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, assessment: controls }));
+      return validateManifest(bytes, hash(bytes));
+    };
+    const modelTokenLimits = { contextLength: 1048576, maxOutputTokens: 131072 };
+    expect(validate({ ...assessment, modelTokenLimits }).assessment).toMatchObject({
+      modelTokenLimits,
+    });
+    expect(validate(assessment).assessment).not.toHaveProperty("modelTokenLimits");
+    for (const value of [0, -1, 1.5, "10", null, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        validate({
+          ...assessment,
+          modelTokenLimits: { ...modelTokenLimits, contextLength: value },
+        }),
+      ).toThrow("token");
+      expect(() =>
+        validate({
+          ...assessment,
+          modelTokenLimits: { ...modelTokenLimits, maxOutputTokens: value },
+        }),
+      ).toThrow("token");
+    }
+    for (const value of [
+      null,
+      [],
+      "registry.json",
+      {},
+      { contextLength: 100 },
+      { maxOutputTokens: 10 },
+      { ...modelTokenLimits, path: "registry.json" },
+    ])
+      expect(() => validate({ ...assessment, modelTokenLimits: value })).toThrow();
+    expect(() =>
+      validate({ ...assessment, modelTokenLimits: { contextLength: 100, maxOutputTokens: 101 } }),
+    ).toThrow("context");
+    expect(() => validate({ ...assessment, modelRegistry: "registry.json" })).toThrow();
+    expect(() => validate({ mode: "static", tools: assessment.tools, modelTokenLimits })).toThrow(
+      "Static assessment",
+    );
+  });
   it("atomically flushes and replaces a native checkpoint using a writable descriptor", () => {
     const path = join(root, "native-checkpoint.json");
     writeCheckpointAtomic(path, { completed: ["first"] });
@@ -357,10 +400,16 @@ describe.runIf(process.platform !== "win32")(
       vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
       vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
       vi.stubEnv("SKILLSPECTOR_MAX_LLM_CONCURRENCY", "999");
+      const ambientRegistry = join(setup.folder, "caller-registry.json");
+      writeFileSync(ambientRegistry, "caller file must not be read or changed");
+      vi.stubEnv("SKILLSPECTOR_MODEL_REGISTRY", ambientRegistry);
       const first = await scanPrepared(setup);
       expect((await scanPrepared(setup)).reused).toBe(1);
       expect(ss.calls().find((call) => call.args[0] === "scan")!.env).not.toHaveProperty(
         "SKILLSPECTOR_MAX_LLM_CONCURRENCY",
+      );
+      expect(ss.calls().find((call) => call.args[0] === "scan")!.env).not.toHaveProperty(
+        "SKILLSPECTOR_MODEL_REGISTRY",
       );
       const bytes = Buffer.from(
         JSON.stringify({
@@ -380,6 +429,36 @@ describe.runIf(process.platform !== "win32")(
       const receipt = JSON.parse(readFileSync(changed.receiptPath, "utf8"));
       expect(receipt.config.assessment.llmConcurrency).toBe(24);
       expect(receipt.scheduler.concurrency).toBe(2);
+      const modelTokenLimits = { contextLength: 1048576, maxOutputTokens: 131072 };
+      const tokenBytes = Buffer.from(
+        JSON.stringify({
+          ...setup.manifest,
+          assessment: { ...assessment, llmConcurrency: 24, modelTokenLimits },
+        }),
+      );
+      writeFileSync(setup.manifestPath, tokenBytes);
+      const tokenProfile = { ...setup, manifestSha256: hash(tokenBytes) };
+      const tokenRun = await scanPrepared(tokenProfile);
+      expect(tokenRun).toMatchObject({ reused: 0, completed: 1 });
+      expect(tokenRun.root).not.toBe(changed.root);
+      const tokenReceipt = JSON.parse(readFileSync(tokenRun.receiptPath, "utf8"));
+      expect(tokenReceipt.config.assessment.modelTokenLimits).toEqual(modelTokenLimits);
+      const record = tokenReceipt.results[setup.manifest.items[0]!.scanKey];
+      const attempt = join(tokenRun.root, record.summary.split("/").slice(0, 2).join("/"));
+      const registryPath = ss.calls().filter((call) => call.args[0] === "scan")[2]!
+        .env.SKILLSPECTOR_MODEL_REGISTRY;
+      expect(registryPath).toBe(join(attempt, "model-registry.json"));
+      expect(JSON.parse(readFileSync(registryPath!, "utf8"))).toEqual({
+        models: {
+          "deepseek-flash": { context_length: 1048576, max_output_tokens: 131072 },
+        },
+      });
+      expect(readFileSync(registryPath!, "utf8")).not.toContain("fixture-not-a-real-key");
+      expect(await scanPrepared(tokenProfile)).toMatchObject({ reused: 1, completed: 0 });
+      writeFileSync(setup.manifestPath, bytes);
+      expect(await scanPrepared(explicit)).toMatchObject({ reused: 1, completed: 0 });
+      expect(ss.calls().filter((call) => call.args[0] === "scan")).toHaveLength(3);
+      expect(readFileSync(ambientRegistry, "utf8")).toBe("caller file must not be read or changed");
       const staticBytes = Buffer.from(
         JSON.stringify({
           ...setup.manifest,
@@ -395,6 +474,7 @@ describe.runIf(process.platform !== "win32")(
       expect(staticCall.args).toContain("--no-llm");
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MAX_LLM_CONCURRENCY");
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_API_KEY");
+      expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MODEL_REGISTRY");
     }, 120000);
     it("retains credential-redacted unsigned partial diagnostics in receipts and checkpoints only", async () => {
       const setup = await prepared({ item: skill });
@@ -579,6 +659,62 @@ describe.runIf(process.platform !== "win32")(
       expect((await scanPrepared(setup)).completed).toBe(1);
     }, 120000);
   },
+);
+
+it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
+  "binds real prepared child HTTP output budgets to explicit token metadata and reuses both profiles",
+  async () => {
+    const service = await compatibleAiServiceV1();
+    try {
+      const setup = await prepared({ item: skill });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", process.env.AIH_SCAN_TEST_SKILLSPECTOR!);
+      vi.stubEnv("DEEPSEEK_API", "fixture-only-not-a-real-key");
+      vi.stubEnv("SKILLSPECTOR_MODEL_REGISTRY", join(setup.folder, "unreadable-ambient-registry"));
+      const profile = (contextLength: number, maxOutputTokens: number) => {
+        const bytes = Buffer.from(
+          JSON.stringify({
+            ...setup.manifest,
+            assessment: {
+              ...assessment,
+              baseUrl: service.endpoint,
+              modelTokenLimits: { contextLength, maxOutputTokens },
+            },
+          }),
+        );
+        writeFileSync(setup.manifestPath, bytes);
+        return { ...setup, manifestSha256: hash(bytes) };
+      };
+      const large = await scanPrepared(profile(1048576, 131072));
+      const largeReceipt = JSON.parse(readFileSync(large.receiptPath, "utf8"));
+      expect(largeReceipt.results[setup.manifest.items[0]!.scanKey].status).toBe("complete-ai");
+      expect(service.requests.length).toBeGreaterThan(0);
+      expect(new Set(service.requests.map((request) => request.max_completion_tokens))).toEqual(
+        new Set([131072]),
+      );
+      const before = service.requests.length;
+      const capped = await scanPrepared(profile(32768, 16384));
+      expect(capped).toMatchObject({ reused: 0, completed: 1 });
+      expect(capped.root).not.toBe(large.root);
+      const cappedReceipt = JSON.parse(readFileSync(capped.receiptPath, "utf8"));
+      expect(cappedReceipt.results[setup.manifest.items[0]!.scanKey].status).toBe("complete-ai");
+      const cappedRequests = service.requests.slice(before);
+      expect(cappedRequests.length).toBeGreaterThan(0);
+      expect(new Set(cappedRequests.map((request) => request.max_completion_tokens))).toEqual(
+        new Set([8192]),
+      );
+      const requests = service.requests.length;
+      expect(await scanPrepared(profile(1048576, 131072))).toMatchObject({
+        reused: 1,
+        completed: 0,
+      });
+      expect(await scanPrepared(profile(32768, 16384))).toMatchObject({ reused: 1, completed: 0 });
+      expect(service.requests).toHaveLength(requests);
+      expect(readFileSync(large.receiptPath, "utf8")).not.toContain("fixture-only-not-a-real-key");
+    } finally {
+      await service.close();
+    }
+  },
+  180000,
 );
 
 it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
