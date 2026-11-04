@@ -29,7 +29,7 @@ do not run another dependency resolver. Verify installed wheel payload before us
 <environment-python> -I tools/analyzers/skillspector/maintenance/verify.py <wheel> <wheel-sha256> <full-version>
 ```
 
-The verifier compares every wheel payload file against the installed distribution,
+The verifier requires the exact package file/directory set and compares every wheel payload file against the installed distribution. Extra shadow modules, bytecode carriers and directory/file symlinks are refused,
 without importing analyzer code; installed RECORD differs because installation adds
 entry points. It rejects changed wheel bytes, installed version or installed payload.
 Prepared maintenance profiles run this check again before scan or checkpoint reuse.

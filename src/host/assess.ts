@@ -102,7 +102,10 @@ async function runWithLimit(
     ]);
     if (grace !== undefined) clearTimeout(grace);
     const notes = run?.notes;
-    const outcome = ended(timedOut && !context.signal.aborted ? "timeout" : "cancelled");
+    const outcome = Object.freeze({
+      ...ended(timedOut && !context.signal.aborted ? "timeout" : "cancelled"),
+      version: run?.version ?? adapter.version,
+    });
     return notes === undefined ? outcome : Object.freeze({ ...outcome, notes });
   } finally {
     if (timer !== undefined) clearTimeout(timer);

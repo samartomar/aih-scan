@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scanWith } from "../../src/host/scan.js";
+import { SKILLSPECTOR_MAINTENANCE_VERSION } from "../../src/host/skillspector.js";
 import { readFindings, readSummary } from "../../src/public/read.js";
 import {
   alive,
@@ -93,6 +94,53 @@ const toolOf = (summary: any, tool: string) =>
   summary.tools.find((entry: { tool: string }) => entry.tool === tool);
 
 describe("SkillSpector adapter (controlled CLI fixture)", () => {
+  it("ignores ambient TP4 controls in a static maintenance scan", async () => {
+    const folder = fixture.folder("maintenance-static", skill);
+    const version = SKILLSPECTOR_MAINTENANCE_VERSION;
+    const report = skillSpectorReport([], { version });
+    (report.metadata as Record<string, unknown>).aih_scan_tp4_limits = {
+      maxFiles: 128,
+      maxFindings: 64,
+      maxBatches: 256,
+    };
+    const ss = skillspector(report, { versionText: `SkillSpector v${version}` });
+    const { summary } = await run(folder, ss, {
+      env: {
+        SKILLSPECTOR_TP4_MAX_FILES: "999",
+        SKILLSPECTOR_TP4_MAX_FINDINGS: "999",
+        SKILLSPECTOR_TP4_MAX_BATCHES: "999",
+      },
+    });
+    expect(toolOf(summary, "skillspector")).toMatchObject({ version, result: "pass" });
+    expect(summary.coverage).toBe("complete");
+  });
+  it("preserves the accepted maintenance identity on failed reports, exits and timeouts", async () => {
+    const folder = fixture.folder("maintenance-failures", skill);
+    const version = SKILLSPECTOR_MAINTENANCE_VERSION;
+    const report = skillSpectorReport([], {
+      version,
+      executionSuccessful: false,
+      status: "failed",
+    });
+    (report.metadata as Record<string, unknown>).aih_scan_tp4_limits = {
+      maxFiles: 128,
+      maxFindings: 64,
+      maxBatches: 256,
+    };
+    for (const [behaviour, reason] of [
+      [{ report }, "failed"],
+      [{ report: null, exit: 2 }, "failed"],
+      [{ report: null, hang: true }, "timeout"],
+    ] as const) {
+      const ss = skillspector(behaviour.report, {
+        ...behaviour,
+        versionText: `SkillSpector v${version}`,
+      });
+      const { summary } = await run(folder, ss, { timeoutMs: 1500 });
+      expect(toolOf(summary, "skillspector")).toMatchObject({ version, reason, result: "not-run" });
+    }
+  });
+
   it("runs the selected CLI natively in static mode over Scan's read-only working copy and normalizes its findings", async () => {
     const folder = fixture.folder("item", skill);
     const ss = skillspector(

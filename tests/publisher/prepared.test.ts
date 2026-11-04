@@ -159,6 +159,17 @@ const skill = {
 };
 
 describe("prepared manifest and exact inventory", () => {
+  it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
+    "rejects installed module shadowing and alternate bytecode carriers",
+    () => {
+      execFileSync(
+        maintenancePythonPath(process.env.AIH_SCAN_TEST_SKILLSPECTOR!),
+        ["-I", join(repo, "tests/support/maintenance-verifier.test.py")],
+        { windowsHide: true, stdio: "pipe" },
+      );
+    },
+  );
+
   it("locates the maintenance verifier interpreter beside the selected executable", () => {
     expect(maintenancePythonPath("C:\\tools\\venv\\Scripts\\skillspector.exe", "win32")).toBe(
       "C:\\tools\\venv\\Scripts\\python.exe",
