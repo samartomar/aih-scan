@@ -91,9 +91,11 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   Scan never picks a provider for you: with `SKILLSPECTOR_PROVIDER` unset (or naming an
   upstream-disabled provider such as `codex_cli`), the result says "AI not available here"
   with the reason, SkillSpector runs static only, nothing is sent to an AI, and coverage is
-  measured exactly as for a static scan. When AI is set up but SkillSpector's AI pass does
-  not run or complete, the static findings are kept and the item is `partial` (reason
-  `failed`).
+  measured exactly as for a static scan. When AI is set up but its pass does not complete,
+  the item is `partial` (reason `failed`). A usable partial report keeps its static
+  findings. If the whole SkillSpector process or report fails, Scan reports the tool
+  `not-run` / `failed` and does not retain that failed report's findings; findings from
+  other completed tools remain.
 - **Results.** SkillSpector's rule id, severity and confidence are kept; each finding is
   placed at its primary location's file and line, which must be a file of the item routed
   to SkillSpector. Codes come from `aih-codes/1` (`codes.tools.skillspector`), SkillSpector's
@@ -141,11 +143,18 @@ aih-scan scan 'C:\skills\example' --mode ai --out 'C:\scan-output\example' --jso
 
 Remove any existing `SKILLSPECTOR_MODEL_<SLOT>` overrides if you intend every analyzer
 to use `deepseek-flash`; SkillSpector otherwise honors those more-specific caller settings.
-Scan does not select another model or a paid fallback. Having the endpoint and key set
-establishes configuration readiness; authentication, balance, quota and parsed findings
-are established only by the run. A failed or malformed AI response keeps the static
-findings and reports partial coverage with reason `failed`; inspect the summary and notes
-instead of treating exit zero or an available configuration as proof of complete AI analysis.
+Scan does not select another model or a paid fallback. The pinned SkillSpector's bundled
+model metadata predates this alias, so it warns and uses its existing 128,000-token
+fallback for context budgeting; it still requests the exact `deepseek-flash` model.
+
+Having the endpoint and key set establishes configuration readiness; authentication,
+balance, quota and parsed findings are established only by the run. Failed or malformed
+AI analysis cannot establish complete coverage. A usable partial report retains its
+findings, but a whole SkillSpector failure (including an exit 2 after a quota error)
+is `not-run` / `failed` and its raw report's static findings are not retained. Findings
+from other completed tools remain. Inspect coverage and notes, and rerun after resolving
+the provider failure; exit zero or an available configuration does not prove complete
+AI analysis.
 
 ### Cisco skill-scanner
 
