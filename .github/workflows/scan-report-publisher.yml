@@ -10,6 +10,11 @@ name: Restricted Scan report publisher
 on:
   workflow_dispatch:
     inputs:
+      producer_json:
+        description: Optional reviewed producer context JSON (SHA-256 must equal vars.SCAN_REPORT_PRODUCER_SHA256)
+        required: false
+        default: ""
+        type: string
       candidate_run_id:
         description: Independently reviewed candidate run ID
         required: true
@@ -24,7 +29,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   bounded-candidate:
-    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
+    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256 && ((inputs.producer_json == '' && vars.SCAN_REPORT_PRODUCER_SHA256 == '') || (inputs.producer_json != '' && vars.SCAN_REPORT_PRODUCER_SHA256 != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -63,6 +68,30 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+      - name: Validate the independent reviewed producer context
+        if: inputs.producer_json != ''
+        id: producer
+        env:
+          PRODUCER_JSON: ${{ inputs.producer_json }}
+          PRODUCER_SHA256: ${{ vars.SCAN_REPORT_PRODUCER_SHA256 }}
+        run: |-
+          set -euo pipefail
+          printf '%s' "$PRODUCER_JSON" > "$RUNNER_TEMP/producer.json"
+          echo "source_commit=$(node tools/publisher/candidate.mjs producer-source "$RUNNER_TEMP/producer.json" "$PRODUCER_SHA256")" >> "$GITHUB_OUTPUT"
+      - name: Check out only the independently reviewed producer source
+        if: inputs.producer_json != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.producer.outputs.source_commit }}
+          path: reviewed-producer
+          persist-credentials: false
+      - name: Build the isolated producer with its exact reviewed lock and package
+        if: inputs.producer_json != ''
+        env:
+          PRODUCER_SHA256: ${{ vars.SCAN_REPORT_PRODUCER_SHA256 }}
+        run: |-
+          set -euo pipefail
+          node tools/publisher/candidate.mjs producer-build "$RUNNER_TEMP/producer.json" "$PRODUCER_SHA256" reviewed-producer "$RUNNER_TEMP/producer-consumer"
       - name: Verify immutable candidate run custody before download
         env:
           GH_TOKEN: ${{ github.token }}
@@ -87,10 +116,19 @@ jobs:
       - name: Select the reviewed summaries and read each one
         env:
           SELECTION_SHA: ${{ vars.SCAN_REPORT_SELECTION_SHA256 }}
+          PRODUCER_SHA256: ${{ vars.SCAN_REPORT_PRODUCER_SHA256 }}
         run: |-
           set -euo pipefail
           if [ -f candidate/prepared-import.json ]; then
-            node tools/publisher/candidate.mjs prepared-check candidate signer-runtime
+            consumer=signer-runtime
+            producer_args=()
+            if [ -n "$PRODUCER_SHA256" ]; then
+              consumer="$RUNNER_TEMP/producer-consumer"
+              producer_args=("$RUNNER_TEMP/producer.json" "$PRODUCER_SHA256")
+            fi
+            node tools/publisher/candidate.mjs prepared-check candidate "$consumer" "${producer_args[@]}"
+          elif [ -n "$PRODUCER_SHA256" ]; then
+            exit 1
           fi
           node tools/publisher/candidate.mjs select candidate "$SELECTION_SHA" selected > selection.txt
           while read -r _digest path; do
@@ -106,7 +144,7 @@ jobs:
           compression-level: 0
   signer:
     needs: bounded-candidate
-    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256
+    if: github.event.repository.visibility == 'public' && github.event_name == 'workflow_dispatch' && github.repository == 'samartomar/aih-scan' && github.repository_id == '1336836161' && github.repository_owner_id == '9993940' && github.ref == 'refs/heads/main' && github.workflow_ref == 'samartomar/aih-scan/.github/workflows/scan-report-publisher.yml@refs/heads/main' && github.sha == vars.SCAN_REPORT_REVIEWED_HEAD && github.actor == 'samartomar' && github.actor_id == '9993940' && github.triggering_actor == 'samartomar' && github.run_attempt == '1' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID != '' && vars.SCAN_REPORT_CANDIDATE_ARTIFACT_DIGEST != '' && vars.SCAN_REPORT_CANDIDATE_RUN_ID != '' && vars.SCAN_REPORT_SELECTION_SHA256 != '' && inputs.candidate_run_id == vars.SCAN_REPORT_CANDIDATE_RUN_ID && inputs.selection_sha256 == vars.SCAN_REPORT_SELECTION_SHA256 && ((inputs.producer_json == '' && vars.SCAN_REPORT_PRODUCER_SHA256 == '') || (inputs.producer_json != '' && vars.SCAN_REPORT_PRODUCER_SHA256 != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

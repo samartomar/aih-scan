@@ -6,4 +6,6 @@ export function safePath(value: unknown): string;
 export function readArchive(bytes: Buffer): Map<string, { type: string; mode: number; bytes: Buffer }>;
 export function extractArchive(bytes: Buffer, out: string): void;
 export function writeArchive(entries: { path: string; bytes?: Buffer; file?: string; mode?: string }[], out: string): { sha256: string; bytes: number };
-export function downloadArchive(descriptor: { url: string; allowedHosts: string[]; sha256: string }, out: string): Promise<void>;
+export function downloadArchive(descriptor: { url?: string; allowedHosts?: string[]; githubRelease?: { repository: string; assetId: number; name: string }; sha256: string }, out: string): Promise<void>;
+
+export function validateReleaseAsset(value: unknown): void;

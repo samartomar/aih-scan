@@ -10,6 +10,11 @@ import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFil
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { buildProducerContext, checkProducerContext, validateProducerContext } from "./producer.mjs";
+import * as releaseTransport from "./prepared-archive.mjs";
+
+export { validateProducerContext } from "./producer.mjs";
+
 export const REPOSITORY = Object.freeze({ id: 1336836161, fullName: "samartomar/aih-scan" });
 export const OWNER = Object.freeze({ id: 9993940, login: "samartomar" });
 export const CANDIDATE_WORKFLOW = ".github/workflows/scan-report-candidate-upload.yml";
@@ -27,28 +32,54 @@ export function validatePreparedImport(bytes, expectedSha256) {
   if (!/^[0-9a-f]{64}$/.test(expectedSha256 ?? "") || sha256(bytes) !== expectedSha256)
     fail("Reviewed prepared import digest mismatch");
   const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  if (!value || Object.keys(value).sort().join(",") !== "allowedHosts,archiveSha256,format,manifestSha256,receiptSha256,url" || value.format !== "aih-scan-prepared-import/1" || !Array.isArray(value.allowedHosts) || value.allowedHosts.length === 0 || !value.allowedHosts.every((host) => typeof host === "string" && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host)) || ![value.archiveSha256, value.manifestSha256, value.receiptSha256].every((hash) => /^[0-9a-f]{64}$/.test(hash))) fail("Invalid prepared import descriptor");
-  const url = new URL(value.url);
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !value.allowedHosts.includes(url.hostname)) fail("Prepared import URL policy refused");
+  const transportKeys = value?.githubRelease ? "githubRelease" : "allowedHosts,url";
+  if (!value || Object.keys(value).sort().join(",") !== `${transportKeys},archiveSha256,format,manifestSha256,receiptSha256`.split(",").sort().join(",") || value.format !== "aih-scan-prepared-import/1" || ![value.archiveSha256, value.manifestSha256, value.receiptSha256].every((hash) => /^[0-9a-f]{64}$/.test(hash))) fail("Invalid prepared import descriptor");
+  if (value.githubRelease) {
+    const { validateReleaseAsset } = releaseTransport;
+    validateReleaseAsset(value.githubRelease);
+  } else {
+    if (!Array.isArray(value.allowedHosts) || !value.allowedHosts.length || !value.allowedHosts.every((host) => typeof host === "string" && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(host))) fail("Invalid prepared import descriptor");
+    const url = new URL(value.url);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !value.allowedHosts.includes(url.hostname) || url.port && url.port !== "443") fail("Prepared import URL policy refused");
+  }
   return value;
 }
 
-export async function importPreparedCandidate(bytes, expectedSha256, consumer, out) {
+function producerFor(producer, consumer, metadata) {
+  if (!producer) { if (metadata.producerSha256 !== undefined) fail("Independent reviewed producer context required"); return undefined; }
+  const context = checkProducerContext(producer.bytes, producer.sha256, consumer);
+  for (const key of ["archiveSha256", "manifestSha256", "receiptSha256"])
+    if (context[key] !== metadata[key]) fail("Reviewed producer report context mismatch");
+  if (metadata.producerSha256 !== undefined && metadata.producerSha256 !== producer.sha256) fail("Reviewed producer context changed between phases");
+  return context;
+}
+function checkProducerReports(context, checked, candidate) {
+  if (!context) return;
+  if (context.packageSha256 !== checked.manifest.scanner.tarballSha256) fail("Reviewed producer scanner mismatch");
+  const listing = checked.summaries.map((path) => `${sha256(readFileSync(join(candidate, path)))}  ${path}\n`).sort((a, b) => a.slice(66) < b.slice(66) ? -1 : 1).join("");
+  if (sha256(listing) !== context.selectionSha256) fail("Reviewed producer selection mismatch");
+}
+export async function importPreparedCandidate(bytes, expectedSha256, consumer, out, producer) {
   const descriptor = validatePreparedImport(bytes, expectedSha256);
+  const context = producerFor(producer, consumer, descriptor);
   const { downloadArchive } = await import("./prepared-archive.mjs");
   const { importCandidate } = await import("./prepared.mjs");
   const archive = `${out}.download.tar`;
   await downloadArchive({ ...descriptor, sha256: descriptor.archiveSha256 }, archive);
   const checked = await importCandidate(archive, descriptor.archiveSha256, descriptor.manifestSha256, descriptor.receiptSha256, consumer, out);
-  writeFileSync(join(out, "prepared-import.json"), `${JSON.stringify({ execution: "local", archiveSha256: descriptor.archiveSha256, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256 })}\n`, { flag: "wx" });
+  checkProducerReports(context, checked, out);
+  writeFileSync(join(out, "prepared-import.json"), `${JSON.stringify({ execution: "local", archiveSha256: descriptor.archiveSha256, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256, ...(producer ? { producerSha256: producer.sha256 } : {}) })}\n`, { flag: "wx" });
   return { execution: "local", count: checked.summaries.length, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256 };
 }
 
-export async function checkPreparedCandidate(candidate, consumer) {
+export async function checkPreparedCandidate(candidate, consumer, producer) {
   const { verifyCandidate } = await import("./prepared.mjs");
   const receipt = JSON.parse(readFileSync(join(candidate, "prepared-import.json"), "utf8"));
   if (receipt.execution !== "local") fail("Prepared execution provenance refused");
+  const context = producerFor(producer, consumer, receipt);
+  if (producer && receipt.producerSha256 !== producer.sha256) fail("Reviewed producer context changed between phases");
   const checked = await verifyCandidate(candidate, receipt.manifestSha256, receipt.receiptSha256, consumer, join(candidate, "scanner.tgz"));
+  checkProducerReports(context, checked, candidate);
   return { execution: "local", count: checked.summaries.length };
 }
 
@@ -211,11 +242,18 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
         ...selectors,
       );
       process.stdout.write(`${JSON.stringify(result)}\n`);
-    } else if (command === "prepared-import" && args.length === 4) {
-      const result = await importPreparedCandidate(readFileSync(args[0]), args[1], args[2], args[3]);
+    } else if (command === "prepared-download" && args.length === 3) {
+      const descriptor = validatePreparedImport(readFileSync(args[0]), args[1]);
+      await releaseTransport.downloadArchive({ ...descriptor, sha256: descriptor.archiveSha256 }, args[2]);
+    } else if (command === "producer-source" && args.length === 2) {
+      process.stdout.write(`${validateProducerContext(readFileSync(args[0]), args[1]).sourceCommit}\n`);
+    } else if (command === "producer-build" && args.length === 4) {
+      buildProducerContext(readFileSync(args[0]), args[1], args[2], args[3]);
+    } else if (command === "prepared-import" && [4, 6].includes(args.length)) {
+      const result = await importPreparedCandidate(readFileSync(args[0]), args[1], args[2], args[3], args.length === 6 ? { bytes: readFileSync(args[4]), sha256: args[5] } : undefined);
       process.stdout.write(`${JSON.stringify(result)}\n`);
-    } else if (command === "prepared-check" && args.length === 2) {
-      const result = await checkPreparedCandidate(args[0], args[1]);
+    } else if (command === "prepared-check" && [2, 4].includes(args.length)) {
+      const result = await checkPreparedCandidate(args[0], args[1], args.length === 4 ? { bytes: readFileSync(args[2]), sha256: args[3] } : undefined);
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } else if (command === "select" && args.length === 3) {
       const result = selectSummaries(args[0], args[1], args[2]);
