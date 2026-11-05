@@ -1,6 +1,6 @@
 {
   "name": "@aihq/scan",
-  "version": "0.1.0",
+  "version": "0.0.0-dev.1",
   "description": "Content assessment for AI agent content: scan exact bytes without running them, then read, match and verify the results.",
   "repository": {
     "type": "git",

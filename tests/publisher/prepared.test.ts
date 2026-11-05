@@ -50,7 +50,7 @@ const repo = resolve(import.meta.dirname, "../..");
 const root = mkdtempSync(join(tmpdir(), "scan-prepared-proof-"));
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 let consumer: string, tarball: string, runtime: PreparedRuntime;
-const scanner = { name: "@aihq/scan", version: "0.1.0", tarballSha256: "" };
+const scanner = { name: "@aihq/scan", version: "0.0.0-dev.1", tarballSha256: "" };
 const assessment = {
   mode: "ai",
   tools: ["aih-trust-lint", "skillspector"],

@@ -276,7 +276,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       name: "@aihq/scan",
-      version: "0.1.0",
+      version: "0.0.0-dev.1",
       files: [
         "dist",
         "schemas",
@@ -311,15 +311,15 @@ describe("@aihq/scan release boundary (#12)", () => {
       version: string;
       packages: Record<string, { version?: string }>;
     };
-    expect(lock.version).toBe("0.1.0");
-    expect(lock.packages[""]?.version).toBe("0.1.0");
+    expect(lock.version).toBe("0.0.0-dev.1");
+    expect(lock.packages[""]?.version).toBe("0.0.0-dev.1");
     for (const retired of [
       "node_modules/@sigstore/verify",
       "node_modules/@sigstore/bundle",
       "node_modules/zod",
     ])
       expect(lock.packages[retired], retired).toBeUndefined();
-    expect(read("src/public/package-identity.ts")).toContain('version: "0.1.0"');
+    expect(read("src/public/package-identity.ts")).toContain('version: "0.0.0-dev.1"');
     expect(existsSync(resolve(root, "LICENSE"))).toBe(true);
     expect(existsSync(resolve(root, "README.md"))).toBe(true);
     expect(existsSync(resolve(root, "src/index.ts"))).toBe(false);

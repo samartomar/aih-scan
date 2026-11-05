@@ -2,5 +2,5 @@
 // Portable metadata: importing it performs no host operations.
 export const packageIdentity = Object.freeze({
   name: "@aihq/scan",
-  version: "0.1.0",
+  version: "0.0.0-dev.1",
 } as const);
