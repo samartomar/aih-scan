@@ -57,7 +57,7 @@ export function validateManifest(bytes, expectedSha256) {
   need(manifest.format === "aih-scan-prepared/1", "Unsupported prepared manifest format");
   if (manifest.parentManifestSha256 !== undefined) need(hash(manifest.parentManifestSha256), "Invalid parent manifest digest");
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
-  need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
+  need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+(?:-dev\.\d+)?$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
   const assessment = manifest.assessment;
   keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
