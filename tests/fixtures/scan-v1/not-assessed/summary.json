@@ -4,7 +4,7 @@
   "revision": 1,
   "origin": "local",
   "scannedAt": "2026-11-01T00:30:00Z",
-  "scanner": "@aihq/scan 0.1.0",
+  "scanner": "@aihq/scan 0.0.0-dev.1",
   "routing": "aih-scan-routing/1",
   "scoring": "aih-risk/1",
   "score": 0,

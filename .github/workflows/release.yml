@@ -87,6 +87,7 @@ jobs:
           npm install --prefix "$consumer" --ignore-scripts --no-audit --no-fund "$tarball"
           "$consumer/node_modules/.bin/aih-scan" --help
           cd "$consumer"
+          # shellcheck disable=SC2016 # single quotes keep the JavaScript template literal intact
           node --input-type=module -e 'for (const entry of ["host", "read", "contracts"]) await import(`@aihq/scan/${entry}`);'
       - name: Upload immutable exact release candidate
         id: upload

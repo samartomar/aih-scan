@@ -50,7 +50,7 @@ const repo = resolve(import.meta.dirname, "../..");
 const root = mkdtempSync(join(tmpdir(), "scan-prepared-proof-"));
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 let consumer: string, tarball: string, runtime: PreparedRuntime;
-const scanner = { name: "@aihq/scan", version: "0.1.0", tarballSha256: "" };
+const scanner = { name: "@aihq/scan", version: "0.0.0-dev.1", tarballSha256: "" };
 const assessment = {
   mode: "ai",
   tools: ["aih-trust-lint", "skillspector"],
@@ -349,6 +349,13 @@ describe("prepared manifest and exact inventory", () => {
     expect(() => validateManifest(notLoopbackBytes, hash(notLoopbackBytes))).toThrow(
       "HTTPS or loopback",
     );
+    for (const version of ["0.0.0-dev", "0.0.0-rc.1", "0.0.0-dev.1+x", "v0.0.0"]) {
+      const badScanner = { ...setup.manifest, scanner: { ...setup.manifest.scanner, version } };
+      const badScannerBytes = Buffer.from(JSON.stringify(badScanner));
+      expect(() => validateManifest(badScannerBytes, hash(badScannerBytes))).toThrow(
+        "Invalid scanner identity",
+      );
+    }
     changed.items[0]!.path = "item";
     changed.items[0]!.scanKey = `git-sha1:${"a".repeat(40)}`;
     await expect(validateContent(changed, setup.content, runtime)).rejects.toThrow("key mismatch");

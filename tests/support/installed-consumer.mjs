@@ -59,8 +59,8 @@ assert.deepEqual(Object.keys(contracts).sort(), [
 ]);
 for (const name of ["formats", "schemas", "routing", "scoring", "codes", "limits", "verification", "defaultSigners"])
   assert.ok(Object.isFrozen(contracts[name]), name);
-assert.equal(manifest.version, "0.1.0");
-assert.deepEqual(contracts.packageIdentity, { name: "@aihq/scan", version: "0.1.0" });
+assert.equal(manifest.version, "0.0.0-dev.1");
+assert.deepEqual(contracts.packageIdentity, { name: "@aihq/scan", version: "0.0.0-dev.1" });
 for (const name of ["request", "source", "summary", "withdrawn"]) {
   const file = `aih-scan-${name}-1.json`;
   const schema = (await import(`@aihq/scan/schemas/${file}`, { with: { type: "json" } })).default;
@@ -115,7 +115,7 @@ assert.equal(result.label, "helper");
 const summaryBytes = new Uint8Array(readFileSync(result.summaryPath));
 const summary = read.readSummary(summaryBytes);
 assert.equal(summary.status, "ok");
-assert.equal(summary.summary.scanner, "@aihq/scan 0.1.0");
+assert.equal(summary.summary.scanner, "@aihq/scan 0.0.0-dev.1");
 assert.equal(summary.summary.scanKey, result.scanKey);
 assert.equal(JSON.stringify(summary.summary).includes("helper\""), false, "request label stays out of the summary");
 const trustLint = summary.summary.sarif[0];

@@ -251,7 +251,7 @@ beforeAll(() => {
 
 describe("the packed tarball", () => {
   it("holds exactly the replacement package", () => {
-    expect(basename(tarball)).toBe("aihq-scan-0.1.0.tgz");
+    expect(basename(tarball)).toBe("aihq-scan-0.0.0-dev.1.tgz");
     const entries = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" })
       .trim()
       .split("\n")
@@ -318,7 +318,7 @@ describe("the packed tarball", () => {
     const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
     expect(manifest).toMatchObject({
       name: "@aihq/scan",
-      version: "0.1.0",
+      version: "0.0.0-dev.1",
       license: "Apache-2.0",
       type: "module",
       bin: { "aih-scan": "./dist/cli.js" },
