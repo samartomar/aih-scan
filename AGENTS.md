@@ -31,6 +31,11 @@ layer. Commit locally when authorized, then run Matt's /code-review against a fi
 base and the originating requirements before merge; that skill reads committed
 changes. /ship handles launch readiness. Preserve the project gates below.
 
+For maintainer assignments, keep the coordinating session in its supplied
+workspace and target this Git root explicitly for commands and edits. Load these
+product rules from that session. Public contributors can use this repository
+independently; private startup routing stays outside public files.
+
 Public work uses fully qualified samartomar/aih-scan#<number> references and explicit
 --repo samartomar/aih-scan on gh issue commands. Keep public text public-safe; never copy
 private plans or private links into this repository. Category and semver labels do
@@ -52,18 +57,11 @@ private maintainer instructions travel through an explicit private handoff.
 Local work does not authorize pushes, tracker writes, PRs, merges, signing, or
 publication. Carry any explicit authorization through its agreed scope.
 
-## Agent skills
+## Workflow references
 
-Use the installed Matt Pocock engineering skills and aih-extensions within this repository's existing rules. Keep the skills in their managed user installation.
+Use the managed Matt Pocock skills and Extensions within this repository's rules.
+Keep upstream skills in their managed installation, unchanged by repository cleanup.
 
-### Issue tracker
-
-GitHub Issues on `samartomar/aih-scan`. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Preserve accepted label mappings and existing categories. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-One product vocabulary with the existing decision authority. See `docs/agents/domain.md`.
+- [Issue routing](docs/agents/issue-tracker.md): owning delivery issue and intake.
+- [Triage](docs/agents/triage-labels.md): existing label roles and mappings.
+- [Domain documentation](docs/agents/domain.md): vocabulary and decision homes.
