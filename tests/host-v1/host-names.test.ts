@@ -1,22 +1,26 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseGitIndex } from "../../src/host/git-index.js";
 import { scanWith } from "../../src/host/scan.js";
 import { hostNameProblem, readFolder } from "../../src/host/snapshot.js";
+import { gitRepository, remoteUrl, serveGit } from "../support/git-fixture-v1.js";
 import { type FixtureRoot, fixtureRoot } from "../support/scan-v1-fixture.js";
 
 let fixture: FixtureRoot;
 beforeEach(() => {
   fixture = fixtureRoot("aih-scan-v1-names-");
 });
-afterEach(() => fixture.dispose());
+afterEach(() => {
+  vi.restoreAllMocks();
+  fixture.dispose();
+});
 
 const gitEnv = {
   ...process.env,
   GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
 };
 const git = (cwd: string, args: string[]) =>
   execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8" }).trim();
@@ -29,6 +33,38 @@ const modesOf = (summaryPath: string) =>
   (JSON.parse(readFileSync(summaryPath, "utf8")).files as { path: string; mode: string }[]).map(
     (file) => [file.path, file.mode],
   );
+
+/** Git objects preserve names that the host filesystem cannot create. */
+function indexedSource(files: Record<string, string>) {
+  const repo = gitRepository(fixture.path("source"));
+  for (const [path, text] of Object.entries(files)) {
+    const blob = repo.git(["hash-object", "-w", "--stdin"], text).trim();
+    repo.git([
+      "-c",
+      "core.protectNTFS=false",
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `100644,${blob},${path}`,
+    ]);
+  }
+  const tree = repo.git(["write-tree"]).trim();
+  const commit = repo
+    .git([
+      "-c",
+      "user.name=Scan fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit-tree",
+      tree,
+      "-m",
+      "Names fixture",
+    ])
+    .trim();
+  repo.git(["update-ref", "refs/heads/trunk", commit]);
+  serveGit(repo);
+  return { type: "git", repo: remoteUrl, ref: "trunk" };
+}
 
 /** A clone whose index marks run.sh executable while the disk does not. */
 function clone(name: string, init: string[] = []) {
@@ -102,23 +138,28 @@ describe("modes from Git's index when the disk cannot say (section 5)", () => {
 
 describe("names a host cannot write", () => {
   it("returns invalid item results on Windows instead of rejecting", async () => {
-    const reserved = fixture.folder("reserved", { "SKILL.md": "# X\n", "aux.md": "x" });
-    const colon = fixture.folder("colon", { "SKILL.md": "# X\n", "notes:1.md": "x" });
-    const trailing = fixture.folder("trailing", { "SKILL.md": "# X\n", "dir./a.md": "x" });
-    const fine = fixture.folder("fine", { "SKILL.md": "# X\n" });
+    const source = indexedSource({
+      "reserved/SKILL.md": "# X\n",
+      "reserved/aux.md": "x",
+      "colon/SKILL.md": "# X\n",
+      "colon/notes:1.md": "x",
+      "trailing/SKILL.md": "# X\n",
+      "trailing/dir./a.md": "x",
+      "fine/SKILL.md": "# X\n",
+    });
     const result = await scanWith(
-      itemsRequest([{ path: reserved }, { path: colon }, { path: trailing }, { path: fine }]),
+      { format: "aih-scan-request/1", origin: "local", source },
       { outDir: fixture.path("out") },
       { platform: "win32" },
     );
     expect(result.status).toBe("refused");
     expect(
-      result.results.map((entry) => [entry.status, "reason" in entry && entry.reason]),
+      result.results.map((entry) => [entry.path, entry.status, "reason" in entry && entry.reason]),
     ).toEqual([
-      ["invalid", "reserved-name"],
-      ["invalid", "reserved-name"],
-      ["invalid", "reserved-name"],
-      ["ok", false],
+      ["colon", "invalid", "reserved-name"],
+      ["fine", "ok", false],
+      ["reserved", "invalid", "reserved-name"],
+      ["trailing", "invalid", "reserved-name"],
     ]);
   });
 
@@ -137,15 +178,18 @@ describe("names a host cannot write", () => {
   });
 
   it("scans case-distinct names where the host keeps them apart, and reports them elsewhere", async () => {
-    const item = fixture.folder("item", { "SKILL.md": "# X\n", "skill.md": "# y\n" });
-    const linux = await scanWith(
-      itemsRequest([{ path: item }]),
-      { outDir: fixture.path("out1") },
-      { platform: "linux" },
-    );
-    expect(linux.status).toBe("ok");
+    const source = indexedSource({ "SKILL.md": "# X\n", "skill.md": "# y\n" });
+    // A case-sensitive host can materialize both files; Windows must refuse before copying.
+    if (process.platform !== "win32" && process.platform !== "darwin") {
+      const linux = await scanWith(
+        { format: "aih-scan-request/1", origin: "local", source },
+        { outDir: fixture.path("out1") },
+        { platform: "linux" },
+      );
+      expect(linux.status).toBe("ok");
+    }
     const mac = await scanWith(
-      itemsRequest([{ path: item }]),
+      { format: "aih-scan-request/1", origin: "local", source },
       { outDir: fixture.path("out2") },
       { platform: "darwin" },
     );

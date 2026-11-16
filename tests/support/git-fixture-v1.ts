@@ -33,6 +33,7 @@ export function gitRepository(root: string): GitFixture {
     );
   git(["init", "--quiet", "--initial-branch=trunk"]);
   git(["config", "core.autocrlf", "false"]);
+  const modes = new Map<string, boolean>();
   return {
     root,
     git,
@@ -42,10 +43,13 @@ export function gitRepository(root: string): GitFixture {
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, text);
         chmodSync(target, executable.includes(path) ? 0o755 : 0o644);
+        modes.set(path, executable.includes(path));
       }
     },
     commit(message) {
       git(["add", "--all"]);
+      for (const [path, executable] of modes)
+        git(["update-index", executable ? "--chmod=+x" : "--chmod=-x", "--", path]);
       git([
         "-c",
         "user.name=Scan fixture",

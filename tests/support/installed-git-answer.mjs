@@ -18,7 +18,8 @@ const bytes =
         tail.map((arg) => (arg.startsWith("https://") ? fixture : arg)),
         {
           cwd: fixture,
-          env: { PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", HOME: fixture },
+          env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", HOME: fixture },
+          windowsHide: true,
           maxBuffer: 256 * 1024 * 1024,
         },
       );

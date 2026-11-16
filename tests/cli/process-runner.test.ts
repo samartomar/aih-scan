@@ -363,7 +363,8 @@ describe("process-group containment", () => {
 });
 
 describe("aih-scan bin", () => {
-  it("executes through a symlinked installed-bin path", () => {
+  // npm uses shell shims on Windows; its installed-bin path is covered by package-install.
+  it.runIf(process.platform !== "win32")("executes through a symlinked installed-bin path", () => {
     const directory = mkdtempSync(join(process.cwd(), ".aih-scan-bin-"));
     temporaryDirectories.push(directory);
     const outputDirectory = join(directory, "dist");

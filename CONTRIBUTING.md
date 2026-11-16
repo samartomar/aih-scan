@@ -14,3 +14,5 @@ The pre-commit hook in `.githooks` is not active after `npm ci --ignore-scripts`
 once per clone with `git config core.hooksPath .githooks`; CI runs the same checks regardless.
 
 Sign off commits under the Developer Certificate of Origin with `git commit -s`.
+CI checks every PR commit, including merge commits. To check locally, run
+`node tools/verify-signoffs.mjs --base <base-commit-sha> --head <branch-head-sha>`.

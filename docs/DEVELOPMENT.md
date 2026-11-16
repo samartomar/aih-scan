@@ -110,6 +110,11 @@ The `CI` workflow's manual `full_validation` input defaults to true and runs cov
 installed-package test and the real analyzer proofs. The required status fails if any
 selected check fails.
 
+Windows CI also runs `npm run verify`, including native controlled analyzer executables
+and the real Job Object supervisor. POSIX-only FIFO, raw filename and symlinked-bin
+fixtures remain on Linux; Windows uses directory junctions for link refusal. File modes
+come from Git's index or the caller's executable list where Windows cannot record them.
+
 ## Optional navigation helpers
 
 Use source and tests directly by default. When their navigation benefit is needed,

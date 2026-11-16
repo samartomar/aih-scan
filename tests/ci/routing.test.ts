@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, test } from "vitest";
 
 const root = resolve(import.meta.dirname, "../..");
@@ -102,11 +103,15 @@ test("a selected failing test propagates a failure to the required verify job", 
     mkdirSync(fixtureRoot);
     writeFileSync(
       join(fixtureRoot, "selected.test.ts"),
-      `import { test, expect } from ${JSON.stringify(join(root, "node_modules/vitest/dist/index.js"))}; test("selected failure", () => expect(1).toBe(2));`,
+      `import { test, expect } from ${JSON.stringify(pathToFileURL(join(root, "node_modules/vitest/dist/index.js")).href)}; test("selected failure", () => expect(1).toBe(2));`,
     );
     writeFileSync(plan, JSON.stringify({ coverage: false, tests: ["tests/selected.test.ts"] }));
     // Vitest is located through a symlink to the actual isolated installation.
-    symlinkSync(join(root, "node_modules"), join(temporary, "node_modules"), "dir");
+    symlinkSync(
+      join(root, "node_modules"),
+      join(temporary, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const result = spawnSync(
       process.execPath,
       [join(root, "tools/ci-route.mjs"), "--run-tests", plan],
@@ -133,6 +138,17 @@ test("ordinary workflow preserves required verify, full dispatch and failure pro
   expect(workflow.concurrency["cancel-in-progress"]).toBe(true);
   expect(workflow.jobs.verify.if).toBeUndefined();
   const steps = workflow.jobs.verify.steps;
+  const signoffs = steps.find((step: { name?: string }) => step.name?.includes("DCO signoff"));
+  expect(signoffs.if).toBe("github.event_name == 'pull_request'");
+  expect(signoffs.env).toEqual({
+    BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+    HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+  });
+  expect(signoffs.run).toBe('node tools/verify-signoffs.mjs --base "$BASE_SHA" --head "$HEAD_SHA"');
+  expect(signoffs["continue-on-error"]).toBeUndefined();
+  expect(workflow.jobs["verify-windows"]["runs-on"]).toBe("windows-latest");
+  expect(workflow.jobs["verify-windows"].steps.at(-1).run).toBe("npm run verify");
+  expect(workflow.jobs["verify-windows"]["continue-on-error"]).toBeUndefined();
   const selected = steps.find((step: { name?: string }) =>
     step.name?.includes("Run selected checks"),
   );

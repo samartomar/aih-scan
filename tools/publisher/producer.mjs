@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { npmCli } from "../npm-cli.mjs";
 import { digest, extractArchive, MAX_ARCHIVE_BYTES, need } from "./prepared-archive.mjs";
 import { regularFiles } from "./prepared.mjs";
 
@@ -41,7 +42,7 @@ export function buildProducerContext(bytes, expectedSha256, source, consumer) {
   mkdirSync(home);
   const env = { PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, HOME: home, USERPROFILE: home, TMPDIR: home, TEMP: home, TMP: home, npm_config_cache: join(home, "cache"), npm_config_userconfig: join(home, "npmrc"), npm_config_globalconfig: join(home, "global-npmrc"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, "gitconfig"), ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {}) };
   for (const file of ["npmrc", "global-npmrc", "gitconfig"]) writeFileSync(join(home, file), "");
-  const npm = (args, cwd) => execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd, env, stdio: "pipe", windowsHide: true });
+  const npm = (args, cwd) => execFileSync(process.execPath, [npmCli(), ...args], { cwd, env, stdio: "pipe", windowsHide: true });
   npm(["ci", "--ignore-scripts", "--no-audit", "--no-fund"], source);
   npm(["--ignore-scripts", "run", "build"], source);
   const packed = JSON.parse(npm(["pack", "--ignore-scripts", "--json"], source).toString());

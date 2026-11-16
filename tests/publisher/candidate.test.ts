@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { npmCli } from "../../tools/npm-cli.mjs";
 import {
   checkCandidateRun,
   selectSummaries,
@@ -19,7 +20,6 @@ import {
   validateProducerContext,
   validateSources,
 } from "../../tools/publisher/candidate.mjs";
-
 import { buildProducerContext, checkProducerContext } from "../../tools/publisher/producer.mjs";
 import { readPackedPackage } from "../support/npm-pack-output.js";
 import { publisherTransport } from "../support/publisher-transport.js";
@@ -246,7 +246,11 @@ describe("summary selection", () => {
     expect(() => selectSummaries(temporary(), reviewed, join(temporary(), "o"))).toThrow(
       "no summaries",
     );
-    symlinkSync("/etc/hostname", join(root, "targets/link"));
+    symlinkSync(
+      temporary(),
+      join(root, "targets/link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     expect(() => selectSummaries(root, reviewed, join(temporary(), "o"))).toThrow("link");
   });
 });
@@ -424,12 +428,15 @@ describe("reviewed source provisioning before candidate intake", () => {
       `import { mkdirSync, writeFileSync } from "node:fs"; for (const key of Object.keys(process.env)) if (/^(GH_TOKEN|GITHUB_TOKEN|ACTIONS_|DEEPSEEK_|NODE_OPTIONS|NODE_AUTH_TOKEN|SSH_|SKILLSPECTOR_)/.test(key)) throw new Error("ambient credential or loader leaked"); mkdirSync("dist", { recursive: true }); writeFileSync("dist/proof.txt", "reviewed clean producer");`,
     );
     writeFileSync(join(source, "dist/proof.txt"), "reviewed clean producer");
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     const pack = readPackedPackage(
-      execFileSync(npm, ["pack", "--ignore-scripts", "--json", "--pack-destination", packed], {
-        cwd: source,
-        encoding: "utf8",
-      }),
+      execFileSync(
+        process.execPath,
+        [npmCli(), "pack", "--ignore-scripts", "--json", "--pack-destination", packed],
+        {
+          cwd: source,
+          encoding: "utf8",
+        },
+      ),
     );
     const git = (args: string[]) =>
       execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();

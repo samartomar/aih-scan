@@ -7,6 +7,7 @@ import {
   readFileSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -58,7 +59,10 @@ describe("scan(request, { outDir }) for items", () => {
   it("delivers the request-to-summary/SARIF-to-reader path with real trust-lint", async () => {
     const skill = fixture.folder("stage/risky", riskySkill, ["scripts/start.sh"]);
     const outDir = fixture.path("out");
-    const result = await scan(request([{ path: skill, label: "risky-label" }]), { outDir });
+    const result = await scan(
+      request([{ path: skill, label: "risky-label", executable: ["scripts/start.sh"] }]),
+      { outDir },
+    );
     expect(result.status).toBe("ok");
     const [entry] = okResults(result);
     expect(entry).toMatchObject({
@@ -122,7 +126,7 @@ describe("scan(request, { outDir }) for items", () => {
       );
     }
 
-    const host = await hostMatchScan(summary, skill);
+    const host = await hostMatchScan(summary, skill, { executable: ["scripts/start.sh"] });
     expect(host).toMatchObject({ status: "ok", matches: true, coverage: "partial", signer: null });
     const files = summary.files.map((file) => ({
       path: file.path,
@@ -163,7 +167,7 @@ describe("snapshot and identity", () => {
       ["SKILL.md", "100644"],
       ["build/out.txt", "100644"],
       ["listed.sh", "100755"],
-      ["tool.sh", "100755"],
+      ["tool.sh", process.platform === "win32" ? "100644" : "100755"],
     ]);
     // Git agrees with the key for the same files and modes.
     const git = fixture.path("git");
@@ -181,25 +185,44 @@ describe("snapshot and identity", () => {
     expect(entry!.scanKey).toBe(`git-sha1:${tree}`);
   });
 
-  it.each([
-    ["symbolic link", (folder: string) => symlinkSync("SKILL.md", join(folder, "link.md")), "link"],
-    ["directory link", (folder: string) => symlinkSync(".", join(folder, "loop")), "link"],
+  it.each(
     [
-      "hard link",
-      (folder: string) => linkSync(join(folder, "SKILL.md"), join(folder, "hard.md")),
-      "hard-link",
-    ],
-    [
-      "special file",
-      (folder: string) => execFileSync("mkfifo", [join(folder, "pipe")]),
-      "special-file",
-    ],
-    [
-      "invalid name",
-      (folder: string) => writeFileSync(join(folder, "back\\slash.md"), "x"),
-      "invalid-name",
-    ],
-  ])("refuses a %s before scanning, without a clean result", async (_name, add, reason) => {
+      [
+        "symbolic link",
+        (folder: string) => symlinkSync("SKILL.md", join(folder, "link.md")),
+        "link",
+      ],
+      [
+        "directory link",
+        (folder: string) =>
+          symlinkSync(
+            folder,
+            join(folder, "loop"),
+            process.platform === "win32" ? "junction" : "dir",
+          ),
+        "link",
+      ],
+      [
+        "hard link",
+        (folder: string) => linkSync(join(folder, "SKILL.md"), join(folder, "hard.md")),
+        "hard-link",
+      ],
+      [
+        "special file",
+        (folder: string) => execFileSync("mkfifo", [join(folder, "pipe")]),
+        "special-file",
+      ],
+      [
+        "invalid name",
+        (folder: string) => writeFileSync(join(folder, "back\\slash.md"), "x"),
+        "invalid-name",
+      ],
+    ].filter(
+      ([name]) =>
+        process.platform !== "win32" ||
+        !["symbolic link", "special file", "invalid name"].includes(name as string),
+    ) as [string, (folder: string) => unknown, string][],
+  )("refuses a %s before scanning, without a clean result", async (_name, add, reason) => {
     const item = fixture.folder("item", { "SKILL.md": "# Item\n" });
     add(item);
     const outDir = fixture.path("out");
@@ -211,7 +234,7 @@ describe("snapshot and identity", () => {
     expect(readdirSync(outDir)).toEqual([]);
   });
 
-  it("refuses names that are not valid text", async () => {
+  it.runIf(process.platform !== "win32")("refuses names that are not valid text", async () => {
     const item = fixture.folder("item", { "SKILL.md": "# Item\n" });
     writeFileSync(
       Buffer.concat([Buffer.from(`${item}/`), Buffer.from([0x66, 0xff, 0x2e, 0x6d, 0x64])]),
@@ -229,7 +252,8 @@ describe("snapshot and identity", () => {
       [`${Array.from({ length: 9 }, () => "x".repeat(120)).join("/")}/f.md`]: "x",
     });
     const big = fixture.folder("big", { "SKILL.md": "# Big\n" });
-    execFileSync("truncate", ["-s", String(50 * 1024 * 1024 + 1), join(big, "blob.bin")]);
+    writeFileSync(join(big, "blob.bin"), "");
+    truncateSync(join(big, "blob.bin"), 50 * 1024 * 1024 + 1);
     const result = await scan(request([{ path: deep }, { path: long }, { path: big }]), {
       outDir: fixture.path("out"),
     });
@@ -289,7 +313,7 @@ describe("snapshot and identity", () => {
   it("isolates sibling failures: finished items are written, the run exits as not all scanned", async () => {
     const good = fixture.folder("good", cleanSkill);
     const bad = fixture.folder("bad", { "SKILL.md": "x" });
-    symlinkSync("/etc/passwd", join(bad, "escape"));
+    symlinkSync(good, join(bad, "escape"), process.platform === "win32" ? "junction" : "dir");
     const result = await scan(request([{ path: bad }, { path: good }]), {
       outDir: fixture.path("out"),
     });

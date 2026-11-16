@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 export async function publisherTransport(bytes: Uint8Array) {
@@ -53,7 +54,7 @@ export async function publisherTransport(bytes: Uint8Array) {
         process.execPath,
         [
           "--import",
-          resolve(import.meta.dirname, "publisher-transport-preload.mjs"),
+          pathToFileURL(resolve(import.meta.dirname, "publisher-transport-preload.mjs")).href,
           join(resolve(import.meta.dirname, "../.."), "tools/publisher/candidate.mjs"),
           ...args,
         ],
@@ -64,6 +65,7 @@ export async function publisherTransport(bytes: Uint8Array) {
             ...env,
           },
           timeout: 30000,
+          windowsHide: true,
         },
       );
     },

@@ -144,7 +144,11 @@ describe("public Git repositories", () => {
       ["scripts/run.sh"],
     );
     const handed = await scan(
-      { format: "aih-scan-request/1", origin: "local", items: [{ path: folder }] },
+      {
+        format: "aih-scan-request/1",
+        origin: "local",
+        items: [{ path: folder, executable: ["scripts/run.sh"] }],
+      },
       { outDir: fixture.path("out2") },
     );
     expect(handed.results[0]).toMatchObject({ scanKey: entry.scanKey });
