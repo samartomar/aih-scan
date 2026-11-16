@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import {
   windowsJobSupervisorExecutableV1,
   windowsSystemRootV1,
@@ -157,6 +155,9 @@ async function darwinProcesses(markers: readonly string[]): Promise<LiveProcessV
 const WINDOWS_SWEEP_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
+  // Avoid module-autoload discovery in the deliberately scrubbed sweep environment.
+  "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))",
+  "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))",
   '$markers = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AIH_SCAN_SWEEP_MARKERS)) -split "`n"',
   "foreach ($process in Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine,ExecutablePath) {",
   "  if ($process.ProcessId -eq $PID) { continue }",
@@ -173,18 +174,6 @@ const WINDOWS_SWEEP_SCRIPT = [
 
 async function windowsProcesses(markers: readonly string[]): Promise<LiveProcessV1[]> {
   const systemRoot = windowsSystemRootV1();
-  // [DEBUG-retro-cim] Temporary candidate proof, enabled only for the isolated CI control.
-  const mode = process.env.AIH_SCAN_DIAGNOSTIC_CIM_IMPORT;
-  const temporary =
-    mode === "utility-manifest-temp" ? mkdtempSync(join(tmpdir(), "aih-sweep-")) : undefined;
-  const script =
-    mode === "utility-manifest" || mode === "utility-manifest-temp" || mode === "utility-binary"
-      ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))\n" +
-        (mode !== "utility-binary"
-          ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))\n"
-          : "Import-Module ([IO.Path]::Combine($env:SystemRoot, 'Microsoft.Net\\assembly\\GAC_MSIL\\Microsoft.Management.Infrastructure.CimCmdlets\\v4.0_1.0.0.0__31bf3856ad364e35\\Microsoft.Management.Infrastructure.CimCmdlets.dll'))\n") +
-        WINDOWS_SWEEP_SCRIPT
-      : WINDOWS_SWEEP_SCRIPT;
   const output = await collect(
     windowsJobSupervisorExecutableV1(),
     [
@@ -194,18 +183,15 @@ async function windowsProcesses(markers: readonly string[]): Promise<LiveProcess
       "-ExecutionPolicy",
       "Bypass",
       "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
+      Buffer.from(WINDOWS_SWEEP_SCRIPT, "utf16le").toString("base64"),
     ],
     {
       SystemRoot: systemRoot,
       windir: systemRoot,
       PATH: `${systemRoot}\\System32;${systemRoot}`,
       AIH_SCAN_SWEEP_MARKERS: Buffer.from(markers.join("\n"), "utf8").toString("base64"),
-      ...(temporary === undefined ? {} : { TEMP: temporary, TMP: temporary }),
     },
-  ).finally(() => {
-    if (temporary !== undefined) rmSync(temporary, { recursive: true, force: true });
-  });
+  );
   const found: LiveProcessV1[] = [];
   for (const line of output.split(/\r?\n/u)) {
     const tab = line.indexOf("\t");

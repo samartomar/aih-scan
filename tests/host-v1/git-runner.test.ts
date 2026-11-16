@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GitContainmentError, runPinnedGit } from "../../src/host/git-runner.js";
-import { observeLinuxGitGroups } from "../support/linux-process-diagnostic.js";
 
 /**
  * The hardened Git runner with real Git: the bounded process-tree runner starts the Git helper,
@@ -77,21 +76,9 @@ describe.runIf(hasGit)("runPinnedGit (real Git)", () => {
   it("bounds Git's output and fails closed on errors and cancellation", async () => {
     const { hooks, work } = stage();
     await runPinnedGit(["init", "--quiet", `--template=${hooks}`], work, {}, hooks);
-    const observed = observeLinuxGitGroups(work);
-    try {
-      // [DEBUG-retro-linux] Every bounded reproduction must pass; never retry a failure.
-      for (let attempt = 0; attempt < (process.platform === "linux" ? 20 : 1); attempt += 1) {
-        await expect(
-          runPinnedGit(["config", "--list"], work, {}, hooks, 4).catch((error) => {
-            if (error instanceof GitContainmentError)
-              process.stdout.write(`[DEBUG-retro-linux] ${JSON.stringify(observed.snapshot())}\n`);
-            throw error;
-          }),
-        ).rejects.toThrow(/gitStdoutBytes exceeds limit 4|maxStdoutBytes/);
-      }
-    } finally {
-      observed.dispose();
-    }
+    await expect(runPinnedGit(["config", "--list"], work, {}, hooks, 4)).rejects.toThrow(
+      /gitStdoutBytes exceeds limit 4|maxStdoutBytes/,
+    );
     await expect(runPinnedGit(["rev-parse", "HEAD"], work, {}, hooks)).rejects.toMatchObject({
       code: "git-acquisition-failed",
     });
@@ -99,7 +86,7 @@ describe.runIf(hasGit)("runPinnedGit (real Git)", () => {
       runPinnedGit(["config", "--list"], work, { signal: AbortSignal.abort() }, hooks),
     ).rejects.toThrow("cancelled");
     expect(new GitContainmentError().code).toBe("git-containment-failed");
-  }, 30_000); // [DEBUG-retro-linux] Harness budget for the twenty diagnostic invocations only.
+  });
 });
 
 describe.runIf(hasGit && hasOpenssl)("runPinnedGit credentials (local HTTPS answerer)", () => {
