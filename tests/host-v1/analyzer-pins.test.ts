@@ -37,20 +37,33 @@ describe("pinned analyzer runtimes", () => {
       ),
     );
     const artifact = JSON.parse(read("tools/analyzers/skillspector/maintenance/artifact.json"));
+    const builderRecipeSha256 = createHash("sha256")
+      .update(read("tools/analyzers/skillspector/maintenance/build.py").replace(/\r\n/gu, "\n"))
+      .digest("hex");
+    expect(builderRecipeSha256).toBe(
+      "dae0a74261c5b15df1d6e7986b42c7ccf96538f9a6959f4e6172d2b41c383a8e",
+    );
     expect(builder).toEqual({
       upstream: "54824463814a0be01360792523ec7245a69190fc",
       sourceSha256: "562349db9ef4084cfe2f18707de3d942c5b94e221162c314c795e4501fabc07d",
-      patchSha256: artifact.patchSha256,
-      runtimeLockSha256: artifact.runtimeLockSha256,
-      buildLockSha256: artifact.buildLockSha256,
-      version: "2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159",
+      patchSha256: "79578d6ea997a331d649bb17173818b84a893a4760142681557bb836db0b9407",
+      runtimeLockSha256: "b30e05171b22849c963e5de7606bfe3e8fbe02ad4f019a2f6c5fea0e8b1147bd",
+      buildLockSha256: "63eb9f0abd6ae0f8ea6aa36cc900c80a2f391b4f7ecd3b5b7d84320d7249a936",
+      builderRecipeSha256,
+      version: "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa",
     });
     expect(artifact).toEqual({
       ...builder,
       wheel:
-        "skillspector-2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159-py3-none-any.whl",
-      wheelSha256: "f40324a28badbfd01c46fe2e77e9d2a0be2df874317d1ca84710b1ccb4e8aab8",
+        "skillspector-2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa-py3-none-any.whl",
+      wheelSha256: "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
     });
+    expect(builder.version).not.toBe(
+      "2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159",
+    );
+    expect(artifact.wheelSha256).not.toBe(
+      "f40324a28badbfd01c46fe2e77e9d2a0be2df874317d1ca84710b1ccb4e8aab8",
+    );
     expect(SKILLSPECTOR_MAINTENANCE_VERSION).toBe(builder.version);
   });
 
@@ -82,8 +95,11 @@ describe("pinned analyzer runtimes", () => {
             stdio: "pipe",
           },
         );
-        const artifact = JSON.parse(read("tools/analyzers/skillspector/maintenance/artifact.json"));
-        const receipt = JSON.parse(readFileSync(join(out, "receipt.json"), "utf8"));
+        const artifactText = read("tools/analyzers/skillspector/maintenance/artifact.json");
+        const receiptText = readFileSync(join(out, "receipt.json"), "utf8");
+        expect(receiptText).toBe(artifactText);
+        const artifact = JSON.parse(artifactText);
+        const receipt = JSON.parse(receiptText);
         expect(receipt).toEqual(artifact);
         const wheel = readFileSync(join(out, "wheels", artifact.wheel));
         expect(createHash("sha256").update(wheel).digest("hex")).toBe(artifact.wheelSha256);

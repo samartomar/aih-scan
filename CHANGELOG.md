@@ -32,6 +32,9 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   `tools/analyzers`.
 - SkillSpector's bounded parallel semantic security analysis and stricter AI response
   completion checks, within Scan's existing ten-minute per-tool deadline.
+- Fail-closed SkillSpector completeness reconciliation across status, limitations, recovery
+  warnings and inspected-file aggregates, retaining usable partial findings and only the
+  positively identified reference-only caveat exception.
 - Signing and verification profile `aih-sigstore-keyless/1`: `aih-scan sign` writes a
   Sigstore `messageSignature` bundle; `verifySummary` verifies offline, separates
   signature validity from signer trust and applies withdrawals through `throughRevision`.

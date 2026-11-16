@@ -17,11 +17,16 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def recipe_digest(path):
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def identity():
     inputs = {"upstream": UPSTREAM, "sourceSha256": SOURCE_SHA256,
               "patchSha256": digest(HERE / "capacity.patch"),
               "runtimeLockSha256": digest(HERE.parent / "uv.lock"),
-              "buildLockSha256": digest(HERE / "uv.lock")}
+              "buildLockSha256": digest(HERE / "uv.lock"),
+              "builderRecipeSha256": recipe_digest(HERE / "build.py")}
     build_id = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {**inputs, "version": "2.13.4+aih.1." + build_id}
 
@@ -86,7 +91,7 @@ def main():
     if len(wheels) != 1:
         raise ValueError("Unexpected wheel set")
     canonical_wheel(wheels[0])
-    (args.out / "receipt.json").write_text(json.dumps({**expected, "wheel": wheels[0].name, "wheelSha256": digest(wheels[0])}, indent=2) + "\n")
+    (args.out / "receipt.json").write_text(json.dumps({**expected, "wheel": wheels[0].name, "wheelSha256": digest(wheels[0])}, indent=2) + "\n", newline="\n")
     print((args.out / "receipt.json").read_text())
 
 

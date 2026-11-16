@@ -138,6 +138,7 @@ export function skillSpectorReport(
     executionSuccessful?: boolean;
     version?: string;
     provenance?: Record<string, unknown>;
+    completeness?: Record<string, unknown>;
   }> = {},
 ): Record<string, unknown> {
   return {
@@ -160,14 +161,23 @@ export function skillSpectorReport(
     },
     execution_successful: overrides.executionSuccessful ?? true,
     analysis_completeness: {
+      total_components: 0,
+      scanned_components: 0,
+      coverage_percent: 100,
       status: overrides.status ?? "complete",
       is_complete: ["complete", "complete_with_caveats"].includes(overrides.status ?? "complete"),
       execution_successful: overrides.executionSuccessful ?? true,
+      fully_inspected_files: 0,
+      partially_inspected_files: 0,
+      entirely_uninspected_files: 0,
       analyzer_statuses: overrides.analyzerStatuses ?? [
         { analyzer_id: "artifact_integrity", status: "completed" },
         { analyzer_id: "semantic_security_discovery", status: "disabled" },
       ],
       ledger_exceptions: overrides.ledgerExceptions ?? [],
+      scope_exclusions: [],
+      limitations: [],
+      ...overrides.completeness,
     },
   };
 }

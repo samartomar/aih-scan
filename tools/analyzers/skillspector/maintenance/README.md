@@ -2,8 +2,10 @@
 
 This is a Scan-maintained source build of NVIDIA SkillSpector 2.13.4, not an upstream
 release. `artifact.json` binds its full distinct version and reproducible wheel SHA-256.
-The version digest binds the upstream commit/archive, capacity patch, runtime lock and
-separate build-tool lock. Original Apache-2.0 license/provenance stays in the source
+The version digest binds the upstream commit/archive, capacity patch, runtime lock,
+separate build-tool lock and the reviewed builder recipe's canonical LF-byte SHA-256.
+Changing the recipe therefore changes the version and wheel identity without depending
+on checkout line endings. Original Apache-2.0 license/provenance stays in the source
 archive and wheel. No installed package is patched.
 
 ## 2.13.4 patch review
@@ -35,11 +37,11 @@ builds a wheel with locked Hatchling and fixed timestamps:
 python tools/analyzers/skillspector/maintenance/build.py --source source.tar.gz --out new-build
 ```
 
-`new-build` must not exist. Compare its `receipt.json` to `artifact.json`, including the
-wheel SHA-256, before installation. Independent clean builds from the same archive and
-reviewed patch/locks must give the same hash; a changed hash or recipe needs review and a
-new bound identity. This command installs only the isolated builder dependencies, not the
-analyzer runtime.
+`new-build` must not exist. Compare its canonical LF `receipt.json` byte-for-byte with
+`artifact.json`, including the wheel SHA-256, before installation. Independent clean builds
+from the same archive and reviewed patch/locks/recipe must give identical receipt and wheel
+bytes; a changed hash or recipe needs review and a new bound identity. This command installs
+only the isolated builder dependencies, not the analyzer runtime.
 
 Provision a separate analyzer environment with the existing runtime lock (see
 `docs/analyzers.md`), then install this exact wheel using `uv pip install --no-deps

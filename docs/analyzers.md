@@ -123,8 +123,12 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   threshold) is a finished run; exit 2, a missing report or a failed analysis is `not-run`,
   reason `failed`; another executable or report version is refused as described above. When
   SkillSpector could not fully inspect a routed file or a supported archive member, the item
-  is `partial` (reason `failed`) with an unsigned note. Gaps on files no tool is routed
-  (binaries, dependency manifests) are not reported as gaps. A reference-only
+  is `partial` (reason `failed`) with an unsigned note. Scan also reconciles the report's
+  recognized `status` / `is_complete` state, limitations, recovery warnings and
+  partially/entirely-uninspected file aggregates; omission-only or unexplained partial states
+  cannot become complete, and missing or inconsistent completeness metadata is refused. Gaps
+  on files no tool is routed (binaries, dependency manifests) and the disabled upstream OSV
+  lookup are not reported as gaps. Only a positively identified reference-only
   `complete_with_caveats` report stays `complete` and carries its caveat note instead.
 
 ### DeepSeek Flash on Windows
