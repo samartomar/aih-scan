@@ -945,6 +945,77 @@ describe("the installed aih-scan CLI", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "reconciles installed disabled-OSV derived evidence without waiving mixed omissions",
+    async () => {
+      for (const [omitted, coverage] of [
+        [1, "complete"],
+        [2, "partial"],
+      ] as const) {
+        const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
+          versionText: "SkillSpector v2.13.4",
+          outputFlag: "--output",
+          report: skillSpectorReport(
+            [skillSpectorIssue("LP3", "SKILL.md", 1, "MEDIUM", 0.7, null)],
+            {
+              status: "partial",
+              analyzerStatuses: [
+                {
+                  analyzer_id: "static_patterns_supply_chain",
+                  status: "degraded",
+                  planned_work: 3,
+                  completed: 2,
+                  partial: 1,
+                  skipped: 0,
+                  failed: 0,
+                  unaccounted: 0,
+                },
+              ],
+              ledgerExceptions: [
+                {
+                  outcome: "partial",
+                  reason_code: "runtime_limit",
+                  path: "requirements.txt",
+                  fatal: false,
+                  analyzers: ["static_patterns_supply_chain_dependencies_runtime_limit"],
+                },
+              ],
+              completeness: {
+                total_components: omitted + 1,
+                scanned_components: 1,
+                fully_inspected_files: 1,
+                partially_inspected_files: omitted,
+                entirely_uninspected_files: 0,
+                limitations: ["Analyzer static_patterns_supply_chain status: degraded."],
+              },
+            },
+          ),
+        });
+        const item = folder(`installed-osv-${omitted}`, {
+          "SKILL.md":
+            "---\nname: osv-fixture\ndescription: Harmless offline OSV completeness fixture.\n---\n# OSV fixture\n\nSummarise the supplied text carefully.\n",
+          "requirements.txt": "requests==2.34.2\n",
+        });
+        const run = await cli(
+          ["scan", item, "--json", "--out", outFolder(`installed-osv-${omitted}`)],
+          { env: { AIH_SCAN_SKILLSPECTOR: analyzer.path } },
+        );
+        expect(run.code, run.stderr).toBe(0);
+        const scanned = json(run).targets[0].results[0];
+        const { summary, findings } = readInstalledResult(scanned);
+        expect(summary.coverage).toBe(coverage);
+        if (coverage === "partial") expect(summary.reason).toBe("failed");
+        expect(summary.tools).toContainEqual(
+          expect.objectContaining({ tool: "skillspector", result: "warn", counts: { medium: 1 } }),
+        );
+        expect(findings).toContainEqual(
+          expect.objectContaining({ ruleId: "LP3", path: "SKILL.md", line: 1, severity: "MEDIUM" }),
+        );
+      }
+    },
+    120_000,
+  );
+
+  it.runIf(process.platform !== "win32")(
     "cancels on SIGINT with exit 130 and ends the analyzer's process tree",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {

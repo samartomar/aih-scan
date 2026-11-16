@@ -128,8 +128,10 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   partially/entirely-uninspected file aggregates; omission-only or unexplained partial states
   cannot become complete, and missing or inconsistent completeness metadata is refused. Gaps
   on files no tool is routed (binaries, dependency manifests) and the disabled upstream OSV
-  lookup are not reported as gaps. Only a positively identified reference-only
-  `complete_with_caveats` report stays `complete` and carries its caveat note instead.
+  lookup are not reported as gaps. Their derived limitations and aggregate omissions are
+  excluded only when positively matched to those components; unrelated or excess omissions
+  remain partial. Only a positively identified reference-only `complete_with_caveats` report
+  stays `complete` and carries its caveat note instead.
 
 ### DeepSeek Flash on Windows
 

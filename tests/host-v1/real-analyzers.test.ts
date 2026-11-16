@@ -309,6 +309,25 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.4 (static, -
     ]);
   }, 120_000);
 
+  it("excludes only disabled OSV derived evidence", async () => {
+    if (skillspector === undefined) throw new Error("SkillSpector runtime required");
+    const folder = fixture.folder("disabled-osv", {
+      "SKILL.md":
+        "---\nname: osv-fixture\ndescription: Harmless offline OSV completeness fixture.\n---\n# OSV fixture\n\nSummarise the supplied text carefully.\n",
+      "requirements.txt": "requests==2.34.2\n",
+    });
+    const { entry, summary } = await scanOnce(folder, {
+      AIH_SCAN_SKILLSPECTOR: unshare ? offline(skillspector, "skillspector") : skillspector,
+    });
+    expect(summary.coverage).toBe("complete");
+    expect(entry).not.toHaveProperty("notes");
+    expect(summary.tools.find((tool) => tool.tool === "skillspector")).toMatchObject({
+      result: "pass",
+      counts: {},
+    });
+    noSentinels();
+  }, 120_000);
+
   it("scans a benign skill offline: ran, pass, complete", async () => {
     const executable = unshare ? offline(skillspector!, "skillspector") : skillspector!;
     const { summary } = await scanOnce(benignFixture(), { AIH_SCAN_SKILLSPECTOR: executable });
