@@ -43,9 +43,6 @@ const program = `
 const fs = require("node:fs");
 const path = require("node:path");
 const dir = __dirname;
-// [DEBUG-retro-native] Temporary hosted fixture-stage evidence; no environment values.
-const trace = stage => fs.appendFileSync(path.join(dir, "node-trace.log"), new Date().toISOString() + "|" + process.pid + "|node|" + stage + "\\n");
-trace("program-start");
 const b = JSON.parse(fs.readFileSync(path.join(dir, "behaviour.json"), "utf8"));
 const args = process.argv.slice(2);
 const list = (root, prefix = "") => {
@@ -61,10 +58,8 @@ let listing = [];
 let writable = false;
 let filesWritable = false;
 if (args[0] === "scan") {
-  trace("scan-start");
   const folder = path.resolve(process.cwd(), args[1]);
   listing = list(folder);
-  trace("scan-listed");
   try {
     fs.writeFileSync(path.join(folder, "probe-write"), "x");
     writable = true;
@@ -78,18 +73,13 @@ if (args[0] === "scan") {
     try { fs.writeFileSync(target, original); filesWritable = true; }
     catch (error) { if (!["EACCES", "EROFS", "EPERM"].includes(error.code)) throw error; }
   }
-  trace("scan-write-checks-ended");
 }
-trace("before-call-record");
 fs.appendFileSync(
   path.join(dir, "calls.jsonl"),
   JSON.stringify({ args, cwd: process.cwd(), env: process.env, listing, writable, filesWritable }) + "\\n",
 );
-trace("call-recorded");
 if (args[0] === "--version") {
-  trace("before-version-output");
   process.stdout.write(b.versionText + "\\n");
-  trace("before-version-exit");
   process.exit(0);
 }
 if (b.hang) {
@@ -99,14 +89,12 @@ if (b.hang) {
   fs.writeFileSync(path.join(dir, "pids.json"), JSON.stringify({ self: process.pid, child: child.pid }));
   setInterval(() => {}, 1000);
 } else {
-  trace("before-report-output");
   const out = args.includes(b.outputFlag) ? args[args.indexOf(b.outputFlag) + 1] : undefined;
   if (b.report !== null) {
     if (out === undefined) process.stdout.write(JSON.stringify(b.report));
     else fs.writeFileSync(out, JSON.stringify(b.report));
   }
   if (out !== undefined) process.stdout.write("Report saved to: " + out + "\\n");
-  trace("before-scan-exit");
   process.exit(b.exit ?? 0);
 }
 `;
