@@ -8,7 +8,7 @@ import unittest
 import zipfile
 
 VERIFIER = Path(__file__).resolve().parents[2] / "tools/analyzers/skillspector/maintenance/verify.py"
-VERSION = "2.13.3+fixture"
+VERSION = "2.13.4+fixture"
 
 
 class InstalledPayloadTest(unittest.TestCase):
@@ -22,7 +22,7 @@ class InstalledPayloadTest(unittest.TestCase):
                 payload = {
                     "skillspector/__init__.py": b"",
                     "skillspector/nodes/analyzers/mcp_tool_poisoning.py": b"raise AssertionError('must never import')\n",
-                    "skillspector-2.13.3+fixture.dist-info/METADATA": b"Metadata-Version: 2.1\nName: skillspector\nVersion: 2.13.3+fixture\n",
+                    "skillspector-2.13.4+fixture.dist-info/METADATA": b"Metadata-Version: 2.1\nName: skillspector\nVersion: 2.13.4+fixture\n",
                 }
                 with zipfile.ZipFile(wheel, "w") as archive:
                     for path, content in payload.items():
@@ -56,6 +56,36 @@ class InstalledPayloadTest(unittest.TestCase):
                 else:
                     self.assertNotEqual(result.returncode, 0, f"Accepted {extra}")
                     self.assertIn("Installed maintenance", result.stderr)
+
+    def test_changed_payload_version_and_digest_are_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installed = root / "installed"
+            package = installed / "skillspector"
+            package.mkdir(parents=True)
+            source = package / "__init__.py"
+            source.write_bytes(b"")
+            metadata = installed / "skillspector-2.13.4+fixture.dist-info/METADATA"
+            metadata.parent.mkdir()
+            metadata.write_text("Metadata-Version: 2.1\nName: skillspector\nVersion: 2.13.4+fixture\n")
+            wheel = root / "fixture.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                for path in (source, metadata):
+                    archive.write(path, path.relative_to(installed).as_posix())
+            command = [sys.executable, "-I", "-c", "import runpy,sys; sys.path.insert(0,sys.argv[1]); sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name='__main__')",
+                       str(installed), str(VERIFIER), str(wheel)]
+            digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            source.write_bytes(b"changed payload")
+            changed = subprocess.run([*command, digest, VERSION], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(changed.returncode, 0)
+            self.assertIn("Installed maintenance payload differs", changed.stderr)
+            source.write_bytes(b"")
+            wrong_version = subprocess.run([*command, digest, "2.13.4"], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(wrong_version.returncode, 0)
+            self.assertIn("Installed maintenance version mismatch", wrong_version.stderr)
+            wrong_digest = subprocess.run([*command, "0" * 64, VERSION], capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(wrong_digest.returncode, 0)
+            self.assertIn("Maintenance wheel digest mismatch", wrong_digest.stderr)
 
 
 if __name__ == "__main__":

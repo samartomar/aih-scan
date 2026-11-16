@@ -204,11 +204,44 @@ describe("prepared manifest and exact inventory", () => {
         "TP4 capacity",
       );
     expect(() => validate({ ...valid, version: "2.13.3" })).toThrow("identity");
+    expect(() =>
+      validate({
+        ...valid,
+        version: "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855",
+      }),
+    ).toThrow("identity");
+    expect(() =>
+      validate({
+        ...valid,
+        version: "2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159",
+        wheelSha256: "f40324a28badbfd01c46fe2e77e9d2a0be2df874317d1ca84710b1ccb4e8aab8",
+      }),
+    ).toThrow("identity");
     expect(() => validate({ ...valid, wheelSha256: "0".repeat(64) })).toThrow("identity");
     expect(
       validateManifest(Buffer.from(JSON.stringify(setup.manifest)), setup.manifestSha256)
         .assessment,
     ).not.toHaveProperty("skillspector");
+
+    const ss = fakeAnalyzer(setup.folder, "skillspector", {
+      versionText: `SkillSpector v${artifact.version}`,
+      outputFlag: "--output",
+      report: null,
+    });
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+    vi.stubEnv("DEEPSEEK_API", "fixture-only-not-a-real-key");
+    for (const invalid of [
+      { ...valid, tp4: { ...valid.tp4, maxFiles: 0 } },
+      { ...valid, wheelSha256: "0".repeat(64) },
+    ]) {
+      const bytes = Buffer.from(
+        JSON.stringify({ ...setup.manifest, assessment: { ...assessment, skillspector: invalid } }),
+      );
+      writeFileSync(setup.manifestPath, bytes);
+      await expect(scanPrepared({ ...setup, manifestSha256: hash(bytes) })).rejects.toThrow();
+      expect(ss.calls()).toEqual([]);
+      expect(existsSync(setup.out)).toBe(false);
+    }
   });
 
   it("durably records unsigned host refusal diagnostics when a child input disappears", async () => {
@@ -437,7 +470,7 @@ describe.runIf(process.platform !== "win32")(
   () => {
     function analyzer(folder: string, complete = true) {
       return fakeAnalyzer(folder, "skillspector", {
-        versionText: "SkillSpector v2.13.3",
+        versionText: "SkillSpector v2.13.4",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           llm: complete,
@@ -546,7 +579,7 @@ describe.runIf(process.platform !== "win32")(
       async (secret, effectiveSecret) => {
         const setup = await prepared({ item: skill });
         const ss = fakeAnalyzer(setup.folder, "skillspector", {
-          versionText: "SkillSpector v2.13.3",
+          versionText: "SkillSpector v2.13.4",
           outputFlag: "--output",
           report: skillSpectorReport([], {
             llm: false,
@@ -913,6 +946,64 @@ describe.runIf(process.platform !== "win32")(
       ).rejects.toThrow("complete AI");
       expect((await scanPrepared(setup)).completed).toBe(1);
     }, 120000);
+    it.each([
+      "limitations",
+      "partially_inspected_files",
+      "entirely_uninspected_files",
+    ])("refuses %s-only partial AI reports as publishing evidence", async (field) => {
+      const setup = await prepared({ item: skill });
+      const completeness =
+        field === "limitations"
+          ? { limitations: ["Analyzer semantic inspection did not finish."] }
+          : {
+              total_components: 1,
+              scanned_components: 0,
+              fully_inspected_files: 0,
+              partially_inspected_files: field === "partially_inspected_files" ? 1 : 0,
+              entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
+            };
+      const ss = fakeAnalyzer(setup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.4",
+        outputFlag: "--output",
+        report: skillSpectorReport([], {
+          llm: true,
+          status: "partial",
+          analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
+          provenance: {
+            provider: { effective_adapter: "openai_compatible" },
+            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "deepseek-flash" }],
+          },
+          completeness,
+        }),
+      });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
+      const result = await scanPrepared(setup);
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const item = setup.manifest.items[0];
+      if (item === undefined) throw new Error("Fixture item");
+      const record = receipt.results[item.scanKey];
+      expect(record.status).toBe("incomplete");
+      expect(
+        (
+          await verifyResult(
+            result.root,
+            record,
+            setup.manifest.items,
+            setup.manifest,
+            setup.content,
+            runtime,
+          )
+        ).eligible,
+      ).toBe(false);
+      await expect(
+        exportCandidate({
+          ...setup,
+          receiptPath: result.receiptPath,
+          out: join(setup.folder, "refused.tar"),
+        }),
+      ).rejects.toThrow("complete AI");
+    }, 120000);
   },
 );
 
@@ -1048,7 +1139,7 @@ describe("prepared transport and eligibility", () => {
         { tool: "aih-trust-lint", result: "pass" },
         {
           tool: "skillspector",
-          version: "2.13.3",
+          version: "2.13.4",
           result: "pass",
           mode: "ai",
           ai: { via: "provider", provider: "openai_compatible", model: "deepseek-flash" },
@@ -1103,8 +1194,8 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
             llmConcurrency: 24,
             skillspector: {
               version:
-                "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855",
-              wheelSha256: "18a124e7bd0d368ddf87926d00b43692f73a4b05cee450531d6a93ad1163b751",
+                "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa",
+              wheelSha256: "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
               tp4: { maxFiles: 256, maxFindings: 256, maxBatches: 256 },
             },
           },
@@ -1119,7 +1210,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
       expect(summary.files).toHaveLength(130);
       expect(
         summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector").version,
-      ).toBe("2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855");
+      ).toBe("2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa");
       const sarif = record.sarif
         .map((entry: { path: string }) => readFileSync(join(result.root, entry.path), "utf8"))
         .join("\n");
@@ -1130,6 +1221,34 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
         completed: 0,
       });
       expect(service.requests).toHaveLength(requests);
+
+      const changedManifest = JSON.parse(bytes.toString());
+      changedManifest.assessment.skillspector.tp4.maxFiles = 512;
+      const changedBytes = Buffer.from(JSON.stringify(changedManifest));
+      writeFileSync(setup.manifestPath, changedBytes);
+      const changed = await scanPrepared({ ...setup, manifestSha256: hash(changedBytes) });
+      expect(changed).toMatchObject({ reused: 0, completed: 1 });
+      expect(changed.root).not.toBe(result.root);
+      expect(service.requests.length).toBeGreaterThan(requests);
+      await expect(
+        verifyResult(
+          result.root,
+          record,
+          setup.manifest.items,
+          JSON.parse(bytes.toString()),
+          setup.content,
+          runtime,
+        ),
+      ).resolves.toMatchObject({ eligible: true });
+
+      writeFileSync(setup.manifestPath, bytes);
+      const changedRequests = service.requests.length;
+      expect(await scanPrepared({ ...setup, manifestSha256: hash(bytes) })).toMatchObject({
+        root: result.root,
+        reused: 1,
+        completed: 0,
+      });
+      expect(service.requests).toHaveLength(changedRequests);
     } finally {
       await service.close();
     }

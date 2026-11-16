@@ -48,6 +48,42 @@ describe("readSummary", () => {
     });
   });
 
+  it("keeps completed historical maintenance evidence readable under its original producer", async () => {
+    const historicalVersion =
+      "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855";
+    const document = JSON.parse(new TextDecoder().decode(clean.summary));
+    delete document.reason;
+    document.coverage = "complete";
+    document.label = "SAFE";
+    document.tools = document.tools.map((tool: Record<string, unknown>) => {
+      if (tool.tool !== "skillspector") return tool;
+      const { reason: _reason, ...completed } = tool;
+      return {
+        ...completed,
+        version: historicalVersion,
+        mode: "ai",
+        result: "pass",
+        ai: { via: "provider", provider: "openai_compatible", model: "deepseek-flash" },
+      };
+    });
+    const read = readSummary(bytesOf(document));
+    expect(read.status).toBe("ok");
+    if (read.status !== "ok") throw new Error(read.status);
+    expect(read.summary.tools).toContainEqual(
+      expect.objectContaining({ tool: "skillspector", version: historicalVersion, result: "pass" }),
+    );
+    expect(await matchScan(read.summary, contentFiles(clean))).toMatchObject({
+      status: "ok",
+      matches: true,
+    });
+    const sarif = clean.sarif[0];
+    if (sarif === undefined) throw new Error("Historical fixture SARIF is missing");
+    expect(await readFindings(read.summary, sarif.bytes, read.summary.scanKey)).toEqual({
+      status: "ok",
+      findings: [],
+    });
+  });
+
   it.each([
     ["another summary version", { format: "aih-scan-summary/2" }, "unsupported-version"],
     ["another routing version", { routing: "aih-scan-routing/2" }, "unsupported-version"],

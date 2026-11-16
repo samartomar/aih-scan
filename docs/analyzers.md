@@ -16,7 +16,7 @@ find these files within an owning item or the source's remaining files.
 
 | Tool | Pinned release | Runs | Counts for coverage |
 |---|---|---|---|
-| SkillSpector | 2.13.3 (NVIDIA/SkillSpector tag `v2.13.3`, commit `38a1dfe93325d2f8bfcd4f8d0241eed706334915`) | by default | yes |
+| SkillSpector | 2.13.4 (NVIDIA/SkillSpector tag `v2.13.4`, commit `54824463814a0be01360792523ec7245a69190fc`) | by default | yes |
 | Cisco skill-scanner | 2.3.2 (PyPI `cisco-ai-skill-scanner==2.3.2`) | only with `--tools …,cisco` | never |
 
 ## Installing
@@ -31,7 +31,7 @@ UV_PROJECT_ENVIRONMENT=$HOME/.aih-scan/cisco \
   uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project
 ```
 
-Without the repository, `uv tool install "skillspector @ git+https://github.com/NVIDIA/SkillSpector@38a1dfe93325d2f8bfcd4f8d0241eed706334915"`
+Without the repository, `uv tool install "skillspector @ git+https://github.com/NVIDIA/SkillSpector@54824463814a0be01360792523ec7245a69190fc"`
 and `uv tool install cisco-ai-skill-scanner==2.3.2` put the commands in `~/.local/bin`
 (unlocked transitive dependencies).
 
@@ -101,24 +101,37 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   upstream-disabled provider such as `codex_cli`), the result says "AI not available here"
   with the reason, SkillSpector runs static only, nothing is sent to an AI, and coverage is
   measured exactly as for a static scan. When AI is set up but its pass does not complete,
-  the item is `partial` (reason `failed`). A usable partial report keeps its static
-  findings. If the whole SkillSpector process or report fails, Scan reports the tool
-  `not-run` / `failed` and does not retain that failed report's findings; findings from
-  other completed tools remain.
-  SkillSpector 2.13.3 runs semantic security batches asynchronously through its shared
+  the item is `partial` (reason `failed`). A usable partial report keeps its static and
+  usable recovered AI findings. If the whole SkillSpector process or report fails, Scan
+  reports the tool `not-run` / `failed` and does not retain that failed report's findings;
+  findings from other completed tools remain. Available fatal report reason codes stay in
+  the diagnostic notes.
+  SkillSpector 2.13.4 runs semantic security batches asynchronously through its shared
   concurrency control (`SKILLSPECTOR_MAX_LLM_CONCURRENCY`), preserving batch result
-  order. Refused, unfinished or invalid AI responses remain incomplete inspection.
+  order. A lossless formatting repair can complete; a field-recovered assessment remains
+  `partial` even when upstream accepts its formatting-recovery policy. Refusals, unfinished
+  or unusable AI responses remain incomplete inspection and distinct from security findings.
   Scan's ten-minute per-tool deadline remains the outer bound, even though this
   upstream release defaults to an eighteen-minute workflow deadline. Large inputs can
   still time out; parallel execution does not guarantee completion within Scan's limit.
-- **Results.** SkillSpector's rule id, severity and confidence are kept; each finding is
-  placed at its primary location's file and line, which must be a file of the item routed
-  to SkillSpector. Codes come from `aih-codes/1` (`codes.tools.skillspector`), SkillSpector's
-  own risk score is ignored and `aih-risk/1` scores the findings. Exit 1 (SkillSpector's own
-  risk threshold) is a finished run; exit 2, a missing report, a failed analysis or another
-  version are `not-run`, reason `failed`. When SkillSpector reports that it could not fully
-  inspect a routed file, the result carries an unsigned note; gaps on files no tool is
-  routed (binaries, dependency manifests) are not reported as gaps.
+- **Results.** SkillSpector's rule id, severity and confidence are kept; each ordinary finding
+  is placed at its primary location's file and line, which must be a file of the item routed
+  to SkillSpector. For a supported archive member, the finding names the exact outer archive
+  with `part: none` and that file's existing SHA-256; the member path and line stay in the
+  finding text. Codes come from `aih-codes/1` (`codes.tools.skillspector`), SkillSpector's own
+  risk score is ignored and `aih-risk/1` scores the findings. Exit 1 (SkillSpector's own risk
+  threshold) is a finished run; exit 2, a missing report or a failed analysis is `not-run`,
+  reason `failed`; another executable or report version is refused as described above. When
+  SkillSpector could not fully inspect a routed file or a supported archive member, the item
+  is `partial` (reason `failed`) with an unsigned note. Scan also reconciles the report's
+  recognized `status` / `is_complete` state, limitations, recovery warnings and
+  partially/entirely-uninspected file aggregates; omission-only or unexplained partial states
+  cannot become complete, and missing or inconsistent completeness metadata is refused. Gaps
+  on files no tool is routed (binaries, dependency manifests) and the disabled upstream OSV
+  lookup are not reported as gaps. Their derived limitations and aggregate omissions are
+  excluded only when positively matched to those components; unrelated or excess omissions
+  remain partial. Only a positively identified reference-only `complete_with_caveats` report
+  stays `complete` and carries its caveat note instead.
 
 ### DeepSeek Flash on Windows
 
@@ -250,11 +263,14 @@ exercised on Linux x64.
 
 ## Optional TP4 maintenance build
 
-Upstream 2.13.3 retains fixed 128-source/64-finding TP4 limits. Scan also supports the
-separately identified reproducible maintenance artifact in
-`tools/analyzers/skillspector/maintenance/README.md`. It preserves those defaults and
-makes capacities explicit without editing an installed analyzer. Prepared profiles bind
-the exact maintenance version/wheel and requested capacities; report and probe identities
-must agree. Existing upstream installations remain supported. Building/installing the
+Upstream 2.13.4 retains fixed 128-source/64-finding TP4 limits. Scan also supports a
+separately identified reproducible 2.13.4-based maintenance artifact, documented with its
+patch review in `tools/analyzers/skillspector/maintenance/README.md`. It preserves upstream
+defaults and makes file/finding capacities explicit without editing an installed analyzer.
+Prepared profiles bind the exact maintenance version/wheel and requested capacities;
+executable, report and resolved-capacity identities must agree before observations are
+accepted. New scans and prepared profiles do not admit the previous 2.13.3 maintenance
+wheel. Completed historical summaries and findings remain readable under their original
+producer identities through the existing public readers. Building/installing the
 maintenance artifact and increasing capacities are explicit operator choices; more
 source/batch work can cost more and does not guarantee complete inspection.

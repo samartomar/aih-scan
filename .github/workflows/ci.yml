@@ -64,9 +64,14 @@ jobs:
             uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project --python 3.13
           "$runtimes/skillspector/bin/skillspector" --version
           "$runtimes/cisco-skill-scanner/bin/skill-scanner" --version
+          source="$runtimes/SkillSpector-54824463814a0be01360792523ec7245a69190fc.tar.gz"
+          curl --fail --silent --show-error --location --output "$source" \
+            "https://codeload.github.com/NVIDIA/SkillSpector/tar.gz/54824463814a0be01360792523ec7245a69190fc"
+          echo "562349db9ef4084cfe2f18707de3d942c5b94e221162c314c795e4501fabc07d  $source" | sha256sum --check --strict
           {
             echo "AIH_SCAN_TEST_SKILLSPECTOR=$runtimes/skillspector/bin/skillspector"
             echo "AIH_SCAN_TEST_SKILL_SCANNER=$runtimes/cisco-skill-scanner/bin/skill-scanner"
+            echo "AIH_SCAN_TEST_SKILLSPECTOR_SOURCE=$source"
             echo "AIH_SCAN_REQUIRE_REAL_ANALYZERS=1"
           } >> "$GITHUB_ENV"
       - run: npm run typecheck
@@ -79,7 +84,7 @@ jobs:
         run: node tools/ci-route.mjs --run-tests ci-plan.json
       - name: Prove the real analyzers from source and from the installed package
         if: steps.route.outputs.analyzers == 'true'
-        run: npx vitest run tests/host-v1/real-analyzers.test.ts tests/package-install.test.ts
+        run: npx vitest run tests/host-v1/analyzer-pins.test.ts tests/host-v1/real-analyzers.test.ts tests/package-install.test.ts
 
   actionlint:
     runs-on: ubuntu-latest

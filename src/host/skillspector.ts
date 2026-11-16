@@ -17,11 +17,11 @@ import {
 import { analyzerFinding, notRun, objectOf } from "./analyzer-report.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
-/** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.3). */
-export const SKILLSPECTOR_VERSION = "2.13.3";
-/** Exact source/archive/patch/runtime-lock/build-lock maintenance identity. */
+/** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.4). */
+export const SKILLSPECTOR_VERSION = "2.13.4";
+/** Exact source/archive/patch/runtime-lock/build-lock/builder-recipe maintenance identity. */
 export const SKILLSPECTOR_MAINTENANCE_VERSION =
-  "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855";
+  "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa";
 /** Selects an exact SkillSpector executable, or `none` to disable it. */
 export const SKILLSPECTOR_VARIABLE = "AIH_SCAN_SKILLSPECTOR";
 
@@ -44,7 +44,7 @@ type Requirement = Readonly<{
   cli?: string;
 }>;
 
-/** The SkillSpector 2.13.3 providers Scan passes through, and what each needs to be set up. */
+/** The SkillSpector 2.13.4 providers Scan passes through, and what each needs to be set up. */
 const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
   openai: { via: "provider", variables: [["OPENAI_API_KEY"]] },
   anthropic: { via: "provider", variables: [["ANTHROPIC_API_KEY"]] },
@@ -222,23 +222,69 @@ const OK_ANALYZER = new Set(["completed", "not_applicable", "disabled"]);
 const OSV_ANALYZER = "static_patterns_supply_chain";
 const OSV_EXCEPTION = "static_patterns_supply_chain_dependencies_runtime_limit";
 const ANALYZED_PARTS = new Set(["text", "code", "config"]);
+const COMPLETENESS_AGGREGATES = [
+  "total_components",
+  "scanned_components",
+  "fully_inspected_files",
+  "partially_inspected_files",
+  "entirely_uninspected_files",
+] as const;
+
+function recognizedCompleteness(completeness: Record<string, unknown>): boolean {
+  const status = completeness.status;
+  if (status !== "complete" && status !== "complete_with_caveats" && status !== "partial")
+    return false;
+  if (completeness.is_complete !== (status !== "partial")) return false;
+  if (completeness.execution_successful !== true) return false;
+  const counts = COMPLETENESS_AGGREGATES.map((name) => completeness[name]);
+  if (counts.some((value) => !Number.isSafeInteger(value) || (value as number) < 0)) return false;
+  const [total, scanned, fully, partially, entirely] = counts as [
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  if (total !== fully + partially + entirely || scanned !== fully) return false;
+  if (
+    !Array.isArray(completeness.limitations) ||
+    completeness.limitations.some((value) => typeof value !== "string" || value.length === 0)
+  )
+    return false;
+  for (const name of ["ledger_exceptions", "analyzer_statuses"]) {
+    const value = completeness[name];
+    if (!Array.isArray(value) || value.some((entry) => objectOf(entry) === undefined)) return false;
+  }
+  if (
+    completeness.warnings !== undefined &&
+    (!Array.isArray(completeness.warnings) ||
+      completeness.warnings.some((entry) => objectOf(entry) === undefined))
+  )
+    return false;
+  return true;
+}
 
 /**
  * What SkillSpector itself reported it did not fully inspect, as one unsigned note, and whether
  * its AI pass (the analyzers its LLM provenance names) failed to complete. Gaps on files Scan does
  * not route to SkillSpector (binaries, dependency manifests) and the disabled OSV lookup are not
- * gaps. A static gap is a note only: SkillSpector ran, so coverage follows `aih-risk/1`. In AI
- * mode an incomplete AI pass is a failure of required analysis.
+ * gaps. Their derived limitations and aggregates are excluded only up to the positively excluded
+ * component count and only when no other gap exists. Reference-only caveats do not make inspection
+ * incomplete; every other relevant gap does.
  */
 function completenessOf(
   completeness: Record<string, unknown>,
   metadata: Record<string, unknown>,
   item: AssessItem,
   mode: ScanMode,
-): Readonly<{ note?: string; aiFailure?: string }> {
+): Readonly<{ note?: string; incomplete: boolean; aiFailure?: string }> {
   const list = (value: unknown) => (Array.isArray(value) ? value : []);
   const ignorable = new Set<string>([OSV_ANALYZER]);
+  const caveats = new Set<string>();
   const gaps = new Set<string>();
+  const excludedLimitations = new Map<string, number>();
+  const excludedPaths = new Set<string>();
+  let positiveExclusion = false;
   for (const raw of list(completeness.ledger_exceptions)) {
     const exception = objectOf(raw);
     if (exception === undefined) continue;
@@ -250,15 +296,32 @@ function completenessOf(
       analyzers.every((name) => name === OSV_EXCEPTION);
     const path = typeof exception.path === "string" ? exception.path : undefined;
     const part = path === undefined ? undefined : item.routed.get(path)?.part;
+    const outer = path?.split("!/")[0];
+    const nested =
+      path !== undefined &&
+      outer !== undefined &&
+      (path.includes("!/") || exception.phase === "nested_artifact_inspection") &&
+      item.routed.has(outer);
     const unrouted =
+      !nested &&
       exception.fatal !== true &&
       path !== undefined &&
       (part === undefined || part === null || !ANALYZED_PARTS.has(part));
     if (osvOnly || unrouted) {
+      positiveExclusion = true;
+      if (path !== undefined) excludedPaths.add(path);
       for (const name of analyzers) ignorable.add(name);
       continue;
     }
-    gaps.add(`${String(exception.reason_code)}${path === undefined ? "" : ` ${path}`}`);
+    const detail = `${String(exception.reason_code)}${path === undefined ? "" : ` ${path}`}`;
+    if (exception.reason_code === "reference_missing") caveats.add(detail);
+    else gaps.add(detail);
+  }
+  for (const raw of list(completeness.warnings)) {
+    const warning = objectOf(raw);
+    if (warning === undefined) continue;
+    const path = typeof warning.path === "string" ? ` ${warning.path}` : "";
+    gaps.add(`${String(warning.reason_code)}${path}`);
   }
   const aiAnalyzers = new Set(
     list(objectOf(metadata.llm_provenance)?.analyzers).map((entry) =>
@@ -274,14 +337,59 @@ function completenessOf(
     if (mode === "ai" && aiAnalyzers.has(id) && state !== "completed" && state !== "not_applicable")
       aiGaps.push(`${id} ${state}`);
     if (OK_ANALYZER.has(state)) continue;
-    if (state !== "failed" && ignorable.has(id)) continue;
+    const limitation =
+      typeof status.message === "string" && status.message.length > 0
+        ? status.message
+        : `Analyzer ${id} status: ${state}.`;
+    if (state !== "failed" && ignorable.has(id)) {
+      excludedLimitations.set(limitation, (excludedLimitations.get(limitation) ?? 0) + 1);
+      continue;
+    }
     gaps.add(`${id} ${state}`);
   }
+  if (mode === "ai" && metadata.llm_assessment_complete === false && aiGaps.length === 0)
+    aiGaps.push("reported assessment incomplete");
+  for (const limitation of list(completeness.limitations)) {
+    if (typeof limitation !== "string") continue;
+    const excluded = excludedLimitations.get(limitation) ?? 0;
+    if (excluded > 1) excludedLimitations.set(limitation, excluded - 1);
+    else excludedLimitations.delete(limitation);
+    if (excluded === 0) gaps.add(limitation);
+  }
+  const omitted =
+    (completeness.partially_inspected_files as number) +
+    (completeness.entirely_uninspected_files as number);
+  const aggregatesExplained = positiveExclusion && gaps.size === 0 && omitted <= excludedPaths.size;
+  if (!aggregatesExplained)
+    for (const name of ["partially_inspected_files", "entirely_uninspected_files"]) {
+      const count = completeness[name];
+      if (typeof count === "number" && count > 0) gaps.add(`${name}: ${count}`);
+    }
   const shown = (values: Iterable<string>) => [...new Set(values)].sort().slice(0, 8).join(", ");
+  const caveatOnly =
+    gaps.size === 0 &&
+    caveats.size > 0 &&
+    completeness.status === "complete_with_caveats" &&
+    completeness.is_complete === true;
+  const unexplained =
+    gaps.size === 0 &&
+    caveats.size === 0 &&
+    ((completeness.status === "partial" && !positiveExclusion) ||
+      (completeness.status === "complete_with_caveats" && !caveatOnly));
+  if (unexplained)
+    gaps.add(
+      `unexplained completeness state: ${String(completeness.status)}/is_complete=${String(completeness.is_complete)}`,
+    );
+  const incomplete = gaps.size > 0 || (caveats.size > 0 && !caveatOnly);
   return Object.freeze({
-    ...(gaps.size === 0
-      ? {}
-      : { note: `SkillSpector reported partial inspection: ${shown(gaps)}` }),
+    incomplete,
+    ...(caveatOnly
+      ? { note: `SkillSpector reported inspection caveats: ${shown(caveats)}` }
+      : incomplete
+        ? {
+            note: `SkillSpector reported partial inspection: ${shown([...gaps, ...caveats])}`,
+          }
+        : {}),
     ...(aiGaps.length === 0
       ? {}
       : { aiFailure: `SkillSpector's AI pass did not complete: ${shown(aiGaps)}` }),
@@ -313,11 +421,12 @@ function aiProvenance(
 }
 
 /**
- * Turns one SkillSpector 2.13.3 JSON report into Scan's tool run. Findings keep SkillSpector's
- * rule id, severity and confidence; each is placed at its primary location's file and line,
- * which must be an item file routed to SkillSpector (Text, Code or Config). SC4 (known
- * vulnerable dependency) is dropped: advisories are a separate call. SkillSpector's own risk
- * score is ignored; `aih-risk/1` scores the findings.
+ * Turns one SkillSpector 2.13.4 JSON report into Scan's tool run. Findings keep SkillSpector's
+ * rule id, severity and confidence; ordinary findings are placed at their primary location's
+ * file and line, which must be an item file routed to SkillSpector (Text, Code or Config).
+ * Archive findings use the exact outer file with `part: none` and retain member details in text.
+ * SC4 (known vulnerable dependency) is dropped: advisories are a separate call. SkillSpector's
+ * own risk score is ignored; `aih-risk/1` scores the findings.
  */
 export function skillSpectorRun(
   report: unknown,
@@ -350,10 +459,24 @@ export function skillSpectorRun(
       "failed",
       mode,
       String(metadata.skillspector_version),
-      "SkillSpector reported a failed analysis",
+      `SkillSpector reported a failed analysis${failureDiagnostic(document)}`,
+    );
+  if (!recognizedCompleteness(completeness))
+    return notRun(
+      "failed",
+      mode,
+      String(metadata.skillspector_version),
+      "SkillSpector reported unrecognized or inconsistent completeness metadata",
     );
   const findings: ToolFinding[] = [];
   const rules: Record<string, string> = {};
+  const archiveRoots = new Set<string>();
+  for (const raw of document.issues) {
+    const file = objectOf(objectOf(raw)?.location)?.file;
+    if (typeof file !== "string" || !file.includes("!/")) continue;
+    const outer = file.split("!/")[0];
+    if (outer !== undefined) archiveRoots.add(outer);
+  }
   for (const raw of document.issues) {
     const issue = objectOf(raw);
     if (issue === undefined || typeof issue.id !== "string" || issue.id === "SC4") continue;
@@ -368,7 +491,7 @@ export function skillSpectorRun(
         : typeof issue.category === "string"
           ? issue.category
           : issue.id;
-    const finding = analyzerFinding(item, {
+    const input = {
       ruleId: issue.id,
       message: description,
       file: location?.file,
@@ -380,7 +503,37 @@ export function skillSpectorRun(
         /^[0-9a-f]{16,128}$/u.test(issue.match_fingerprint)
           ? issue.match_fingerprint
           : undefined,
-    });
+    };
+    let finding = analyzerFinding(item, input);
+    const file =
+      typeof location?.file === "string"
+        ? location.file.startsWith("./")
+          ? location.file.slice(2)
+          : location.file
+        : undefined;
+    const outer = file?.split("!/")[0];
+    if (
+      finding === undefined &&
+      file !== undefined &&
+      outer !== undefined &&
+      (file.includes("!/") || archiveRoots.has(outer)) &&
+      item.routed.get(outer)?.part === null
+    ) {
+      const nested = file !== outer;
+      const memberLine =
+        typeof location?.start_line === "number" &&
+        Number.isSafeInteger(location.start_line) &&
+        location.start_line >= 1
+          ? location.start_line
+          : 1;
+      finding = analyzerFinding(item, {
+        ...input,
+        file: outer,
+        line: nested ? 1 : location?.start_line,
+        message: nested ? `${file}:${memberLine}: ${description}` : description,
+        allowUnrouted: true,
+      });
+    }
     if (finding === undefined) continue;
     findings.push(finding);
     rules[issue.id] ??= description;
@@ -388,12 +541,14 @@ export function skillSpectorRun(
   const suppressedCount =
     typeof document.suppressed_count === "number" ? document.suppressed_count : 0;
   const inspected = completenessOf(completeness, metadata, item, mode);
-  // An AI pass that did not run or did not complete keeps the static findings and counts; the
-  // missing AI analysis is a failed part (the item is partial with reason `failed`).
+  // A usable report keeps its findings and counts; an incomplete AI pass or another relevant
+  // inspection gap is a failed part (the item is partial with reason `failed`).
   const aiFailure =
     mode === "ai" && (metadata.llm_requested !== true || metadata.llm_available !== true)
       ? "SkillSpector's AI pass did not run"
       : inspected.aiFailure;
+  const failedPart =
+    aiFailure ?? (inspected.incomplete ? "SkillSpector's inspection is incomplete" : undefined);
   return Object.freeze({
     status: "ran" as const,
     version: String(metadata.skillspector_version),
@@ -404,7 +559,7 @@ export function skillSpectorRun(
     ...(Number.isSafeInteger(suppressedCount) && suppressedCount > 0
       ? { suppressed: Object.freeze([{ count: suppressedCount, reason: "SkillSpector baseline" }]) }
       : {}),
-    ...(aiFailure === undefined ? {} : { failedPart: aiFailure }),
+    ...(failedPart === undefined ? {} : { failedPart }),
     ...(inspected.note === undefined ? {} : { notes: Object.freeze([inspected.note]) }),
   });
 }
@@ -417,7 +572,7 @@ export interface SkillSpectorOptions {
 }
 
 /**
- * The SkillSpector adapter: runs the installed SkillSpector 2.13.3 CLI natively (Windows
+ * The SkillSpector adapter: runs the installed SkillSpector 2.13.4 CLI natively (Windows
  * included) over Scan's read-only working copy, under the tool time limit and the caller's
  * cancellation, with its whole process tree contained and removed.
  */
@@ -459,6 +614,21 @@ export function skillSpectorAdapter(options: SkillSpectorOptions = {}): ToolAdap
       }
     },
   });
+}
+
+function failureDiagnostic(report: unknown): string {
+  const completeness = objectOf(objectOf(report)?.analysis_completeness);
+  if (completeness === undefined || !Array.isArray(completeness.ledger_exceptions)) return "";
+  const reasons = new Set<string>();
+  for (const raw of completeness.ledger_exceptions) {
+    const exception = objectOf(raw);
+    if (exception?.fatal !== true) continue;
+    const reason =
+      typeof exception.reason_code === "string" ? exception.reason_code : "unknown_failure";
+    const path = typeof exception.path === "string" ? ` ${exception.path}` : "";
+    reasons.add(`${reason}${path}`);
+  }
+  return reasons.size === 0 ? "" : `; report: ${[...reasons].sort().slice(0, 8).join(", ")}`;
 }
 
 async function runInstalled(
@@ -514,7 +684,7 @@ async function runInstalled(
   if (result.termination !== undefined)
     return notRun("failed", mode, version, `SkillSpector ${result.termination}`);
   // Exit 1 means SkillSpector's own risk threshold was crossed: a finished run.
-  if (result.code !== 0 && result.code !== 1)
+  if (![0, 1, 2].includes(result.code ?? -1))
     return notRun("failed", mode, version, `SkillSpector exited ${result.code}`);
   const document =
     settings.platform === "win32"
@@ -523,6 +693,8 @@ async function runInstalled(
   const metadata = objectOf(objectOf(document)?.metadata);
   if (metadata?.skillspector_version !== version)
     return notRun("failed", mode, version, "SkillSpector probe/report identity mismatch");
+  if (result.code === 2)
+    return notRun("failed", mode, version, `SkillSpector exited 2${failureDiagnostic(document)}`);
   if (version === SKILLSPECTOR_MAINTENANCE_VERSION) {
     const actual = objectOf(metadata?.aih_scan_tp4_limits);
     const expected = {
