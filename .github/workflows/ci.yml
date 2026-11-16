@@ -104,6 +104,26 @@ jobs:
           node-version: "24.15.0"
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Diagnose hosted Windows process startup and isolated seams
+        run: |
+          @'
+          import { spawnSync } from "node:child_process";
+          import { availableParallelism, totalmem } from "node:os";
+          import { join } from "node:path";
+          console.log(JSON.stringify({ node: process.version, parallelism: availableParallelism(), memoryGiB: totalmem() / 1024 ** 3 }));
+          const powershell = join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
+          for (const [probe, command, args] of [
+            ["node", process.execPath, ["-e", "process.exit(0)"]],
+            ["powershell", powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 0"]],
+          ]) for (let attempt = 1; attempt <= 3; attempt++) {
+            const started = performance.now();
+            const result = spawnSync(command, args, { windowsHide: true, timeout: 10000, stdio: "pipe" });
+            console.log(JSON.stringify({ probe, attempt, durationMs: performance.now() - started, status: result.status, error: result.error?.code }));
+            if (result.status !== 0) process.exitCode = 1;
+          }
+          '@ | node --input-type=module
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx vitest run tests/host-v1/analyzers.test.ts tests/release-readiness.test.ts --testNamePattern "ignores ambient TP4|accepts only a stable unambiguous npm CLI version" --no-file-parallelism
       - run: npm run verify
 
   actionlint:
