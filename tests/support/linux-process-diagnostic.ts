@@ -24,10 +24,6 @@ function state(pid: number) {
   }
 }
 
-export function linuxPidEvidence(pids: readonly number[]) {
-  return process.platform === "linux" ? pids.map(state) : { platform: process.platform };
-}
-
 /** Observes only the detached Git helper spawned in one disposable fixture's exact cwd. */
 export function observeLinuxGitGroups(cwd: string) {
   const groups = new Set<number>();

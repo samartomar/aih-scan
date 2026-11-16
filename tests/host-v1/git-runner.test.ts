@@ -79,13 +79,16 @@ describe.runIf(hasGit)("runPinnedGit (real Git)", () => {
     await runPinnedGit(["init", "--quiet", `--template=${hooks}`], work, {}, hooks);
     const observed = observeLinuxGitGroups(work);
     try {
-      await expect(
-        runPinnedGit(["config", "--list"], work, {}, hooks, 4).catch((error) => {
-          if (error instanceof GitContainmentError)
-            process.stdout.write(`[DEBUG-retro-linux] ${JSON.stringify(observed.snapshot())}\n`);
-          throw error;
-        }),
-      ).rejects.toThrow(/gitStdoutBytes exceeds limit 4|maxStdoutBytes/);
+      // [DEBUG-retro-linux] Every bounded reproduction must pass; never retry a failure.
+      for (let attempt = 0; attempt < (process.platform === "linux" ? 20 : 1); attempt += 1) {
+        await expect(
+          runPinnedGit(["config", "--list"], work, {}, hooks, 4).catch((error) => {
+            if (error instanceof GitContainmentError)
+              process.stdout.write(`[DEBUG-retro-linux] ${JSON.stringify(observed.snapshot())}\n`);
+            throw error;
+          }),
+        ).rejects.toThrow(/gitStdoutBytes exceeds limit 4|maxStdoutBytes/);
+      }
     } finally {
       observed.dispose();
     }
@@ -96,7 +99,7 @@ describe.runIf(hasGit)("runPinnedGit (real Git)", () => {
       runPinnedGit(["config", "--list"], work, { signal: AbortSignal.abort() }, hooks),
     ).rejects.toThrow("cancelled");
     expect(new GitContainmentError().code).toBe("git-containment-failed");
-  });
+  }, 30_000); // [DEBUG-retro-linux] Harness budget for the twenty diagnostic invocations only.
 });
 
 describe.runIf(hasGit && hasOpenssl)("runPinnedGit credentials (local HTTPS answerer)", () => {

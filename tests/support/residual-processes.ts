@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   windowsJobSupervisorExecutableV1,
   windowsSystemRootV1,
@@ -172,9 +174,15 @@ const WINDOWS_SWEEP_SCRIPT = [
 async function windowsProcesses(markers: readonly string[]): Promise<LiveProcessV1[]> {
   const systemRoot = windowsSystemRootV1();
   // [DEBUG-retro-cim] Temporary candidate proof, enabled only for the isolated CI control.
+  const mode = process.env.AIH_SCAN_DIAGNOSTIC_CIM_IMPORT;
+  const temporary =
+    mode === "utility-manifest-temp" ? mkdtempSync(join(tmpdir(), "aih-sweep-")) : undefined;
   const script =
-    process.env.AIH_SCAN_DIAGNOSTIC_CIM_IMPORT === "1"
-      ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))\n" +
+    mode === "utility-manifest" || mode === "utility-manifest-temp" || mode === "utility-binary"
+      ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))\n" +
+        (mode !== "utility-binary"
+          ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))\n"
+          : "Import-Module ([IO.Path]::Combine($env:SystemRoot, 'Microsoft.Net\\assembly\\GAC_MSIL\\Microsoft.Management.Infrastructure.CimCmdlets\\v4.0_1.0.0.0__31bf3856ad364e35\\Microsoft.Management.Infrastructure.CimCmdlets.dll'))\n") +
         WINDOWS_SWEEP_SCRIPT
       : WINDOWS_SWEEP_SCRIPT;
   const output = await collect(
@@ -193,8 +201,11 @@ async function windowsProcesses(markers: readonly string[]): Promise<LiveProcess
       windir: systemRoot,
       PATH: `${systemRoot}\\System32;${systemRoot}`,
       AIH_SCAN_SWEEP_MARKERS: Buffer.from(markers.join("\n"), "utf8").toString("base64"),
+      ...(temporary === undefined ? {} : { TEMP: temporary, TMP: temporary }),
     },
-  );
+  ).finally(() => {
+    if (temporary !== undefined) rmSync(temporary, { recursive: true, force: true });
+  });
   const found: LiveProcessV1[] = [];
   for (const line of output.split(/\r?\n/u)) {
     const tab = line.indexOf("\t");

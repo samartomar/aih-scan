@@ -106,9 +106,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Diagnose scrubbed CIM module loading and prove its negative control
         run: |
+          $env:AIH_SCAN_SWEEP_CANDIDATE_OUT = Join-Path $env:RUNNER_TEMP 'aih-sweep-candidate.txt'
           npx vitest run tests/support/windows-sweep-diagnostic.test.ts --no-file-parallelism
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:AIH_SCAN_DIAGNOSTIC_CIM_IMPORT = '1'
+          $env:AIH_SCAN_DIAGNOSTIC_CIM_IMPORT = (Get-Content -LiteralPath $env:AIH_SCAN_SWEEP_CANDIDATE_OUT -Raw).Trim()
           try {
             npx vitest run tests/cli/windows-job-supervisor.test.ts --testNamePattern "negative control" --no-file-parallelism
             $result = $LASTEXITCODE

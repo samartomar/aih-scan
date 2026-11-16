@@ -129,14 +129,24 @@ export function fakeAnalyzer(
   };
 }
 
-/** `true` while a process with this pid exists. */
+/** `true` while a process with this pid can still run. Linux zombies have already exited. */
 export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const close = stat.lastIndexOf(")");
+      if (close > 0 && /^\s+Z(?:\s|$)/u.test(stat.slice(close + 1))) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      // A state we cannot read is not evidence that the process has exited.
+    }
+  }
+  return true;
 }
 
 /** A SkillSpector 2.13.4 JSON report in the upstream shape (fields as the real CLI writes them). */

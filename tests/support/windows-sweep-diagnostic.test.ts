@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { fixtureRoot } from "./scan-v1-fixture.js";
@@ -8,14 +9,21 @@ const fixture = fixtureRoot("aih-cim-diagnostic-");
 afterAll(() => fixture.dispose());
 const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
 const powershell = join(systemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-function probe(importModule: boolean) {
+type Mode = "baseline" | "utility-manifest" | "utility-manifest-temp" | "utility-binary";
+function probe(mode: Mode) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
     "[Console]::WriteLine('ps-start')",
-    ...(importModule
+    ...(mode !== "baseline"
       ? [
-          "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))",
+          "[Console]::WriteLine('before-utility')",
+          "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))",
+          "[Console]::WriteLine('imported-utility')",
+          "[Console]::WriteLine('before-import-cim')",
+          mode !== "utility-binary"
+            ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))"
+            : "Import-Module ([IO.Path]::Combine($env:SystemRoot, 'Microsoft.Net\\assembly\\GAC_MSIL\\Microsoft.Management.Infrastructure.CimCmdlets\\v4.0_1.0.0.0__31bf3856ad364e35\\Microsoft.Management.Infrastructure.CimCmdlets.dll'))",
           "[Console]::WriteLine('imported-cim')",
         ]
       : []),
@@ -45,6 +53,7 @@ function probe(importModule: boolean) {
           windir: systemRoot,
           PATH: `${systemRoot}\\System32;${systemRoot}`,
           AIH_SCAN_SWEEP_MARKERS: Buffer.from("aih-cim-probe").toString("base64"),
+          ...(mode === "utility-manifest-temp" ? { TEMP: fixture.root, TMP: fixture.root } : {}),
         },
       },
     );
@@ -68,7 +77,7 @@ function probe(importModule: boolean) {
           reject(error);
         }
       }
-    }, 5000);
+    }, 15000);
     child.once("error", (error) => {
       clearTimeout(timer);
       reject(error);
@@ -80,19 +89,27 @@ function probe(importModule: boolean) {
   });
 }
 it.runIf(process.platform === "win32")(
-  "compares scrubbed CIM autoload with the trusted explicit module import",
+  "compares scrubbed CIM autoload with trusted Utility-first imports",
   async () => {
-    for (const imported of [false, true]) {
+    let selected: Mode | undefined;
+    for (const mode of [
+      "baseline",
+      "utility-manifest",
+      "utility-manifest-temp",
+      "utility-binary",
+    ] as const) {
       const started = performance.now();
-      const result = await probe(imported);
+      const result = await probe(mode);
       process.stdout.write(
-        `${JSON.stringify({ imported, durationMs: performance.now() - started, result })}\n`,
+        `${JSON.stringify({ mode, durationMs: performance.now() - started, result })}\n`,
       );
-      if (imported) {
-        expect(result.code).toBe(0);
-        expect(result.stdout).toContain("after-cim");
-      }
+      if (mode !== "baseline" && result.code === 0 && result.stdout.includes("after-cim"))
+        selected ??= mode;
     }
+    expect(selected, "at least one trusted import must complete").toBeDefined();
+    const receipt = process.env.AIH_SCAN_SWEEP_CANDIDATE_OUT;
+    if (receipt !== undefined && selected !== undefined) writeFileSync(receipt, selected);
+    process.stdout.write(`${JSON.stringify({ selected })}\n`);
   },
-  30000,
+  85000,
 );

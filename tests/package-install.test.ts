@@ -26,7 +26,6 @@ import {
 } from "./support/analyzer-cli-v1.js";
 import { compatibleAiServiceV1 } from "./support/compatible-ai-service-v1.js";
 import { gitRepository } from "./support/git-fixture-v1.js";
-import { linuxPidEvidence } from "./support/linux-process-diagnostic.js";
 import { readPackedPackage } from "./support/npm-pack-output.js";
 import { integrityOf, npmTarball, sha256Of } from "./support/npm-tarball-v1.js";
 import { ghsa, type OsvService, osvService } from "./support/osv-service-v1.js";
@@ -1050,13 +1049,8 @@ describe("the installed aih-scan CLI", () => {
       expect(run.code, run.stderr).toBe(130);
       const pids = hanging.pids();
       expect(pids).toBeDefined();
-      const liveness = { self: alive(pids!.self), child: alive(pids!.child) };
-      const context =
-        liveness.self || liveness.child
-          ? JSON.stringify(linuxPidEvidence([pids!.self, pids!.child]))
-          : undefined;
-      expect(liveness.self, context).toBe(false);
-      expect(liveness.child, context).toBe(false);
+      expect(alive(pids!.self)).toBe(false);
+      expect(alive(pids!.child)).toBe(false);
       expect(readdirSync(temporary)).toEqual([]);
     },
     120_000,
