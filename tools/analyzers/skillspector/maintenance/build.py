@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tarfile
 
@@ -23,6 +24,26 @@ def identity():
               "buildLockSha256": digest(HERE / "uv.lock")}
     build_id = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {**inputs, "version": "2.13.4+aih.1." + build_id}
+
+
+def canonical_wheel(path):
+    data = bytearray(path.read_bytes())
+    end = data.rfind(b"PK\x05\x06")
+    if end < 0 or end + 22 != len(data):
+        raise ValueError("Unexpected maintenance wheel directory")
+    central_size = struct.unpack_from("<I", data, end + 12)[0]
+    offset = struct.unpack_from("<I", data, end + 16)[0]
+    if offset + central_size != end:
+        raise ValueError("Unexpected maintenance wheel directory size")
+    while offset < end:
+        if data[offset:offset + 4] != b"PK\x01\x02":
+            raise ValueError("Unexpected maintenance wheel entry")
+        data[offset + 5] = 0
+        name, extra, comment = struct.unpack_from("<HHH", data, offset + 28)
+        offset += 46 + name + extra + comment
+    if offset != end:
+        raise ValueError("Unexpected maintenance wheel entries")
+    path.write_bytes(data)
 
 
 def main():
@@ -49,14 +70,14 @@ def main():
                 raise ValueError("Unexpected upstream archive root")
         archive.extractall(args.out, filter="data")
     source = args.out / ("SkillSpector-" + UPSTREAM)
-    subprocess.run(["git", "apply", "--check", str(HERE / "capacity.patch")], cwd=source, check=True)
-    subprocess.run(["git", "apply", str(HERE / "capacity.patch")], cwd=source, check=True)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", "--check", str(HERE / "capacity.patch")], cwd=source, check=True)
+    subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", str(HERE / "capacity.patch")], cwd=source, check=True)
     project = source / "pyproject.toml"
     text = project.read_text()
     if text.count('version = "2.13.4"') != 1:
         raise ValueError("Unexpected upstream version source")
     project.write_text(text.replace('version = "2.13.4"', 'version = "' + expected["version"] + '"'))
-    (source / "src/skillspector/aih-scan-build.json").write_text(json.dumps(expected, sort_keys=True) + "\n")
+    (source / "src/skillspector/aih-scan-build.json").write_text(json.dumps(expected, sort_keys=True) + "\n", newline="\r\n")
     environment = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(args.out / "builder"), "SOURCE_DATE_EPOCH": "1793599200"}
     subprocess.run(["uv", "sync", "--project", str(HERE), "--locked", "--no-install-project"], env=environment, check=True)
     python = args.out / "builder" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -64,6 +85,7 @@ def main():
     wheels = list((args.out / "wheels").glob("*.whl"))
     if len(wheels) != 1:
         raise ValueError("Unexpected wheel set")
+    canonical_wheel(wheels[0])
     (args.out / "receipt.json").write_text(json.dumps({**expected, "wheel": wheels[0].name, "wheelSha256": digest(wheels[0])}, indent=2) + "\n")
     print((args.out / "receipt.json").read_text())
 

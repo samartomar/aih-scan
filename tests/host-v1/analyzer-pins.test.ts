@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CISCO_VERSION } from "../../src/host/cisco.js";
 import {
@@ -8,6 +11,7 @@ import {
 } from "../../src/host/skillspector.js";
 
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+const maintenanceSource = process.env.AIH_SCAN_TEST_SKILLSPECTOR_SOURCE;
 
 describe("pinned analyzer runtimes", () => {
   it("locks SkillSpector to the v2.13.4 tag commit the adapter requires", () => {
@@ -49,6 +53,46 @@ describe("pinned analyzer runtimes", () => {
     });
     expect(SKILLSPECTOR_MAINTENANCE_VERSION).toBe(builder.version);
   });
+
+  it.runIf(maintenanceSource !== undefined)(
+    "reproduces the reviewed maintenance wheel from authenticated source on this platform",
+    () => {
+      if (maintenanceSource === undefined) throw new Error("AIH_SCAN_TEST_SKILLSPECTOR_SOURCE");
+      expect(existsSync(maintenanceSource), "AIH_SCAN_TEST_SKILLSPECTOR_SOURCE").toBe(true);
+      const python = process.platform === "win32" ? "python" : "python3";
+      const root = mkdtempSync(join(tmpdir(), "aih-scan-maintenance-build-"));
+      try {
+        const out = join(root, "build");
+        execFileSync(
+          python,
+          [
+            "tools/analyzers/skillspector/maintenance/build.py",
+            "--source",
+            maintenanceSource,
+            "--out",
+            out,
+          ],
+          {
+            env: {
+              ...process.env,
+              UV_CACHE_DIR: join(root, "uv-cache"),
+              UV_LINK_MODE: "copy",
+              PYTHONDONTWRITEBYTECODE: "1",
+            },
+            stdio: "pipe",
+          },
+        );
+        const artifact = JSON.parse(read("tools/analyzers/skillspector/maintenance/artifact.json"));
+        const receipt = JSON.parse(readFileSync(join(out, "receipt.json"), "utf8"));
+        expect(receipt).toEqual(artifact);
+        const wheel = readFileSync(join(out, "wheels", artifact.wheel));
+        expect(createHash("sha256").update(wheel).digest("hex")).toBe(artifact.wheelSha256);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    180000,
+  );
 
   it("locks Cisco skill-scanner to the 2.3.2 release the adapter requires", () => {
     expect(CISCO_VERSION).toBe("2.3.2");
