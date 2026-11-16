@@ -8,8 +8,8 @@ import subprocess
 import tarfile
 
 HERE = Path(__file__).resolve().parent
-UPSTREAM = "38a1dfe93325d2f8bfcd4f8d0241eed706334915"
-SOURCE_SHA256 = "c503337dd2e0e3a600149a6ab33a7cfa3d88e9869c2cfaff3eb1dbb77e68e29e"
+UPSTREAM = "54824463814a0be01360792523ec7245a69190fc"
+SOURCE_SHA256 = "562349db9ef4084cfe2f18707de3d942c5b94e221162c314c795e4501fabc07d"
 
 
 def digest(path):
@@ -22,7 +22,7 @@ def identity():
               "runtimeLockSha256": digest(HERE.parent / "uv.lock"),
               "buildLockSha256": digest(HERE / "uv.lock")}
     build_id = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return {**inputs, "version": "2.13.3+aih.1." + build_id}
+    return {**inputs, "version": "2.13.4+aih.1." + build_id}
 
 
 def main():
@@ -53,9 +53,9 @@ def main():
     subprocess.run(["git", "apply", str(HERE / "capacity.patch")], cwd=source, check=True)
     project = source / "pyproject.toml"
     text = project.read_text()
-    if text.count('version = "2.13.3"') != 1:
+    if text.count('version = "2.13.4"') != 1:
         raise ValueError("Unexpected upstream version source")
-    project.write_text(text.replace('version = "2.13.3"', 'version = "' + expected["version"] + '"'))
+    project.write_text(text.replace('version = "2.13.4"', 'version = "' + expected["version"] + '"'))
     (source / "src/skillspector/aih-scan-build.json").write_text(json.dumps(expected, sort_keys=True) + "\n")
     environment = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(args.out / "builder"), "SOURCE_DATE_EPOCH": "1793599200"}
     subprocess.run(["uv", "sync", "--project", str(HERE), "--locked", "--no-install-project"], env=environment, check=True)

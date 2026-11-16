@@ -21,7 +21,7 @@ import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from 
 export const SKILLSPECTOR_VERSION = "2.13.4";
 /** Exact source/archive/patch/runtime-lock/build-lock maintenance identity. */
 export const SKILLSPECTOR_MAINTENANCE_VERSION =
-  "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855";
+  "2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159";
 /** Selects an exact SkillSpector executable, or `none` to disable it. */
 export const SKILLSPECTOR_VARIABLE = "AIH_SCAN_SKILLSPECTOR";
 

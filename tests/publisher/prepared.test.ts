@@ -204,11 +204,37 @@ describe("prepared manifest and exact inventory", () => {
         "TP4 capacity",
       );
     expect(() => validate({ ...valid, version: "2.13.3" })).toThrow("identity");
+    expect(() =>
+      validate({
+        ...valid,
+        version: "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855",
+      }),
+    ).toThrow("identity");
     expect(() => validate({ ...valid, wheelSha256: "0".repeat(64) })).toThrow("identity");
     expect(
       validateManifest(Buffer.from(JSON.stringify(setup.manifest)), setup.manifestSha256)
         .assessment,
     ).not.toHaveProperty("skillspector");
+
+    const ss = fakeAnalyzer(setup.folder, "skillspector", {
+      versionText: `SkillSpector v${artifact.version}`,
+      outputFlag: "--output",
+      report: null,
+    });
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+    vi.stubEnv("DEEPSEEK_API", "fixture-only-not-a-real-key");
+    for (const invalid of [
+      { ...valid, tp4: { ...valid.tp4, maxFiles: 0 } },
+      { ...valid, wheelSha256: "0".repeat(64) },
+    ]) {
+      const bytes = Buffer.from(
+        JSON.stringify({ ...setup.manifest, assessment: { ...assessment, skillspector: invalid } }),
+      );
+      writeFileSync(setup.manifestPath, bytes);
+      await expect(scanPrepared({ ...setup, manifestSha256: hash(bytes) })).rejects.toThrow();
+      expect(ss.calls()).toEqual([]);
+      expect(existsSync(setup.out)).toBe(false);
+    }
   });
 
   it("durably records unsigned host refusal diagnostics when a child input disappears", async () => {
@@ -1103,8 +1129,8 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
             llmConcurrency: 24,
             skillspector: {
               version:
-                "2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855",
-              wheelSha256: "18a124e7bd0d368ddf87926d00b43692f73a4b05cee450531d6a93ad1163b751",
+                "2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159",
+              wheelSha256: "f40324a28badbfd01c46fe2e77e9d2a0be2df874317d1ca84710b1ccb4e8aab8",
               tp4: { maxFiles: 256, maxFindings: 256, maxBatches: 256 },
             },
           },
@@ -1119,7 +1145,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
       expect(summary.files).toHaveLength(130);
       expect(
         summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector").version,
-      ).toBe("2.13.3+aih.1.beab0672042e0e41eab09e381ccecd8a9db96d34a78dacddf16c737dd73cc855");
+      ).toBe("2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159");
       const sarif = record.sarif
         .map((entry: { path: string }) => readFileSync(join(result.root, entry.path), "utf8"))
         .join("\n");
@@ -1130,6 +1156,34 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
         completed: 0,
       });
       expect(service.requests).toHaveLength(requests);
+
+      const changedManifest = JSON.parse(bytes.toString());
+      changedManifest.assessment.skillspector.tp4.maxFiles = 512;
+      const changedBytes = Buffer.from(JSON.stringify(changedManifest));
+      writeFileSync(setup.manifestPath, changedBytes);
+      const changed = await scanPrepared({ ...setup, manifestSha256: hash(changedBytes) });
+      expect(changed).toMatchObject({ reused: 0, completed: 1 });
+      expect(changed.root).not.toBe(result.root);
+      expect(service.requests.length).toBeGreaterThan(requests);
+      await expect(
+        verifyResult(
+          result.root,
+          record,
+          setup.manifest.items,
+          JSON.parse(bytes.toString()),
+          setup.content,
+          runtime,
+        ),
+      ).resolves.toMatchObject({ eligible: true });
+
+      writeFileSync(setup.manifestPath, bytes);
+      const changedRequests = service.requests.length;
+      expect(await scanPrepared({ ...setup, manifestSha256: hash(bytes) })).toMatchObject({
+        root: result.root,
+        reused: 1,
+        completed: 0,
+      });
+      expect(service.requests).toHaveLength(changedRequests);
     } finally {
       await service.close();
     }
