@@ -18,8 +18,8 @@ import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fix
 
 // Controlled CLI fixtures stand in for SkillSpector and Cisco here: they are real subprocesses
 // started by Scan's native runner, never the real analyzers and never an AI provider.
-// Windows cold native integration startup needs a larger harness budget; tool deadlines stay fixed.
-if (process.platform === "win32") vi.setConfig({ testTimeout: 15_000 });
+// Match the real Windows process harness so bounded 60s probes finish; tool deadlines stay fixed.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 90_000 });
 
 beforeAll(() => {
   if (process.platform !== "win32") return;
