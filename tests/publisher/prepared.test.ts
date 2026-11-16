@@ -437,7 +437,7 @@ describe.runIf(process.platform !== "win32")(
   () => {
     function analyzer(folder: string, complete = true) {
       return fakeAnalyzer(folder, "skillspector", {
-        versionText: "SkillSpector v2.13.3",
+        versionText: "SkillSpector v2.13.4",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           llm: complete,
@@ -546,7 +546,7 @@ describe.runIf(process.platform !== "win32")(
       async (secret, effectiveSecret) => {
         const setup = await prepared({ item: skill });
         const ss = fakeAnalyzer(setup.folder, "skillspector", {
-          versionText: "SkillSpector v2.13.3",
+          versionText: "SkillSpector v2.13.4",
           outputFlag: "--output",
           report: skillSpectorReport([], {
             llm: false,
@@ -1048,7 +1048,7 @@ describe("prepared transport and eligibility", () => {
         { tool: "aih-trust-lint", result: "pass" },
         {
           tool: "skillspector",
-          version: "2.13.3",
+          version: "2.13.4",
           result: "pass",
           mode: "ai",
           ai: { via: "provider", provider: "openai_compatible", model: "deepseek-flash" },

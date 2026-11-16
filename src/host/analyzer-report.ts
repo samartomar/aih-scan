@@ -30,8 +30,9 @@ const ANALYZED_PARTS: ReadonlySet<FindingPart> = new Set(["text", "code", "confi
 /**
  * One external analyzer finding placed on Scan's inventory: the file must be an item file
  * (a `./` prefix is removed) whose routed part the analyzer covers, so findings on Dependencies
- * or unrouted files and paths outside the item are dropped. Lines below 1 or missing become 1;
- * a confidence outside 0..1 is ignored.
+ * or unrouted files and paths outside the item are dropped. An explicit archive fallback permits
+ * the exact outer file with `part: none`. Lines below 1 or missing become 1; a confidence outside
+ * 0..1 is ignored.
  */
 export function analyzerFinding(
   item: AssessItem,
@@ -44,12 +45,20 @@ export function analyzerFinding(
     confidence: unknown;
     fingerprint?: string | undefined;
     category?: string | undefined;
+    /** Permit an exact outer archive file with no routed part; SkillSpector supplies the member details. */
+    allowUnrouted?: boolean | undefined;
   }>,
 ): ToolFinding | undefined {
   if (typeof input.file !== "string") return undefined;
   const path = input.file.startsWith("./") ? input.file.slice(2) : input.file;
-  const part = item.routed.get(path)?.part;
-  if (part === undefined || part === null || !ANALYZED_PARTS.has(part)) return undefined;
+  const routed = item.routed.get(path)?.part;
+  if (
+    routed === undefined ||
+    (routed === null && input.allowUnrouted !== true) ||
+    (routed !== null && !ANALYZED_PARTS.has(routed))
+  )
+    return undefined;
+  const part = routed === null ? ("none" as const) : routed;
   const line =
     typeof input.line === "number" && Number.isSafeInteger(input.line) && input.line >= 1
       ? input.line

@@ -50,7 +50,7 @@ const callerEnv = (extra: Record<string, string> = {}) => ({
 
 function skillspector(report: unknown, extra: Partial<Parameters<typeof fakeAnalyzer>[2]> = {}) {
   return fakeAnalyzer(fixture.root, "skillspector", {
-    versionText: "SkillSpector v2.13.3",
+    versionText: "SkillSpector v2.13.4",
     outputFlag: "--output",
     report,
     ...extra,
@@ -191,7 +191,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     expect(call.env.HOME).not.toBe(callerEnv().HOME);
     expect(toolOf(summary, "skillspector")).toEqual({
       tool: "skillspector",
-      version: "2.13.3",
+      version: "2.13.4",
       mode: "static",
       result: "fail",
       counts: { high: 2, medium: 1 },
@@ -220,6 +220,55 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     ]);
     // Supplied text never becomes the message: SkillSpector's pattern name does.
     expect(findings.findings[1]?.text).toBe("Instruction Override");
+  });
+
+  it("retains archive findings against the exact outer bytes through the public reader", async () => {
+    const folder = fixture.folder("archive-findings", {
+      ...skill,
+      "bundle.zip": new Uint8Array([0x50, 0x4b, 0, 0]),
+    });
+    const ss = skillspector(
+      skillSpectorReport([
+        skillSpectorIssue("P1", "bundle.zip!/SKILL.md", 5, "HIGH", 0.9, "Instruction Override"),
+        skillSpectorIssue("SC2", "bundle.zip!/run.sh", 2, "HIGH", 0.8, "External Script Fetching"),
+        skillSpectorIssue("YR4", "bundle.zip", 7, "MEDIUM", 0.7, "Archive match"),
+      ]),
+    );
+    const { entry, summary } = await run(folder, ss);
+    if (entry?.status !== "ok") throw new Error("expected ok");
+    const sarifPath = entry.sarifPaths.find((path) =>
+      readFileSync(path, "utf8").includes('"name":"skillspector"'),
+    )!;
+    const findings = await readFindings(summary, readBytes(sarifPath), summary.scanKey);
+    if (findings.status !== "ok") throw new Error(findings.status);
+    const outer = summary.files.find((file: { path: string }) => file.path === "bundle.zip");
+    expect(outer).toMatchObject({ part: "none" });
+    expect(findings.findings).toEqual([
+      expect.objectContaining({
+        ruleId: "P1",
+        path: "bundle.zip",
+        line: 1,
+        part: "none",
+        fileSha256: outer.sha256,
+        text: "bundle.zip!/SKILL.md:5: Instruction Override",
+      }),
+      expect.objectContaining({
+        ruleId: "SC2",
+        path: "bundle.zip",
+        line: 1,
+        part: "none",
+        fileSha256: outer.sha256,
+        text: "bundle.zip!/run.sh:2: External Script Fetching",
+      }),
+      expect.objectContaining({
+        ruleId: "YR4",
+        path: "bundle.zip",
+        line: 7,
+        part: "none",
+        fileSha256: outer.sha256,
+        text: "Archive match",
+      }),
+    ]);
   });
 
   it("selects the installed CLI from the caller's PATH when no exact executable is named", async () => {
@@ -258,7 +307,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     const old = skillspector(skillSpectorReport([]), { versionText: "SkillSpector v2.12.0" });
     const wrong = await run(folder, old);
     expect(wrong.entry).toMatchObject({
-      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.3"],
+      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.4"],
     });
     expect(old.calls().filter((call) => call.args[0] === "scan")).toHaveLength(0);
   });
@@ -280,7 +329,67 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     }
   });
 
-  it("reports SkillSpector's own inspection gaps on routed files as a note; gaps on unrouted files are not gaps", async () => {
+  it("rejects a failed report whose producer identity differs from the executable probe", async () => {
+    const folder = fixture.folder("item", skill);
+    const report = skillSpectorReport([], {
+      version: "2.13.3",
+      executionSuccessful: false,
+      status: "failed",
+    });
+    const { entry, summary } = await run(folder, skillspector(report, { exit: 2 }));
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(entry).toMatchObject({
+      notes: ["skillspector: failed: SkillSpector probe/report identity mismatch"],
+    });
+  });
+
+  it("keeps provider failure diagnostics without retaining findings from a failed report", async () => {
+    const folder = fixture.folder("item", skill);
+    const report = skillSpectorReport(
+      [skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8, "Instruction Override")],
+      {
+        executionSuccessful: false,
+        status: "failed",
+        ledgerExceptions: [
+          {
+            outcome: "failed",
+            phase: "semantic",
+            reason_code: "llm_batch_failed",
+            path: "SKILL.md",
+            fatal: true,
+            analyzers: ["semantic_security_discovery"],
+          },
+        ],
+      },
+    );
+    const { entry, summary } = await run(folder, skillspector(report, { exit: 2 }));
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(toolOf(summary, "skillspector")).toMatchObject({
+      result: "not-run",
+      reason: "failed",
+      counts: {},
+    });
+    expect(entry).toMatchObject({
+      notes: ["skillspector: failed: SkillSpector exited 2; report: llm_batch_failed SKILL.md"],
+    });
+    if (entry?.status !== "ok") throw new Error("expected ok");
+    expect(
+      entry.sarifPaths.some((path) => readFileSync(path, "utf8").includes('"name":"skillspector"')),
+    ).toBe(false);
+    const reported = await run(folder, skillspector(report));
+    expect(reported.entry).toMatchObject({
+      notes: [
+        "skillspector: failed: SkillSpector reported a failed analysis; report: llm_batch_failed SKILL.md",
+      ],
+    });
+    expect(toolOf(reported.summary, "skillspector")).toMatchObject({
+      result: "not-run",
+      reason: "failed",
+      counts: {},
+    });
+  });
+
+  it("marks SkillSpector's own inspection gaps on routed files partial; gaps on unrouted files are not gaps", async () => {
     const folder = fixture.folder("item", skill);
     const ss = skillspector(
       skillSpectorReport([], {
@@ -298,11 +407,11 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
       }),
     );
     const { entry, summary } = await run(folder, ss);
-    expect(summary.coverage).toBe("complete");
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
     expect(entry).toMatchObject({
-      notes: [
+      notes: expect.arrayContaining([
         "SkillSpector reported partial inspection: bundled_execution_surface degraded, opaque_content scripts/install.sh",
-      ],
+      ]),
     });
     const unrouted = skillspector(
       skillSpectorReport([], {
@@ -313,6 +422,66 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
       }),
     );
     expect((await run(folder, unrouted)).entry).not.toHaveProperty("notes");
+  });
+
+  it("keeps omitted archive members and exhausted archive limits visible as partial coverage", async () => {
+    const folder = fixture.folder("archive-gaps", {
+      ...skill,
+      "bundle.tgz": new Uint8Array([0x1f, 0x8b, 0, 0]),
+    });
+    const ss = skillspector(
+      skillSpectorReport([], {
+        status: "partial",
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            phase: "nested_artifact_inspection",
+            reason_code: "archive_compression_ratio",
+            path: "bundle.tgz",
+            fatal: false,
+          },
+          {
+            outcome: "partial",
+            phase: "nested_artifact_inspection",
+            reason_code: "archive_member_size_limit",
+            path: "bundle.tgz!/huge.txt",
+            fatal: false,
+          },
+        ],
+      }),
+    );
+    const { entry, summary } = await run(folder, ss);
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(entry).toMatchObject({
+      notes: expect.arrayContaining([
+        "SkillSpector reported partial inspection: archive_compression_ratio bundle.tgz, archive_member_size_limit bundle.tgz!/huge.txt",
+      ]),
+    });
+  });
+
+  it("keeps reference-only complete_with_caveats reports complete and their caveats visible", async () => {
+    const folder = fixture.folder("item", skill);
+    const ss = skillspector(
+      skillSpectorReport([], {
+        status: "complete_with_caveats",
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            phase: "reference_resolution",
+            reason_code: "reference_missing",
+            path: "SKILL.md",
+            start_line: 6,
+            end_line: 6,
+            fatal: false,
+          },
+        ],
+      }),
+    );
+    const { entry, summary } = await run(folder, ss);
+    expect(summary.coverage).toBe("complete");
+    expect(entry).toMatchObject({
+      notes: ["SkillSpector reported inspection caveats: reference_missing SKILL.md"],
+    });
   });
 
   it("does not count SkillSpector's disabled OSV lookup (advisories are a separate call) as a coverage gap", async () => {
@@ -407,6 +576,85 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
     for (const path of [entry.summaryPath, ...entry.sarifPaths])
       expect(readFileSync(path, "utf8")).not.toContain(secret);
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it("retains usable recovered AI findings without treating accepted format recovery as complete", async () => {
+    const folder = fixture.folder("item", skill);
+    const report = skillSpectorReport(
+      [skillSpectorIssue("SSD-1", "SKILL.md", 6, "HIGH", 0.8, "Semantic prompt injection")],
+      {
+        llm: true,
+        status: "partial",
+        analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "degraded" }],
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            phase: "semantic",
+            reason_code: "llm_format_recovery_exhausted",
+            path: "SKILL.md",
+            fatal: false,
+            analyzers: ["semantic_security_discovery"],
+          },
+          {
+            outcome: "partial",
+            phase: "semantic_runtime",
+            reason_code: "semantic_runtime_incomplete",
+            path: "SKILL.md",
+            fatal: false,
+          },
+        ],
+        provenance: {
+          provider: { effective_adapter: "ollama" },
+          analyzers: [{ analyzer_id: "semantic_security_discovery", model: "llama3" }],
+        },
+      },
+    );
+    const completeness = report.analysis_completeness as Record<string, unknown>;
+    completeness.policy_accepted = true;
+    completeness.warnings = [
+      {
+        outcome: "partial",
+        phase: "semantic",
+        reason_code: "llm_format_recovery_exhausted",
+        path: "SKILL.md",
+        fatal: false,
+        analyzers: ["semantic_security_discovery"],
+        assessment_complete: false,
+        accepted_by_policy: true,
+      },
+    ];
+    (report.metadata as Record<string, unknown>).llm_assessment_complete = false;
+    (report.metadata as Record<string, unknown>).llm_recovery_policy_accepted = true;
+    const { entry, summary } = await run(folder, skillspector(report), {
+      extra: { mode: "ai" },
+      env: { SKILLSPECTOR_PROVIDER: "ollama" },
+    });
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(toolOf(summary, "skillspector")).toMatchObject({
+      mode: "ai",
+      result: "fail",
+      counts: { high: 1 },
+    });
+    if (entry?.status !== "ok") throw new Error("expected ok");
+    const sarifPath = entry.sarifPaths.find((path) =>
+      readFileSync(path, "utf8").includes('"name":"skillspector"'),
+    )!;
+    const findings = await readFindings(summary, readBytes(sarifPath), summary.scanKey);
+    if (findings.status !== "ok") throw new Error(findings.status);
+    expect(findings.findings).toEqual([
+      expect.objectContaining({
+        ruleId: "SSD-1",
+        code: "trust.prompt-injection",
+        path: "SKILL.md",
+        line: 6,
+        text: "Semantic prompt injection",
+      }),
+    ]);
+    expect(entry).toMatchObject({
+      notes: expect.arrayContaining([
+        "skillspector: SkillSpector's AI pass did not complete: semantic_security_discovery degraded",
+      ]),
+    });
   });
 
   it("falls back to static explicitly when AI is not set up here, without changing static coverage", async () => {

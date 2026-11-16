@@ -26,7 +26,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   packages by exact version, downloaded npm tarballs and remote MCP configuration (never
   contacted). Item discovery for skills, agents, commands, rules (steering included),
   hooks and MCP configs, with remaining files and a roll-up.
-- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.3 as the
+- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.4 as the
   primary analyzer (static by default, optional AI pass through the caller's own setup)
   and the optional Cisco skill-scanner 2.3.2 second opinion; locked runtimes in
   `tools/analyzers`.

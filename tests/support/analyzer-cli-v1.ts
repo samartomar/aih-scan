@@ -127,7 +127,7 @@ export function alive(pid: number): boolean {
   }
 }
 
-/** A SkillSpector 2.13.3 JSON report in the upstream shape (fields as the real CLI writes them). */
+/** A SkillSpector 2.13.4 JSON report in the upstream shape (fields as the real CLI writes them). */
 export function skillSpectorReport(
   issues: readonly Record<string, unknown>[],
   overrides: Readonly<{
@@ -149,7 +149,7 @@ export function skillSpectorReport(
     suppressed_count: 0,
     suppressed: [],
     metadata: {
-      skillspector_version: overrides.version ?? "2.13.3",
+      skillspector_version: overrides.version ?? "2.13.4",
       llm_requested: overrides.llm ?? false,
       llm_available: overrides.llm ?? false,
       llm_provenance: overrides.provenance ?? {
@@ -161,7 +161,7 @@ export function skillSpectorReport(
     execution_successful: overrides.executionSuccessful ?? true,
     analysis_completeness: {
       status: overrides.status ?? "complete",
-      is_complete: (overrides.status ?? "complete") === "complete",
+      is_complete: ["complete", "complete_with_caveats"].includes(overrides.status ?? "complete"),
       execution_successful: overrides.executionSuccessful ?? true,
       analyzer_statuses: overrides.analyzerStatuses ?? [
         { analyzer_id: "artifact_integrity", status: "completed" },
