@@ -268,7 +268,9 @@ function recognizedCompleteness(completeness: Record<string, unknown>): boolean 
  * What SkillSpector itself reported it did not fully inspect, as one unsigned note, and whether
  * its AI pass (the analyzers its LLM provenance names) failed to complete. Gaps on files Scan does
  * not route to SkillSpector (binaries, dependency manifests) and the disabled OSV lookup are not
- * gaps. Reference-only caveats do not make inspection incomplete; every other relevant gap does.
+ * gaps. Their derived limitations and aggregates are excluded only up to the positively excluded
+ * component count and only when no other gap exists. Reference-only caveats do not make inspection
+ * incomplete; every other relevant gap does.
  */
 function completenessOf(
   completeness: Record<string, unknown>,
@@ -280,13 +282,9 @@ function completenessOf(
   const ignorable = new Set<string>([OSV_ANALYZER]);
   const caveats = new Set<string>();
   const gaps = new Set<string>();
+  const excludedLimitations = new Map<string, number>();
+  const excludedPaths = new Set<string>();
   let positiveExclusion = false;
-  for (const limitation of list(completeness.limitations))
-    if (typeof limitation === "string" && limitation.length > 0) gaps.add(limitation);
-  for (const name of ["partially_inspected_files", "entirely_uninspected_files"]) {
-    const count = completeness[name];
-    if (typeof count === "number" && count > 0) gaps.add(`${name}: ${count}`);
-  }
   for (const raw of list(completeness.ledger_exceptions)) {
     const exception = objectOf(raw);
     if (exception === undefined) continue;
@@ -311,6 +309,7 @@ function completenessOf(
       (part === undefined || part === null || !ANALYZED_PARTS.has(part));
     if (osvOnly || unrouted) {
       positiveExclusion = true;
+      if (path !== undefined) excludedPaths.add(path);
       for (const name of analyzers) ignorable.add(name);
       continue;
     }
@@ -338,11 +337,34 @@ function completenessOf(
     if (mode === "ai" && aiAnalyzers.has(id) && state !== "completed" && state !== "not_applicable")
       aiGaps.push(`${id} ${state}`);
     if (OK_ANALYZER.has(state)) continue;
-    if (state !== "failed" && ignorable.has(id)) continue;
+    const limitation =
+      typeof status.message === "string" && status.message.length > 0
+        ? status.message
+        : `Analyzer ${id} status: ${state}.`;
+    if (state !== "failed" && ignorable.has(id)) {
+      excludedLimitations.set(limitation, (excludedLimitations.get(limitation) ?? 0) + 1);
+      continue;
+    }
     gaps.add(`${id} ${state}`);
   }
   if (mode === "ai" && metadata.llm_assessment_complete === false && aiGaps.length === 0)
     aiGaps.push("reported assessment incomplete");
+  for (const limitation of list(completeness.limitations)) {
+    if (typeof limitation !== "string") continue;
+    const excluded = excludedLimitations.get(limitation) ?? 0;
+    if (excluded > 1) excludedLimitations.set(limitation, excluded - 1);
+    else excludedLimitations.delete(limitation);
+    if (excluded === 0) gaps.add(limitation);
+  }
+  const omitted =
+    (completeness.partially_inspected_files as number) +
+    (completeness.entirely_uninspected_files as number);
+  const aggregatesExplained = positiveExclusion && gaps.size === 0 && omitted <= excludedPaths.size;
+  if (!aggregatesExplained)
+    for (const name of ["partially_inspected_files", "entirely_uninspected_files"]) {
+      const count = completeness[name];
+      if (typeof count === "number" && count > 0) gaps.add(`${name}: ${count}`);
+    }
   const shown = (values: Iterable<string>) => [...new Set(values)].sort().slice(0, 8).join(", ");
   const caveatOnly =
     gaps.size === 0 &&

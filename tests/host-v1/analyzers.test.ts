@@ -626,6 +626,94 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
   it("does not count SkillSpector's disabled OSV lookup (advisories are a separate call) as a coverage gap", async () => {
     const folder = fixture.folder("item", skill);
     const ss = skillspector(
+      skillSpectorReport([skillSpectorIssue("LP3", "SKILL.md", 1, "MEDIUM", 0.7, null)], {
+        status: "partial",
+        analyzerStatuses: [
+          {
+            analyzer_id: "static_patterns_supply_chain",
+            status: "degraded",
+            planned_work: 3,
+            completed: 2,
+            partial: 1,
+            skipped: 0,
+            failed: 0,
+            unaccounted: 0,
+          },
+        ],
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            reason_code: "runtime_limit",
+            path: "requirements.txt",
+            fatal: false,
+            analyzers: ["static_patterns_supply_chain_dependencies_runtime_limit"],
+          },
+        ],
+        completeness: {
+          total_components: 2,
+          scanned_components: 1,
+          fully_inspected_files: 1,
+          partially_inspected_files: 1,
+          entirely_uninspected_files: 0,
+          limitations: ["Analyzer static_patterns_supply_chain status: degraded."],
+        },
+      }),
+    );
+    const { entry, summary } = await run(folder, ss);
+    expect(summary.coverage).toBe("complete");
+    expect(toolOf(summary, "skillspector")).toMatchObject({
+      result: "warn",
+      counts: { medium: 1 },
+    });
+    expect(entry).not.toHaveProperty("notes");
+  });
+
+  it("keeps aggregate omissions beyond the positively disabled OSV component partial", async () => {
+    const folder = fixture.folder("mixed-osv-aggregate", skill);
+    const ss = skillspector(
+      skillSpectorReport([], {
+        status: "partial",
+        analyzerStatuses: [
+          {
+            analyzer_id: "static_patterns_supply_chain",
+            status: "degraded",
+            planned_work: 3,
+            completed: 2,
+            partial: 1,
+            skipped: 0,
+            failed: 0,
+            unaccounted: 0,
+          },
+        ],
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            reason_code: "runtime_limit",
+            path: "requirements.txt",
+            fatal: false,
+            analyzers: ["static_patterns_supply_chain_dependencies_runtime_limit"],
+          },
+        ],
+        completeness: {
+          total_components: 3,
+          scanned_components: 1,
+          fully_inspected_files: 1,
+          partially_inspected_files: 2,
+          entirely_uninspected_files: 0,
+          limitations: ["Analyzer static_patterns_supply_chain status: degraded."],
+        },
+      }),
+    );
+    const { entry, summary } = await run(folder, ss);
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(entry).toMatchObject({
+      notes: expect.arrayContaining([expect.stringContaining("partially_inspected_files: 2")]),
+    });
+  });
+
+  it("does not let disabled OSV hide an unrelated limitation or its aggregate omission", async () => {
+    const folder = fixture.folder("mixed-osv-limitation", skill);
+    const ss = skillspector(
       skillSpectorReport([], {
         status: "partial",
         analyzerStatuses: [{ analyzer_id: "static_patterns_supply_chain", status: "degraded" }],
@@ -638,11 +726,57 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
             analyzers: ["static_patterns_supply_chain_dependencies_runtime_limit"],
           },
         ],
+        completeness: {
+          total_components: 2,
+          scanned_components: 1,
+          fully_inspected_files: 1,
+          partially_inspected_files: 1,
+          entirely_uninspected_files: 0,
+          limitations: [
+            "Analyzer static_patterns_supply_chain status: degraded.",
+            "Analyzer static_patterns_tool_misuse status: degraded.",
+          ],
+        },
       }),
     );
-    const { summary } = await run(folder, ss);
+    const { entry, summary } = await run(folder, ss);
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(entry).toMatchObject({
+      notes: expect.arrayContaining([
+        expect.stringContaining("static_patterns_tool_misuse status: degraded"),
+        expect.stringContaining("partially_inspected_files: 1"),
+      ]),
+    });
+  });
+
+  it("reconciles derived limitations and aggregates for positively unrouted content", async () => {
+    const folder = fixture.folder("derived-unrouted", skill);
+    const ss = skillspector(
+      skillSpectorReport([], {
+        status: "partial",
+        analyzerStatuses: [{ analyzer_id: "bundled_execution_surface", status: "degraded" }],
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            reason_code: "excluded_executable_content",
+            path: "logo.png",
+            fatal: false,
+            analyzers: ["bundled_execution_surface"],
+          },
+        ],
+        completeness: {
+          total_components: 1,
+          scanned_components: 0,
+          fully_inspected_files: 0,
+          partially_inspected_files: 1,
+          entirely_uninspected_files: 0,
+          limitations: ["Analyzer bundled_execution_surface status: degraded."],
+        },
+      }),
+    );
+    const { entry, summary } = await run(folder, ss);
     expect(summary.coverage).toBe("complete");
-    expect(toolOf(summary, "skillspector").result).toBe("pass");
+    expect(entry).not.toHaveProperty("notes");
   });
 
   it("ends a run that exceeds the time limit with its whole process tree and marks the item partial (timeout)", async () => {
