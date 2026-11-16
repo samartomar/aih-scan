@@ -1168,29 +1168,42 @@ describe("Cisco skill-scanner adapter (controlled CLI fixture)", () => {
     expect(sarif).toContain('"version":"2.3.2"');
   });
 
-  it.each([
+  describe.each([
     "unavailable",
     "failed",
     "timeout",
     "not applicable",
-  ])("reports a %s Cisco run without making coverage partial", async (name) => {
-    const folder = fixture.folder("item", skill);
-    const agent = fixture.folder("agent", { "reviewer.md": "# Reviewer\n\nReview the diff.\n" });
-    const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
-    const cases: [string, string, FakeAnalyzer | undefined, string, number?][] = [
-      ["unavailable", folder, undefined, "not-run"],
-      ["failed", folder, cisco(null, { exit: 1 }), "not-run"],
-      ["timeout", folder, cisco(null, { hang: true }), "not-run", 1_500],
-      ["not applicable", agent, cisco(ciscoReport([])), "not-applicable"],
-    ];
-    const [, item, cx, result, timeoutMs] = cases.find(([label]) => label === name)!;
-    const { summary } = await run(item, skillspector(ssReport), {
-      extra: tools,
-      ...(cx === undefined ? {} : { cisco: cx }),
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  ])("a %s Cisco run", (name) => {
+    let required: FakeAnalyzer;
+    beforeEach(async () => {
+      required = skillspector(ssReport);
+      if (name === "timeout") {
+        // Populate the documented version cache through a real scan before applying the
+        // deliberately tight Cisco deadline. Required analyzer cold startup is not this case.
+        const ready = await run(fixture.folder("warm-required", skill), required);
+        expect(toolOf(ready.summary, "skillspector").result).toBe("warn");
+      }
     });
-    expect(toolOf(summary, "cisco").result, name).toBe(result);
-    expect(summary.coverage, name).toBe("complete");
+    it("does not make required coverage partial", async () => {
+      const folder = fixture.folder("item", skill);
+      const agent = fixture.folder("agent", { "reviewer.md": "# Reviewer\n\nReview the diff.\n" });
+      const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
+      const cases: [string, string, FakeAnalyzer | undefined, string, number?][] = [
+        ["unavailable", folder, undefined, "not-run"],
+        ["failed", folder, cisco(null, { exit: 1 }), "not-run"],
+        ["timeout", folder, cisco(null, { hang: true }), "not-run", 1_500],
+        ["not applicable", agent, cisco(ciscoReport([])), "not-applicable"],
+      ];
+      const [, item, cx, result, timeoutMs] = cases.find(([label]) => label === name)!;
+      const { summary } = await run(item, required, {
+        extra: tools,
+        ...(cx === undefined ? {} : { cisco: cx }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      expect(toolOf(summary, "cisco").result, name).toBe(result);
+      expect(summary.coverage, name).toBe("complete");
+      if (name === "timeout") expect(toolOf(summary, "cisco").reason).toBe("timeout");
+    });
   });
 });
 
