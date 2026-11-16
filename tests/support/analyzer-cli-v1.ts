@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { nativeNodeCli } from "./native-node-cli.js";
 
 /**
  * A controlled analyzer CLI: a small Node program installed as an executable named like the
@@ -27,6 +28,8 @@ export interface FakeCall {
   /** Files visible in the scanned folder (argv folder, or the cwd for `.`). */
   readonly listing: string[];
   readonly writable: boolean;
+  /** Windows attributes protect copied files even though directory creation is allowed. */
+  readonly filesWritable: boolean;
 }
 
 export interface FakeAnalyzer {
@@ -53,6 +56,7 @@ const list = (root, prefix = "") => {
 };
 let listing = [];
 let writable = false;
+let filesWritable = false;
 if (args[0] === "scan") {
   const folder = path.resolve(process.cwd(), args[1]);
   listing = list(folder);
@@ -62,10 +66,17 @@ if (args[0] === "scan") {
   } catch (error) {
     writable = error.code !== "EACCES" && error.code !== "EROFS" && error.code !== "EPERM";
   }
+  if (writable) fs.unlinkSync(path.join(folder, "probe-write"));
+  for (const file of listing) {
+    const target = path.join(folder, file);
+    const original = fs.readFileSync(target);
+    try { fs.writeFileSync(target, original); filesWritable = true; }
+    catch (error) { if (!["EACCES", "EROFS", "EPERM"].includes(error.code)) throw error; }
+  }
 }
 fs.appendFileSync(
   path.join(dir, "calls.jsonl"),
-  JSON.stringify({ args, cwd: process.cwd(), env: process.env, listing, writable }) + "\\n",
+  JSON.stringify({ args, cwd: process.cwd(), env: process.env, listing, writable, filesWritable }) + "\\n",
 );
 if (args[0] === "--version") {
   process.stdout.write(b.versionText + "\\n");
@@ -74,13 +85,16 @@ if (args[0] === "--version") {
 if (b.hang) {
   const keep = b.ignoreTerm ? "process.on('SIGTERM', () => {}); " : "";
   if (b.ignoreTerm) process.on("SIGTERM", () => {});
-  const child = require("node:child_process").spawn(process.execPath, ["-e", keep + "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const child = require("node:child_process").spawn(process.execPath, ["-e", keep + "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
   fs.writeFileSync(path.join(dir, "pids.json"), JSON.stringify({ self: process.pid, child: child.pid }));
   setInterval(() => {}, 1000);
 } else {
-  const out = args[args.indexOf(b.outputFlag) + 1];
-  if (b.report !== null) fs.writeFileSync(out, JSON.stringify(b.report));
-  process.stdout.write("Report saved to: " + out + "\\n");
+  const out = args.includes(b.outputFlag) ? args[args.indexOf(b.outputFlag) + 1] : undefined;
+  if (b.report !== null) {
+    if (out === undefined) process.stdout.write(JSON.stringify(b.report));
+    else fs.writeFileSync(out, JSON.stringify(b.report));
+  }
+  if (out !== undefined) process.stdout.write("Report saved to: " + out + "\\n");
   process.exit(b.exit ?? 0);
 }
 `;
@@ -95,9 +109,7 @@ export function fakeAnalyzer(
   installed += 1;
   const dir = join(root, `${name}-cli-${installed}`);
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, name);
-  writeFileSync(path, `#!${process.execPath}\n${program}`);
-  chmodSync(path, 0o755);
+  const path = nativeNodeCli(dir, name, program);
   writeFileSync(join(dir, "behaviour.json"), JSON.stringify(behaviour));
   return {
     path,
@@ -117,14 +129,24 @@ export function fakeAnalyzer(
   };
 }
 
-/** `true` while a process with this pid exists. */
+/** `true` while a process with this pid can still run. Linux zombies have already exited. */
 export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+  if (process.platform === "linux") {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const close = stat.lastIndexOf(")");
+      if (close > 0 && /^\s+Z(?:\s|$)/u.test(stat.slice(close + 1))) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      // A state we cannot read is not evidence that the process has exited.
+    }
+  }
+  return true;
 }
 
 /** A SkillSpector 2.13.4 JSON report in the upstream shape (fields as the real CLI writes them). */

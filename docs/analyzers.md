@@ -61,6 +61,10 @@ when you cancel. A timeout is `not-run` with reason `timeout` and makes that ite
 written to a private scratch folder outside the working copy and the output folder, read
 with a size bound, and removed.
 
+The copy preserves the source bytes. POSIX permissions also prevent adding files to the
+working directory. Windows read-only attributes protect existing copied files but do not
+prevent creating new entries in that directory; they are not an analyzer sandbox.
+
 ### SkillSpector
 
 ```

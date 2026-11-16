@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { delimiter, join } from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { scanWith } from "../../src/host/scan.js";
 import { SKILLSPECTOR_MAINTENANCE_VERSION } from "../../src/host/skillspector.js";
 import { readFindings, readSummary } from "../../src/public/read.js";
@@ -13,10 +13,25 @@ import {
   skillSpectorIssue,
   skillSpectorReport,
 } from "../support/analyzer-cli-v1.js";
+import { nativeNodeCli } from "../support/native-node-cli.js";
 import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fixture.js";
 
 // Controlled CLI fixtures stand in for SkillSpector and Cisco here: they are real subprocesses
 // started by Scan's native runner, never the real analyzers and never an AI provider.
+// Match the real Windows process harness so bounded 60s probes finish; tool deadlines stay fixed.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 90_000 });
+
+beforeAll(() => {
+  if (process.platform !== "win32") return;
+  // Compile test tooling before behavior cases start; each real probe and scan still runs
+  // under the original test and product deadlines.
+  const setup = fixtureRoot("aih-scan-native-setup-");
+  try {
+    nativeNodeCli(setup.root, "fixture", "process.exit(0);");
+  } finally {
+    setup.dispose();
+  }
+});
 
 let fixture: FixtureRoot;
 beforeEach(() => {
@@ -42,6 +57,7 @@ const skill = {
 
 const callerEnv = (extra: Record<string, string> = {}) => ({
   PATH: process.env.PATH ?? "/usr/bin:/bin",
+  ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" } : {}),
   HOME: fixture.path("caller-home"),
   HTTPS_PROXY: "http://proxy.invalid:3128",
   PYTHONPATH: "/caller/python",
@@ -104,14 +120,17 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
       maxBatches: 256,
     };
     const ss = skillspector(report, { versionText: `SkillSpector v${version}` });
-    const { summary } = await run(folder, ss, {
+    const { summary, entry } = await run(folder, ss, {
       env: {
         SKILLSPECTOR_TP4_MAX_FILES: "999",
         SKILLSPECTOR_TP4_MAX_FINDINGS: "999",
         SKILLSPECTOR_TP4_MAX_BATCHES: "999",
       },
     });
-    expect(toolOf(summary, "skillspector")).toMatchObject({ version, result: "pass" });
+    expect(toolOf(summary, "skillspector"), JSON.stringify(entry)).toMatchObject({
+      version,
+      result: "pass",
+    });
     expect(summary.coverage).toBe("complete");
   });
   it("refuses a maintenance report whose resolved capacities differ from the requested configuration", async () => {
@@ -162,7 +181,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
         ...behaviour,
         versionText: `SkillSpector v${version}`,
       });
-      const { summary } = await run(folder, ss, { timeoutMs: 1500 });
+      const { summary } = await run(folder, ss, "hang" in behaviour ? { timeoutMs: 1500 } : {});
       expect(toolOf(summary, "skillspector")).toMatchObject({ version, reason, result: "not-run" });
     }
   });
@@ -196,11 +215,12 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     const call = scans[0]!;
     expect(call.args).toEqual([
       "scan",
-      expect.stringMatching(/aih-scan-snapshot-.*\/item$/u),
+      expect.stringMatching(/aih-scan-snapshot-.*[\\/]item$/u),
       "--format",
       "json",
-      "--output",
-      expect.stringMatching(/skillspector-report\.json$/u),
+      ...(process.platform === "win32"
+        ? []
+        : ["--output", expect.stringMatching(/skillspector-report\.json$/u)]),
       "--no-llm",
     ]);
     expect(call.args[1]).not.toBe(folder);
@@ -210,7 +230,12 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
       "requirements.txt",
       "scripts/install.sh",
     ]);
-    expect(call.writable).toBe(false);
+    expect(call.filesWritable).toBe(false);
+    expect(call.writable).toBe(process.platform === "win32");
+    for (const [path, content] of Object.entries(skill))
+      expect(readBytes(join(folder, path))).toEqual(
+        typeof content === "string" ? new TextEncoder().encode(content) : content,
+      );
     expect(call.env.SKILLSPECTOR_OSV_TIMEOUT).toBe("0");
     for (const name of ["HTTPS_PROXY", "PYTHONPATH", "SKILLSPECTOR_PROVIDER"])
       expect(call.env[name]).toBeUndefined();
@@ -303,7 +328,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     const result = await scanWith(
       request(folder),
       { outDir: fixture.path("on-path") },
-      { now: fixedNow, env: { PATH: `${ss.dir}:/usr/bin:/bin`, HOME: fixture.path("home") } },
+      { now: fixedNow, env: callerEnv({ PATH: [ss.dir, process.env.PATH ?? ""].join(delimiter) }) },
     );
     expect(result.status).toBe("ok");
     expect(ss.calls().map((call) => call.args[0])).toEqual(["--version", "scan"]);
@@ -987,7 +1012,8 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
 
   it("selects a signed-in AI CLI provider only when its CLI is on PATH, and runs SkillSpector natively", async () => {
     const folder = fixture.folder("item", skill);
-    const bin = fixture.folder("bin", { claude: "#!/bin/sh\nexit 0\n" }, ["claude"]);
+    const bin = fixture.folder("bin", {});
+    nativeNodeCli(bin, "claude", "process.exit(0);");
     const ss = skillspector(
       skillSpectorReport([], {
         llm: true,
@@ -1009,7 +1035,10 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
     });
     const withCli = await run(folder, ss, {
       extra: { mode: "ai" },
-      env: { SKILLSPECTOR_PROVIDER: "claude_cli", PATH: `${bin}:/usr/bin:/bin` },
+      env: {
+        SKILLSPECTOR_PROVIDER: "claude_cli",
+        PATH: [bin, process.env.PATH ?? ""].join(delimiter),
+      },
     });
     expect(withCli.result).toMatchObject({ ai: { status: "available", via: "cli" } });
     expect(toolOf(withCli.summary, "skillspector")).toMatchObject({
@@ -1074,10 +1103,11 @@ describe("Cisco skill-scanner adapter (controlled CLI fixture)", () => {
   it("is off by default and runs only when named, with --use-behavioral from inside the working copy", async () => {
     const folder = fixture.folder("item", skill);
     const cx = cisco(ciscoReport([]));
-    const unnamed = await run(folder, skillspector(ssReport), { cisco: cx });
+    const selected = skillspector(ssReport);
+    const unnamed = await run(folder, selected, { cisco: cx });
     expect(toolOf(unnamed.summary, "cisco")).toBeUndefined();
     expect(cx.calls()).toHaveLength(0);
-    const named = await run(folder, skillspector(ssReport), {
+    const named = await run(folder, selected, {
       cisco: cx,
       extra: { tools: ["skillspector", "aih-trust-lint", "cisco"] },
     });
@@ -1091,8 +1121,13 @@ describe("Cisco skill-scanner adapter (controlled CLI fixture)", () => {
       "--output-json",
       expect.stringMatching(/cisco\.json$/u),
     ]);
-    expect(call.cwd).toMatch(/aih-scan-snapshot-.*\/item$/u);
-    expect(call.writable).toBe(false);
+    expect(call.cwd).toMatch(/aih-scan-snapshot-.*[\\/]item$/u);
+    expect(call.filesWritable).toBe(false);
+    expect(call.writable).toBe(process.platform === "win32");
+    for (const [path, content] of Object.entries(skill))
+      expect(readBytes(join(folder, path))).toEqual(
+        typeof content === "string" ? new TextEncoder().encode(content) : content,
+      );
     for (const name of ["HTTPS_PROXY", "PYTHONPATH"]) expect(call.env[name]).toBeUndefined();
     expect(toolOf(named.summary, "cisco")).toMatchObject({
       tool: "cisco",
@@ -1124,9 +1159,10 @@ describe("Cisco skill-scanner adapter (controlled CLI fixture)", () => {
       ]),
     );
     const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
-    const base = await run(folder, skillspector(ss));
-    const first = await run(folder, skillspector(ss), { cisco: cx, extra: tools });
-    const again = await run(folder, skillspector(ss), { cisco: cx, extra: tools });
+    const selected = skillspector(ss);
+    const base = await run(folder, selected);
+    const first = await run(folder, selected, { cisco: cx, extra: tools });
+    const again = await run(folder, selected, { cisco: cx, extra: tools });
     // Without Cisco: MEDIUM 10 x 0.5 = 5. With Cisco: HIGH 25 x 1 replaces it (not 25 + 5); INFO is 0.
     expect(base.summary.score).toBe(5);
     expect(first.summary.score).toBe(25);
@@ -1146,25 +1182,42 @@ describe("Cisco skill-scanner adapter (controlled CLI fixture)", () => {
     expect(sarif).toContain('"version":"2.3.2"');
   });
 
-  it("reports unavailable, failed, timed-out and not-applicable Cisco runs without making coverage partial", async () => {
-    const folder = fixture.folder("item", skill);
-    const agent = fixture.folder("agent", { "reviewer.md": "# Reviewer\n\nReview the diff.\n" });
-    const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
-    const cases: [string, string, FakeAnalyzer | undefined, string, number?][] = [
-      ["unavailable", folder, undefined, "not-run"],
-      ["failed", folder, cisco(null, { exit: 1 }), "not-run"],
-      ["timeout", folder, cisco(null, { hang: true }), "not-run", 1_500],
-      ["not applicable", agent, cisco(ciscoReport([])), "not-applicable"],
-    ];
-    for (const [name, item, cx, result, timeoutMs] of cases) {
-      const { summary } = await run(item, skillspector(ssReport), {
+  describe.each([
+    "unavailable",
+    "failed",
+    "timeout",
+    "not applicable",
+  ])("a %s Cisco run", (name) => {
+    let required: FakeAnalyzer;
+    beforeEach(async () => {
+      required = skillspector(ssReport);
+      if (name === "timeout") {
+        // Populate the documented version cache through a real scan before applying the
+        // deliberately tight Cisco deadline. Required analyzer cold startup is not this case.
+        const ready = await run(fixture.folder("warm-required", skill), required);
+        expect(toolOf(ready.summary, "skillspector").result).toBe("warn");
+      }
+    });
+    it("does not make required coverage partial", async () => {
+      const folder = fixture.folder("item", skill);
+      const agent = fixture.folder("agent", { "reviewer.md": "# Reviewer\n\nReview the diff.\n" });
+      const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
+      const cases: [string, string, FakeAnalyzer | undefined, string, number?][] = [
+        ["unavailable", folder, undefined, "not-run"],
+        ["failed", folder, cisco(null, { exit: 1 }), "not-run"],
+        ["timeout", folder, cisco(null, { hang: true }), "not-run", 1_500],
+        ["not applicable", agent, cisco(ciscoReport([])), "not-applicable"],
+      ];
+      const [, item, cx, result, timeoutMs] = cases.find(([label]) => label === name)!;
+      const { summary } = await run(item, required, {
         extra: tools,
         ...(cx === undefined ? {} : { cisco: cx }),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
       expect(toolOf(summary, "cisco").result, name).toBe(result);
       expect(summary.coverage, name).toBe("complete");
-    }
+      if (name === "timeout") expect(toolOf(summary, "cisco").reason).toBe("timeout");
+    });
   });
 });
 
@@ -1174,8 +1227,10 @@ describe("analyzer output paths", () => {
     const ss = skillspector(skillSpectorReport([]));
     const { entry } = await run(folder, ss);
     const call = ss.calls().find((c) => c.args[0] === "scan")!;
-    const report = call.args[call.args.indexOf("--output") + 1]!;
-    expect(() => readFileSync(report)).toThrow();
+    if (process.platform !== "win32") {
+      const report = call.args[call.args.indexOf("--output") + 1]!;
+      expect(() => readFileSync(report)).toThrow();
+    } else expect(call.args).not.toContain("--output");
     expect(() => readFileSync(join(call.args[1]!, "SKILL.md"))).toThrow();
     expect(entry?.status).toBe("ok");
   });

@@ -125,7 +125,7 @@ describe("source route discovery for a folder", () => {
     ).toEqual([
       ["hooks.cursor.json", "100644", "text"],
       ["hooks.json", "100644", "config"],
-      ["stop.sh", "100755", "code"],
+      ["stop.sh", process.platform === "win32" ? "100644" : "100755", "code"],
     ]);
     // A single-file item is a one-file folder.
     expect(summaryOf(found["agent:.kiro/agents/reviewer.json"]).files).toMatchObject([

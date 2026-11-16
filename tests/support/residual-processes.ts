@@ -155,6 +155,9 @@ async function darwinProcesses(markers: readonly string[]): Promise<LiveProcessV
 const WINDOWS_SWEEP_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
+  // Avoid module-autoload discovery in the deliberately scrubbed sweep environment.
+  "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))",
+  "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))",
   '$markers = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AIH_SCAN_SWEEP_MARKERS)) -split "`n"',
   "foreach ($process in Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine,ExecutablePath) {",
   "  if ($process.ProcessId -eq $PID) { continue }",

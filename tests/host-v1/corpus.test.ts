@@ -29,7 +29,11 @@ describe("the shared scan-v1 corpus", () => {
     if (process.env.AIH_SCAN_UPDATE_CORPUS === "1") {
       const folder = fixture.folder(`gen-${name}`, source.files, source.executable);
       const result = await scanWith(
-        { format: "aih-scan-request/1", origin: "local", items: [{ path: folder }] },
+        {
+          format: "aih-scan-request/1",
+          origin: "local",
+          items: [{ path: folder, executable: source.executable }],
+        },
         { outDir: fixture.path(`gen-out-${name}`) },
         { now: corpusNow },
       );
@@ -51,7 +55,11 @@ describe("the shared scan-v1 corpus", () => {
     const committed = corpusCase(name);
     const folder = materialize(fixture, committed);
     const result = await scanWith(
-      { format: "aih-scan-request/1", origin: "local", items: [{ path: folder }] },
+      {
+        format: "aih-scan-request/1",
+        origin: "local",
+        items: [{ path: folder, executable: source.executable }],
+      },
       { outDir: fixture.path(`out-${name}`) },
       { now: corpusNow },
     );

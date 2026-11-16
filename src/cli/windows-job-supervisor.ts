@@ -413,6 +413,9 @@ public static class AihScanWindowsJobSupervisorV1
 const SUPERVISOR_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$ProgressPreference = 'SilentlyContinue'",
+  // Avoid module-autoload discovery in the deliberately scrubbed supervisor environment.
+  // PSHOME belongs to the absolute Windows PowerShell executable selected below.
+  "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))",
   "$spec = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AIH_SCAN_WINDOWS_JOB_SPEC)) | ConvertFrom-Json",
   "Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:AIH_SCAN_WINDOWS_JOB_SOURCE)))",
   "$code = [AihScanWindowsJobSupervisorV1]::Run([string]$spec.application, [string]$spec.commandLine, [string]$spec.directory, [string[]]$spec.environment, [string]$spec.statusPath, [int]$spec.residualGraceMs, [int]$spec.pauseAfterCreateMs)",

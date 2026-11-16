@@ -32,6 +32,24 @@ if (process.env.AIH_SCAN_TEST_GIT_FIXTURE !== undefined) {
   const childProcess = createRequire(import.meta.url)("node:child_process");
   const spawn = childProcess.spawn;
   childProcess.spawn = function (command, args, options) {
+    // On Windows the native supervisor owns CreateProcessW: the Node helper is in its
+    // input spec rather than spawn's argv. Replace only that helper, retaining the actual
+    // supervisor, Job Object, bounded runner, and hardened Git arguments.
+    const encoded = options?.env?.AIH_SCAN_WINDOWS_JOB_SPEC;
+    if (typeof encoded === "string") {
+      const spec = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+      const helper = /(?:"[^"\r\n]*[\\/]host[\\/]git-command\.js"|[^\s"]*[\\/]host[\\/]git-command\.js)/u;
+      if (spec.application === process.execPath && helper.test(spec.commandLine)) {
+        spec.commandLine = spec.commandLine.replace(helper, `"${answer}"`);
+        spec.environment.push(`AIH_SCAN_TEST_GIT_FIXTURE=${process.env.AIH_SCAN_TEST_GIT_FIXTURE}`);
+        if (process.env.AIH_SCAN_TEST_GIT_LOG !== undefined)
+          spec.environment.push(`AIH_SCAN_TEST_GIT_LOG=${process.env.AIH_SCAN_TEST_GIT_LOG}`);
+        return spawn.call(this, command, args, {
+          ...options,
+          env: { ...options.env, AIH_SCAN_WINDOWS_JOB_SPEC: Buffer.from(JSON.stringify(spec)).toString("base64") },
+        });
+      }
+    }
     if (
       command === process.execPath &&
       Array.isArray(args) &&

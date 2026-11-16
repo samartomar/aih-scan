@@ -74,6 +74,26 @@ const finished = (status: Record<string, unknown> | string | undefined, stdout =
 };
 
 describe("runUnderWindowsJobV1 (Node side)", () => {
+  it("imports the trusted built-in Utility module before decoding the supervisor input", async () => {
+    vi.stubEnv("PSModulePath", "C:\\untrusted\\modules");
+    await finished({
+      leaderExitCode: 0,
+      residualProcesses: 0,
+      residualMembers: [],
+      remainingProcesses: 0,
+    });
+    const script = Buffer.from(supervisor.args.at(-1) as string, "base64").toString("utf16le");
+    const trustedImport =
+      "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'))";
+    expect(script).toContain(trustedImport);
+    expect(script.indexOf(trustedImport)).toBeLessThan(script.indexOf("$spec ="));
+    expect(spawnMock.mock.calls.at(-1)?.[2].env.PSModulePath).toBeUndefined();
+    expect(supervisor.spec.environment).toEqual([
+      "PATH=C:\\Windows\\System32",
+      "HOME=C:\\Users\\scan",
+    ]);
+  });
+
   it("starts Windows PowerShell from SystemRoot with a quoted command line and the exact environment", async () => {
     const result = await finished(
       { leaderExitCode: 0, residualProcesses: 0, residualMembers: [], remainingProcesses: 0 },
