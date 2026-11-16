@@ -46,6 +46,10 @@ run when `AIH_SCAN_TEST_SKILLSPECTOR` and `AIH_SCAN_TEST_SKILL_SCANNER` name the
 provisioned executables (`<env>/bin/skillspector`, `<env>/bin/skill-scanner`; on Windows
 `<env>\Scripts\<name>.exe`). With `unshare -rn` available they run without a network.
 `AIH_SCAN_REQUIRE_REAL_ANALYZERS=1` makes a missing runtime a failure instead of a skip.
+`AIH_SCAN_TEST_SKILLSPECTOR_SOURCE` names the authenticated maintenance codeload archive and
+adds the external-builder reproducibility proof to `tests/host-v1/analyzer-pins.test.ts`. CI
+downloads that exact archive, checks its pinned SHA-256 and runs the builder proof with the
+real analyzer tests; the maintenance README records its identity and manual build command.
 
 The real maintenance capacity proof uses the exact reviewed wheel and its separately
 provisioned maintenance executable (see `tools/analyzers/skillspector/maintenance/README.md`):
