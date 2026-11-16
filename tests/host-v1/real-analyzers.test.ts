@@ -217,11 +217,10 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.4 (static, -
         expect.objectContaining({ ruleId: "SC2", path, code: "trust.malicious-code" }),
       );
     expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
-    expect(entry.notes).toEqual(
-      expect.arrayContaining([
-        "SkillSpector reported partial inspection: static_parse_limit scripts/generate.sh, static_patterns_tool_misuse degraded",
-      ]),
-    );
+    expect(entry.notes).toEqual([
+      "SkillSpector reported partial inspection: Analyzer static_patterns_tool_misuse status: degraded., partially_inspected_files: 1, static_parse_limit scripts/generate.sh, static_patterns_tool_misuse degraded",
+      "skillspector: SkillSpector's inspection is incomplete",
+    ]);
     noSentinels();
   }, 180_000);
 
@@ -343,11 +342,10 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.4 (static, -
       }),
     );
     expect(first.summary).toMatchObject({ coverage: "partial", reason: "failed" });
-    expect(first.entry.notes).toEqual(
-      expect.arrayContaining([
-        "SkillSpector reported partial inspection: bundled_execution_surface degraded, opaque_content hooks/hooks.json",
-      ]),
-    );
+    expect(first.entry.notes).toEqual([
+      "SkillSpector reported partial inspection: Analyzer bundled_execution_surface status: degraded., bundled_execution_surface degraded, opaque_content hooks/hooks.json, partially_inspected_files: 1",
+      "skillspector: SkillSpector's inspection is incomplete",
+    ]);
     expect(first.bytes).toBe(again.bytes);
     noSentinels();
   }, 180_000);

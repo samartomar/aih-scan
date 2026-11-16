@@ -17,7 +17,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { alive, fakeAnalyzer } from "./support/analyzer-cli-v1.js";
+import {
+  alive,
+  fakeAnalyzer,
+  skillSpectorIssue,
+  skillSpectorReport,
+} from "./support/analyzer-cli-v1.js";
 import { compatibleAiServiceV1 } from "./support/compatible-ai-service-v1.js";
 import { gitRepository } from "./support/git-fixture-v1.js";
 import { readPackedPackage } from "./support/npm-pack-output.js";
@@ -894,6 +899,52 @@ describe("the installed aih-scan CLI", () => {
   }, 120_000);
 
   it.runIf(process.platform !== "win32")(
+    "keeps installed omission-only partial coverage and findings through the public reader",
+    async () => {
+      for (const field of [
+        "limitations",
+        "partially_inspected_files",
+        "entirely_uninspected_files",
+      ] as const) {
+        const completeness: Record<string, unknown> =
+          field === "limitations"
+            ? { limitations: ["Analyzer bounded parser did not finish."] }
+            : {
+                total_components: 1,
+                scanned_components: 0,
+                fully_inspected_files: 0,
+                partially_inspected_files: field === "partially_inspected_files" ? 1 : 0,
+                entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
+              };
+        const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
+          versionText: "SkillSpector v2.13.4",
+          outputFlag: "--output",
+          report: skillSpectorReport(
+            [skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8, "Instruction Override")],
+            { status: "partial", completeness },
+          ),
+        });
+        const item = folder(`installed-omission-${field}`, cleanSkill);
+        const run = await cli(
+          ["scan", item, "--json", "--out", outFolder(`installed-omission-${field}`)],
+          { env: { AIH_SCAN_SKILLSPECTOR: analyzer.path } },
+        );
+        expect(run.code, run.stderr).toBe(0);
+        const scanned = json(run).targets[0].results[0];
+        const { summary, findings } = readInstalledResult(scanned);
+        expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+        expect(summary.tools).toContainEqual(
+          expect.objectContaining({ tool: "skillspector", result: "fail", counts: { high: 1 } }),
+        );
+        expect(findings).toContainEqual(
+          expect.objectContaining({ ruleId: "P1", path: "SKILL.md", line: 6, severity: "HIGH" }),
+        );
+      }
+    },
+    120_000,
+  );
+
+  it.runIf(process.platform !== "win32")(
     "cancels on SIGINT with exit 130 and ends the analyzer's process tree",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
@@ -1350,11 +1401,10 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
         "skillspector 2.13.4 static",
       ]);
       expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
-      expect(skill.notes).toEqual(
-        expect.arrayContaining([
-          "SkillSpector reported partial inspection: bundled_execution_surface degraded, opaque_content hooks/hooks.json",
-        ]),
-      );
+      expect(skill.notes).toEqual([
+        "SkillSpector reported partial inspection: Analyzer bundled_execution_surface status: degraded., bundled_execution_surface degraded, opaque_content hooks/hooks.json, partially_inspected_files: 1",
+        "skillspector: SkillSpector's inspection is incomplete",
+      ]);
       const findings = await cli(["findings", skill.summaryPath, "--key", skill.scanKey]);
       expect(findings.stdout).toContain("skillspector");
       expect(findings.stdout).toContain("cisco");
