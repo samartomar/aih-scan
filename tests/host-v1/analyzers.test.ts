@@ -114,6 +114,32 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     expect(toolOf(summary, "skillspector")).toMatchObject({ version, result: "pass" });
     expect(summary.coverage).toBe("complete");
   });
+  it("refuses a maintenance report whose resolved capacities differ from the requested configuration", async () => {
+    const folder = fixture.folder("maintenance-capacity-mismatch", skill);
+    const version = SKILLSPECTOR_MAINTENANCE_VERSION;
+    const report = skillSpectorReport(
+      [skillSpectorIssue("TP4", "SKILL.md", 6, "HIGH", 0.9, "Tool poisoning")],
+      { version },
+    );
+    (report.metadata as Record<string, unknown>).aih_scan_tp4_limits = {
+      maxFiles: 999,
+      maxFindings: 64,
+      maxBatches: 256,
+    };
+    const ss = skillspector(report, { versionText: `SkillSpector v${version}` });
+    const { entry, summary } = await run(folder, ss);
+    expect(toolOf(summary, "skillspector")).toMatchObject({
+      version,
+      result: "not-run",
+      reason: "failed",
+      counts: {},
+    });
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(entry).toMatchObject({
+      notes: ["skillspector: failed: SkillSpector effective TP4 limits mismatch"],
+    });
+  });
+
   it("preserves the accepted maintenance identity on failed reports, exits and timeouts", async () => {
     const folder = fixture.folder("maintenance-failures", skill);
     const version = SKILLSPECTOR_MAINTENANCE_VERSION;

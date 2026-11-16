@@ -47,6 +47,19 @@ provisioned executables (`<env>/bin/skillspector`, `<env>/bin/skill-scanner`; on
 `<env>\Scripts\<name>.exe`). With `unshare -rn` available they run without a network.
 `AIH_SCAN_REQUIRE_REAL_ANALYZERS=1` makes a missing runtime a failure instead of a skip.
 
+The real maintenance capacity proof uses the exact reviewed wheel and its separately
+provisioned maintenance executable (see `tools/analyzers/skillspector/maintenance/README.md`):
+
+```sh
+AIH_SCAN_TEST_SKILLSPECTOR=<maintenance-executable> \
+AIH_SCAN_TEST_SKILLSPECTOR_WHEEL=<reviewed-maintenance-wheel> \
+  npx vitest run tests/publisher/prepared.test.ts -t "retains complete TP4"
+```
+
+It drives the installed package through the prepared public-tooling seam with a loopback
+synthetic AI service, checks capacity/configuration-bound resume behavior and never contacts
+a live provider. Run the standard analyzer proofs separately with the standard executable.
+
 ## Regenerating fixtures
 
 - Corpus (`tests/fixtures/scan-v1`): `AIH_SCAN_UPDATE_CORPUS=1 npx vitest run tests/host-v1/corpus.test.ts`.

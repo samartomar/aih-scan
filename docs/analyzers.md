@@ -257,11 +257,14 @@ exercised on Linux x64.
 
 ## Optional TP4 maintenance build
 
-Upstream 2.13.3 retains fixed 128-source/64-finding TP4 limits. Scan also supports the
-separately identified reproducible maintenance artifact in
-`tools/analyzers/skillspector/maintenance/README.md`. It preserves those defaults and
-makes capacities explicit without editing an installed analyzer. Prepared profiles bind
-the exact maintenance version/wheel and requested capacities; report and probe identities
-must agree. Existing 2.13.3 maintenance installations remain supported. Building/installing the
+Upstream 2.13.4 retains fixed 128-source/64-finding TP4 limits. Scan also supports a
+separately identified reproducible 2.13.4-based maintenance artifact, documented with its
+patch review in `tools/analyzers/skillspector/maintenance/README.md`. It preserves upstream
+defaults and makes file/finding capacities explicit without editing an installed analyzer.
+Prepared profiles bind the exact maintenance version/wheel and requested capacities;
+executable, report and resolved-capacity identities must agree before observations are
+accepted. New scans and prepared profiles do not admit the previous 2.13.3 maintenance
+wheel. Completed historical summaries and findings remain readable under their original
+producer identities through the existing public readers. Building/installing the
 maintenance artifact and increasing capacities are explicit operator choices; more
 source/batch work can cost more and does not guarantee complete inspection.
