@@ -22,6 +22,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 class Fixture {
+  // [DEBUG-retro-native] Temporary hosted launcher-stage evidence; no environment values.
+  static void Trace(string directory, string stage) {
+    File.AppendAllText(Path.Combine(directory, "launcher-trace.log"), DateTime.UtcNow.ToString("O") + "|" + Process.GetCurrentProcess().Id + "|" + Process.GetCurrentProcess().ProcessName + "|" + stage + "\n");
+  }
   static string Quote(string value) {
     var result = new StringBuilder("\"");
     int slashes = 0;
@@ -34,6 +38,7 @@ class Fixture {
   }
   static int Main(string[] args) {
     string directory = AppDomain.CurrentDomain.BaseDirectory;
+    Trace(directory, "main");
     string name = Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]);
     var arguments = new StringBuilder(Quote(Path.Combine(directory, name + ".cjs")));
     foreach (string arg in args) arguments.Append(' ').Append(Quote(arg));
@@ -42,10 +47,17 @@ class Fixture {
     start.CreateNoWindow = true;
     start.RedirectStandardOutput = true;
     start.RedirectStandardError = true;
+    Trace(directory, "before-child-start");
     using (var child = Process.Start(start)) {
+      Trace(directory, "child-started:" + child.Id);
       var output = child.StandardOutput.BaseStream.CopyToAsync(Console.OpenStandardOutput());
       var error = child.StandardError.BaseStream.CopyToAsync(Console.OpenStandardError());
-      child.WaitForExit(); System.Threading.Tasks.Task.WaitAll(output, error); return child.ExitCode;
+      Trace(directory, "streams-copying");
+      child.WaitForExit();
+      Trace(directory, "child-exited:" + child.ExitCode);
+      System.Threading.Tasks.Task.WaitAll(output, error);
+      Trace(directory, "streams-ended");
+      return child.ExitCode;
     }
   }
 }
