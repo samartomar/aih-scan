@@ -123,7 +123,7 @@ const findings = await read.readFindings(summary.summary, new Uint8Array(readFil
 assert.equal(findings.status, "ok");
 assert.ok(findings.findings.some((finding) => finding.code === "trust.prompt-injection"), JSON.stringify(findings));
 assert.ok(trustLint.sha256.length === 64);
-const hostMatch = await host.matchScan(summary.summary, item);
+const hostMatch = await host.matchScan(summary.summary, item, { executable: ["scripts/run.sh"] });
 assert.deepEqual({ status: hostMatch.status, matches: hostMatch.matches, signer: hostMatch.signer }, { status: "ok", matches: true, signer: null });
 const files = [
   { path: "SKILL.md", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "SKILL.md"))) },

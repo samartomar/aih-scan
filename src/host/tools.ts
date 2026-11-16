@@ -52,8 +52,8 @@ export type ToolRun =
       /** Rule descriptions for the SARIF driver, by rule id. */
       rules?: Readonly<Record<string, string>>;
       /**
-       * The tool ran but part of the requested analysis failed (SkillSpector's AI pass in AI
-       * mode); a counted tool then makes coverage `partial` with reason `failed`. Unsigned detail.
+       * The tool ran but part of the requested analysis failed or stayed incomplete; a counted
+       * tool then makes coverage `partial` with reason `failed`. Unsigned detail.
        */
       failedPart?: string;
       /** Unsigned notes for the caller (for example why AI was not used); never in the summary. */

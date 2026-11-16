@@ -158,7 +158,7 @@ export function aiEligible(summary, manifest) {
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
   const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
   const via = loopbackHost(host) ? "local" : "provider";
-  if (primary?.version !== (manifest.assessment.skillspector?.version ?? "2.13.3") || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? "2.13.4") || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
   return manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 }
 export async function verifyResult(root, record, items, manifest, content, runtime) {

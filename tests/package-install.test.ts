@@ -233,6 +233,58 @@ async function loopback(
 const json = (run: Run) => JSON.parse(run.stdout);
 const outFolder = (name: string) => join(work, "out", name);
 
+function readInstalledResult(scanned: { summaryPath: string; sarifPaths: string[] }) {
+  const source = `
+    import { readFileSync } from "node:fs";
+    import { readFindings, readSummary } from "@aihq/scan/read";
+    const [summaryPath, ...sarifPaths] = process.argv.slice(1);
+    const read = readSummary(new Uint8Array(readFileSync(summaryPath)));
+    if (read.status !== "ok") throw new Error("summary " + read.status);
+    const findings = [];
+    for (const path of sarifPaths) {
+      const listed = await readFindings(read.summary, new Uint8Array(readFileSync(path)), read.summary.scanKey);
+      if (listed.status !== "ok") throw new Error("findings " + listed.status);
+      findings.push(...listed.findings);
+    }
+    console.log(JSON.stringify({ summary: read.summary, findings }));
+  `;
+  const output = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", source, scanned.summaryPath, ...scanned.sarifPaths],
+    { cwd: consumer, encoding: "utf8" },
+  );
+  return JSON.parse(output) as { summary: any; findings: any[] };
+}
+
+function nodeInstalled(
+  script: string,
+  args: readonly string[],
+  env: Record<string, string>,
+): Promise<Run> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [script, ...args], {
+      cwd: consumer,
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const timer = setTimeout(() => child.kill(), 120_000);
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolvePromise({ code, signal, stdout, stderr });
+    });
+  });
+}
+
 beforeAll(() => {
   const exact = process.env.AIH_SCAN_PACKED_TARBALL;
   if (exact !== undefined) {
@@ -252,7 +304,7 @@ beforeAll(() => {
 describe("the packed tarball", () => {
   it("holds exactly the replacement package", () => {
     expect(basename(tarball)).toBe("aihq-scan-0.0.0-dev.1.tgz");
-    const entries = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" })
+    const entries = execFileSync("tar", ["--force-local", "-tzf", tarball], { encoding: "utf8" })
       .trim()
       .split("\n")
       .map((entry) => entry.replace(/^package\//, ""))
@@ -391,7 +443,7 @@ describe("the installed public entries", () => {
       assert.deepEqual(read.summary.notAnalysed, []);
       assert.equal(read.summary.coverage, "partial");
       assert.deepEqual(read.summary.tools.find(t => t.tool === "skillspector"), {
-        tool: "skillspector", version: "2.13.3", mode: "static", result: "not-run",
+        tool: "skillspector", version: "2.13.4", mode: "static", result: "not-run",
         reason: "unavailable", counts: {} });
       assert.deepEqual(new Uint8Array(readFileSync(item + "/" + path)), bytes);
       console.log("installed-kiro-ok");
@@ -845,7 +897,7 @@ describe("the installed aih-scan CLI", () => {
     "cancels on SIGINT with exit 130 and ends the analyzer's process tree",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.3",
+        versionText: "SkillSpector v2.13.4",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -876,7 +928,7 @@ describe("the installed aih-scan CLI", () => {
     "stops at once on a second SIGINT, still ending the analyzer tree and removing Scan's temporary folders",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.3",
+        versionText: "SkillSpector v2.13.4",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -922,7 +974,7 @@ describe.runIf(skillspector !== undefined)(
         path: "session-summary.kiro.hook",
         text: '{"when":{"type":"userTriggered"},"then":{"type":"askAgent","prompt":"Summarise this Kiro session carefully."}}\n',
       },
-    ])("preserves the selected model and schema-only HTTP controls for $name, and refuses incomplete AI responses", async ({
+    ])("preserves caller AI controls for $name and distinguishes complete, recovered and failed responses", async ({
       name,
       path,
       text,
@@ -930,7 +982,15 @@ describe.runIf(skillspector !== undefined)(
       const service = await compatibleAiServiceV1();
       servers.push(service);
       const skill = folder(`compatible-ai-${name}`, { [path]: text });
-      for (const outcome of ["complete", "malformed", "quota", "unfinished"] as const) {
+      for (const outcome of [
+        "complete",
+        "repaired",
+        "recovered",
+        "malformed",
+        "refused",
+        "quota",
+        "unfinished",
+      ] as const) {
         service.setOutcome(outcome);
         const run = await cli(
           [
@@ -951,22 +1011,22 @@ describe.runIf(skillspector !== undefined)(
               SKILLSPECTOR_MODEL: "deepseek-flash",
               SKILLSPECTOR_REASONING_EFFORT: "none",
               SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
+              SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
             },
           },
         );
         expect(run.code, run.stderr).toBe(0);
         const scanned = json(run).targets[0].results[0];
         expect(scanned.status).toBe("ok");
-        const summary = JSON.parse(readFileSync(scanned.summaryPath, "utf8"));
+        const { summary, findings } = readInstalledResult(scanned);
         expect(summary.files).toEqual([
           { path, mode: "100644", part: "text", sha256: sha256Of(Buffer.from(text)) },
         ]);
         expect(summary.notAnalysed).toEqual([]);
         expect(summary.dependencies).toEqual([]);
-        expect(summary.coverage, JSON.stringify(scanned)).toBe(
-          outcome === "complete" ? "complete" : "partial",
-        );
-        if (outcome !== "complete") expect(summary.reason).toBe("failed");
+        const complete = outcome === "complete" || outcome === "repaired";
+        expect(summary.coverage, JSON.stringify(scanned)).toBe(complete ? "complete" : "partial");
+        if (!complete) expect(summary.reason).toBe("failed");
         const tool = summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector");
         if (outcome === "quota") {
           expect(tool).toMatchObject({ mode: "ai", result: "not-run", reason: "failed" });
@@ -974,11 +1034,33 @@ describe.runIf(skillspector !== undefined)(
           expect(tool).toMatchObject({
             mode: "ai",
             ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
-            // The finding result is independent of coverage: these responses add no findings.
-            result: "pass",
+            result: outcome === "recovered" ? "fail" : "pass",
+            ...(outcome === "recovered" ? { counts: { high: 1 } } : {}),
           });
         }
+        if (outcome === "recovered") {
+          expect(findings).toContainEqual(
+            expect.objectContaining({
+              tool: "skillspector",
+              ruleId: "SSD-1",
+              code: "trust.prompt-injection",
+              path,
+            }),
+          );
+        } else {
+          expect(findings.some((finding) => finding.ruleId === "SSD-1")).toBe(false);
+        }
+        const notes = (scanned.notes ?? []).join("\n");
+        if (outcome === "recovered" || outcome === "malformed")
+          expect(notes).toContain("llm_format_recovery_exhausted");
+        if (outcome === "refused") expect(notes).toContain("llm_response_refused");
+        if (outcome === "unfinished") expect(notes).toContain("llm_response_truncated");
+        if (outcome === "quota") {
+          expect(notes).toContain("SkillSpector exited 2; report: llm_batch_failed");
+          expect(notes).toContain(path);
+        }
         expect(service.requests.length).toBeGreaterThan(0);
+        expect(service.security.maxActive).toBeLessThanOrEqual(2);
         if (name === "kiro-hook") {
           expect(JSON.stringify(service.requests)).toContain(
             "Summarise this Kiro session carefully.",
@@ -989,14 +1071,20 @@ describe.runIf(skillspector !== undefined)(
           expect(request.model).toBe("deepseek-flash");
           expect(request.reasoning_effort).toBe("none");
           expect(request.response_format).toBeUndefined();
-          expect(request.tool_choice).toMatchObject({
-            type: "function",
-            function: { name: "LLMAnalysisResult" },
-          });
-          // These declarations describe a response object. There is no host-tool dispatcher.
-          expect(request.tools).toMatchObject([
-            { type: "function", function: { name: "LLMAnalysisResult" } },
-          ]);
+          const fieldRecovery = JSON.stringify(request.messages).includes("Requested field:");
+          if (fieldRecovery) {
+            expect(request.tool_choice).toBeUndefined();
+            expect(request.tools).toBeUndefined();
+          } else {
+            const choice = request.tool_choice as { type: string; function: { name: string } };
+            const tools = request.tools as { type: string; function: { name: string } }[];
+            expect(choice.type).toBe("function");
+            expect(choice.function.name.length).toBeGreaterThan(0);
+            // Declarations describe response data only; there is no host-tool dispatcher.
+            expect(tools).toMatchObject([
+              { type: "function", function: { name: choice.function.name } },
+            ]);
+          }
           expect(
             (request.messages as { role: string }[]).every(
               (message) => message.role === "user" || message.role === "system",
@@ -1006,6 +1094,81 @@ describe.runIf(skillspector !== undefined)(
         expect(JSON.stringify(summary) + run.stdout + run.stderr).not.toContain(
           "fixture-only-not-a-real-key",
         );
+      }
+    }, 240_000);
+
+    it("keeps simulated recovered findings through installed host and reader without complete coverage", async () => {
+      const service = await compatibleAiServiceV1();
+      servers.push(service);
+      service.setOutcome("recovered");
+      const item = folder("compatible-host-recovered", { "SKILL.md": cleanSkill["SKILL.md"] });
+      const script = join(consumer, "compatible-host-recovered.mjs");
+      writeFileSync(
+        script,
+        `
+          import { readFileSync } from "node:fs";
+          import { scan } from "@aihq/scan/host";
+          import { readFindings, readSummary } from "@aihq/scan/read";
+          const [item, out] = process.argv.slice(2);
+          const result = await scan(
+            { format: "aih-scan-request/1", origin: "local", mode: "ai", items: [{ path: item }] },
+            { outDir: out },
+          );
+          const entry = result.results[0];
+          if (entry?.status !== "ok") throw new Error(JSON.stringify(result));
+          const read = readSummary(new Uint8Array(readFileSync(entry.summaryPath)));
+          if (read.status !== "ok") throw new Error("summary");
+          const findings = [];
+          for (const path of entry.sarifPaths) {
+            const listed = await readFindings(read.summary, new Uint8Array(readFileSync(path)), read.summary.scanKey);
+            if (listed.status !== "ok") throw new Error("findings");
+            findings.push(...listed.findings);
+          }
+          console.log(JSON.stringify({
+            coverage: read.summary.coverage,
+            reason: read.summary.reason,
+            tools: read.summary.tools,
+            notes: entry.notes,
+            findings,
+          }));
+        `,
+      );
+      const run = await nodeInstalled(script, [item, outFolder("compatible-host-recovered")], {
+        AIH_SCAN_SKILLSPECTOR: skillspector!,
+        AIH_SCAN_SKILL_SCANNER: "none",
+        SKILLSPECTOR_PROVIDER: "openai_compatible",
+        SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
+        SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
+        SKILLSPECTOR_MODEL: "deepseek-flash",
+        SKILLSPECTOR_REASONING_EFFORT: "none",
+        SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
+        SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
+      });
+      expect(run.code, run.stderr).toBe(0);
+      const output = JSON.parse(run.stdout);
+      expect(output.coverage).toBe("partial");
+      expect(output.reason).toBe("failed");
+      expect(output.tools).toContainEqual(
+        expect.objectContaining({
+          tool: "skillspector",
+          version: "2.13.4",
+          mode: "ai",
+          result: "fail",
+          ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
+        }),
+      );
+      expect(output.findings).toContainEqual(
+        expect.objectContaining({
+          tool: "skillspector",
+          ruleId: "SSD-1",
+          code: "trust.prompt-injection",
+          path: "SKILL.md",
+        }),
+      );
+      expect(output.notes.join("\n")).toContain("llm_format_recovery_exhausted");
+      for (const request of service.requests) {
+        expect(request.model).toBe("deepseek-flash");
+        expect(request.reasoning_effort).toBe("none");
       }
     }, 180_000);
 
@@ -1066,8 +1229,74 @@ describe.runIf(skillspector !== undefined)(
 );
 
 describe.runIf((skillspector !== undefined && skillScanner !== undefined) || required)(
-  "the installed CLI with the real SkillSpector 2.13.3 and Cisco skill-scanner 2.3.2",
+  "the installed public API and CLI with the real SkillSpector 2.13.4 and Cisco skill-scanner 2.3.2",
   () => {
+    it("accepts the real runtime through installed host, contracts and reader interfaces", async () => {
+      expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
+      expect(skillScanner, "AIH_SCAN_TEST_SKILL_SCANNER").toBeDefined();
+      const item = folder("real-host-benign", cleanSkill);
+      const script = join(consumer, "real-host.mjs");
+      writeFileSync(
+        script,
+        `
+          import { readFileSync } from "node:fs";
+          import { join } from "node:path";
+          import { scan } from "@aihq/scan/host";
+          import { scanKeyOf } from "@aihq/scan/contracts";
+          import { readFindings, readSummary } from "@aihq/scan/read";
+          const [item, out] = process.argv.slice(2);
+          const result = await scan(
+            { format: "aih-scan-request/1", origin: "local", items: [{ path: item }] },
+            { outDir: out },
+          );
+          const entry = result.results[0];
+          if (entry?.status !== "ok") throw new Error(JSON.stringify(result));
+          const read = readSummary(new Uint8Array(readFileSync(entry.summaryPath)));
+          if (read.status !== "ok") throw new Error("summary");
+          const key = await scanKeyOf([
+            { path: "SKILL.md", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "SKILL.md"))) },
+            { path: "scripts/greet.py", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "scripts/greet.py"))) },
+          ]);
+          if (key.status !== "ok") throw new Error("key");
+          const findings = [];
+          for (const path of entry.sarifPaths) {
+            const listed = await readFindings(read.summary, new Uint8Array(readFileSync(path)), read.summary.scanKey);
+            if (listed.status !== "ok") throw new Error("findings");
+            findings.push(...listed.findings);
+          }
+          console.log(JSON.stringify({
+            status: result.status,
+            coverage: read.summary.coverage,
+            tools: read.summary.tools,
+            scanKeyMatches: key.scanKey === read.summary.scanKey,
+            findings,
+          }));
+        `,
+      );
+      const output = JSON.parse(
+        execFileSync(process.execPath, [script, item, outFolder("real-host-api")], {
+          cwd: consumer,
+          env: {
+            ...process.env,
+            AIH_SCAN_SKILLSPECTOR: skillspector!,
+            AIH_SCAN_SKILL_SCANNER: "none",
+          },
+          encoding: "utf8",
+        }),
+      );
+      expect(output.status).toBe("ok");
+      expect(output.coverage).toBe("complete");
+      expect(output.scanKeyMatches).toBe(true);
+      expect(output.tools).toContainEqual({
+        tool: "skillspector",
+        version: "2.13.4",
+        mode: "static",
+        result: "pass",
+        counts: {},
+      });
+      expect(output.findings).toEqual([]);
+    }, 180_000);
+
     it("runs both natively in static mode, without a network when unshare is available, executing nothing", async () => {
       expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
       expect(skillScanner, "AIH_SCAN_TEST_SKILL_SCANNER").toBeDefined();
@@ -1118,9 +1347,14 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       ).toEqual([
         "aih-trust-lint 1.0.0 static",
         "cisco 2.3.2 static",
-        "skillspector 2.13.3 static",
+        "skillspector 2.13.4 static",
       ]);
-      expect(summary.coverage).toBe("complete");
+      expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+      expect(skill.notes).toEqual(
+        expect.arrayContaining([
+          "SkillSpector reported partial inspection: bundled_execution_surface degraded, opaque_content hooks/hooks.json",
+        ]),
+      );
       const findings = await cli(["findings", skill.summaryPath, "--key", skill.scanKey]);
       expect(findings.stdout).toContain("skillspector");
       expect(findings.stdout).toContain("cisco");
