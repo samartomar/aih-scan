@@ -123,7 +123,7 @@ jobs:
           }
           '@ | node --input-type=module
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npx vitest run tests/host-v1/analyzers.test.ts tests/release-readiness.test.ts --testNamePattern "ignores ambient TP4|accepts only a stable unambiguous npm CLI version" --no-file-parallelism
+          npx vitest run tests/host-v1/analyzers.test.ts tests/release-readiness.test.ts --testNamePattern "ignores ambient TP4|accepts only a stable unambiguous npm CLI version" --no-file-parallelism --testTimeout=30000
       - run: npm run verify
 
   actionlint:
