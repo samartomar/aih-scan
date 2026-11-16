@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { scanWith } from "../../src/host/scan.js";
 import { SKILLSPECTOR_MAINTENANCE_VERSION } from "../../src/host/skillspector.js";
 import { readFindings, readSummary } from "../../src/public/read.js";
@@ -18,6 +18,8 @@ import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fix
 
 // Controlled CLI fixtures stand in for SkillSpector and Cisco here: they are real subprocesses
 // started by Scan's native runner, never the real analyzers and never an AI provider.
+// Windows cold native integration startup needs a larger harness budget; tool deadlines stay fixed.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 15_000 });
 
 beforeAll(() => {
   if (process.platform !== "win32") return;
@@ -179,7 +181,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
         ...behaviour,
         versionText: `SkillSpector v${version}`,
       });
-      const { summary } = await run(folder, ss, { timeoutMs: 1500 });
+      const { summary } = await run(folder, ss, "hang" in behaviour ? { timeoutMs: 1500 } : {});
       expect(toolOf(summary, "skillspector")).toMatchObject({ version, reason, result: "not-run" });
     }
   });

@@ -104,6 +104,16 @@ jobs:
           node-version: "24.15.0"
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Diagnose scrubbed CIM module loading and prove its negative control
+        run: |
+          npx vitest run tests/support/windows-sweep-diagnostic.test.ts --no-file-parallelism
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:AIH_SCAN_DIAGNOSTIC_CIM_IMPORT = '1'
+          try {
+            npx vitest run tests/cli/windows-job-supervisor.test.ts --testNamePattern "negative control" --no-file-parallelism
+            $result = $LASTEXITCODE
+          } finally { Remove-Item Env:AIH_SCAN_DIAGNOSTIC_CIM_IMPORT }
+          exit $result
       - run: npm run verify
 
   actionlint:

@@ -171,6 +171,12 @@ const WINDOWS_SWEEP_SCRIPT = [
 
 async function windowsProcesses(markers: readonly string[]): Promise<LiveProcessV1[]> {
   const systemRoot = windowsSystemRootV1();
+  // [DEBUG-retro-cim] Temporary candidate proof, enabled only for the isolated CI control.
+  const script =
+    process.env.AIH_SCAN_DIAGNOSTIC_CIM_IMPORT === "1"
+      ? "Import-Module ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1'))\n" +
+        WINDOWS_SWEEP_SCRIPT
+      : WINDOWS_SWEEP_SCRIPT;
   const output = await collect(
     windowsJobSupervisorExecutableV1(),
     [
@@ -180,7 +186,7 @@ async function windowsProcesses(markers: readonly string[]): Promise<LiveProcess
       "-ExecutionPolicy",
       "Bypass",
       "-EncodedCommand",
-      Buffer.from(WINDOWS_SWEEP_SCRIPT, "utf16le").toString("base64"),
+      Buffer.from(script, "utf16le").toString("base64"),
     ],
     {
       SystemRoot: systemRoot,
