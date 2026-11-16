@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { scanWith } from "../../src/host/scan.js";
 import { SKILLSPECTOR_MAINTENANCE_VERSION } from "../../src/host/skillspector.js";
 import { readFindings, readSummary } from "../../src/public/read.js";
@@ -18,6 +18,18 @@ import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fix
 
 // Controlled CLI fixtures stand in for SkillSpector and Cisco here: they are real subprocesses
 // started by Scan's native runner, never the real analyzers and never an AI provider.
+
+beforeAll(() => {
+  if (process.platform !== "win32") return;
+  // Compile test tooling before behavior cases start; each real probe and scan still runs
+  // under the original test and product deadlines.
+  const setup = fixtureRoot("aih-scan-native-setup-");
+  try {
+    nativeNodeCli(setup.root, "fixture", "process.exit(0);");
+  } finally {
+    setup.dispose();
+  }
+});
 
 let fixture: FixtureRoot;
 beforeEach(() => {
