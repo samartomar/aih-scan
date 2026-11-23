@@ -169,31 +169,31 @@ describe("processRunner", () => {
     expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
 
-  it.each([
-    "stdout",
-    "stderr",
-  ] as const)("settles with a truncated result when %s exceeds its byte cap", async (stream) => {
-    const child = new FakeChild();
-    child.kill.mockReturnValue(true);
-    spawnMock.mockReturnValue(child);
+  it.each(["stdout", "stderr"] as const)(
+    "settles with a truncated result when %s exceeds its byte cap",
+    async (stream) => {
+      const child = new FakeChild();
+      child.kill.mockReturnValue(true);
+      spawnMock.mockReturnValue(child);
 
-    const completed = spawnBoundedV1([ANALYZER, "--version"], options);
-    child[stream].write(Buffer.alloc(options.maxStdoutBytes + 1));
+      const completed = spawnBoundedV1([ANALYZER, "--version"], options);
+      child[stream].write(Buffer.alloc(options.maxStdoutBytes + 1));
 
-    await expect(
-      Promise.race([completed.then(() => "settled"), Promise.resolve("pending")]),
-    ).resolves.toBe("pending");
-    child.emit("close", 0);
-    await expect(completed).resolves.toEqual({
-      code: 1,
-      stdout: "",
-      stderr: "",
-      truncated: true,
-      termination: "output-limit",
-      outputLimit: { stream, limit: 1024, observed: 1025 },
-    });
-    expect(child.kill).toHaveBeenCalledTimes(1);
-  });
+      await expect(
+        Promise.race([completed.then(() => "settled"), Promise.resolve("pending")]),
+      ).resolves.toBe("pending");
+      child.emit("close", 0);
+      await expect(completed).resolves.toEqual({
+        code: 1,
+        stdout: "",
+        stderr: "",
+        truncated: true,
+        termination: "output-limit",
+        outputLimit: { stream, limit: 1024, observed: 1025 },
+      });
+      expect(child.kill).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("process-group containment", () => {

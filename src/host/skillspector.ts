@@ -17,11 +17,11 @@ import {
 import { analyzerFinding, notRun, objectOf } from "./analyzer-report.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
-/** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.4). */
-export const SKILLSPECTOR_VERSION = "2.13.4";
+/** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.6). */
+export const SKILLSPECTOR_VERSION = "2.13.6";
 /** Exact source/archive/patch/runtime-lock/build-lock/builder-recipe maintenance identity. */
 export const SKILLSPECTOR_MAINTENANCE_VERSION =
-  "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa";
+  "2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81";
 /** Selects an exact SkillSpector executable, or `none` to disable it. */
 export const SKILLSPECTOR_VARIABLE = "AIH_SCAN_SKILLSPECTOR";
 
@@ -44,7 +44,7 @@ type Requirement = Readonly<{
   cli?: string;
 }>;
 
-/** The SkillSpector 2.13.4 providers Scan passes through, and what each needs to be set up. */
+/** The SkillSpector 2.13.6 providers Scan passes through, and what each needs to be set up. */
 const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
   openai: { via: "provider", variables: [["OPENAI_API_KEY"]] },
   anthropic: { via: "provider", variables: [["ANTHROPIC_API_KEY"]] },
@@ -69,6 +69,8 @@ const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
   opencode_cli: { via: "cli", cli: "opencode" },
 });
 const DISABLED_UPSTREAM = new Set(["codex_cli", "antigravity_cli"]);
+/** Providers SkillSpector 2.13.6 offers that Scan does not pass through yet. */
+const UNSUPPORTED_BY_SCAN = new Set(["gemini"]);
 
 const isSet = (env: HostEnv, name: string) => {
   const value = env[name];
@@ -125,6 +127,11 @@ export function skillSpectorAiSetup(
     return Object.freeze({
       available: false as const,
       reason: `SkillSpector ${SKILLSPECTOR_VERSION} disables the ${named} provider`,
+    });
+  if (UNSUPPORTED_BY_SCAN.has(named))
+    return Object.freeze({
+      available: false as const,
+      reason: `Scan does not yet support the ${named} provider`,
     });
   const requirement = Object.hasOwn(PROVIDERS, named) ? PROVIDERS[named] : undefined;
   if (requirement === undefined)
@@ -255,10 +262,26 @@ function recognizedCompleteness(completeness: Record<string, unknown>): boolean 
     const value = completeness[name];
     if (!Array.isArray(value) || value.some((entry) => objectOf(entry) === undefined)) return false;
   }
+  for (const name of ["warnings", "notices"]) {
+    const value = completeness[name];
+    if (
+      value !== undefined &&
+      (!Array.isArray(value) || value.some((entry) => objectOf(entry) === undefined))
+    )
+      return false;
+  }
+  const patterns = completeness.exclude_patterns;
   if (
-    completeness.warnings !== undefined &&
-    (!Array.isArray(completeness.warnings) ||
-      completeness.warnings.some((entry) => objectOf(entry) === undefined))
+    patterns !== undefined &&
+    (!Array.isArray(patterns) || patterns.some((value) => typeof value !== "string"))
+  )
+    return false;
+  const excluded = completeness.excluded_file_count;
+  if (excluded !== undefined && (!Number.isSafeInteger(excluded) || (excluded as number) < 0))
+    return false;
+  if (
+    completeness.dependency_inspection !== undefined &&
+    objectOf(completeness.dependency_inspection) === undefined
   )
     return false;
   return true;
@@ -323,6 +346,32 @@ function completenessOf(
     const path = typeof warning.path === "string" ? ` ${warning.path}` : "";
     gaps.add(`${String(warning.reason_code)}${path}`);
   }
+  // 2.13.5+ reports documentation notices (prose command notation it did not inspect as a
+  // command), caller exclusions and opt-in dependency-content inspection outside the status.
+  // Scan requests none of them and has not established that any leaves inspection complete.
+  for (const raw of list(completeness.notices)) {
+    const notice = objectOf(raw);
+    if (notice === undefined) continue;
+    const path = typeof notice.path === "string" ? ` ${notice.path}` : "";
+    gaps.add(`notice ${String(notice.reason_code)}${path}`);
+  }
+  const excludedFiles = completeness.excluded_file_count;
+  if (
+    list(completeness.exclude_patterns).length > 0 ||
+    (typeof excludedFiles === "number" && excludedFiles > 0)
+  )
+    gaps.add(`user_exclusion: ${String(excludedFiles ?? 0)}`);
+  // 2.13.5+ always reports this summary; only the untouched default is complete.
+  const dependencies = objectOf(completeness.dependency_inspection);
+  if (dependencies === undefined) gaps.add("dependency_inspection missing");
+  else if (
+    dependencies.enabled !== false ||
+    dependencies.status !== "not_requested" ||
+    dependencies.inspected_artifacts !== 0 ||
+    !Array.isArray(dependencies.artifacts) ||
+    dependencies.artifacts.length > 0
+  )
+    gaps.add(`dependency_inspection ${String(dependencies.status)}`);
   const aiAnalyzers = new Set(
     list(objectOf(metadata.llm_provenance)?.analyzers).map((entry) =>
       String(objectOf(entry)?.analyzer_id),
@@ -421,7 +470,7 @@ function aiProvenance(
 }
 
 /**
- * Turns one SkillSpector 2.13.4 JSON report into Scan's tool run. Findings keep SkillSpector's
+ * Turns one SkillSpector 2.13.6 JSON report into Scan's tool run. Findings keep SkillSpector's
  * rule id, severity and confidence; ordinary findings are placed at their primary location's
  * file and line, which must be an item file routed to SkillSpector (Text, Code or Config).
  * Archive findings use the exact outer file with `part: none` and retain member details in text.
@@ -572,7 +621,7 @@ export interface SkillSpectorOptions {
 }
 
 /**
- * The SkillSpector adapter: runs the installed SkillSpector 2.13.4 CLI natively (Windows
+ * The SkillSpector adapter: runs the installed SkillSpector 2.13.6 CLI natively (Windows
  * included) over Scan's read-only working copy, under the tool time limit and the caller's
  * cancellation, with its whole process tree contained and removed.
  */

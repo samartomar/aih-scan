@@ -77,24 +77,24 @@ test("aggregate cutoff occurs before forwarding excess bytes across retries", as
   expect(retry).not.toContain("123456");
   expect(() => relay.assertWithinBounds()).toThrow(/Git acquisition transport/);
 });
-test.each([
-  "different-authority",
-  "oversized-header",
-])("%s cannot contact the upstream", async (kind) => {
-  let calls = 0;
-  const authority = await upstream((socket) => {
-    calls++;
-    socket.end();
-  });
-  const relay = await startGitFetchRelay(`https://${authority}/fixture.git`, 1024);
-  cleanups.push(relay.close);
-  await tunnel(
-    relay.proxy,
-    kind === "different-authority" ? "example.invalid:443" : authority,
-    kind === "oversized-header" ? `X-Large: ${"x".repeat(9000)}\r\n` : "",
-  ).complete;
-  expect(calls).toBe(0);
-});
+test.each(["different-authority", "oversized-header"])(
+  "%s cannot contact the upstream",
+  async (kind) => {
+    let calls = 0;
+    const authority = await upstream((socket) => {
+      calls++;
+      socket.end();
+    });
+    const relay = await startGitFetchRelay(`https://${authority}/fixture.git`, 1024);
+    cleanups.push(relay.close);
+    await tunnel(
+      relay.proxy,
+      kind === "different-authority" ? "example.invalid:443" : authority,
+      kind === "oversized-header" ? `X-Large: ${"x".repeat(9000)}\r\n` : "",
+    ).complete;
+    expect(calls).toBe(0);
+  },
+);
 test("connection admission remains finite even when clients send no tunnel payload", async () => {
   const authority = await upstream((socket) => socket.end());
   const relay = await startGitFetchRelay(`https://${authority}/fixture.git`, 1024);
@@ -105,56 +105,56 @@ test("connection admission remains finite even when clients send no tunnel paylo
   expect(relay.limitSignal.aborted).toBe(true);
   expect(() => relay.assertWithinBounds()).toThrow(/Git acquisition transport/);
 });
-test.each([
-  false,
-  true,
-])("public acquisition tunnels the fetch through the relay, ignoring inherited proxies; containment failure %s", async (containmentFailure) => {
-  const authority = await upstream((socket) => socket.end(Buffer.alloc(2 * 1024 * 1024)));
-  vi.stubEnv("NO_PROXY", "*");
-  vi.stubEnv("no_proxy", "*");
-  vi.stubEnv("HTTPS_PROXY", "http://attacker.invalid:9000");
-  let received = 0;
-  vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv, options) => {
-    const args = JSON.parse(argv[2]!) as string[];
-    if (args.includes("ls-remote"))
+test.each([false, true])(
+  "public acquisition tunnels the fetch through the relay, ignoring inherited proxies; containment failure %s",
+  async (containmentFailure) => {
+    const authority = await upstream((socket) => socket.end(Buffer.alloc(2 * 1024 * 1024)));
+    vi.stubEnv("NO_PROXY", "*");
+    vi.stubEnv("no_proxy", "*");
+    vi.stubEnv("HTTPS_PROXY", "http://attacker.invalid:9000");
+    let received = 0;
+    vi.spyOn(processBoundary, "spawnBoundedV1").mockImplementation(async (argv, options) => {
+      const args = JSON.parse(argv[2]!) as string[];
+      if (args.includes("ls-remote"))
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            bytesBase64: Buffer.from(`${"a".repeat(40)}\trefs/heads/main\n`).toString("base64"),
+          }),
+          stderr: "",
+          truncated: false,
+        };
+      if (!args.includes("fetch"))
+        return { code: 0, stdout: '{"bytesBase64":""}', stderr: "", truncated: false };
+      expect(options.containProcessTree).toBe(true);
+      expect(
+        Object.keys(options.env!).some((key) =>
+          ["NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"].includes(key.toUpperCase()),
+        ),
+      ).toBe(false);
+      expect(args).toContain("http.sslVerify=true");
+      expect(args).toContain("http.followRedirects=false");
+      expect(args).toContain("credential.helper=");
+      const proxy = args.find((arg) => arg.startsWith("http.proxy="))?.slice("http.proxy=".length);
+      expect(proxy).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      if (proxy) received = (await tunnel(proxy, authority).complete).length;
+      expect(options.signal?.aborted).toBe(true);
       return {
-        code: 0,
-        stdout: JSON.stringify({
-          bytesBase64: Buffer.from(`${"a".repeat(40)}\trefs/heads/main\n`).toString("base64"),
-        }),
+        code: 1,
+        stdout: "",
         stderr: "",
         truncated: false,
+        ...(containmentFailure ? { termination: "containment-failure" as const } : {}),
       };
-    if (!args.includes("fetch"))
-      return { code: 0, stdout: '{"bytesBase64":""}', stderr: "", truncated: false };
-    expect(options.containProcessTree).toBe(true);
-    expect(
-      Object.keys(options.env!).some((key) =>
-        ["NO_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"].includes(key.toUpperCase()),
-      ),
-    ).toBe(false);
-    expect(args).toContain("http.sslVerify=true");
-    expect(args).toContain("http.followRedirects=false");
-    expect(args).toContain("credential.helper=");
-    const proxy = args.find((arg) => arg.startsWith("http.proxy="))?.slice("http.proxy=".length);
-    expect(proxy).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    if (proxy) received = (await tunnel(proxy, authority).complete).length;
-    expect(options.signal?.aborted).toBe(true);
-    return {
-      code: 1,
-      stdout: "",
-      stderr: "",
-      truncated: false,
-      ...(containmentFailure ? { termination: "containment-failure" as const } : {}),
-    };
-  });
-  const result = await acquireGit(
-    { repo: `https://${authority}/fixture.git`, ref: "main" },
-    new AbortController().signal,
-  ).catch((error: unknown) => error);
-  // A failed or uncontained fetch is an unavailable source; the refusal never echoes the URL.
-  expect(result).toMatchObject({ status: "refused", reason: "source-unavailable" });
-  expect(JSON.stringify(result)).not.toContain(authority);
-  // The fetch reached the upstream only through the loopback relay tunnel.
-  expect(received).toBeGreaterThan(2 * 1024 * 1024);
-});
+    });
+    const result = await acquireGit(
+      { repo: `https://${authority}/fixture.git`, ref: "main" },
+      new AbortController().signal,
+    ).catch((error: unknown) => error);
+    // A failed or uncontained fetch is an unavailable source; the refusal never echoes the URL.
+    expect(result).toMatchObject({ status: "refused", reason: "source-unavailable" });
+    expect(JSON.stringify(result)).not.toContain(authority);
+    // The fetch reached the upstream only through the loopback relay tunnel.
+    expect(received).toBeGreaterThan(2 * 1024 * 1024);
+  },
+);

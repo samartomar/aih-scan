@@ -149,7 +149,7 @@ export function alive(pid: number): boolean {
   return true;
 }
 
-/** A SkillSpector 2.13.4 JSON report in the upstream shape (fields as the real CLI writes them). */
+/** A SkillSpector 2.13.6 JSON report in the upstream shape (fields as the real CLI writes them). */
 export function skillSpectorReport(
   issues: readonly Record<string, unknown>[],
   overrides: Readonly<{
@@ -172,7 +172,7 @@ export function skillSpectorReport(
     suppressed_count: 0,
     suppressed: [],
     metadata: {
-      skillspector_version: overrides.version ?? "2.13.4",
+      skillspector_version: overrides.version ?? "2.13.6",
       llm_requested: overrides.llm ?? false,
       llm_available: overrides.llm ?? false,
       llm_provenance: overrides.provenance ?? {
@@ -199,6 +199,14 @@ export function skillSpectorReport(
       ledger_exceptions: overrides.ledgerExceptions ?? [],
       scope_exclusions: [],
       limitations: [],
+      dependency_inspection: {
+        enabled: false,
+        status: "not_requested",
+        mode: "static_local",
+        locked_entries: 0,
+        inspected_artifacts: 0,
+        artifacts: [],
+      },
       ...overrides.completeness,
     },
   };
@@ -226,6 +234,7 @@ export function skillSpectorIssue(
     code_snippet: "snippet",
     match_fingerprint: `${id.toLowerCase().padEnd(8, "0")}${"ab".repeat(28)}`,
     occurrences: [{ file, start_line: line }],
+    surface: "instructions",
   };
 }
 

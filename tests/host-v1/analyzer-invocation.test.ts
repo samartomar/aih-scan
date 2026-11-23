@@ -153,11 +153,12 @@ describe("SkillSpector command construction", () => {
 describe("SkillSpector AI setup (reads which settings exist, never their values)", () => {
   it.each([
     [{}, "SKILLSPECTOR_PROVIDER is not set"],
-    [{ SKILLSPECTOR_PROVIDER: "codex_cli" }, "SkillSpector 2.13.4 disables the codex_cli provider"],
+    [{ SKILLSPECTOR_PROVIDER: "codex_cli" }, "SkillSpector 2.13.6 disables the codex_cli provider"],
     [
       { SKILLSPECTOR_PROVIDER: "made_up" },
       "SKILLSPECTOR_PROVIDER names a provider SkillSpector does not support",
     ],
+    [{ SKILLSPECTOR_PROVIDER: "gemini" }, "Scan does not yet support the gemini provider"],
     [{ SKILLSPECTOR_PROVIDER: "openai" }, "OPENAI_API_KEY is not set for provider openai"],
     [
       {

@@ -26,7 +26,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   packages by exact version, downloaded npm tarballs and remote MCP configuration (never
   contacted). Item discovery for skills, agents, commands, rules (steering included),
   hooks and MCP configs, with remaining files and a roll-up.
-- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.4 as the
+- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.6 as the
   primary analyzer (static by default, optional AI pass through the caller's own setup)
   and the optional Cisco skill-scanner 2.3.2 second opinion; locked runtimes in
   `tools/analyzers`.
@@ -34,7 +34,9 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   completion checks, within Scan's existing ten-minute per-tool deadline.
 - Fail-closed SkillSpector completeness reconciliation across status, limitations, recovery
   warnings and inspected-file aggregates, retaining usable partial findings and only the
-  positively identified reference-only caveat exception.
+  positively identified reference-only caveat exception. SkillSpector 2.13.5+ documentation
+  notices, caller exclusions and requested dependency-content inspection, which its status
+  does not reflect, leave the item partial.
 - Signing and verification profile `aih-sigstore-keyless/1`: `aih-scan sign` writes a
   Sigstore `messageSignature` bundle; `verifySummary` verifies offline, separates
   signature validity from signer trust and applies withdrawals through `throughRevision`.
@@ -65,6 +67,6 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 Historical published versions and tags are kept unchanged as release history; see
 [RELEASING.md](RELEASING.md).
 
-- Support an explicitly identified reproducible SkillSpector 2.13.4 TP4 maintenance build
+- Support an explicitly identified reproducible SkillSpector 2.13.6 TP4 maintenance build
   with configuration-bound source/finding capacity and strict installed artifact verification.
   Preserve upstream defaults, completed producer identities and incomplete evidence.

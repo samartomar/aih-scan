@@ -217,6 +217,13 @@ describe("prepared manifest and exact inventory", () => {
         wheelSha256: "f40324a28badbfd01c46fe2e77e9d2a0be2df874317d1ca84710b1ccb4e8aab8",
       }),
     ).toThrow("identity");
+    expect(() =>
+      validate({
+        ...valid,
+        version: "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa",
+        wheelSha256: "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
+      }),
+    ).toThrow("identity");
     expect(() => validate({ ...valid, wheelSha256: "0".repeat(64) })).toThrow("identity");
     expect(
       validateManifest(Buffer.from(JSON.stringify(setup.manifest)), setup.manifestSha256)
@@ -470,7 +477,7 @@ describe.runIf(process.platform !== "win32")(
   () => {
     function analyzer(folder: string, complete = true) {
       return fakeAnalyzer(folder, "skillspector", {
-        versionText: "SkillSpector v2.13.4",
+        versionText: "SkillSpector v2.13.6",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           llm: complete,
@@ -579,7 +586,7 @@ describe.runIf(process.platform !== "win32")(
       async (secret, effectiveSecret) => {
         const setup = await prepared({ item: skill });
         const ss = fakeAnalyzer(setup.folder, "skillspector", {
-          versionText: "SkillSpector v2.13.4",
+          versionText: "SkillSpector v2.13.6",
           outputFlag: "--output",
           report: skillSpectorReport([], {
             llm: false,
@@ -744,191 +751,192 @@ describe.runIf(process.platform !== "win32")(
         ),
       ).rejects.toThrow("SARIF");
     }, 120000);
-    it.each([
-      "prior",
-      "current",
-    ])("keeps the exact %s producer through installed candidate and pre-signing validation", async (producerVersion) => {
-      const setup = await prepared({ historical: skill });
-      if (producerVersion === "prior") {
-        const sourceTar = join(setup.folder, "prior-package.tar");
-        const entries = readArchive(gunzipSync(readFileSync(tarball)));
-        writeArchive(
-          [...entries]
-            .filter(([, entry]) => entry.type === "file")
-            .map(([path, entry]) => ({
-              path,
-              bytes: entry.bytes,
-              mode: entry.mode & 0o111 ? "100755" : "100644",
-            }))
-            .concat([
-              {
-                path: "package/prior-producer.txt",
-                bytes: Buffer.from("distinct reviewed prior producer fixture"),
-                mode: "100644",
-              },
-            ]),
-          sourceTar,
-        );
-        setup.tarball = join(setup.folder, "prior.tgz");
-        writeFileSync(setup.tarball, gzipSync(readFileSync(sourceTar)));
-        setup.consumer = join(setup.folder, "prior-consumer");
-        cpSync(consumer, setup.consumer, { recursive: true });
-        writeFileSync(
-          join(setup.consumer, "node_modules/@aihq/scan/prior-producer.txt"),
-          "distinct reviewed prior producer fixture",
-        );
-        setup.manifest = {
-          ...setup.manifest,
-          scanner: { ...scanner, tarballSha256: hash(readFileSync(setup.tarball)) },
-        };
-        writeFileSync(setup.manifestPath, JSON.stringify(setup.manifest));
-        setup.manifestSha256 = hash(readFileSync(setup.manifestPath));
-      }
-      const ss = analyzer(setup.folder);
-      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
-      vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
-      const result = await scanPrepared(setup);
-      const archive = join(setup.folder, "reviewed.tar");
-      const exported = await exportCandidate({
-        ...setup,
-        receiptPath: result.receiptPath,
-        out: archive,
-      });
-      const receipt = JSON.parse(
-        readArchive(readFileSync(archive)).get("receipt.json")!.bytes.toString("utf8"),
-      );
-      const records = Object.values(receipt.results) as {
-        summary: string;
-        summarySha256: string;
-      }[];
-      const source = join(setup.folder, "reviewed-source");
-      mkdirSync(source);
-      writeFileSync(join(source, "package-lock.json"), "reviewed exact dependency lock");
-      const git = (args: string[]) =>
-        execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
-      git(["init", "--quiet"]);
-      git(["remote", "add", "origin", "https://github.com/samartomar/aih-scan.git"]);
-      git(["add", "."]);
-      git([
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--quiet",
-        "-m",
-        "Reviewed producer source fixture",
-      ]);
-      const context = {
-        format: "aih-scan-producer-context/1",
-        sourceCommit: git(["rev-parse", "HEAD"]),
-        packageSha256: setup.manifest.scanner.tarballSha256,
-        lockSha256: hash(readFileSync(join(source, "package-lock.json"))),
-        archiveSha256: exported.archiveSha256,
-        manifestSha256: exported.manifestSha256,
-        receiptSha256: exported.receiptSha256,
-        selectionSha256: hash(
-          records
-            .map((record) => `${record.summarySha256}  ${record.summary}\n`)
-            .sort((a, b) => (a.slice(66) < b.slice(66) ? -1 : 1))
-            .join(""),
-        ),
-      };
-      const contextBytes = Buffer.from(JSON.stringify(context));
-      const contextPath = join(setup.folder, "producer.json");
-      writeFileSync(contextPath, contextBytes);
-      const candidateConsumer = join(setup.folder, "candidate-consumer"),
-        publisherConsumer = join(setup.folder, "publisher-consumer");
-      cpSync(setup.consumer, candidateConsumer, { recursive: true });
-      cpSync(setup.consumer, publisherConsumer, { recursive: true });
-      sealProducerContext(
-        contextBytes,
-        hash(contextBytes),
-        source,
-        candidateConsumer,
-        setup.tarball,
-      );
-      sealProducerContext(
-        contextBytes,
-        hash(contextBytes),
-        source,
-        publisherConsumer,
-        setup.tarball,
-      );
-      const descriptor = {
-        format: "aih-scan-prepared-import/1",
-        githubRelease: { repository: "samartomar/aih-scan", assetId: 123, name: "reviewed.tar" },
-        archiveSha256: exported.archiveSha256,
-        manifestSha256: exported.manifestSha256,
-        receiptSha256: exported.receiptSha256,
-      };
-      const descriptorPath = join(setup.folder, "descriptor.json");
-      writeFileSync(descriptorPath, JSON.stringify(descriptor));
-      const fixture = await publisherTransport(readFileSync(archive));
-      const candidate = join(setup.folder, "hosted-candidate");
-      try {
-        await fixture.run([
-          "prepared-import",
-          descriptorPath,
-          hash(readFileSync(descriptorPath)),
-          candidateConsumer,
-          candidate,
-          contextPath,
-          hash(contextBytes),
-        ]);
-        expect(
-          await checkPreparedCandidate(candidate, publisherConsumer, {
-            bytes: contextBytes,
-            sha256: hash(contextBytes),
-          }),
-        ).toEqual({ execution: "local", count: 1 });
-        const cli = await fixture.run([
-          "prepared-check",
-          candidate,
-          publisherConsumer,
-          contextPath,
-          hash(contextBytes),
-        ]);
-        expect(JSON.parse(cli.stdout)).toEqual({ execution: "local", count: 1 });
-        expect(readFileSync(join(candidate, "manifest.json"))).toEqual(
-          readArchive(readFileSync(archive)).get("manifest.json")?.bytes,
-        );
-        for (const record of records)
-          expect(readFileSync(join(candidate, record.summary))).toEqual(
-            readArchive(readFileSync(archive)).get(record.summary)?.bytes,
+    it.each(["prior", "current"])(
+      "keeps the exact %s producer through installed candidate and pre-signing validation",
+      async (producerVersion) => {
+        const setup = await prepared({ historical: skill });
+        if (producerVersion === "prior") {
+          const sourceTar = join(setup.folder, "prior-package.tar");
+          const entries = readArchive(gunzipSync(readFileSync(tarball)));
+          writeArchive(
+            [...entries]
+              .filter(([, entry]) => entry.type === "file")
+              .map(([path, entry]) => ({
+                path,
+                bytes: entry.bytes,
+                mode: entry.mode & 0o111 ? "100755" : "100644",
+              }))
+              .concat([
+                {
+                  path: "package/prior-producer.txt",
+                  bytes: Buffer.from("distinct reviewed prior producer fixture"),
+                  mode: "100644",
+                },
+              ]),
+            sourceTar,
           );
-        await expect(checkPreparedCandidate(candidate, publisherConsumer)).rejects.toThrow(
-          "Independent reviewed producer",
+          setup.tarball = join(setup.folder, "prior.tgz");
+          writeFileSync(setup.tarball, gzipSync(readFileSync(sourceTar)));
+          setup.consumer = join(setup.folder, "prior-consumer");
+          cpSync(consumer, setup.consumer, { recursive: true });
+          writeFileSync(
+            join(setup.consumer, "node_modules/@aihq/scan/prior-producer.txt"),
+            "distinct reviewed prior producer fixture",
+          );
+          setup.manifest = {
+            ...setup.manifest,
+            scanner: { ...scanner, tarballSha256: hash(readFileSync(setup.tarball)) },
+          };
+          writeFileSync(setup.manifestPath, JSON.stringify(setup.manifest));
+          setup.manifestSha256 = hash(readFileSync(setup.manifestPath));
+        }
+        const ss = analyzer(setup.folder);
+        vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+        vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
+        const result = await scanPrepared(setup);
+        const archive = join(setup.folder, "reviewed.tar");
+        const exported = await exportCandidate({
+          ...setup,
+          receiptPath: result.receiptPath,
+          out: archive,
+        });
+        const receipt = JSON.parse(
+          readArchive(readFileSync(archive)).get("receipt.json")!.bytes.toString("utf8"),
         );
-        const swapped = Buffer.from(JSON.stringify({ ...context, sourceCommit: "f".repeat(40) }));
-        await expect(
-          checkPreparedCandidate(candidate, publisherConsumer, {
-            bytes: swapped,
-            sha256: hash(swapped),
-          }),
-        ).rejects.toThrow("runtime/context");
-        const packageFile = join(publisherConsumer, "node_modules/@aihq/scan/CONTRACTS.md");
-        writeFileSync(packageFile, "changed package");
-        await expect(
-          checkPreparedCandidate(candidate, publisherConsumer, {
-            bytes: contextBytes,
-            sha256: hash(contextBytes),
-          }),
-        ).rejects.toThrow("runtime/context");
-        writeFileSync(join(source, "package-lock.json"), "tampered dependency lock");
-        expect(() =>
-          sealProducerContext(
-            contextBytes,
-            hash(contextBytes),
-            source,
-            join(setup.folder, "never-installed"),
-            tarball,
+        const records = Object.values(receipt.results) as {
+          summary: string;
+          summarySha256: string;
+        }[];
+        const source = join(setup.folder, "reviewed-source");
+        mkdirSync(source);
+        writeFileSync(join(source, "package-lock.json"), "reviewed exact dependency lock");
+        const git = (args: string[]) =>
+          execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
+        git(["init", "--quiet"]);
+        git(["remote", "add", "origin", "https://github.com/samartomar/aih-scan.git"]);
+        git(["add", "."]);
+        git([
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "commit",
+          "--quiet",
+          "-m",
+          "Reviewed producer source fixture",
+        ]);
+        const context = {
+          format: "aih-scan-producer-context/1",
+          sourceCommit: git(["rev-parse", "HEAD"]),
+          packageSha256: setup.manifest.scanner.tarballSha256,
+          lockSha256: hash(readFileSync(join(source, "package-lock.json"))),
+          archiveSha256: exported.archiveSha256,
+          manifestSha256: exported.manifestSha256,
+          receiptSha256: exported.receiptSha256,
+          selectionSha256: hash(
+            records
+              .map((record) => `${record.summarySha256}  ${record.summary}\n`)
+              .sort((a, b) => (a.slice(66) < b.slice(66) ? -1 : 1))
+              .join(""),
           ),
-        ).toThrow("source is modified");
-      } finally {
-        await fixture.close();
-      }
-    }, 120000);
+        };
+        const contextBytes = Buffer.from(JSON.stringify(context));
+        const contextPath = join(setup.folder, "producer.json");
+        writeFileSync(contextPath, contextBytes);
+        const candidateConsumer = join(setup.folder, "candidate-consumer"),
+          publisherConsumer = join(setup.folder, "publisher-consumer");
+        cpSync(setup.consumer, candidateConsumer, { recursive: true });
+        cpSync(setup.consumer, publisherConsumer, { recursive: true });
+        sealProducerContext(
+          contextBytes,
+          hash(contextBytes),
+          source,
+          candidateConsumer,
+          setup.tarball,
+        );
+        sealProducerContext(
+          contextBytes,
+          hash(contextBytes),
+          source,
+          publisherConsumer,
+          setup.tarball,
+        );
+        const descriptor = {
+          format: "aih-scan-prepared-import/1",
+          githubRelease: { repository: "samartomar/aih-scan", assetId: 123, name: "reviewed.tar" },
+          archiveSha256: exported.archiveSha256,
+          manifestSha256: exported.manifestSha256,
+          receiptSha256: exported.receiptSha256,
+        };
+        const descriptorPath = join(setup.folder, "descriptor.json");
+        writeFileSync(descriptorPath, JSON.stringify(descriptor));
+        const fixture = await publisherTransport(readFileSync(archive));
+        const candidate = join(setup.folder, "hosted-candidate");
+        try {
+          await fixture.run([
+            "prepared-import",
+            descriptorPath,
+            hash(readFileSync(descriptorPath)),
+            candidateConsumer,
+            candidate,
+            contextPath,
+            hash(contextBytes),
+          ]);
+          expect(
+            await checkPreparedCandidate(candidate, publisherConsumer, {
+              bytes: contextBytes,
+              sha256: hash(contextBytes),
+            }),
+          ).toEqual({ execution: "local", count: 1 });
+          const cli = await fixture.run([
+            "prepared-check",
+            candidate,
+            publisherConsumer,
+            contextPath,
+            hash(contextBytes),
+          ]);
+          expect(JSON.parse(cli.stdout)).toEqual({ execution: "local", count: 1 });
+          expect(readFileSync(join(candidate, "manifest.json"))).toEqual(
+            readArchive(readFileSync(archive)).get("manifest.json")?.bytes,
+          );
+          for (const record of records)
+            expect(readFileSync(join(candidate, record.summary))).toEqual(
+              readArchive(readFileSync(archive)).get(record.summary)?.bytes,
+            );
+          await expect(checkPreparedCandidate(candidate, publisherConsumer)).rejects.toThrow(
+            "Independent reviewed producer",
+          );
+          const swapped = Buffer.from(JSON.stringify({ ...context, sourceCommit: "f".repeat(40) }));
+          await expect(
+            checkPreparedCandidate(candidate, publisherConsumer, {
+              bytes: swapped,
+              sha256: hash(swapped),
+            }),
+          ).rejects.toThrow("runtime/context");
+          const packageFile = join(publisherConsumer, "node_modules/@aihq/scan/CONTRACTS.md");
+          writeFileSync(packageFile, "changed package");
+          await expect(
+            checkPreparedCandidate(candidate, publisherConsumer, {
+              bytes: contextBytes,
+              sha256: hash(contextBytes),
+            }),
+          ).rejects.toThrow("runtime/context");
+          writeFileSync(join(source, "package-lock.json"), "tampered dependency lock");
+          expect(() =>
+            sealProducerContext(
+              contextBytes,
+              hash(contextBytes),
+              source,
+              join(setup.folder, "never-installed"),
+              tarball,
+            ),
+          ).toThrow("source is modified");
+        } finally {
+          await fixture.close();
+        }
+      },
+      120000,
+    );
     it("retains failed/static fallback results for retry and refuses them as completed AI evidence", async () => {
       const setup = await prepared({ item: skill });
       const ss = analyzer(setup.folder, false);
@@ -946,64 +954,64 @@ describe.runIf(process.platform !== "win32")(
       ).rejects.toThrow("complete AI");
       expect((await scanPrepared(setup)).completed).toBe(1);
     }, 120000);
-    it.each([
-      "limitations",
-      "partially_inspected_files",
-      "entirely_uninspected_files",
-    ])("refuses %s-only partial AI reports as publishing evidence", async (field) => {
-      const setup = await prepared({ item: skill });
-      const completeness =
-        field === "limitations"
-          ? { limitations: ["Analyzer semantic inspection did not finish."] }
-          : {
-              total_components: 1,
-              scanned_components: 0,
-              fully_inspected_files: 0,
-              partially_inspected_files: field === "partially_inspected_files" ? 1 : 0,
-              entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
-            };
-      const ss = fakeAnalyzer(setup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.4",
-        outputFlag: "--output",
-        report: skillSpectorReport([], {
-          llm: true,
-          status: "partial",
-          analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
-          provenance: {
-            provider: { effective_adapter: "openai_compatible" },
-            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "deepseek-flash" }],
-          },
-          completeness,
-        }),
-      });
-      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
-      vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
-      const result = await scanPrepared(setup);
-      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
-      const item = setup.manifest.items[0];
-      if (item === undefined) throw new Error("Fixture item");
-      const record = receipt.results[item.scanKey];
-      expect(record.status).toBe("incomplete");
-      expect(
-        (
-          await verifyResult(
-            result.root,
-            record,
-            setup.manifest.items,
-            setup.manifest,
-            setup.content,
-            runtime,
-          )
-        ).eligible,
-      ).toBe(false);
-      await expect(
-        exportCandidate({
-          ...setup,
-          receiptPath: result.receiptPath,
-          out: join(setup.folder, "refused.tar"),
-        }),
-      ).rejects.toThrow("complete AI");
-    }, 120000);
+    it.each(["limitations", "partially_inspected_files", "entirely_uninspected_files"])(
+      "refuses %s-only partial AI reports as publishing evidence",
+      async (field) => {
+        const setup = await prepared({ item: skill });
+        const completeness =
+          field === "limitations"
+            ? { limitations: ["Analyzer semantic inspection did not finish."] }
+            : {
+                total_components: 1,
+                scanned_components: 0,
+                fully_inspected_files: 0,
+                partially_inspected_files: field === "partially_inspected_files" ? 1 : 0,
+                entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
+              };
+        const ss = fakeAnalyzer(setup.folder, "skillspector", {
+          versionText: "SkillSpector v2.13.6",
+          outputFlag: "--output",
+          report: skillSpectorReport([], {
+            llm: true,
+            status: "partial",
+            analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
+            provenance: {
+              provider: { effective_adapter: "openai_compatible" },
+              analyzers: [{ analyzer_id: "semantic_security_discovery", model: "deepseek-flash" }],
+            },
+            completeness,
+          }),
+        });
+        vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+        vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
+        const result = await scanPrepared(setup);
+        const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+        const item = setup.manifest.items[0];
+        if (item === undefined) throw new Error("Fixture item");
+        const record = receipt.results[item.scanKey];
+        expect(record.status).toBe("incomplete");
+        expect(
+          (
+            await verifyResult(
+              result.root,
+              record,
+              setup.manifest.items,
+              setup.manifest,
+              setup.content,
+              runtime,
+            )
+          ).eligible,
+        ).toBe(false);
+        await expect(
+          exportCandidate({
+            ...setup,
+            receiptPath: result.receiptPath,
+            out: join(setup.folder, "refused.tar"),
+          }),
+        ).rejects.toThrow("complete AI");
+      },
+      120000,
+    );
   },
 );
 
@@ -1139,7 +1147,7 @@ describe("prepared transport and eligibility", () => {
         { tool: "aih-trust-lint", result: "pass" },
         {
           tool: "skillspector",
-          version: "2.13.4",
+          version: "2.13.6",
           result: "pass",
           mode: "ai",
           ai: { via: "provider", provider: "openai_compatible", model: "deepseek-flash" },
@@ -1194,8 +1202,8 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
             llmConcurrency: 24,
             skillspector: {
               version:
-                "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa",
-              wheelSha256: "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
+                "2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81",
+              wheelSha256: "6edbd210f237cb0ca0b950d2e45b4941f3bf13efcbb0fe068e740969fc9f3261",
               tp4: { maxFiles: 256, maxFindings: 256, maxBatches: 256 },
             },
           },
@@ -1210,7 +1218,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
       expect(summary.files).toHaveLength(130);
       expect(
         summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector").version,
-      ).toBe("2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa");
+      ).toBe("2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81");
       const sarif = record.sarif
         .map((entry: { path: string }) => readFileSync(join(result.root, entry.path), "utf8"))
         .join("\n");

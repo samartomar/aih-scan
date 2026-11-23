@@ -16,7 +16,7 @@ find these files within an owning item or the source's remaining files.
 
 | Tool | Pinned release | Runs | Counts for coverage |
 |---|---|---|---|
-| SkillSpector | 2.13.4 (NVIDIA/SkillSpector tag `v2.13.4`, commit `54824463814a0be01360792523ec7245a69190fc`) | by default | yes |
+| SkillSpector | 2.13.6 (NVIDIA/SkillSpector tag `v2.13.6`, commit `e2674da339b0bddc6e565d059c0577c6d9cd25da`) | by default | yes |
 | Cisco skill-scanner | 2.3.2 (PyPI `cisco-ai-skill-scanner==2.3.2`) | only with `--tools …,cisco` | never |
 
 ## Installing
@@ -31,7 +31,7 @@ UV_PROJECT_ENVIRONMENT=$HOME/.aih-scan/cisco \
   uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project
 ```
 
-Without the repository, `uv tool install "skillspector @ git+https://github.com/NVIDIA/SkillSpector@54824463814a0be01360792523ec7245a69190fc"`
+Without the repository, `uv tool install "skillspector @ git+https://github.com/NVIDIA/SkillSpector@e2674da339b0bddc6e565d059c0577c6d9cd25da"`
 and `uv tool install cisco-ai-skill-scanner==2.3.2` put the commands in `~/.local/bin`
 (unlocked transitive dependencies).
 
@@ -100,6 +100,7 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   | `ollama` | local | a local Ollama service |
   | `openai_compatible` | local for a loopback `SKILLSPECTOR_COMPAT_BASE_URL`, else provider | `SKILLSPECTOR_COMPAT_BASE_URL` and `SKILLSPECTOR_COMPAT_API_KEY` (both required, including for a local service) |
   | `openai`, `anthropic`, `anthropic_proxy`, `azure_openai`, `bedrock`, `nv_build`, `nv_inference` | provider | the provider's key or profile variables |
+  | `gemini` | — | not supported by Scan yet (SkillSpector 2.13.6 offers it); reported as "AI not available here" |
 
   Scan never picks a provider for you: with `SKILLSPECTOR_PROVIDER` unset (or naming an
   upstream-disabled provider such as `codex_cli`), the result says "AI not available here"
@@ -110,7 +111,15 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   reports the tool `not-run` / `failed` and does not retain that failed report's findings;
   findings from other completed tools remain. Available fatal report reason codes stay in
   the diagnostic notes.
-  SkillSpector 2.13.4 runs semantic security batches asynchronously through its shared
+
+  In AI mode Scan forwards the caller's environment except Python loader variables and the
+  OSV timeout. SkillSpector's own resource and limit controls (`SKILLSPECTOR_*` caps such as
+  archive member, ledger event, parser source and TP4 byte limits) therefore come from the
+  caller's environment. They are not recorded and are not part of the result identity, so
+  two AI scans with different caps can carry the same identity. A lowered cap still surfaces
+  as an inspection gap and leaves the item `partial`. Static mode and prepared publisher
+  profiles forward only an allowlist, so ambient caps never apply there.
+  SkillSpector 2.13.6 runs semantic security batches asynchronously through its shared
   concurrency control (`SKILLSPECTOR_MAX_LLM_CONCURRENCY`), preserving batch result
   order. A lossless formatting repair can complete; a field-recovered assessment remains
   `partial` even when upstream accepts its formatting-recovery policy. Refusals, unfinished
@@ -135,7 +144,12 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   lookup are not reported as gaps. Their derived limitations and aggregate omissions are
   excluded only when positively matched to those components; unrelated or excess omissions
   remain partial. Only a positively identified reference-only `complete_with_caveats` report
-  stays `complete` and carries its caveat note instead.
+  stays `complete` and carries its caveat note instead. Fields that SkillSpector 2.13.5 added
+  outside the status also leave the item `partial`: documentation `notices`, caller exclusions
+  (`exclude_patterns` / `excluded_file_count`) and any `dependency_inspection` other than the
+  untouched default (`enabled: false`, `status: "not_requested"`, no inspected artifacts). A
+  report without that summary is also `partial`, because 2.13.6 always writes it. Scan
+  requests none of these, and malformed values are refused.
 
 ### DeepSeek Flash on Windows
 
@@ -267,14 +281,16 @@ exercised on Linux x64.
 
 ## Optional TP4 maintenance build
 
-Upstream 2.13.4 retains fixed 128-source/64-finding TP4 limits. Scan also supports a
-separately identified reproducible 2.13.4-based maintenance artifact, documented with its
+Upstream 2.13.6 retains a fixed 64-finding TP4 limit and reads its 128-source default from
+`SKILLSPECTOR_TP4_MAX_FILES`. Scan still refuses either TP4 capacity variable on the standard
+release, so its source and finding capacities stay at upstream defaults. Scan also supports a
+separately identified reproducible 2.13.6-based maintenance artifact, documented with its
 patch review in `tools/analyzers/skillspector/maintenance/README.md`. It preserves upstream
 defaults and makes file/finding capacities explicit without editing an installed analyzer.
 Prepared profiles bind the exact maintenance version/wheel and requested capacities;
 executable, report and resolved-capacity identities must agree before observations are
-accepted. New scans and prepared profiles do not admit the previous 2.13.3 maintenance
-wheel. Completed historical summaries and findings remain readable under their original
+accepted. New scans and prepared profiles do not admit the previous 2.13.3 or 2.13.4
+maintenance wheels. Completed historical summaries and findings remain readable under their original
 producer identities through the existing public readers. Building/installing the
 maintenance artifact and increasing capacities are explicit operator choices; more
 source/batch work can cost more and does not guarantee complete inspection.
