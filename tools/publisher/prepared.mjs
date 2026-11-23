@@ -10,6 +10,8 @@ import { gunzipSync } from "node:zlib";
 import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive, safePath, writeArchive } from "./prepared-archive.mjs";
 
 const maintenanceArtifact = JSON.parse(readFileSync(new URL("../analyzers/skillspector/maintenance/artifact.json", import.meta.url), "utf8"));
+// The maintenance build is versioned `<standard release>+aih.1.<build id>`; the pin test binds that prefix to SKILLSPECTOR_VERSION.
+const standardSkillSpectorVersion = maintenanceArtifact.version.split("+")[0];
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
 const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
@@ -158,7 +160,7 @@ export function aiEligible(summary, manifest) {
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
   const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
   const via = loopbackHost(host) ? "local" : "provider";
-  if (primary?.version !== (manifest.assessment.skillspector?.version ?? "2.13.6") || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
   return manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 }
 export async function verifyResult(root, record, items, manifest, content, runtime) {

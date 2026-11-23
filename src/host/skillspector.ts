@@ -69,6 +69,8 @@ const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
   opencode_cli: { via: "cli", cli: "opencode" },
 });
 const DISABLED_UPSTREAM = new Set(["codex_cli", "antigravity_cli"]);
+/** Providers SkillSpector 2.13.6 offers that Scan does not pass through yet. */
+const UNSUPPORTED_BY_SCAN = new Set(["gemini"]);
 
 const isSet = (env: HostEnv, name: string) => {
   const value = env[name];
@@ -125,6 +127,11 @@ export function skillSpectorAiSetup(
     return Object.freeze({
       available: false as const,
       reason: `SkillSpector ${SKILLSPECTOR_VERSION} disables the ${named} provider`,
+    });
+  if (UNSUPPORTED_BY_SCAN.has(named))
+    return Object.freeze({
+      available: false as const,
+      reason: `Scan does not yet support the ${named} provider`,
     });
   const requirement = Object.hasOwn(PROVIDERS, named) ? PROVIDERS[named] : undefined;
   if (requirement === undefined)
@@ -354,10 +361,15 @@ function completenessOf(
     (typeof excludedFiles === "number" && excludedFiles > 0)
   )
     gaps.add(`user_exclusion: ${String(excludedFiles ?? 0)}`);
+  // 2.13.5+ always reports this summary; only the untouched default is complete.
   const dependencies = objectOf(completeness.dependency_inspection);
-  if (
-    dependencies !== undefined &&
-    (dependencies.enabled !== false || dependencies.status !== "not_requested")
+  if (dependencies === undefined) gaps.add("dependency_inspection missing");
+  else if (
+    dependencies.enabled !== false ||
+    dependencies.status !== "not_requested" ||
+    dependencies.inspected_artifacts !== 0 ||
+    !Array.isArray(dependencies.artifacts) ||
+    dependencies.artifacts.length > 0
   )
     gaps.add(`dependency_inspection ${String(dependencies.status)}`);
   const aiAnalyzers = new Set(

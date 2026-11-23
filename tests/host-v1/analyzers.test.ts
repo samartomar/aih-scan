@@ -691,6 +691,74 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
       },
       "dependency_inspection partial",
     ],
+    [
+      "a documentation notice without a path",
+      {
+        notices: [
+          {
+            reason_code: "unsupported_prose_command_pattern",
+            phase: "documentation",
+            start_line: 6,
+            end_line: 6,
+          },
+        ],
+      },
+      "notice unsupported_prose_command_pattern",
+    ],
+    [
+      "exclusion patterns with no excluded files",
+      { exclude_patterns: ["*.md"], excluded_file_count: 0 },
+      "user_exclusion: 0",
+    ],
+    ["an excluded-file count without patterns", { excluded_file_count: 2 }, "user_exclusion: 2"],
+    [
+      "a failed unrequested dependency inspection",
+      {
+        dependency_inspection: {
+          enabled: false,
+          status: "failed",
+          inspected_artifacts: 0,
+          artifacts: [],
+        },
+      },
+      "dependency_inspection failed",
+    ],
+    [
+      "an enabled dependency inspection still marked not_requested",
+      {
+        dependency_inspection: {
+          enabled: true,
+          status: "not_requested",
+          inspected_artifacts: 0,
+          artifacts: [],
+        },
+      },
+      "dependency_inspection not_requested",
+    ],
+    [
+      "an unrequested dependency inspection that reports inspected artifacts",
+      {
+        dependency_inspection: {
+          enabled: false,
+          status: "not_requested",
+          inspected_artifacts: 3,
+          artifacts: [{ name: "left-pad", version: "1.3.0", status: "partial" }],
+        },
+      },
+      "dependency_inspection not_requested",
+    ],
+    [
+      "an unrequested dependency inspection without its artifact list",
+      {
+        dependency_inspection: { enabled: false, status: "not_requested", inspected_artifacts: 0 },
+      },
+      "dependency_inspection not_requested",
+    ],
+    [
+      "a missing dependency inspection summary",
+      { dependency_inspection: undefined },
+      "dependency_inspection missing",
+    ],
   ])(
     "fails closed on %s that a complete 2.13.6 status does not account for",
     async (_name, completeness, note) => {

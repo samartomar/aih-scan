@@ -100,6 +100,7 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   | `ollama` | local | a local Ollama service |
   | `openai_compatible` | local for a loopback `SKILLSPECTOR_COMPAT_BASE_URL`, else provider | `SKILLSPECTOR_COMPAT_BASE_URL` and `SKILLSPECTOR_COMPAT_API_KEY` (both required, including for a local service) |
   | `openai`, `anthropic`, `anthropic_proxy`, `azure_openai`, `bedrock`, `nv_build`, `nv_inference` | provider | the provider's key or profile variables |
+  | `gemini` | — | not supported by Scan yet (SkillSpector 2.13.6 offers it); reported as "AI not available here" |
 
   Scan never picks a provider for you: with `SKILLSPECTOR_PROVIDER` unset (or naming an
   upstream-disabled provider such as `codex_cli`), the result says "AI not available here"
@@ -110,6 +111,14 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   reports the tool `not-run` / `failed` and does not retain that failed report's findings;
   findings from other completed tools remain. Available fatal report reason codes stay in
   the diagnostic notes.
+
+  In AI mode Scan forwards the caller's environment except Python loader variables and the
+  OSV timeout. SkillSpector's own resource and limit controls (`SKILLSPECTOR_*` caps such as
+  archive member, ledger event, parser source and TP4 byte limits) therefore come from the
+  caller's environment. They are not recorded and are not part of the result identity, so
+  two AI scans with different caps can carry the same identity. A lowered cap still surfaces
+  as an inspection gap and leaves the item `partial`. Static mode and prepared publisher
+  profiles forward only an allowlist, so ambient caps never apply there.
   SkillSpector 2.13.6 runs semantic security batches asynchronously through its shared
   concurrency control (`SKILLSPECTOR_MAX_LLM_CONCURRENCY`), preserving batch result
   order. A lossless formatting repair can complete; a field-recovered assessment remains
@@ -138,7 +147,9 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   stays `complete` and carries its caveat note instead. Fields that SkillSpector 2.13.5 added
   outside the status also leave the item `partial`: documentation `notices`, caller exclusions
   (`exclude_patterns` / `excluded_file_count`) and any `dependency_inspection` other than the
-  default `not_requested`. Scan requests none of them, and malformed values are refused.
+  untouched default (`enabled: false`, `status: "not_requested"`, no inspected artifacts). A
+  report without that summary is also `partial`, because 2.13.6 always writes it. Scan
+  requests none of these, and malformed values are refused.
 
 ### DeepSeek Flash on Windows
 

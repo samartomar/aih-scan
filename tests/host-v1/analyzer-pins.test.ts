@@ -65,6 +65,9 @@ describe("pinned analyzer runtimes", () => {
       "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
     );
     expect(SKILLSPECTOR_MAINTENANCE_VERSION).toBe(builder.version);
+    expect(SKILLSPECTOR_MAINTENANCE_VERSION.startsWith(`${SKILLSPECTOR_VERSION}+aih.1.`)).toBe(
+      true,
+    );
   });
 
   it.runIf(maintenanceSource !== undefined)(
