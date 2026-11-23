@@ -610,23 +610,23 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     ]);
   });
 
-  it.each([
-    "partial",
-    "complete_with_caveats",
-  ])("fails closed on an unexplained %s completeness state", async (status) => {
-    const folder = fixture.folder(`unexplained-${status}`, skill);
-    const report = skillSpectorReport([], {
-      completeness: {
-        status,
-        is_complete: status === "complete_with_caveats",
-      },
-    });
-    const { entry, summary } = await run(folder, skillspector(report));
-    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
-    expect(entry).toMatchObject({
-      notes: expect.arrayContaining([expect.stringContaining("unexplained completeness state")]),
-    });
-  });
+  it.each(["partial", "complete_with_caveats"])(
+    "fails closed on an unexplained %s completeness state",
+    async (status) => {
+      const folder = fixture.folder(`unexplained-${status}`, skill);
+      const report = skillSpectorReport([], {
+        completeness: {
+          status,
+          is_complete: status === "complete_with_caveats",
+        },
+      });
+      const { entry, summary } = await run(folder, skillspector(report));
+      expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+      expect(entry).toMatchObject({
+        notes: expect.arrayContaining([expect.stringContaining("unexplained completeness state")]),
+      });
+    },
+  );
 
   it.each([
     ["an unrecognized status", { status: "partially_complete", is_complete: false }],
@@ -955,42 +955,42 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
     });
   });
 
-  it.each([
-    "warning",
-    "metadata",
-  ])("does not let contradictory complete flags hide explicit AI %s incompleteness", async (kind) => {
-    const folder = fixture.folder(`ai-${kind}-incomplete`, skill);
-    const report = skillSpectorReport(
-      [skillSpectorIssue("SSD-1", "SKILL.md", 6, "HIGH", 0.8, "Semantic prompt injection")],
-      {
-        llm: true,
-        analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
-        provenance: {
-          provider: { effective_adapter: "ollama" },
-          analyzers: [{ analyzer_id: "semantic_security_discovery", model: "llama3" }],
-        },
-      },
-    );
-    if (kind === "warning")
-      (report.analysis_completeness as Record<string, unknown>).warnings = [
+  it.each(["warning", "metadata"])(
+    "does not let contradictory complete flags hide explicit AI %s incompleteness",
+    async (kind) => {
+      const folder = fixture.folder(`ai-${kind}-incomplete`, skill);
+      const report = skillSpectorReport(
+        [skillSpectorIssue("SSD-1", "SKILL.md", 6, "HIGH", 0.8, "Semantic prompt injection")],
         {
-          reason_code: "llm_format_recovery_exhausted",
-          path: "SKILL.md",
-          assessment_complete: false,
-          accepted_by_policy: true,
+          llm: true,
+          analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
+          provenance: {
+            provider: { effective_adapter: "ollama" },
+            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "llama3" }],
+          },
         },
-      ];
-    else (report.metadata as Record<string, unknown>).llm_assessment_complete = false;
-    const { summary } = await run(folder, skillspector(report), {
-      extra: { mode: "ai" },
-      env: { SKILLSPECTOR_PROVIDER: "ollama" },
-    });
-    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
-    expect(toolOf(summary, "skillspector")).toMatchObject({
-      result: "fail",
-      counts: { high: 1 },
-    });
-  });
+      );
+      if (kind === "warning")
+        (report.analysis_completeness as Record<string, unknown>).warnings = [
+          {
+            reason_code: "llm_format_recovery_exhausted",
+            path: "SKILL.md",
+            assessment_complete: false,
+            accepted_by_policy: true,
+          },
+        ];
+      else (report.metadata as Record<string, unknown>).llm_assessment_complete = false;
+      const { summary } = await run(folder, skillspector(report), {
+        extra: { mode: "ai" },
+        env: { SKILLSPECTOR_PROVIDER: "ollama" },
+      });
+      expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+      expect(toolOf(summary, "skillspector")).toMatchObject({
+        result: "fail",
+        counts: { high: 1 },
+      });
+    },
+  );
 
   it("falls back to static explicitly when AI is not set up here, without changing static coverage", async () => {
     const folder = fixture.folder("item", skill);
@@ -1182,43 +1182,43 @@ describe("Cisco skill-scanner adapter (controlled CLI fixture)", () => {
     expect(sarif).toContain('"version":"2.3.2"');
   });
 
-  describe.each([
-    "unavailable",
-    "failed",
-    "timeout",
-    "not applicable",
-  ])("a %s Cisco run", (name) => {
-    let required: FakeAnalyzer;
-    beforeEach(async () => {
-      required = skillspector(ssReport);
-      if (name === "timeout") {
-        // Populate the documented version cache through a real scan before applying the
-        // deliberately tight Cisco deadline. Required analyzer cold startup is not this case.
-        const ready = await run(fixture.folder("warm-required", skill), required);
-        expect(toolOf(ready.summary, "skillspector").result).toBe("warn");
-      }
-    });
-    it("does not make required coverage partial", async () => {
-      const folder = fixture.folder("item", skill);
-      const agent = fixture.folder("agent", { "reviewer.md": "# Reviewer\n\nReview the diff.\n" });
-      const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
-      const cases: [string, string, FakeAnalyzer | undefined, string, number?][] = [
-        ["unavailable", folder, undefined, "not-run"],
-        ["failed", folder, cisco(null, { exit: 1 }), "not-run"],
-        ["timeout", folder, cisco(null, { hang: true }), "not-run", 1_500],
-        ["not applicable", agent, cisco(ciscoReport([])), "not-applicable"],
-      ];
-      const [, item, cx, result, timeoutMs] = cases.find(([label]) => label === name)!;
-      const { summary } = await run(item, required, {
-        extra: tools,
-        ...(cx === undefined ? {} : { cisco: cx }),
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  describe.each(["unavailable", "failed", "timeout", "not applicable"])(
+    "a %s Cisco run",
+    (name) => {
+      let required: FakeAnalyzer;
+      beforeEach(async () => {
+        required = skillspector(ssReport);
+        if (name === "timeout") {
+          // Populate the documented version cache through a real scan before applying the
+          // deliberately tight Cisco deadline. Required analyzer cold startup is not this case.
+          const ready = await run(fixture.folder("warm-required", skill), required);
+          expect(toolOf(ready.summary, "skillspector").result).toBe("warn");
+        }
       });
-      expect(toolOf(summary, "cisco").result, name).toBe(result);
-      expect(summary.coverage, name).toBe("complete");
-      if (name === "timeout") expect(toolOf(summary, "cisco").reason).toBe("timeout");
-    });
-  });
+      it("does not make required coverage partial", async () => {
+        const folder = fixture.folder("item", skill);
+        const agent = fixture.folder("agent", {
+          "reviewer.md": "# Reviewer\n\nReview the diff.\n",
+        });
+        const tools = { tools: ["skillspector", "aih-trust-lint", "cisco"] };
+        const cases: [string, string, FakeAnalyzer | undefined, string, number?][] = [
+          ["unavailable", folder, undefined, "not-run"],
+          ["failed", folder, cisco(null, { exit: 1 }), "not-run"],
+          ["timeout", folder, cisco(null, { hang: true }), "not-run", 1_500],
+          ["not applicable", agent, cisco(ciscoReport([])), "not-applicable"],
+        ];
+        const [, item, cx, result, timeoutMs] = cases.find(([label]) => label === name)!;
+        const { summary } = await run(item, required, {
+          extra: tools,
+          ...(cx === undefined ? {} : { cisco: cx }),
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        });
+        expect(toolOf(summary, "cisco").result, name).toBe(result);
+        expect(summary.coverage, name).toBe("complete");
+        if (name === "timeout") expect(toolOf(summary, "cisco").reason).toBe("timeout");
+      });
+    },
+  );
 });
 
 describe("analyzer output paths", () => {

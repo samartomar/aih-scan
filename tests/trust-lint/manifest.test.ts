@@ -236,14 +236,14 @@ describe("scanTrustManifestsV1 (parity: Core scanTrustManifests)", () => {
     expect(scan()).toEqual([]);
   });
 
-  it.each([
-    "!input.is_empty()",
-    "!isOwner(user)",
-  ])("does not treat boolean negation as a bang auto-run directive: %s", (expression) => {
-    write("skills/boolean/SKILL.md", `# Boolean example\n\n\`\`\`rust\n${expression}\n\`\`\`\n`);
+  it.each(["!input.is_empty()", "!isOwner(user)"])(
+    "does not treat boolean negation as a bang auto-run directive: %s",
+    (expression) => {
+      write("skills/boolean/SKILL.md", `# Boolean example\n\n\`\`\`rust\n${expression}\n\`\`\`\n`);
 
-    expect(scan()).toEqual([]);
-  });
+      expect(scan()).toEqual([]);
+    },
+  );
 
   it("does not treat a multiline boolean-negation continuation as bang auto-run", () => {
     write(

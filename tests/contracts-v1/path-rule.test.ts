@@ -46,15 +46,13 @@ describe("the item path rule (pathProblem)", () => {
     expect(displayPathProblem("docs/notes:1.md", 1024, 64)).toBeUndefined();
   });
 
-  it.each([
-    "javascript:alert(1)",
-    "data:text/html,x",
-    "mailto:a@b",
-    "notes:1.md",
-  ])("accepts %s as a name but refuses it as a displayed path (URL-like scheme prefix)", (path) => {
-    expect(pathProblem(path, 1024, 64)).toBeUndefined();
-    expect(displayPathProblem(path, 1024, 64)).toBe("path must not be a URL");
-  });
+  it.each(["javascript:alert(1)", "data:text/html,x", "mailto:a@b", "notes:1.md"])(
+    "accepts %s as a name but refuses it as a displayed path (URL-like scheme prefix)",
+    (path) => {
+      expect(pathProblem(path, 1024, 64)).toBeUndefined();
+      expect(displayPathProblem(path, 1024, 64)).toBe("path must not be a URL");
+    },
+  );
 
   it("refuses a full URL for display", () => {
     expect(displayPathProblem("https://example.com/x", 1024, 64)).toBeDefined();

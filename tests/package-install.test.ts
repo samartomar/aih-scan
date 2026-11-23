@@ -1071,128 +1071,128 @@ describe.runIf(skillspector !== undefined)(
         path: "session-summary.kiro.hook",
         text: '{"when":{"type":"userTriggered"},"then":{"type":"askAgent","prompt":"Summarise this Kiro session carefully."}}\n',
       },
-    ])("preserves caller AI controls for $name and distinguishes complete, recovered and failed responses", async ({
-      name,
-      path,
-      text,
-    }) => {
-      const service = await compatibleAiServiceV1();
-      servers.push(service);
-      const skill = folder(`compatible-ai-${name}`, { [path]: text });
-      for (const outcome of [
-        "complete",
-        "repaired",
-        "recovered",
-        "malformed",
-        "refused",
-        "quota",
-        "unfinished",
-      ] as const) {
-        service.setOutcome(outcome);
-        const run = await cli(
-          [
-            "scan",
-            skill,
-            "--mode",
-            "ai",
-            "--json",
-            "--out",
-            outFolder(`compatible-${name}-${outcome}`),
-          ],
-          {
-            env: {
-              AIH_SCAN_SKILLSPECTOR: skillspector!,
-              SKILLSPECTOR_PROVIDER: "openai_compatible",
-              SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
-              SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
-              SKILLSPECTOR_MODEL: "deepseek-flash",
-              SKILLSPECTOR_REASONING_EFFORT: "none",
-              SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
-              SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
+    ])(
+      "preserves caller AI controls for $name and distinguishes complete, recovered and failed responses",
+      async ({ name, path, text }) => {
+        const service = await compatibleAiServiceV1();
+        servers.push(service);
+        const skill = folder(`compatible-ai-${name}`, { [path]: text });
+        for (const outcome of [
+          "complete",
+          "repaired",
+          "recovered",
+          "malformed",
+          "refused",
+          "quota",
+          "unfinished",
+        ] as const) {
+          service.setOutcome(outcome);
+          const run = await cli(
+            [
+              "scan",
+              skill,
+              "--mode",
+              "ai",
+              "--json",
+              "--out",
+              outFolder(`compatible-${name}-${outcome}`),
+            ],
+            {
+              env: {
+                AIH_SCAN_SKILLSPECTOR: skillspector!,
+                SKILLSPECTOR_PROVIDER: "openai_compatible",
+                SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
+                SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
+                SKILLSPECTOR_MODEL: "deepseek-flash",
+                SKILLSPECTOR_REASONING_EFFORT: "none",
+                SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
+                SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
+              },
             },
-          },
-        );
-        expect(run.code, run.stderr).toBe(0);
-        const scanned = json(run).targets[0].results[0];
-        expect(scanned.status).toBe("ok");
-        const { summary, findings } = readInstalledResult(scanned);
-        expect(summary.files).toEqual([
-          { path, mode: "100644", part: "text", sha256: sha256Of(Buffer.from(text)) },
-        ]);
-        expect(summary.notAnalysed).toEqual([]);
-        expect(summary.dependencies).toEqual([]);
-        const complete = outcome === "complete" || outcome === "repaired";
-        expect(summary.coverage, JSON.stringify(scanned)).toBe(complete ? "complete" : "partial");
-        if (!complete) expect(summary.reason).toBe("failed");
-        const tool = summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector");
-        if (outcome === "quota") {
-          expect(tool).toMatchObject({ mode: "ai", result: "not-run", reason: "failed" });
-        } else {
-          expect(tool).toMatchObject({
-            mode: "ai",
-            ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
-            result: outcome === "recovered" ? "fail" : "pass",
-            ...(outcome === "recovered" ? { counts: { high: 1 } } : {}),
-          });
-        }
-        if (outcome === "recovered") {
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              tool: "skillspector",
-              ruleId: "SSD-1",
-              code: "trust.prompt-injection",
-              path,
-            }),
           );
-        } else {
-          expect(findings.some((finding) => finding.ruleId === "SSD-1")).toBe(false);
-        }
-        const notes = (scanned.notes ?? []).join("\n");
-        if (outcome === "recovered" || outcome === "malformed")
-          expect(notes).toContain("llm_format_recovery_exhausted");
-        if (outcome === "refused") expect(notes).toContain("llm_response_refused");
-        if (outcome === "unfinished") expect(notes).toContain("llm_response_truncated");
-        if (outcome === "quota") {
-          expect(notes).toContain("SkillSpector exited 2; report: llm_batch_failed");
-          expect(notes).toContain(path);
-        }
-        expect(service.requests.length).toBeGreaterThan(0);
-        expect(service.security.maxActive).toBeLessThanOrEqual(2);
-        if (name === "kiro-hook") {
-          expect(JSON.stringify(service.requests)).toContain(
-            "Summarise this Kiro session carefully.",
-          );
-          expect(JSON.stringify(service.requests)).toContain(path);
-        }
-        for (const request of service.requests) {
-          expect(request.model).toBe("deepseek-flash");
-          expect(request.reasoning_effort).toBe("none");
-          expect(request.response_format).toBeUndefined();
-          const fieldRecovery = JSON.stringify(request.messages).includes("Requested field:");
-          if (fieldRecovery) {
-            expect(request.tool_choice).toBeUndefined();
-            expect(request.tools).toBeUndefined();
+          expect(run.code, run.stderr).toBe(0);
+          const scanned = json(run).targets[0].results[0];
+          expect(scanned.status).toBe("ok");
+          const { summary, findings } = readInstalledResult(scanned);
+          expect(summary.files).toEqual([
+            { path, mode: "100644", part: "text", sha256: sha256Of(Buffer.from(text)) },
+          ]);
+          expect(summary.notAnalysed).toEqual([]);
+          expect(summary.dependencies).toEqual([]);
+          const complete = outcome === "complete" || outcome === "repaired";
+          expect(summary.coverage, JSON.stringify(scanned)).toBe(complete ? "complete" : "partial");
+          if (!complete) expect(summary.reason).toBe("failed");
+          const tool = summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector");
+          if (outcome === "quota") {
+            expect(tool).toMatchObject({ mode: "ai", result: "not-run", reason: "failed" });
           } else {
-            const choice = request.tool_choice as { type: string; function: { name: string } };
-            const tools = request.tools as { type: string; function: { name: string } }[];
-            expect(choice.type).toBe("function");
-            expect(choice.function.name.length).toBeGreaterThan(0);
-            // Declarations describe response data only; there is no host-tool dispatcher.
-            expect(tools).toMatchObject([
-              { type: "function", function: { name: choice.function.name } },
-            ]);
+            expect(tool).toMatchObject({
+              mode: "ai",
+              ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
+              result: outcome === "recovered" ? "fail" : "pass",
+              ...(outcome === "recovered" ? { counts: { high: 1 } } : {}),
+            });
           }
-          expect(
-            (request.messages as { role: string }[]).every(
-              (message) => message.role === "user" || message.role === "system",
-            ),
-          ).toBe(true);
+          if (outcome === "recovered") {
+            expect(findings).toContainEqual(
+              expect.objectContaining({
+                tool: "skillspector",
+                ruleId: "SSD-1",
+                code: "trust.prompt-injection",
+                path,
+              }),
+            );
+          } else {
+            expect(findings.some((finding) => finding.ruleId === "SSD-1")).toBe(false);
+          }
+          const notes = (scanned.notes ?? []).join("\n");
+          if (outcome === "recovered" || outcome === "malformed")
+            expect(notes).toContain("llm_format_recovery_exhausted");
+          if (outcome === "refused") expect(notes).toContain("llm_response_refused");
+          if (outcome === "unfinished") expect(notes).toContain("llm_response_truncated");
+          if (outcome === "quota") {
+            expect(notes).toContain("SkillSpector exited 2; report: llm_batch_failed");
+            expect(notes).toContain(path);
+          }
+          expect(service.requests.length).toBeGreaterThan(0);
+          expect(service.security.maxActive).toBeLessThanOrEqual(2);
+          if (name === "kiro-hook") {
+            expect(JSON.stringify(service.requests)).toContain(
+              "Summarise this Kiro session carefully.",
+            );
+            expect(JSON.stringify(service.requests)).toContain(path);
+          }
+          for (const request of service.requests) {
+            expect(request.model).toBe("deepseek-flash");
+            expect(request.reasoning_effort).toBe("none");
+            expect(request.response_format).toBeUndefined();
+            const fieldRecovery = JSON.stringify(request.messages).includes("Requested field:");
+            if (fieldRecovery) {
+              expect(request.tool_choice).toBeUndefined();
+              expect(request.tools).toBeUndefined();
+            } else {
+              const choice = request.tool_choice as { type: string; function: { name: string } };
+              const tools = request.tools as { type: string; function: { name: string } }[];
+              expect(choice.type).toBe("function");
+              expect(choice.function.name.length).toBeGreaterThan(0);
+              // Declarations describe response data only; there is no host-tool dispatcher.
+              expect(tools).toMatchObject([
+                { type: "function", function: { name: choice.function.name } },
+              ]);
+            }
+            expect(
+              (request.messages as { role: string }[]).every(
+                (message) => message.role === "user" || message.role === "system",
+              ),
+            ).toBe(true);
+          }
+          expect(JSON.stringify(summary) + run.stdout + run.stderr).not.toContain(
+            "fixture-only-not-a-real-key",
+          );
         }
-        expect(JSON.stringify(summary) + run.stdout + run.stderr).not.toContain(
-          "fixture-only-not-a-real-key",
-        );
-      }
-    }, 240_000);
+      },
+      240_000,
+    );
 
     it("keeps simulated recovered findings through installed host and reader without complete coverage", async () => {
       const service = await compatibleAiServiceV1();
