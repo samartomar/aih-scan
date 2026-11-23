@@ -14,21 +14,21 @@ const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta
 const maintenanceSource = process.env.AIH_SCAN_TEST_SKILLSPECTOR_SOURCE;
 
 describe("pinned analyzer runtimes", () => {
-  it("locks SkillSpector to the v2.13.4 tag commit the adapter requires", () => {
-    expect(SKILLSPECTOR_VERSION).toBe("2.13.4");
-    const commit = "54824463814a0be01360792523ec7245a69190fc";
+  it("locks SkillSpector to the v2.13.6 tag commit the adapter requires", () => {
+    expect(SKILLSPECTOR_VERSION).toBe("2.13.6");
+    const commit = "e2674da339b0bddc6e565d059c0577c6d9cd25da";
     expect(read("tools/analyzers/skillspector/pyproject.toml")).toContain(
       `skillspector @ git+https://github.com/NVIDIA/SkillSpector@${commit}`,
     );
     const lock = read("tools/analyzers/skillspector/uv.lock");
     expect(lock).toMatch(
       new RegExp(
-        `name = "skillspector"\\nversion = "2\\.13\\.4"\\nsource = \\{ git = "https://github\\.com/NVIDIA/SkillSpector\\?rev=${commit}#${commit}" \\}`,
+        `name = "skillspector"\\nversion = "2\\.13\\.6"\\nsource = \\{ git = "https://github\\.com/NVIDIA/SkillSpector\\?rev=${commit}#${commit}" \\}`,
       ),
     );
   });
 
-  it("binds the maintenance builder, artifact and adapter to the same 2.13.4 inputs", () => {
+  it("binds the maintenance builder, artifact and adapter to the same 2.13.6 inputs", () => {
     const builder = JSON.parse(
       execFileSync(
         process.platform === "win32" ? "python" : "python3",
@@ -41,28 +41,28 @@ describe("pinned analyzer runtimes", () => {
       .update(read("tools/analyzers/skillspector/maintenance/build.py").replace(/\r\n/gu, "\n"))
       .digest("hex");
     expect(builderRecipeSha256).toBe(
-      "dae0a74261c5b15df1d6e7986b42c7ccf96538f9a6959f4e6172d2b41c383a8e",
+      "696354b8404a98526b4a9b761df57bc772724ada49bc9ba26022433a150fcf20",
     );
     expect(builder).toEqual({
-      upstream: "54824463814a0be01360792523ec7245a69190fc",
-      sourceSha256: "562349db9ef4084cfe2f18707de3d942c5b94e221162c314c795e4501fabc07d",
-      patchSha256: "79578d6ea997a331d649bb17173818b84a893a4760142681557bb836db0b9407",
-      runtimeLockSha256: "b30e05171b22849c963e5de7606bfe3e8fbe02ad4f019a2f6c5fea0e8b1147bd",
+      upstream: "e2674da339b0bddc6e565d059c0577c6d9cd25da",
+      sourceSha256: "678f5dd59b5dff0c62181c045e15e8411727cc425c653a793b36e60fb50b11e1",
+      patchSha256: "e69867562c561f07a28f2ea41aa8edc77e1bf0216db59627734ea4a3d741de3b",
+      runtimeLockSha256: "54c41965dece90280da2c54c5f3e04ab4c2a9ee219ae740ab64e02ca26b68e0f",
       buildLockSha256: "63eb9f0abd6ae0f8ea6aa36cc900c80a2f391b4f7ecd3b5b7d84320d7249a936",
       builderRecipeSha256,
-      version: "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa",
+      version: "2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81",
     });
     expect(artifact).toEqual({
       ...builder,
       wheel:
-        "skillspector-2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa-py3-none-any.whl",
-      wheelSha256: "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
+        "skillspector-2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81-py3-none-any.whl",
+      wheelSha256: "6edbd210f237cb0ca0b950d2e45b4941f3bf13efcbb0fe068e740969fc9f3261",
     });
     expect(builder.version).not.toBe(
-      "2.13.4+aih.1.8ef6704a6123a29c3c219a6b3bee3ff419f6a75fc428a469bf7a46fc88c05159",
+      "2.13.4+aih.1.4ad76d9621cde6753dc73beb47b6f602db64893cd577cdfdf974c0a1e284b4aa",
     );
     expect(artifact.wheelSha256).not.toBe(
-      "f40324a28badbfd01c46fe2e77e9d2a0be2df874317d1ca84710b1ccb4e8aab8",
+      "2e361e6fc6255d0ca32d5fdf0fd4c0ca559b0a9a74ad6bfdcdf208c76fb18284",
     );
     expect(SKILLSPECTOR_MAINTENANCE_VERSION).toBe(builder.version);
   });

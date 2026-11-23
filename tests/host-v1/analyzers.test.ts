@@ -66,7 +66,7 @@ const callerEnv = (extra: Record<string, string> = {}) => ({
 
 function skillspector(report: unknown, extra: Partial<Parameters<typeof fakeAnalyzer>[2]> = {}) {
   return fakeAnalyzer(fixture.root, "skillspector", {
-    versionText: "SkillSpector v2.13.4",
+    versionText: "SkillSpector v2.13.6",
     outputFlag: "--output",
     report,
     ...extra,
@@ -242,7 +242,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     expect(call.env.HOME).not.toBe(callerEnv().HOME);
     expect(toolOf(summary, "skillspector")).toEqual({
       tool: "skillspector",
-      version: "2.13.4",
+      version: "2.13.6",
       mode: "static",
       result: "fail",
       counts: { high: 2, medium: 1 },
@@ -358,7 +358,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     const old = skillspector(skillSpectorReport([]), { versionText: "SkillSpector v2.12.0" });
     const wrong = await run(folder, old);
     expect(wrong.entry).toMatchObject({
-      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.4"],
+      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.6"],
     });
     expect(old.calls().filter((call) => call.args[0] === "scan")).toHaveLength(0);
   });
@@ -637,6 +637,10 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     ["missing limitations", { limitations: undefined }],
     ["a missing exception ledger", { ledger_exceptions: undefined }],
     ["missing execution state", { execution_successful: undefined }],
+    ["a non-list notice field", { notices: { reason_code: "unsupported_prose_command_pattern" } }],
+    ["a non-string exclusion pattern", { exclude_patterns: [1] }],
+    ["a negative exclusion count", { excluded_file_count: -1 }],
+    ["a non-object dependency inspection", { dependency_inspection: "not_requested" }],
   ])("rejects %s instead of inferring complete coverage", async (_name, completeness) => {
     const folder = fixture.folder("invalid-completeness", skill);
     const report = skillSpectorReport([], { completeness });
@@ -646,6 +650,71 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     expect(entry).toMatchObject({
       notes: expect.arrayContaining([expect.stringContaining("completeness metadata")]),
     });
+  });
+
+  it.each([
+    [
+      "a documentation notice",
+      {
+        notices: [
+          {
+            reason_code: "unsupported_prose_command_pattern",
+            message:
+              "This command pattern is not allowed for inspection; put the command in a code block.",
+            phase: "documentation",
+            path: "SKILL.md",
+            start_line: 6,
+            end_line: 6,
+            source_start_offset: 10,
+            source_end_offset: 16,
+          },
+        ],
+      },
+      "notice unsupported_prose_command_pattern SKILL.md",
+    ],
+    [
+      "a caller exclusion",
+      { exclude_patterns: ["*.md"], excluded_file_count: 1 },
+      "user_exclusion: 1",
+    ],
+    [
+      "requested dependency-content inspection",
+      {
+        dependency_inspection: {
+          enabled: true,
+          status: "partial",
+          mode: "static_local",
+          locked_entries: 1,
+          inspected_artifacts: 0,
+          artifacts: [],
+        },
+      },
+      "dependency_inspection partial",
+    ],
+  ])(
+    "fails closed on %s that a complete 2.13.6 status does not account for",
+    async (_name, completeness, note) => {
+      const folder = fixture.folder("unaccounted-2136", skill);
+      const report = skillSpectorReport(
+        [skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8, "Instruction Override")],
+        { completeness },
+      );
+      const { entry, summary } = await run(folder, skillspector(report));
+      expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+      expect(toolOf(summary, "skillspector")).toMatchObject({
+        result: "fail",
+        counts: { high: 1 },
+      });
+      expect(entry).toMatchObject({
+        notes: expect.arrayContaining([expect.stringContaining(note)]),
+      });
+    },
+  );
+
+  it("keeps an unrequested 2.13.6 dependency inspection summary complete", async () => {
+    const folder = fixture.folder("dependency-not-requested", skill);
+    const { summary } = await run(folder, skillspector(skillSpectorReport([])));
+    expect(summary.coverage).toBe("complete");
   });
 
   it("does not count SkillSpector's disabled OSV lookup (advisories are a separate call) as a coverage gap", async () => {

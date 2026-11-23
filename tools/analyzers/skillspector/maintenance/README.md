@@ -1,6 +1,6 @@
 # SkillSpector TP4 maintenance build
 
-This is a Scan-maintained source build of NVIDIA SkillSpector 2.13.4, not an upstream
+This is a Scan-maintained source build of NVIDIA SkillSpector 2.13.6, not an upstream
 release. `artifact.json` binds its full distinct version and reproducible wheel SHA-256.
 The version digest binds the upstream commit/archive, capacity patch, runtime lock,
 separate build-tool lock and the reviewed builder recipe's canonical LF-byte SHA-256.
@@ -8,27 +8,29 @@ Changing the recipe therefore changes the version and wheel identity without dep
 on checkout line endings. Original Apache-2.0 license/provenance stays in the source
 archive and wheel. No installed package is patched.
 
-## 2.13.4 patch review
+## 2.13.6 patch review
 
-The 2.13.3 maintenance patch was compared with the official `v2.13.4` tag at commit
-`54824463814a0be01360792523ec7245a69190fc`. The retained patch applies to that source;
-its SHA-256 is unchanged.
+The 2.13.4 maintenance patch was compared with the official `v2.13.6` tag at commit
+`e2674da339b0bddc6e565d059c0577c6d9cd25da`. Two upstream changes stopped it applying, so the
+patch was rebased with the same resulting behavior and has a new SHA-256.
 
 | Patch behavior | Disposition | Why |
 | --- | --- | --- |
-| `SKILLSPECTOR_TP4_MAX_FILES` and `SKILLSPECTOR_TP4_MAX_FINDINGS` | Retained unchanged | Upstream 2.13.4 still fixes these capacities at 128 files and 64 findings. The maintenance build makes only these two additional capacities configurable. |
+| `SKILLSPECTOR_TP4_MAX_FILES` | Rebased, behavior unchanged | Upstream 2.13.5 reads this variable itself (default 128, bound 10000). The patch replaces that line so the maintenance build keeps its reviewed 1–4096 bound, default and warning-without-echo behavior. That bound also stays below the 10000-record report bound. |
+| `SKILLSPECTOR_TP4_MAX_FINDINGS` | Retained unchanged | Upstream 2.13.6 still fixes TP4 findings at 64. |
 | Existing `SKILLSPECTOR_TP4_MAX_BATCHES` support | Retained unchanged | Upstream already supplies this control, its 256 default and 1–4096 validation. The patch does not replace it. |
+| Upstream TP4 byte capacities (`SKILLSPECTOR_TP4_MAX_TOTAL_CODE_BYTES`, `_TOTAL_INPUT_BYTES`, `_FILE_CODE_BYTES`) | Not patched | These are new upstream controls with upstream defaults. Prepared profiles do not forward them, and static runs scrub them. |
 | `metadata.aih_scan_tp4_limits` in JSON reports | Retained unchanged | Scan must compare the producer's resolved numeric file/finding/batch capacities with the requested configuration before accepting observations. Upstream does not emit this maintenance metadata. |
-| `soft_wrap=True` for `--version` | Retained unchanged | The full bound maintenance version must remain on one line for Scan's executable probe; upstream still uses Rich's default wrapping. |
-| Upstream source and runtime inputs | Replaced | The source is now the authenticated 2.13.4 commit/archive and the runtime lock is the same reviewed 2.13.4 lock used by the standard runtime, including its tree-sitter dependencies. The builder's version prefix and bound artifact receipt are updated accordingly. |
-| Prior 2.13.3 artifact eligibility | Removed for new scans and profiles | New observations must name the new 2.13.4 maintenance producer and wheel. No capacity or integrity hunk was removed, and historical output formats were not migrated or rewritten. |
+| `soft_wrap=True` for `--version` | Moved, behavior unchanged | Upstream moved the version callback to `skillspector/cli_entry.py`, which is now the console entry point. The full bound maintenance version must remain on one line for Scan's executable probe; upstream still uses Rich's default wrapping. |
+| Upstream source and runtime inputs | Replaced | The source is now the authenticated 2.13.6 commit/archive. The runtime lock is the same reviewed 2.13.6 lock used by the standard runtime. The builder's version prefix and bound artifact receipt are updated accordingly. |
+| Prior 2.13.3 and 2.13.4 artifact eligibility | Removed for new scans and profiles | New observations must name the new 2.13.6 maintenance producer and wheel. No capacity or integrity behavior was removed, and historical output formats were not migrated or rewritten. |
 
 No new defaults, provider/model/reasoning selections, budget overrides, deadline changes or
 report-bound changes were added.
 
 ## Reproduce and install
 
-Acquire `https://codeload.github.com/NVIDIA/SkillSpector/tar.gz/54824463814a0be01360792523ec7245a69190fc`
+Acquire `https://codeload.github.com/NVIDIA/SkillSpector/tar.gz/e2674da339b0bddc6e565d059c0577c6d9cd25da`
 and retain the downloaded archive. The builder authenticates its SHA-256 before extracting
 only ordinary files/directories, applies the checked patch to a new source directory and
 builds a wheel with locked Hatchling and fixed timestamps:
@@ -85,6 +87,6 @@ This capability does not change provider/model/reasoning choices or make an inco
 assessment eligible. Larger limits do not guarantee complete inspection.
 
 Completed historical summaries and findings, including those naming the previous 2.13.3
-maintenance producer, remain readable under their original identities through the existing
-public readers. Historical readability does not admit the old wheel for new scans or
-prepared profiles, and no historical evidence is relabeled as a 2.13.4 observation.
+or 2.13.4 maintenance producers, remain readable under their original identities through the existing
+public readers. Historical readability does not admit the old wheels for new scans or
+prepared profiles, and no historical evidence is relabeled as a 2.13.6 observation.

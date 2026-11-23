@@ -369,10 +369,10 @@ sources, chunks and bytes before requesting paid inference. No control is inferr
 ambient variables; all three capacities and exact artifact identity are explicit and
 bound into the resume configuration. The helper requires the exact reviewed wheel in
 `AIH_SCAN_SKILLSPECTOR_WHEEL`, verifies its installed payload before running/reusing a
-maintenance profile, and forwards only requested settings. Standard upstream 2.13.4 cannot
-satisfy this profile: it retains fixed file/finding capacities and does not emit the
-maintenance resolved-capacity metadata. The previous 2.13.3 maintenance wheel is not
-accepted for a new profile. Omitted profiles retain upstream defaults and existing
+maintenance profile, and forwards only requested settings. Standard upstream 2.13.6 cannot
+satisfy this profile: it retains a fixed finding capacity and does not emit the
+maintenance resolved-capacity metadata. The previous 2.13.3 and 2.13.4 maintenance wheels
+are not accepted for a new profile. Omitted profiles retain upstream defaults and existing
 configuration identities. Incomplete results, findings/scoring and ten-minute tool deadline
 are unchanged.
 

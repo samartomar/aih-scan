@@ -29,7 +29,7 @@ npm registry, OSV, Fulcio and Rekor traffic at those local services.
 
 ## Analyzer runtimes
 
-SkillSpector 2.13.4 and Cisco skill-scanner 2.3.2 are locked in `tools/analyzers/<tool>`
+SkillSpector 2.13.6 and Cisco skill-scanner 2.3.2 are locked in `tools/analyzers/<tool>`
 (`pyproject.toml` + `uv.lock`). Provision them outside `PATH`:
 
 ```sh

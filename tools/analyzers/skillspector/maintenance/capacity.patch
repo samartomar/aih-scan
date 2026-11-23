@@ -1,15 +1,26 @@
+--- a/src/skillspector/cli_entry.py
++++ b/src/skillspector/cli_entry.py
+@@ -43,7 +43,7 @@ class _LazyCommandGroup(TyperGroup):
+ def version_callback(value: bool) -> None:
+     """Print version and exit without importing the scanner or its providers."""
+     if value:
+-        Console().print(f"SkillSpector v{__version__}")
++        Console().print(f"SkillSpector v{__version__}", soft_wrap=True)
+         raise typer.Exit()
+ 
+ 
 --- a/src/skillspector/nodes/analyzers/mcp_tool_poisoning.py
 +++ b/src/skillspector/nodes/analyzers/mcp_tool_poisoning.py
-@@ -73,7 +73,7 @@
+@@ -75,7 +75,7 @@ logger = logging.getLogger(__name__)
  
  _FRAMEWORK_TAGS = ["ASI02", "AML.T0080"]
  TP3_MAX_PARAM_DESC_LENGTH = 500
--TP4_MAX_FILES = 128
+-TP4_MAX_FILES = bounded_capacity("SKILLSPECTOR_TP4_MAX_FILES", 128, 10_000)
 +DEFAULT_TP4_MAX_FILES = 128
- TP4_MAX_TOTAL_CODE_BYTES = 4 * 1024 * 1024
- TP4_MAX_TOTAL_INPUT_BYTES = 4 * 1024 * 1024
- TP4_MAX_FILE_CODE_BYTES = 1024 * 1024
-@@ -82,7 +82,7 @@
+ TP4_MAX_TOTAL_CODE_BYTES = bounded_capacity(
+     "SKILLSPECTOR_TP4_MAX_TOTAL_CODE_BYTES", 4 * 1024 * 1024, 64 * 1024 * 1024
+ )
+@@ -90,7 +90,7 @@ TP4_MAX_BATCHES_CEILING = 4096
  TP4_MAX_BATCH_INPUT_TOKENS = 32_000
  TP4_MIN_CODE_TOKENS = 64
  TP4_MAX_DECLARATION_CHARS = 16_384
@@ -18,11 +29,10 @@
  
  
  def _tp4_max_batches_from_environment(value: str | None) -> int:
-@@ -104,6 +104,22 @@
- 
+@@ -113,6 +113,21 @@ def _tp4_max_batches_from_environment(value: str | None) -> int:
  
  TP4_MAX_BATCHES = _tp4_max_batches_from_environment(os.environ.get("SKILLSPECTOR_TP4_MAX_BATCHES"))
-+
+ 
 +
 +def _tp4_capacity(name: str, default: int) -> int:
 +    value = os.environ.get(name)
@@ -38,12 +48,12 @@
 +TP4_MAX_FILES = _tp4_capacity("SKILLSPECTOR_TP4_MAX_FILES", DEFAULT_TP4_MAX_FILES)
 +TP4_MAX_FINDINGS = _tp4_capacity("SKILLSPECTOR_TP4_MAX_FINDINGS", DEFAULT_TP4_MAX_FINDINGS)
 +
- 
  _CATEGORY = "MCP Tool Poisoning"
+ 
  
 --- a/src/skillspector/nodes/report.py
 +++ b/src/skillspector/nodes/report.py
-@@ -1327,7 +1327,11 @@
+@@ -1529,7 +1529,11 @@ def _build_metadata(
      )
  
      sanitized_inference_usage = sanitize_inference_usage(inference_usage)
@@ -55,14 +65,3 @@
          "has_executable_scripts": has_executable_scripts,
          "skillspector_version": skillspector_version,
          "llm_requested": use_llm,
---- a/src/skillspector/cli.py
-+++ b/src/skillspector/cli.py
-@@ -291,7 +291,7 @@
- def version_callback(value: bool) -> None:
-     """Print version and exit."""
-     if value:
--        console.print(f"SkillSpector v{__version__}")
-+        console.print(f"SkillSpector v{__version__}", soft_wrap=True)
-         raise typer.Exit()
- 
- 
