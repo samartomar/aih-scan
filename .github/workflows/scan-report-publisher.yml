@@ -42,7 +42,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.15.0
       - run: npm ci --ignore-scripts && npm run build
@@ -61,7 +61,7 @@ jobs:
           cd ..
           tar --create --file signer-runtime.tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 signer-runtime
           echo "sha256=$(sha256sum signer-runtime.tar | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signer-runtime
           path: signer-runtime.tar
@@ -106,7 +106,7 @@ jobs:
           gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID" > run.json
           gh api "repos/samartomar/aih-scan/actions/runs/$RUN_ID/artifacts?per_page=100" > archives.json
           node tools/publisher/candidate.mjs check-run run.json archives.json "$RUN_ID" "$HEAD" "$ARCHIVE_ID" "$ARCHIVE_DIGEST"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ vars.SCAN_REPORT_CANDIDATE_ARTIFACT_ID }}
           digest-mismatch: error
@@ -135,7 +135,7 @@ jobs:
             node dist/cli.js read "selected/$path" > /dev/null
           done < selection.txt
           cp selection.txt selected/selection.txt
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: checked-summaries
           path: selected/
@@ -152,10 +152,10 @@ jobs:
       id-token: write
     environment: scan-report-signing-prod
     steps:
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.15.0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: signer-runtime
           digest-mismatch: error
@@ -170,7 +170,7 @@ jobs:
           test "$(sha256sum runtime/signer-runtime.tar | awk '{print $1}')" = "$RUNTIME_SHA"
           tar --extract --file runtime/signer-runtime.tar --no-same-owner --no-same-permissions
           test -f signer-runtime/node_modules/@aihq/scan/dist/cli.js
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: checked-summaries
           digest-mismatch: error
@@ -189,7 +189,7 @@ jobs:
             node "$cli" verify "signing/$path" --bundle "$bundle" --json > "signing/${path%.json}.verified.json"
             node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")); if(r.status!=="ok"||r.verified!==true||r.signer?.trusted!==true||r.withdrawn!==false) process.exit(1)' "signing/${path%.json}.verified.json"
           done < signing/selection.txt
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scan-report-signed
           path: signing/
