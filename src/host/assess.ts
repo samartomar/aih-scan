@@ -24,6 +24,8 @@ import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from 
 
 export interface AssessSettings {
   readonly origin: Origin;
+  /** The summary revision to write; `scanWith` supplies the request's, default 1. */
+  readonly revision: number;
   readonly mode: ScanMode;
   /** The caller's tool selection; undefined selects every routed tool. aih-trust-lint always runs. */
   readonly tools: readonly ToolId[] | undefined;
@@ -334,7 +336,7 @@ export async function assessItem(
   const summary: Summary = Object.freeze({
     format: formats.summary,
     scanKey: item.scanKey,
-    revision: 1,
+    revision: settings.revision,
     origin: settings.origin,
     scannedAt: `${settings.now().toISOString().slice(0, 19)}Z`,
     scanner: `${packageIdentity.name} ${packageIdentity.version}`,

@@ -122,6 +122,7 @@ const request = {
     kinds: { type: "array", minItems: 1, uniqueItems: true, items: kind },
     tools: { type: "array", uniqueItems: true, items: { enum: [...optionalTools] } },
     mode: { enum: ["static", "ai"] },
+    revision: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
   },
 } as const;
 

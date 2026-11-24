@@ -640,6 +640,7 @@ export async function scanWith(
           adapters,
           {
             origin: valid.origin,
+            revision: valid.revision ?? 1,
             mode,
             tools: valid.tools,
             internalScopes: options.internalScopes ?? [],

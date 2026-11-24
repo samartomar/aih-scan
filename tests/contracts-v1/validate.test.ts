@@ -184,6 +184,25 @@ describe("request and source validation", () => {
   });
 });
 
+describe("operator-supplied summary revision", () => {
+  it("accepts a positive safe integer revision in a request, in the validator and the schema alike", () => {
+    const ajv = compile(schemas.request);
+    const base = { format: "aih-scan-request/1", origin: "published", items: [{ path: "a" }] };
+    const ok = validateRequest({ ...base, revision: 3 });
+    expect(ok).toMatchObject({ status: "ok", request: { revision: 3 } });
+    expect(ajv({ ...base, revision: 3 })).toBe(true);
+    const defaulted = validateRequest(base);
+    expect(defaulted).toMatchObject({ status: "ok" });
+    expect(defaulted.status === "ok" ? defaulted.request : undefined).not.toHaveProperty(
+      "revision",
+    );
+    for (const revision of [0, -1, 1.5, "2", null, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(validateRequest({ ...base, revision }).status, String(revision)).toBe("invalid");
+      expect(ajv({ ...base, revision }), String(revision)).toBe(false);
+    }
+  });
+});
+
 describe("summary and withdrawal schemas", () => {
   it("agree with the corpus summaries", () => {
     const ajv = compile(schemas.summary);
