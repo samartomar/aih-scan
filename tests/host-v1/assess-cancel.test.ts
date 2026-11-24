@@ -38,6 +38,7 @@ it("keeps the actual version when a completed adapter races with cancellation", 
     new Map([["skillspector", adapter]]),
     {
       origin: "local",
+      revision: 1,
       mode: "static",
       tools: ["skillspector"],
       internalScopes: [],

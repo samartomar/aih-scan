@@ -191,11 +191,11 @@ describe("operator-supplied summary revision", () => {
     const ok = validateRequest({ ...base, revision: 3 });
     expect(ok).toMatchObject({ status: "ok", request: { revision: 3 } });
     expect(ajv({ ...base, revision: 3 })).toBe(true);
-    expect(validateRequest(base)).toMatchObject({ status: "ok" });
-    expect(
-      validateRequest(base).status === "ok" &&
-        "revision" in (validateRequest(base) as { request: object }).request,
-    ).toBe(false);
+    const defaulted = validateRequest(base);
+    expect(defaulted).toMatchObject({ status: "ok" });
+    expect(defaulted.status === "ok" ? defaulted.request : undefined).not.toHaveProperty(
+      "revision",
+    );
     for (const revision of [0, -1, 1.5, "2", null, Number.MAX_SAFE_INTEGER + 1]) {
       expect(validateRequest({ ...base, revision }).status, String(revision)).toBe("invalid");
       expect(ajv({ ...base, revision }), String(revision)).toBe(false);

@@ -18,6 +18,8 @@ export const AGENT_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "m
 // A pinned Claude model id (family plus numeric version, optionally a date snapshot). Aliases
 // such as `opus`, `default` or `claude-opus-latest` name whatever the CLI or account resolves.
 const PINNED_CLAUDE_MODEL = /^claude-[a-z]+(?:-[0-9]+)+$/;
+// An explicit manifest revision, carried into identities and requests only when present.
+const revisionOf = (value) => value.revision === undefined ? {} : { revision: value.revision };
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
 const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
@@ -169,7 +171,7 @@ export async function validateContent(manifest, root, runtime) {
 }
 function configIdentity(manifest, runtime) {
   // An explicit revision changes every summary's bytes, so it is part of the configuration; omitting it keeps existing identities.
-  return { scanner: manifest.scanner, assessment: manifest.assessment, ...(manifest.revision === undefined ? {} : { revision: manifest.revision }), routing: runtime.contracts.routing.format, scoring: runtime.contracts.scoring.format };
+  return { scanner: manifest.scanner, assessment: manifest.assessment, ...revisionOf(manifest), routing: runtime.contracts.routing.format, scoring: runtime.contracts.scoring.format };
 }
 const requestedToolsFinished = (summary, manifest) => manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 export function aiEligible(summary, manifest) {
@@ -252,7 +254,7 @@ async function worker(requestPath) {
   const runtime = await loadRuntime(job.consumer, job.tarball, job.scanner);
   const controller = new AbortController(); process.once("disconnect", () => controller.abort()); process.on("message", () => controller.abort());
   const started = Date.now();
-  const result = await runtime.host.scan({ format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, ...(job.revision === undefined ? {} : { revision: job.revision }), items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] }, { outDir: job.out, signal: controller.signal });
+  const result = await runtime.host.scan({ format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, ...revisionOf(job), items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] }, { outDir: job.out, signal: controller.signal });
   const item = result.results[0];
   let record;
   if (item?.status !== "ok") record = { status: "failed", detail: result.status, elapsedMs: Date.now() - started };
@@ -447,7 +449,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
         const [key, items] = pending.shift(), item = items[0];
         const id = randomUUID(), work = join(root, "attempts", id); mkdirSync(work, { recursive: true });
         const requestPath = join(work, "request.json");
-        writeJson(requestPath, { scanner: manifest.scanner, assessment: manifest.assessment, ...(manifest.revision === undefined ? {} : { revision: manifest.revision }), consumer: resolve(consumer), tarball: resolve(tarball), folder: resolve(content, ...item.path.split("/")), item, out: join(work, "output") });
+        writeJson(requestPath, { scanner: manifest.scanner, assessment: manifest.assessment, ...revisionOf(manifest), consumer: resolve(consumer), tarball: resolve(tarball), folder: resolve(content, ...item.path.split("/")), item, out: join(work, "output") });
         const job = launch(requestPath, manifest.assessment, controller.signal).then(async (record) => {
           if (record.summary) {
             record.summary = relative(root, record.summary).split(sep).join("/");

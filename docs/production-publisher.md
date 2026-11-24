@@ -83,13 +83,16 @@ Hash the exact UTF-8 JSON bytes as SHA-256. This tooling-only format does not ch
 
 An optional top-level `"revision": 2` sets the summary revision for every key the manifest
 scans, so a store can publish a newer result for a key it has already published (default `1`).
-It must be a positive safe integer. It is part of the configuration identity, so a changed
-revision is a separate resume namespace, while omitting it keeps existing identities. Every
+It must be a positive safe integer. It is part of the configuration identity: an explicit
+value, including `1`, is a separate resume namespace, while omitting it keeps existing
+identities. Every
 result, export and import must carry exactly that revision. Scan does not see the store:
 before publishing, the operator must check that the revision is greater than every revision
 the same signer has published for each selected key. A result for one key may be published
 once per revision; for example, static evidence as revision 2 and AI evidence as revision 3.
-Withdrawals are unchanged: `throughRevision` covers that signer's revisions 1 to N.
+Withdrawals are unchanged: a withdrawal covers that signer's revisions 1 to
+`throughRevision` for that key. A later revision needs this prepared route: the candidate
+workflow's sources route runs the CLI, which writes revision 1.
 
 Each item root is relative to the staging content directory; each file path is relative
 to that root. Include the complete inventory, including support files, with `100644` or

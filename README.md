@@ -134,10 +134,10 @@ a hand-built look-alike matches with `signer: null`.
 
 The request (`aih-scan-request/1`) carries either a `source` (`aih-scan-source/1`) or
 caller-prepared `items` (`[{ path, executable?, label? }]`), plus `origin`, and optional
-`kinds`, `tools`, `mode` and `revision`. `revision` is the positive integer written into each
-summary (default `1`): the signer's nth result for that key, chosen by the store operator.
-Scan cannot see a store, so it does not check earlier revisions. With `items` Scan hashes each folder exactly as given and
-returns one result per folder. JSON Schemas are exported as
+`kinds`, `tools`, `mode` and `revision`. `revision` is the positive integer written into
+each summary (default `1`): the signer's nth result for that key, chosen by the store
+operator. Scan cannot see a store, so it does not check earlier revisions. With `items`
+Scan hashes each folder exactly as given and returns one result per folder. JSON Schemas are exported as
 `@aihq/scan/schemas/aih-scan-request-1.json`, `…/aih-scan-source-1.json`,
 `…/aih-scan-summary-1.json` and `…/aih-scan-withdrawn-1.json`, and as `schemas` from
 `/contracts`.

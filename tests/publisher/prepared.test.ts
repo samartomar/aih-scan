@@ -355,6 +355,16 @@ describe("prepared manifest and exact inventory", () => {
     ])
       expect(() => validate(refused), JSON.stringify(refused)).toThrow();
   });
+  it("accepts only a positive safe integer manifest revision", async () => {
+    const setup = await prepared({ item: skill }, staticAssessment);
+    const validate = (revision: unknown) => {
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, revision }));
+      return validateManifest(bytes, hash(bytes));
+    };
+    expect(validate(2).revision).toBe(2);
+    for (const revision of [0, -1, 1.5, "2", null, Number.MAX_SAFE_INTEGER + 1])
+      expect(() => validate(revision), String(revision)).toThrow("revision");
+  });
   it("validates explicit model token metadata without accepting a caller registry path", async () => {
     const setup = await prepared({ item: skill });
     const validate = (controls: Record<string, unknown>) => {
@@ -849,11 +859,6 @@ describe.runIf(process.platform !== "win32")(
           runtime,
         ),
       ).rejects.toThrow("revision");
-      for (const revision of [0, -1, 1.5, "2", null])
-        expect(() => {
-          const b = Buffer.from(JSON.stringify({ ...setup.manifest, revision }));
-          validateManifest(b, hash(b));
-        }, String(revision)).toThrow("revision");
     }, 120000);
     it.each([
       ["fixture-secret-value-166", "fixture-secret-value-166"],

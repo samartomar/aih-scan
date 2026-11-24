@@ -50,6 +50,9 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 - CLI: `scan`, `advisories`, `read`, `findings`, `verify` and `sign`, with exits 0
   (finished, complete or partial), 1 (only with `--fail-at`), 2 (could not scan or read)
   and 130 (cancelled).
+- An optional `revision` in `aih-scan-request/1` and in the prepared-content manifest: a
+  positive safe integer, default `1`, written into each summary so a store operator can
+  publish a later revision for a key it has already published.
 
 ### Removed
 
