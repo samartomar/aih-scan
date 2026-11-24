@@ -50,6 +50,11 @@ export interface ScanRequest {
   readonly kinds?: readonly Kind[];
   readonly tools?: readonly ToolId[];
   readonly mode?: ScanMode;
+  /**
+   * The summary revision to write: the signer's nth result for each key, chosen by whoever runs
+   * the store (default 1). Scan cannot see a store, so it does not check earlier revisions.
+   */
+  readonly revision?: number;
 }
 
 export type ToolResult = "pass" | "warn" | "fail" | "not-run" | "not-applicable";
@@ -372,7 +377,12 @@ export function validateRequest(
     const request = object(value, "request");
     const problem = formatProblem(request.format, formats.request, "request");
     if (problem !== undefined) throw new Invalid(problem);
-    keys(request, "request", ["format", "origin"], ["source", "items", "kinds", "tools", "mode"]);
+    keys(
+      request,
+      "request",
+      ["format", "origin"],
+      ["source", "items", "kinds", "tools", "mode", "revision"],
+    );
     const hasSource = Object.hasOwn(request, "source");
     const hasItems = Object.hasOwn(request, "items");
     if (hasSource === hasItems) invalid("request must have exactly one of source or items");
@@ -384,6 +394,7 @@ export function validateRequest(
       kinds?: readonly Kind[];
       tools?: readonly ToolId[];
       mode?: ScanMode;
+      revision?: number;
     } = {
       format: formats.request,
       origin: oneOf(request.origin, "request.origin", ["published", "local"]),
@@ -413,6 +424,8 @@ export function validateRequest(
     }
     if (request.mode !== undefined)
       result.mode = oneOf<ScanMode>(request.mode, "request.mode", ["static", "ai"]);
+    if (request.revision !== undefined)
+      result.revision = integer(request.revision, "request.revision", 1);
     return Object.freeze({ status: "ok" as const, request: Object.freeze(result) as ScanRequest });
   });
 }

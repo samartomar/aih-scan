@@ -782,6 +782,79 @@ describe.runIf(process.platform !== "win32")(
         ).summaries,
       ).toHaveLength(1);
     }, 120000);
+    it("writes, binds and verifies an operator-supplied revision through scan, export and import", async () => {
+      const setup = await prepared({ item: skill }, staticAssessment);
+      const ss = fakeAnalyzer(setup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.6",
+        outputFlag: "--output",
+        report: skillSpectorReport([]),
+      });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      const key = setup.manifest.items[0]!.scanKey;
+      const first = await scanPrepared(setup);
+      const defaultReceipt = JSON.parse(readFileSync(first.receiptPath, "utf8"));
+      expect(defaultReceipt.config).not.toHaveProperty("revision");
+      const defaultSummary = JSON.parse(
+        readFileSync(join(first.root, defaultReceipt.results[key].summary), "utf8"),
+      );
+      expect(defaultSummary.revision).toBe(1);
+
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, revision: 2 }));
+      writeFileSync(setup.manifestPath, bytes);
+      const revised = { ...setup, manifestSha256: hash(bytes) };
+      const second = await scanPrepared(revised);
+      expect(second).toMatchObject({ reused: 0, completed: 1 });
+      expect(second.root).not.toBe(first.root);
+      const receipt = JSON.parse(readFileSync(second.receiptPath, "utf8"));
+      expect(receipt.config.revision).toBe(2);
+      const record = receipt.results[key];
+      expect(record.status).toBe("complete-static");
+      const summaryPath = join(second.root, record.summary);
+      expect(JSON.parse(readFileSync(summaryPath, "utf8")).revision).toBe(2);
+      expect((await scanPrepared(revised)).reused).toBe(1);
+
+      const archive = join(setup.folder, "revised.tar");
+      const exported = await exportCandidate({
+        ...revised,
+        receiptPath: second.receiptPath,
+        out: archive,
+      });
+      const imported = join(setup.folder, "revised-imported");
+      await importCandidate(
+        archive,
+        exported.archiveSha256,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        imported,
+      );
+      const verified = await verifyCandidate(
+        imported,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        join(imported, "scanner.tgz"),
+      );
+      expect(verified.manifest.revision).toBe(2);
+      // A revision-1 result can never pass as the manifest's revision 2.
+      const items = setup.manifest.items;
+      const wrong = { ...defaultReceipt.results[key] };
+      await expect(
+        verifyResult(
+          first.root,
+          wrong,
+          items,
+          { ...setup.manifest, revision: 2 },
+          setup.content,
+          runtime,
+        ),
+      ).rejects.toThrow("revision");
+      for (const revision of [0, -1, 1.5, "2", null])
+        expect(() => {
+          const b = Buffer.from(JSON.stringify({ ...setup.manifest, revision }));
+          validateManifest(b, hash(b));
+        }, String(revision)).toThrow("revision");
+    }, 120000);
     it.each([
       ["fixture-secret-value-166", "fixture-secret-value-166"],
       [" \tfixture-edge-whitespace-166\r\n", "fixture-edge-whitespace-166"],

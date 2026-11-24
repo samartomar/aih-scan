@@ -1129,6 +1129,13 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
     },
   );
 
+  it("writes the operator-supplied revision into the summary, and revision 1 by default", async () => {
+    const folder = fixture.folder("item", skill);
+    const ss = skillspector(skillSpectorReport([]));
+    expect((await run(folder, ss)).summary.revision).toBe(1);
+    expect((await run(folder, ss, { extra: { revision: 3 } })).summary.revision).toBe(3);
+  });
+
   it("falls back to static explicitly when AI is not set up here, without changing static coverage", async () => {
     const folder = fixture.folder("item", skill);
     const ss = skillspector(skillSpectorReport([]));

@@ -61,7 +61,9 @@ const atomicJson = writeCheckpointAtomic;
 export function validateManifest(bytes, expectedSha256) {
   need(hash(expectedSha256) && digest(bytes) === expectedSha256, "Reviewed manifest digest mismatch");
   const manifest = json(bytes);
-  keys(manifest, ["format", "scanner", "assessment", "items"], ["parentManifestSha256"]);
+  keys(manifest, ["format", "scanner", "assessment", "items"], ["parentManifestSha256", "revision"]);
+  // The summary revision the store operator assigns (the signer's nth result per key); default 1.
+  if (manifest.revision !== undefined) need(Number.isSafeInteger(manifest.revision) && manifest.revision >= 1, "Invalid summary revision; expected a positive safe integer");
   need(manifest.format === "aih-scan-prepared/1", "Unsupported prepared manifest format");
   if (manifest.parentManifestSha256 !== undefined) need(hash(manifest.parentManifestSha256), "Invalid parent manifest digest");
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
@@ -166,7 +168,8 @@ export async function validateContent(manifest, root, runtime) {
   return groups;
 }
 function configIdentity(manifest, runtime) {
-  return { scanner: manifest.scanner, assessment: manifest.assessment, routing: runtime.contracts.routing.format, scoring: runtime.contracts.scoring.format };
+  // An explicit revision changes every summary's bytes, so it is part of the configuration; omitting it keeps existing identities.
+  return { scanner: manifest.scanner, assessment: manifest.assessment, ...(manifest.revision === undefined ? {} : { revision: manifest.revision }), routing: runtime.contracts.routing.format, scoring: runtime.contracts.scoring.format };
 }
 const requestedToolsFinished = (summary, manifest) => manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 export function aiEligible(summary, manifest) {
@@ -204,6 +207,7 @@ export async function verifyResult(root, record, items, manifest, content, runti
   const read = runtime.read.readSummary(new Uint8Array(bytes)); need(read.status === "ok", "Invalid result summary");
   const summary = read.summary;
   need(summary.scanKey === items[0].scanKey && summary.scanner === `${manifest.scanner.name} ${manifest.scanner.version}`, "Result key or scanner mismatch");
+  need(summary.revision === (manifest.revision ?? 1), "Result revision mismatch");
   const inventory = (files) => files.map(({ path, mode, sha256 }) => ({ path, mode, sha256 })).sort((a,b)=>a.path < b.path ? -1 : 1);
   need(items.every((item) => canonical(inventory(item.files)) === canonical(inventory(summary.files))), "Summary differs from reviewed path/mode/hash inventory");
   const expectedSarif = summary.sarif.map((entry) => ({ path: `${record.summary.slice(0, -12)}${entry.path}`, sha256: entry.sha256 })).sort((a,b)=>a.path < b.path ? -1 : 1);
@@ -248,7 +252,7 @@ async function worker(requestPath) {
   const runtime = await loadRuntime(job.consumer, job.tarball, job.scanner);
   const controller = new AbortController(); process.once("disconnect", () => controller.abort()); process.on("message", () => controller.abort());
   const started = Date.now();
-  const result = await runtime.host.scan({ format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] }, { outDir: job.out, signal: controller.signal });
+  const result = await runtime.host.scan({ format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, ...(job.revision === undefined ? {} : { revision: job.revision }), items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] }, { outDir: job.out, signal: controller.signal });
   const item = result.results[0];
   let record;
   if (item?.status !== "ok") record = { status: "failed", detail: result.status, elapsedMs: Date.now() - started };
@@ -263,7 +267,7 @@ async function worker(requestPath) {
   const durable = record.summary ? { ...record, summary: relative(stateRoot, record.summary).split(sep).join("/"), sarif: record.sarif.map((entry) => ({ ...entry, path: relative(stateRoot, entry.path).split(sep).join("/") })) } : record;
   const receiptPath = join(dirname(requestPath), "result.json");
   need(!existsSync(receiptPath), "Attempt result already exists");
-  writeCheckpointAtomic(receiptPath, { format: "aih-scan-prepared-attempt/1", configSha256: fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment }, runtime)), scanKey: job.item.scanKey, record: durable });
+  writeCheckpointAtomic(receiptPath, { format: "aih-scan-prepared-attempt/1", configSha256: fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment, revision: job.revision }, runtime)), scanKey: job.item.scanKey, record: durable });
   return record;
 }
 function childEnvironment(assessment, scratch) {
@@ -361,7 +365,7 @@ async function recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, c
     // analyzer outcomes; file presence or requested AI alone never establishes success.
     const job = json(readRegular(join(attempt, "request.json"))), key = job.item?.scanKey;
     if (!groups.has(key)) continue;
-    need(fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment }, runtime)) === checkpoint.configSha256, "Orphan attempt configuration mismatch");
+    need(fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment, revision: job.revision }, runtime)) === checkpoint.configSha256, "Orphan attempt configuration mismatch");
     const summaryPath = join(attempt, "output", runtime.contracts.keyFolderName(key), "summary.json");
     if (!existsSync(summaryPath)) continue;
     const bytes = readRegular(summaryPath), read = runtime.read.readSummary(new Uint8Array(bytes));
@@ -443,7 +447,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
         const [key, items] = pending.shift(), item = items[0];
         const id = randomUUID(), work = join(root, "attempts", id); mkdirSync(work, { recursive: true });
         const requestPath = join(work, "request.json");
-        writeJson(requestPath, { scanner: manifest.scanner, assessment: manifest.assessment, consumer: resolve(consumer), tarball: resolve(tarball), folder: resolve(content, ...item.path.split("/")), item, out: join(work, "output") });
+        writeJson(requestPath, { scanner: manifest.scanner, assessment: manifest.assessment, ...(manifest.revision === undefined ? {} : { revision: manifest.revision }), consumer: resolve(consumer), tarball: resolve(tarball), folder: resolve(content, ...item.path.split("/")), item, out: join(work, "output") });
         const job = launch(requestPath, manifest.assessment, controller.signal).then(async (record) => {
           if (record.summary) {
             record.summary = relative(root, record.summary).split(sep).join("/");
