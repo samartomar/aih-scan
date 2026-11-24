@@ -19,6 +19,11 @@ export interface FakeAnalyzerBehaviour {
   readonly hang?: boolean;
   /** With `hang`: both processes ignore SIGTERM, so only a forced stop ends them. */
   readonly ignoreTerm?: boolean;
+  /**
+   * On `scan`, start this agent CLI by name from the analyzer's PATH, as SkillSpector's CLI
+   * providers do (`<name> -p --output-format text`), and record its stdout as `agentStdout`.
+   */
+  readonly agentCli?: string;
 }
 
 export interface FakeCall {
@@ -30,6 +35,8 @@ export interface FakeCall {
   readonly writable: boolean;
   /** Windows attributes protect copied files even though directory creation is allowed. */
   readonly filesWritable: boolean;
+  /** Stdout of the agent CLI started on `scan` when `agentCli` is configured. */
+  readonly agentStdout?: string;
 }
 
 export interface FakeAnalyzer {
@@ -74,9 +81,14 @@ if (args[0] === "scan") {
     catch (error) { if (!["EACCES", "EROFS", "EPERM"].includes(error.code)) throw error; }
   }
 }
+let agentStdout;
+if (args[0] === "scan" && b.agentCli) {
+  const agent = require("node:child_process").spawnSync(b.agentCli, ["-p", "--output-format", "text"], { input: "prompt", env: process.env, encoding: "utf8" });
+  agentStdout = agent.stdout;
+}
 fs.appendFileSync(
   path.join(dir, "calls.jsonl"),
-  JSON.stringify({ args, cwd: process.cwd(), env: process.env, listing, writable, filesWritable }) + "\\n",
+  JSON.stringify({ args, cwd: process.cwd(), env: process.env, listing, writable, filesWritable, agentStdout }) + "\\n",
 );
 if (args[0] === "--version") {
   process.stdout.write(b.versionText + "\\n");

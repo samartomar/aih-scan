@@ -1184,6 +1184,95 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "applies an explicit Claude CLI effort and records the client, model and effort it ran with",
+    async () => {
+      const folder = fixture.folder("item", skill);
+      const bin = fixture.folder("bin", {});
+      nativeNodeCli(
+        bin,
+        "claude",
+        `const a = process.argv.slice(2);
+if (a[0] === "--version") { process.stdout.write("2.1.330 (Claude Code)\\n"); process.exit(0); }
+process.stdout.write(JSON.stringify(a)); process.exit(0);`,
+      );
+      const ss = skillspector(
+        skillSpectorReport([], {
+          llm: true,
+          provenance: {
+            provider: { effective_adapter: "claude_cli" },
+            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "redacted" }],
+          },
+        }),
+        { agentCli: "claude" },
+      );
+      const env = {
+        SKILLSPECTOR_PROVIDER: "claude_cli",
+        SKILLSPECTOR_MODEL: "claude-opus-5-5",
+        AIH_SCAN_AI_EFFORT: "medium",
+        PATH: [bin, process.env.PATH ?? ""].join(delimiter),
+      };
+      const { result, summary } = await run(folder, ss, { extra: { mode: "ai" }, env });
+      expect(result).toMatchObject({ ai: { status: "available", via: "cli" } });
+      const call = ss.calls().find((c) => c.args[0] === "scan")!;
+      expect(JSON.parse(call.agentStdout!)).toEqual([
+        "-p",
+        "--output-format",
+        "text",
+        "--effort",
+        "medium",
+      ]);
+      expect(toolOf(summary, "skillspector")).toMatchObject({
+        mode: "ai",
+        ai: {
+          via: "cli",
+          provider: "claude_cli",
+          model: "claude-opus-5-5",
+          effort: "medium",
+          client: { name: "claude", version: "2.1.330" },
+        },
+      });
+      // Without a Scan-applied effort the CLI keeps its own default and none is recorded.
+      const { SKILLSPECTOR_MODEL: _m, AIH_SCAN_AI_EFFORT: _e, ...plain } = env;
+      const defaults = await run(folder, ss, { extra: { mode: "ai" }, env: plain });
+      const ai = toolOf(defaults.summary, "skillspector").ai;
+      expect(ai).toEqual({
+        via: "cli",
+        provider: "claude_cli",
+        model: "provider default",
+        client: { name: "claude", version: "2.1.330" },
+      });
+      const plainCall = ss
+        .calls()
+        .filter((c) => c.args[0] === "scan")
+        .at(-1)!;
+      expect(JSON.parse(plainCall.agentStdout!)).toEqual(["-p", "--output-format", "text"]);
+    },
+  );
+
+  it("refuses an AI effort Scan cannot apply instead of silently ignoring it", async () => {
+    const folder = fixture.folder("item", skill);
+    const bin = fixture.folder("bin", {});
+    nativeNodeCli(bin, "claude", "process.exit(0);");
+    const ss = skillspector(skillSpectorReport([]));
+    const PATH = [bin, process.env.PATH ?? ""].join(delimiter);
+    const cases: [Record<string, string>, string][] = [
+      [
+        { SKILLSPECTOR_PROVIDER: "ollama", AIH_SCAN_AI_EFFORT: "medium" },
+        "AIH_SCAN_AI_EFFORT applies only to provider claude_cli",
+      ],
+      [
+        { SKILLSPECTOR_PROVIDER: "claude_cli", AIH_SCAN_AI_EFFORT: "turbo", PATH },
+        "AIH_SCAN_AI_EFFORT must be one of low, medium, high, xhigh, max",
+      ],
+    ];
+    for (const [env, reason] of cases) {
+      const { result, summary } = await run(folder, ss, { extra: { mode: "ai" }, env });
+      expect(result).toMatchObject({ ai: { status: "not-available", reason } });
+      expect(toolOf(summary, "skillspector")).toMatchObject({ mode: "static" });
+    }
+  });
+
   it("keeps a configured AI pass that did not run or did not complete as a failed, partial result", async () => {
     const folder = fixture.folder("item", skill);
     const env = { SKILLSPECTOR_PROVIDER: "ollama" };

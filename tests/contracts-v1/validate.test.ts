@@ -9,6 +9,7 @@ import {
   validateSource,
   validateWithdrawn,
 } from "../../src/public/contracts.js";
+import { readSummary } from "../../src/public/read.js";
 import { corpusCase } from "../support/scan-v1-corpus.js";
 
 const compile = (schema: object) => new Ajv({ strict: false }).compile(schema);
@@ -189,6 +190,43 @@ describe("summary and withdrawal schemas", () => {
     for (const name of ["risky", "clean", "not-assessed"]) {
       const summary = JSON.parse(new TextDecoder().decode(corpusCase(name).summary));
       expect(ajv(summary), name).toBe(true);
+    }
+  });
+
+  it("accept optional agent-CLI effort and client provenance and refuse malformed values", () => {
+    const ajv = compile(schemas.summary);
+    const base = JSON.parse(new TextDecoder().decode(corpusCase("clean").summary));
+    const withAi = (ai: Record<string, unknown>) => ({
+      ...base,
+      tools: base.tools.map((tool: { tool: string }) =>
+        tool.tool === "skillspector" ? { ...tool, mode: "ai", ai } : tool,
+      ),
+    });
+    const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+    const cli = {
+      via: "cli",
+      provider: "claude_cli",
+      model: "claude-opus-5-5",
+      effort: "medium",
+      client: { name: "claude", version: "2.1.330" },
+    };
+    const read = readSummary(encode(withAi(cli)));
+    expect(read.status).toBe("ok");
+    expect(
+      read.status === "ok" && read.summary.tools.find((t) => t.tool === "skillspector")?.ai,
+    ).toEqual(cli);
+    expect(ajv(withAi(cli))).toBe(true);
+    const { effort: _effort, client: _client, ...plain } = cli;
+    expect(readSummary(encode(withAi(plain))).status).toBe("ok");
+    for (const bad of [
+      { ...cli, effort: "" },
+      { ...cli, effort: "Medium!" },
+      { ...cli, client: { name: "claude" } },
+      { ...cli, client: { name: "claude", version: "2.1.330", path: "/usr/bin/claude" } },
+      { ...cli, extra: true },
+    ]) {
+      expect(readSummary(encode(withAi(bad))).status, JSON.stringify(bad)).toBe("invalid");
+      expect(ajv(withAi(bad)), JSON.stringify(bad)).toBe(false);
     }
   });
 

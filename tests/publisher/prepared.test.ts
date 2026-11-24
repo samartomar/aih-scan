@@ -18,11 +18,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { checkPreparedCandidate } from "../../tools/publisher/candidate.mjs";
 import {
   aiEligible,
+  eligibleEvidence,
   exportCandidate,
   importCandidate,
   loadRuntime,
   maintenancePythonPath,
   mergePrepared,
+  type PreparedAssessment,
   type PreparedRuntime,
   recoverPrepared,
   scanPrepared,
@@ -111,7 +113,10 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 afterEach(() => vi.unstubAllEnvs());
 
 let sequence = 0;
-async function prepared(families: Record<string, Record<string, string>>) {
+async function prepared(
+  families: Record<string, Record<string, string>>,
+  chosen: PreparedAssessment = assessment,
+) {
   const folder = join(root, `case-${sequence++}`),
     content = join(folder, "content");
   mkdirSync(content, { recursive: true });
@@ -140,7 +145,7 @@ async function prepared(families: Record<string, Record<string, string>>) {
       labels: { caller: `unsigned-${path}` },
     });
   }
-  const manifest = { format: "aih-scan-prepared/1", scanner, assessment, items };
+  const manifest = { format: "aih-scan-prepared/1", scanner, assessment: chosen, items };
   const bytes = Buffer.from(JSON.stringify(manifest)),
     manifestPath = join(folder, "manifest.json");
   writeFileSync(manifestPath, bytes);
@@ -160,6 +165,14 @@ async function prepared(families: Record<string, Record<string, string>>) {
 }
 const skill = {
   "SKILL.md": "---\nname: greeter\ndescription: Greets users.\n---\n# Greeting\nSay hello.\n",
+};
+const staticAssessment = { mode: "static", tools: ["aih-trust-lint", "skillspector"] };
+const cliAssessment = {
+  mode: "ai",
+  tools: ["aih-trust-lint", "skillspector"],
+  provider: "claude_cli",
+  model: "claude-opus-5-5",
+  effort: "medium",
 };
 
 describe("prepared manifest and exact inventory", () => {
@@ -297,6 +310,33 @@ describe("prepared manifest and exact inventory", () => {
     expect(() => validate({ mode: "static", tools: assessment.tools, llmConcurrency: 2 })).toThrow(
       "Static assessment",
     );
+  });
+  it("accepts a signed-in Claude CLI profile only with an explicit model and effort and no HTTP controls", async () => {
+    const setup = await prepared({ item: skill });
+    const validate = (controls: Record<string, unknown>) => {
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, assessment: controls }));
+      return validateManifest(bytes, hash(bytes));
+    };
+    expect(validate(cliAssessment).assessment).toEqual(cliAssessment);
+    expect(validate({ ...cliAssessment, llmConcurrency: 2 }).assessment).toMatchObject({
+      llmConcurrency: 2,
+    });
+    const { model: _model, ...noModel } = cliAssessment;
+    const { effort: _effort, ...noEffort } = cliAssessment;
+    for (const refused of [
+      noModel,
+      noEffort,
+      { ...cliAssessment, model: "" },
+      { ...cliAssessment, effort: "turbo" },
+      { ...cliAssessment, provider: "gemini_cli" },
+      { ...cliAssessment, baseUrl: "https://api.deepseek.com" },
+      { ...cliAssessment, credentialVariable: "DEEPSEEK_API" },
+      { ...cliAssessment, reasoningEffort: "none" },
+      { ...cliAssessment, structuredOutputMethod: "function_calling" },
+      { ...cliAssessment, modelTokenLimits: { contextLength: 10, maxOutputTokens: 5 } },
+      { ...assessment, effort: "medium" },
+    ])
+      expect(() => validate(refused), JSON.stringify(refused)).toThrow();
   });
   it("validates explicit model token metadata without accepting a caller registry path", async () => {
     const setup = await prepared({ item: skill });
@@ -575,6 +615,154 @@ describe.runIf(process.platform !== "win32")(
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MAX_LLM_CONCURRENCY");
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_API_KEY");
       expect(staticCall.env).not.toHaveProperty("SKILLSPECTOR_MODEL_REGISTRY");
+    }, 120000);
+    it("exports, imports and verifies complete static evidence while partial static keys stay incomplete", async () => {
+      const setup = await prepared({ item: skill }, staticAssessment);
+      const ss = fakeAnalyzer(setup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.6",
+        outputFlag: "--output",
+        report: skillSpectorReport([]),
+      });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      const result = await scanPrepared(setup);
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const key = setup.manifest.items[0]!.scanKey;
+      expect(receipt.results[key].status).toBe("complete-static");
+      expect(ss.calls().find((call) => call.args[0] === "scan")!.args).toContain("--no-llm");
+      expect((await scanPrepared(setup)).reused).toBe(1);
+      const archive = join(setup.folder, "static.tar");
+      const exported = await exportCandidate({
+        ...setup,
+        receiptPath: result.receiptPath,
+        out: archive,
+      });
+      const imported = join(setup.folder, "static-imported");
+      const checked = await importCandidate(
+        archive,
+        exported.archiveSha256,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        imported,
+      );
+      expect(checked.summaries).toHaveLength(1);
+      const verified = await verifyCandidate(
+        imported,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        join(imported, "scanner.tgz"),
+      );
+      expect(verified.summaries).toHaveLength(1);
+      const summary = JSON.parse(readFileSync(join(imported, verified.summaries[0]!), "utf8"));
+      expect(summary.tools.find((t: { tool: string }) => t.tool === "skillspector")).toMatchObject({
+        mode: "static",
+      });
+
+      const partialSetup = await prepared({ item: skill }, staticAssessment);
+      const partial = fakeAnalyzer(partialSetup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.6",
+        outputFlag: "--output",
+        report: skillSpectorReport([], {
+          analyzerStatuses: [{ analyzer_id: "static_patterns_tool_misuse", status: "degraded" }],
+        }),
+      });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", partial.path);
+      const partialRun = await scanPrepared(partialSetup);
+      const partialReceipt = JSON.parse(readFileSync(partialRun.receiptPath, "utf8"));
+      expect(partialReceipt.results[partialSetup.manifest.items[0]!.scanKey].status).toBe(
+        "incomplete",
+      );
+      await expect(
+        exportCandidate({
+          ...partialSetup,
+          receiptPath: partialRun.receiptPath,
+          out: join(partialSetup.folder, "partial.tar"),
+        }),
+      ).rejects.toThrow("no complete static result");
+    }, 120000);
+    it("runs a signed-in Claude CLI with the selected model and effort and admits its honest provenance", async () => {
+      const setup = await prepared({ item: skill }, cliAssessment);
+      const bin = join(setup.folder, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "claude"),
+        `#!${process.execPath}\nconst a = process.argv.slice(2);\nif (a[0] === "--version") { process.stdout.write("2.1.330 (Claude Code)\\n"); process.exit(0); }\nprocess.stdout.write(JSON.stringify({ argv: a, home: process.env.HOME }));\n`,
+        { mode: 0o755 },
+      );
+      const ss = fakeAnalyzer(setup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.6",
+        outputFlag: "--output",
+        agentCli: "claude",
+        report: skillSpectorReport([], {
+          llm: true,
+          analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
+          provenance: {
+            provider: { effective_adapter: "claude_cli" },
+            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "claude-opus-5-5" }],
+          },
+        }),
+      });
+      const home = join(setup.folder, "operator-home");
+      mkdirSync(home);
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("PATH", [bin, process.env.PATH ?? ""].join(":"));
+      vi.stubEnv("SKILLSPECTOR_MODEL", "caller-model-must-not-leak");
+      vi.stubEnv("DEEPSEEK_API", "fixture-not-a-real-key");
+      const result = await scanPrepared(setup);
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const key = setup.manifest.items[0]!.scanKey;
+      expect(receipt.results[key].status).toBe("complete-ai");
+      const call = ss.calls().find((entry) => entry.args[0] === "scan")!;
+      expect(call.env).toMatchObject({
+        SKILLSPECTOR_PROVIDER: "claude_cli",
+        SKILLSPECTOR_MODEL: "claude-opus-5-5",
+        HOME: home,
+      });
+      expect(call.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_API_KEY");
+      expect(call.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_BASE_URL");
+      expect(call.env).not.toHaveProperty("DEEPSEEK_API");
+      expect(JSON.parse(call.agentStdout!)).toEqual({
+        argv: ["-p", "--output-format", "text", "--effort", "medium"],
+        home,
+      });
+      const summary = JSON.parse(
+        readFileSync(join(result.root, receipt.results[key].summary), "utf8"),
+      );
+      expect(summary.tools.find((t: { tool: string }) => t.tool === "skillspector").ai).toEqual({
+        via: "cli",
+        provider: "claude_cli",
+        model: "claude-opus-5-5",
+        effort: "medium",
+        client: { name: "claude", version: "2.1.330" },
+      });
+      const archive = join(setup.folder, "cli.tar");
+      const exported = await exportCandidate({
+        ...setup,
+        receiptPath: result.receiptPath,
+        out: archive,
+      });
+      const imported = join(setup.folder, "cli-imported");
+      await importCandidate(
+        archive,
+        exported.archiveSha256,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        imported,
+      );
+      expect(
+        (
+          await verifyCandidate(
+            imported,
+            exported.manifestSha256,
+            exported.receiptSha256,
+            consumer,
+            join(imported, "scanner.tgz"),
+          )
+        ).summaries,
+      ).toHaveLength(1);
     }, 120000);
     it.each([
       ["fixture-secret-value-166", "fixture-secret-value-166"],
@@ -1162,6 +1350,80 @@ describe("prepared transport and eligibility", () => {
         { assessment },
       ),
     ).toBe(false);
+  });
+  it("admits complete static evidence and refuses partial static or AI-mode summaries", () => {
+    const summary = {
+      origin: "published",
+      coverage: "complete",
+      tools: [
+        { tool: "aih-trust-lint", version: "1.0.0", mode: "static", result: "warn" },
+        { tool: "skillspector", version: "2.13.6", mode: "static", result: "pass" },
+      ],
+    };
+    const manifest = { assessment: staticAssessment };
+    expect(eligibleEvidence(summary, manifest)).toBe(true);
+    expect(aiEligible(summary, manifest)).toBe(false);
+    expect(eligibleEvidence({ ...summary, coverage: "partial" }, manifest)).toBe(false);
+    expect(eligibleEvidence({ ...summary, origin: "local" }, manifest)).toBe(false);
+    const swap = (patch: Record<string, unknown>) => ({
+      ...summary,
+      tools: [summary.tools[0], { ...summary.tools[1], ...patch }],
+    });
+    expect(eligibleEvidence(swap({ result: "not-run", reason: "timeout" }), manifest)).toBe(false);
+    expect(eligibleEvidence(swap({ version: "2.13.3" }), manifest)).toBe(false);
+    expect(
+      eligibleEvidence(
+        swap({ mode: "ai", ai: { via: "cli", provider: "claude_cli", model: "m" } }),
+        manifest,
+      ),
+    ).toBe(false);
+    expect(eligibleEvidence({ ...summary, tools: [summary.tools[1]] }, manifest)).toBe(false);
+  });
+  it("admits agent-CLI AI only with the selected model and effort and a recorded client", () => {
+    const ai = {
+      via: "cli",
+      provider: "claude_cli",
+      model: "claude-opus-5-5",
+      effort: "medium",
+      client: { name: "claude", version: "2.1.330" },
+    };
+    const summary = (patch: Record<string, unknown> = {}) => ({
+      origin: "published",
+      coverage: "complete",
+      tools: [
+        { tool: "aih-trust-lint", result: "pass" },
+        {
+          tool: "skillspector",
+          version: "2.13.6",
+          result: "pass",
+          mode: "ai",
+          ai: { ...ai, ...patch },
+        },
+      ],
+    });
+    const manifest = { assessment: cliAssessment };
+    expect(eligibleEvidence(summary(), manifest)).toBe(true);
+    expect(aiEligible(summary(), manifest)).toBe(true);
+    for (const patch of [
+      { model: "provider default" },
+      { model: "claude-fable-5-2" },
+      { effort: "high" },
+      { effort: undefined },
+      { client: undefined },
+      { via: "provider" },
+      { provider: "gemini_cli" },
+    ])
+      expect(eligibleEvidence(summary(patch), manifest), JSON.stringify(patch)).toBe(false);
+    expect(eligibleEvidence({ ...summary(), coverage: "partial" }, manifest)).toBe(false);
+    // The HTTP-provider path keeps its own exact requirements.
+    expect(
+      eligibleEvidence(
+        summary({ via: "provider", provider: "openai_compatible", model: "deepseek-flash" }),
+        {
+          assessment,
+        },
+      ),
+    ).toBe(true);
   });
   it("round-trips regular-file ustar, rejecting digest corruption, traversal and links before writing", () => {
     const archive = join(root, `tar-${sequence++}.tar`);

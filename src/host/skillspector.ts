@@ -1,7 +1,7 @@
-import { statSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
-import type { HostExecutableV1 } from "../cli/host-executable.js";
-import type { ScanMode } from "../contracts/validate.js";
+import { type HostExecutableV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
+import type { AiProvenance, ScanMode } from "../contracts/validate.js";
 import {
   ANALYZER_REPORT_MAX_BYTES,
   type HostEnv,
@@ -33,8 +33,24 @@ export type AiVia = "cli" | "local" | "provider";
  * which settings are present; it never stores, prints or records a credential value.
  */
 export type AiSetup =
-  | Readonly<{ available: true; provider: string; via: AiVia; model?: string }>
+  | Readonly<{
+      available: true;
+      provider: string;
+      via: AiVia;
+      model?: string;
+      /** An effort Scan applies to the agent CLI (`AIH_SCAN_AI_EFFORT`); absent means the CLI's own. */
+      effort?: string;
+      /** The agent CLI and the version it reported, filled in when Scan runs it. */
+      client?: Readonly<{ name: string; version: string }>;
+    }>
   | Readonly<{ available: false; reason: string }>;
+
+/** Scan's own control for the effort of a signed-in Claude CLI pass. */
+export const AI_EFFORT_VARIABLE = "AIH_SCAN_AI_EFFORT";
+/** Effort levels the Claude CLI accepts for `--effort`. */
+export const AI_EFFORT_LEVELS = Object.freeze(["low", "medium", "high", "xhigh", "max"] as const);
+/** Providers whose CLI Scan can start with an explicit effort. */
+const EFFORT_PROVIDERS = new Set(["claude_cli"]);
 
 type Requirement = Readonly<{
   via: AiVia;
@@ -89,8 +105,13 @@ function isLoopbackUrl(value: string | undefined): boolean {
 
 /** Whether `name` is an executable on the caller's PATH (no search beyond it, nothing run). */
 export function onPath(name: string, env: HostEnv, platform: NodeJS.Platform): boolean {
+  return pathOf(name, env, platform) !== undefined;
+}
+
+/** The first executable named `name` on the caller's PATH, or `undefined` (nothing run). */
+export function pathOf(name: string, env: HostEnv, platform: NodeJS.Platform): string | undefined {
   const value = platform === "win32" ? (env.Path ?? env.PATH ?? env.path) : env.PATH;
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string") return undefined;
   const path = platform === "win32" ? win32 : posix;
   const extensions =
     platform === "win32"
@@ -99,15 +120,16 @@ export function onPath(name: string, env: HostEnv, platform: NodeJS.Platform): b
   for (const directory of value.split(platform === "win32" ? ";" : ":")) {
     if (!path.isAbsolute(directory)) continue;
     for (const extension of extensions) {
+      const candidate = path.join(directory, `${name}${extension}`);
       try {
-        const stat = statSync(path.join(directory, `${name}${extension}`));
-        if (stat.isFile() && (platform === "win32" || (stat.mode & 0o111) !== 0)) return true;
+        const stat = statSync(candidate);
+        if (stat.isFile() && (platform === "win32" || (stat.mode & 0o111) !== 0)) return candidate;
       } catch {
         // Not here.
       }
     }
   }
-  return false;
+  return undefined;
 }
 
 /**
@@ -139,6 +161,24 @@ export function skillSpectorAiSetup(
       available: false as const,
       reason: "SKILLSPECTOR_PROVIDER names a provider SkillSpector does not support",
     });
+  const effort = env[AI_EFFORT_VARIABLE]?.trim().toLowerCase() ?? "";
+  if (effort !== "") {
+    if (!EFFORT_PROVIDERS.has(named))
+      return Object.freeze({
+        available: false as const,
+        reason: `${AI_EFFORT_VARIABLE} applies only to provider ${[...EFFORT_PROVIDERS].join(", ")}`,
+      });
+    if (!(AI_EFFORT_LEVELS as readonly string[]).includes(effort))
+      return Object.freeze({
+        available: false as const,
+        reason: `${AI_EFFORT_VARIABLE} must be one of ${AI_EFFORT_LEVELS.join(", ")}`,
+      });
+    if (platform === "win32")
+      return Object.freeze({
+        available: false as const,
+        reason: `${AI_EFFORT_VARIABLE} needs a POSIX host; Scan cannot apply it on Windows`,
+      });
+  }
   for (const group of requirement.variables ?? [])
     if (!group.some((name) => isSet(env, name)))
       return Object.freeze({
@@ -160,6 +200,7 @@ export function skillSpectorAiSetup(
     provider: named,
     via,
     ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
   });
 }
 
@@ -448,7 +489,7 @@ function completenessOf(
 function aiProvenance(
   metadata: Record<string, unknown>,
   setup: Extract<AiSetup, { available: true }>,
-): Readonly<{ via: AiVia; provider: string; model: string }> {
+): AiProvenance {
   const provenance = objectOf(metadata.llm_provenance);
   const provider = objectOf(provenance?.provider);
   const effective = provider?.effective_adapter;
@@ -466,6 +507,8 @@ function aiProvenance(
         ? effective
         : setup.provider,
     model: model.slice(0, 256),
+    ...(setup.effort === undefined ? {} : { effort: setup.effort }),
+    ...(setup.client === undefined ? {} : { client: setup.client }),
   });
 }
 
@@ -721,9 +764,17 @@ async function runInstalled(
     env: settings.env,
     platform: settings.platform,
   });
+  let ai = settings.ai;
+  let runEnv = invocation.env;
+  if (mode === "ai" && ai?.available === true && ai.via === "cli") {
+    const agent = await agentCli(ai, invocation.env, settings, context.signal);
+    if (typeof agent === "string") return notRun("failed", mode, version, agent);
+    ai = agent.ai;
+    runEnv = agent.env;
+  }
   const result = await runAnalyzer(invocation.argv, {
     cwd: invocation.cwd,
-    env: invocation.env,
+    env: runEnv,
     signal: context.signal,
     ...(settings.platform === "win32" ? { maxStdoutBytes: ANALYZER_REPORT_MAX_BYTES } : {}),
   });
@@ -767,5 +818,49 @@ async function runInstalled(
       version,
       "Configured TP4 capacity requires the maintenance build",
     );
-  return skillSpectorRun(document, item, mode, settings.ai);
+  return skillSpectorRun(document, item, mode, ai);
+}
+
+/**
+ * Prepares the signed-in agent CLI SkillSpector will start: records the client's own reported
+ * version and, for an explicit effort, puts a private launcher first on SkillSpector's PATH that
+ * starts the caller's CLI with `--effort <level>` on each `-p` call. Nothing supplied runs.
+ */
+async function agentCli(
+  setup: Extract<AiSetup, { available: true }>,
+  env: Readonly<Record<string, string>>,
+  settings: Readonly<{ platform: NodeJS.Platform; scratch: string }>,
+  signal: AbortSignal,
+): Promise<
+  | string
+  | Readonly<{ ai: Extract<AiSetup, { available: true }>; env: Readonly<Record<string, string>> }>
+> {
+  const name = PROVIDERS[setup.provider]?.cli;
+  if (name !== "claude") return Object.freeze({ ai: setup, env });
+  // SkillSpector finds the CLI on PATH; Scan resolves the same PATH entry through its runner.
+  const found = resolveHostExecutableV1(name, env, settings.platform);
+  if (found === undefined || found.foundIn !== "PATH") return `the ${name} CLI is not on PATH`;
+  const real = found.path;
+  const reported = await probeVersion(
+    found,
+    env,
+    settings.scratch,
+    /(?:^|\s)v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?:\s|$)/u,
+    signal,
+  );
+  const ai = Object.freeze({
+    ...setup,
+    ...(reported === undefined ? {} : { client: Object.freeze({ name, version: reported }) }),
+  });
+  if (setup.effort === undefined) return Object.freeze({ ai, env });
+  if (settings.platform === "win32" || /['\n]/u.test(real))
+    return `Scan cannot apply ${AI_EFFORT_VARIABLE} to this ${name} CLI`;
+  const bin = posix.join(settings.scratch, "agent-cli");
+  mkdirSync(bin, { mode: 0o700 });
+  writeFileSync(
+    posix.join(bin, name),
+    `#!/bin/sh\nif [ "$1" = "-p" ]; then exec '${real}' "$@" --effort '${setup.effort}'; fi\nexec '${real}' "$@"\n`,
+    { mode: 0o700, flag: "wx" },
+  );
+  return Object.freeze({ ai, env: Object.freeze({ ...env, PATH: `${bin}:${env.PATH ?? ""}` }) });
 }

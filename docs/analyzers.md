@@ -91,6 +91,20 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   `provider`), the provider and the model, never a credential. The command says before
   scanning that the scanned content is sent to that AI.
 
+  For a signed-in agent CLI, the summary's `ai` record also names the client and the version
+  it reports (`client: { "name": "claude", "version": "2.1.330" }`), so a reader can tell an
+  agent-CLI pass from an HTTP provider. Without `SKILLSPECTOR_MODEL` the model is recorded as
+  `provider default`: the CLI's own choice, which Scan cannot see.
+
+  **Claude CLI effort.** SkillSpector has no effort setting for `claude_cli`. Set Scan's own
+  `AIH_SCAN_AI_EFFORT` to `low`, `medium`, `high`, `xhigh` or `max` to run the pass at that
+  effort. Scan then puts a private launcher first on SkillSpector's `PATH` that starts your
+  `claude` with `--effort <level>` on each analysis call, and records `effort` in the summary.
+  Nothing else in the call changes. The setting applies only to `claude_cli` on Linux and
+  macOS: another provider, an unknown level or a Windows host is reported as "AI not available
+  here" with the reason, never silently ignored. Without it, the CLI uses its own default and
+  no effort is recorded.
+
   AI counts as set up when `SKILLSPECTOR_PROVIDER` names a supported provider and its
   required settings are present:
 

@@ -1,6 +1,6 @@
 import type { FindingPart, SarifLevel, Severity } from "../contracts/risk.js";
 import type { RoutedFile, ToolId } from "../contracts/routing.js";
-import type { ScanMode } from "../contracts/validate.js";
+import type { AiProvenance, ScanMode } from "../contracts/validate.js";
 import type { SnapshotFile } from "./snapshot.js";
 
 /** One item as every tool receives it: the exact snapshot bytes, their routing and the read-only copy. */
@@ -46,7 +46,7 @@ export type ToolRun =
       status: "ran";
       version: string;
       mode: ScanMode;
-      ai?: Readonly<{ via: "cli" | "local" | "provider"; provider: string; model: string }>;
+      ai?: AiProvenance;
       findings: readonly ToolFinding[];
       suppressed?: readonly Readonly<{ count: number; reason: string }>[];
       /** Rule descriptions for the SARIF driver, by rule id. */

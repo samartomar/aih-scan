@@ -40,7 +40,7 @@ mode. It uploads the unsigned `scan-report-candidate` artifact (the output folde
 source's scan result, the sources and the scanner tarball's SHA-256). It has read-only
 repository permission and no OIDC token.
 
-## Prepared local content and completed AI outputs
+## Prepared local content and completed outputs
 
 `tools/publisher/prepared.mjs` is maintainer tooling, separate from the published Scan API.
 It handles ordinary item roots, editions, bundles, plugins and extracted entries through
@@ -98,14 +98,52 @@ The example is the DeepSeek non-thinking schema-response configuration described
 [analyzers.md](analyzers.md#deepseek-flash-on-windows). Other explicitly selected
 `openai_compatible` HTTP models/endpoints and the analyzer's `function_calling`,
 `json_mode` or `json_schema` controls can be requested without a provider substitution.
-The operator must verify that those settings work together at that provider. No agent
-CLI transport is enabled. Endpoints require HTTPS, except explicit loopback HTTP.
+The operator must verify that those settings work together at that provider. Endpoints
+require HTTPS, except explicit loopback HTTP.
 Credential values are read from `credentialVariable` (default
 `SKILLSPECTOR_COMPAT_API_KEY`) into each isolated child environment only; receipts and
 worker request files contain the variable name, never its value. Other provider,
 Python/Node loader, tracing, home configuration and credential environments are not
 inherited. Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
 requested, `AIH_SCAN_SKILL_SCANNER`; install them using the locked analyzer instructions.
+
+#### Static and signed-in agent-CLI assessments
+
+A static assessment names only `mode` and `tools`:
+
+```json
+"assessment": { "mode": "static", "tools": ["aih-trust-lint", "skillspector"] }
+```
+
+A complete static result is publishing evidence: the summary has `coverage: complete` and
+`origin: published`, SkillSpector ran in static mode at the pinned standard version, and every
+requested tool is `pass`, `warn`, `fail` or `not-applicable`. Its receipt status is
+`complete-static`. A partial static result stays `incomplete` and is refused, as before.
+
+The signed-in Claude CLI is the one agent-CLI provider the prepared route accepts. It needs an
+explicit model and effort and names no HTTP, credential or maintenance controls:
+
+```json
+"assessment": {
+  "mode": "ai",
+  "tools": ["aih-trust-lint", "skillspector"],
+  "provider": "claude_cli",
+  "model": "claude-opus-5-5",
+  "effort": "medium"
+}
+```
+
+Each isolated child gets `SKILLSPECTOR_PROVIDER=claude_cli`, `SKILLSPECTOR_MODEL` and Scan's
+`AIH_SCAN_AI_EFFORT` from the manifest, so no ambient model or effort applies. It also gets the
+operator's own `HOME`, because the signed-in CLI reads its sign-in from there. That is the one
+exception to the private home that other profiles use: use a host and account dedicated to
+this work. No credential value is read or recorded. The route needs Linux or macOS (see
+[analyzers.md](analyzers.md)). A result is complete AI evidence (`complete-ai`) only when the
+signed summary records `via: cli`, `provider: claude_cli`, the manifest's exact model and
+effort, and the `claude` client with the version it reported. There is no model or effort
+fallback: a usage-limit refusal or any unfinished AI pass leaves the key `incomplete` for a
+later retry on the same profile. Changing the model or effort creates a separate
+configuration and resume namespace.
 
 AI assessments may also set `llmConcurrency` to an explicit positive safe integer, for
 example `"llmConcurrency": 24`. The helper passes it only to its isolated scan child as
@@ -158,11 +196,13 @@ node tools/publisher/prepared.mjs scan manifest.json "$MANIFEST_SHA" content con
 ```
 
 `scan` returns a new immutable receipt path/hash and completed, reused, pending, unique-key
-and reference counts. Keep that receipt and its state directory. A static fallback,
-failed/cancelled analysis or partial coverage stays visible but cannot become eligible AI
-publishing evidence. A clean risk label or process exit alone is insufficient. Requested
-tools must have completed or be explicitly not applicable; the primary AI tool must
-have actually run in AI mode with the selected provider/model and complete coverage.
+and reference counts. Keep that receipt and its state directory. A static fallback in an AI
+profile, a failed/cancelled analysis or partial coverage stays visible but cannot become
+eligible publishing evidence. A clean risk label or process exit alone is insufficient.
+Requested tools must have completed or be explicitly not applicable. In an AI profile the
+primary AI tool must have actually run in AI mode with the selected provider/model (and, for
+the Claude CLI, effort and client) and complete coverage; in a static profile it must have run
+in static mode with complete coverage.
 All risk labels are accepted; this is an evidence-completeness policy, not a risk gate.
 
 Incomplete or failed results retain available unsigned host diagnostic `notes` in local
@@ -238,7 +278,7 @@ node tools/publisher/prepared.mjs archive manifest.json "$MANIFEST_SHA" content 
 The returned archive, batch-manifest and receipt hashes bind the exact transfer. The
 batch manifest retains the parent manifest digest. Export rechecks actual local bytes
 with public `scanKeyOf` and portable `matchScan`, every summary, every referenced SARIF
-digest and findings, the installed scanner and AI eligibility. Its archive contains only
+digest and findings, the installed scanner and evidence eligibility. Its archive contains only
 that manifest, an unsigned `execution: local` receipt, the scanner tarball and selected
 summary/SARIF bytes. It excludes source content, worker requests, cache histories and
 credentials. Import accepts the helper's bounded regular-file-only ustar transport;
@@ -304,7 +344,7 @@ summary, expected key, scanner/configuration and parsed SARIF. It cannot reconst
 untransferred source bytes or independently establish that local inference occurred.
 The unsigned receipt says `local`; owner review authorizes signing those bytes. It is
 never a claim of hosted analysis, a cryptographic signature or consumer trust by itself.
-The signing workflow revalidates the entire prepared inventory and AI eligibility before
+The signing workflow revalidates the entire prepared inventory and evidence eligibility before
 selection. The existing candidate workflow/run/artifact custody checks, reviewed selection
 digest, protected signer environment and default trusted signer identity remain in force.
 
@@ -416,7 +456,7 @@ intake; the helper does not substitute the archive's scanner.
 Candidate import retains the independently approved context digest as provenance.
 Publisher prepared-check requires the independently supplied matching context and
 rechecks the original archive/manifest/receipt/package/selection identities, every
-installed package file, dependency inventory, configuration and complete AI evidence.
+installed package file, dependency inventory, configuration and complete evidence.
 Unknown contexts, changed runtime files or metadata swapped between phases fail closed.
 The archived scanner is compared with the independent installed package before any of
 its public modules are imported. The publisher always prepares the **current reviewed

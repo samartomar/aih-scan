@@ -195,6 +195,16 @@ const summary = {
               via: { enum: ["cli", "local", "provider"] },
               provider: { type: "string", minLength: 1 },
               model: { type: "string", minLength: 1 },
+              effort: { type: "string", minLength: 1, maxLength: 32, pattern: "^[a-z]+$" },
+              client: {
+                type: "object",
+                additionalProperties: false,
+                required: ["name", "version"],
+                properties: {
+                  name: { type: "string", minLength: 1, maxLength: 64 },
+                  version: { type: "string", minLength: 1, maxLength: 64 },
+                },
+              },
             },
           },
           result: { enum: ["pass", "warn", "fail", "not-run", "not-applicable"] },

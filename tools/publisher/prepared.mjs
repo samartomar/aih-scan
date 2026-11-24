@@ -12,6 +12,8 @@ import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive
 const maintenanceArtifact = JSON.parse(readFileSync(new URL("../analyzers/skillspector/maintenance/artifact.json", import.meta.url), "utf8"));
 // The maintenance build is versioned `<standard release>+aih.1.<build id>`; the pin test binds that prefix to SKILLSPECTOR_VERSION.
 const standardSkillSpectorVersion = maintenanceArtifact.version.split("+")[0];
+// Effort levels the Claude CLI accepts; Scan applies one through AIH_SCAN_AI_EFFORT.
+const AGENT_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
 const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
@@ -61,11 +63,18 @@ export function validateManifest(bytes, expectedSha256) {
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
   need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+(?:-dev\.\d+)?$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
   const assessment = manifest.assessment;
-  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
+  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "effort", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
-  if (assessment.mode === "ai") {
-    need(assessment.provider === "openai_compatible" && typeof assessment.model === "string" && assessment.model.length > 0 && assessment.model.length <= 256 && plainText(assessment.model), "Prepared AI requires an explicitly selected HTTP provider/model; no agent CLI or model fallback");
+  if (assessment.mode === "ai" && assessment.provider === "claude_cli") {
+    // A signed-in agent CLI: the operator's own sign-in, an explicit model and effort, no HTTP controls.
+    need(typeof assessment.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(assessment.model), "Prepared agent-CLI AI requires an explicitly selected model; no model fallback");
+    need(AGENT_EFFORTS.includes(assessment.effort), `Prepared agent-CLI AI requires an explicit effort: ${AGENT_EFFORTS.join(", ")}`);
+    need(["baseUrl", "credentialVariable", "reasoningEffort", "structuredOutputMethod", "modelTokenLimits", "skillspector"].every((key) => assessment[key] === undefined), "Prepared agent-CLI AI must not name HTTP-provider or maintenance controls");
+    if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
+  } else if (assessment.mode === "ai") {
+    need(assessment.provider === "openai_compatible" && typeof assessment.model === "string" && assessment.model.length > 0 && assessment.model.length <= 256 && plainText(assessment.model), "Prepared AI requires an explicitly selected HTTP provider/model or the claude_cli agent CLI; no model fallback");
+    need(assessment.effort === undefined, "Agent-CLI effort does not apply to an HTTP provider");
     const endpoint = new URL(assessment.baseUrl);
     const loopback = loopbackHost(endpoint.hostname);
     need(endpoint.protocol === "https:" || endpoint.protocol === "http:" && loopback, "AI endpoint must be HTTPS or loopback HTTP");
@@ -155,14 +164,33 @@ export async function validateContent(manifest, root, runtime) {
 function configIdentity(manifest, runtime) {
   return { scanner: manifest.scanner, assessment: manifest.assessment, routing: runtime.contracts.routing.format, scoring: runtime.contracts.scoring.format };
 }
+const requestedToolsFinished = (summary, manifest) => manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
 export function aiEligible(summary, manifest) {
   if (manifest.assessment.mode !== "ai" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
-  const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
-  const via = loopbackHost(host) ? "local" : "provider";
-  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.via !== via || primary.ai.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
-  return manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
+  if (manifest.assessment.provider === "claude_cli") {
+    // Honest agent-CLI provenance: the exact model and effort Scan applied and the client it ran.
+    const client = primary.ai.client;
+    if (primary.ai.via !== "cli" || primary.ai.effort !== manifest.assessment.effort || !object(client) || client.name !== "claude" || typeof client.version !== "string" || !client.version) return false;
+  } else {
+    const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
+    if (primary.ai.via !== (loopbackHost(host) ? "local" : "provider")) return false;
+  }
+  return requestedToolsFinished(summary, manifest);
 }
+export function staticEligible(summary, manifest) {
+  if (manifest.assessment.mode !== "static" || summary.coverage !== "complete" || summary.origin !== "published") return false;
+  const primary = summary.tools.find((tool) => tool.tool === "skillspector");
+  if (primary?.version !== standardSkillSpectorVersion || primary.mode !== "static" || primary.ai !== undefined || !["pass", "warn", "fail"].includes(primary.result)) return false;
+  return requestedToolsFinished(summary, manifest);
+}
+export function eligibleEvidence(summary, manifest) {
+  return manifest.assessment.mode === "static" ? staticEligible(summary, manifest) : aiEligible(summary, manifest);
+}
+/** The receipt status of a complete result: `complete-ai` keeps its meaning; static evidence is `complete-static`. */
+const completeStatus = (assessment) => assessment.mode === "static" ? "complete-static" : "complete-ai";
+const COMPLETE = new Set(["complete-ai", "complete-static"]);
 export async function verifyResult(root, record, items, manifest, content, runtime) {
   keys(record, ["status", "summary", "summarySha256", "sarif", "elapsedMs"], ["detail", "notes"]);
   if (record.notes !== undefined) need(Array.isArray(record.notes) && record.notes.length <= 32 && record.notes.every((note) => typeof note === "string" && note.length > 0 && note.length <= 4096 && plainText(note)), "Invalid unsigned diagnostic notes");
@@ -192,12 +220,12 @@ export async function verifyResult(root, record, items, manifest, content, runti
     const match = await runtime.read.matchScan(summary, files);
     need(match.status === "ok" && match.matches === true, "Result does not match the complete prepared inventory");
   }
-  const eligible = aiEligible(summary, manifest);
-  need(record.status === (eligible ? "complete-ai" : "incomplete"), "Result eligibility was misreported");
+  const eligible = eligibleEvidence(summary, manifest);
+  need(record.status === (eligible ? completeStatus(manifest.assessment) : "incomplete"), "Result eligibility was misreported");
   return { summary, eligible };
 }
 function diagnosticNotes(item, assessment) {
-  const credential = assessment.mode === "ai" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
+  const credential = assessment.mode === "ai" && assessment.provider !== "claude_cli" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
   // Python's str.strip also removes NEL and the four ASCII information separators.
   const whitespace = (character) => character.trim() === "" || character === "\u0085" || character.codePointAt(0) >= 28 && character.codePointAt(0) <= 31;
   const characters = [...(credential ?? "")];
@@ -223,9 +251,9 @@ async function worker(requestPath) {
   else {
     const summary = runtime.read.readSummary(new Uint8Array(readRegular(item.summaryPath)));
     need(summary.status === "ok", "Worker returned an invalid summary");
-    record = { status: aiEligible(summary.summary, { assessment: job.assessment }) ? "complete-ai" : "incomplete", summary: item.summaryPath, summarySha256: digest(readRegular(item.summaryPath)), sarif: summary.summary.sarif.map((entry) => ({ path: join(dirname(item.summaryPath), ...entry.path.split("/")), sha256: entry.sha256 })), elapsedMs: Date.now() - started };
+    record = { status: eligibleEvidence(summary.summary, { assessment: job.assessment }) ? completeStatus(job.assessment) : "incomplete", summary: item.summaryPath, summarySha256: digest(readRegular(item.summaryPath)), sarif: summary.summary.sarif.map((entry) => ({ path: join(dirname(item.summaryPath), ...entry.path.split("/")), sha256: entry.sha256 })), elapsedMs: Date.now() - started };
   }
-  const notes = record.status === "complete-ai" ? [] : diagnosticNotes(item, job.assessment);
+  const notes = COMPLETE.has(record.status) ? [] : diagnosticNotes(item, job.assessment);
   if (notes.length) record.notes = notes;
   const stateRoot = resolve(dirname(requestPath), "../..");
   const durable = record.summary ? { ...record, summary: relative(stateRoot, record.summary).split(sep).join("/"), sarif: record.sarif.map((entry) => ({ ...entry, path: relative(stateRoot, entry.path).split(sep).join("/") })) } : record;
@@ -239,7 +267,13 @@ function childEnvironment(assessment, scratch) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) if (allowed.has(key.toUpperCase())) env[key] = value;
   Object.assign(env, { HOME: scratch, USERPROFILE: scratch, APPDATA: scratch, LOCALAPPDATA: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
-  if (assessment.mode === "ai") {
+  if (assessment.mode === "ai" && assessment.provider === "claude_cli") {
+    // The signed-in CLI reads the operator's own sign-in from their HOME; no credential value is handled.
+    need(process.platform !== "win32", "Prepared agent-CLI AI needs a POSIX host");
+    need(typeof process.env.HOME === "string" && process.env.HOME.startsWith("/"), "HOME is not set; the signed-in claude CLI cannot be used");
+    Object.assign(env, { HOME: process.env.HOME, SKILLSPECTOR_PROVIDER: "claude_cli", SKILLSPECTOR_MODEL: assessment.model, AIH_SCAN_AI_EFFORT: assessment.effort });
+    if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
+  } else if (assessment.mode === "ai") {
     const variable = assessment.credentialVariable ?? "SKILLSPECTOR_COMPAT_API_KEY";
     need(typeof process.env[variable] === "string" && process.env[variable].trim(), `${variable} is not set; no AI request started`);
     Object.assign(env, { SKILLSPECTOR_PROVIDER: assessment.provider, SKILLSPECTOR_COMPAT_BASE_URL: assessment.baseUrl, SKILLSPECTOR_COMPAT_API_KEY: process.env[variable], SKILLSPECTOR_MODEL: assessment.model, SKILLSPECTOR_REASONING_EFFORT: assessment.reasoningEffort, SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: assessment.structuredOutputMethod });
@@ -285,10 +319,10 @@ function acquireLock(folder) {
 async function recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime) {
   let recovered = 0, ignored = 0;
   const adopt = async (key, record) => {
-    if (!groups.has(key) || record.status !== "complete-ai") return;
+    if (!groups.has(key) || !COMPLETE.has(record.status)) return;
     await verifyResult(root, record, groups.get(key), manifest, content, runtime);
     const prior = checkpoint.results[key];
-    if (prior?.status === "complete-ai") {
+    if (COMPLETE.has(prior?.status)) {
       await verifyResult(root, prior, groups.get(key), manifest, content, runtime);
       need(prior.summarySha256 === record.summarySha256, "Conflicting completed checkpoint records; retain both for review");
     } else { checkpoint.results[key] = record; recovered++; }
@@ -327,7 +361,7 @@ async function recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, c
     if (!existsSync(summaryPath)) continue;
     const bytes = readRegular(summaryPath), read = runtime.read.readSummary(new Uint8Array(bytes));
     need(read.status === "ok", "Orphan attempt has an invalid summary");
-    const record = { status: aiEligible(read.summary, manifest) ? "complete-ai" : "incomplete", summary: relative(root, summaryPath).split(sep).join("/"), summarySha256: digest(bytes), sarif: read.summary.sarif.map((entry) => ({ path: relative(root, join(dirname(summaryPath), ...entry.path.split("/"))).split(sep).join("/"), sha256: entry.sha256 })), elapsedMs: null, detail: "Recovered completed output; original worker elapsed time is unavailable" };
+    const record = { status: eligibleEvidence(read.summary, manifest) ? completeStatus(manifest.assessment) : "incomplete", summary: relative(root, summaryPath).split(sep).join("/"), summarySha256: digest(bytes), sarif: read.summary.sarif.map((entry) => ({ path: relative(root, join(dirname(summaryPath), ...entry.path.split("/"))).split(sep).join("/"), sha256: entry.sha256 })), elapsedMs: null, detail: "Recovered completed output; original worker elapsed time is unavailable" };
     await adopt(key, record);
   }
   if (recovered) atomicJson(join(root, "checkpoint.json"), checkpoint);
@@ -343,8 +377,8 @@ export async function recoverPrepared({ manifestPath, manifestSha256, content, c
     const checkpoint = existsSync(path) ? json(readRegular(path)) : { format: "aih-scan-prepared-checkpoint/1", configSha256, results: {} };
     need(checkpoint.format === "aih-scan-prepared-checkpoint/1" && checkpoint.configSha256 === configSha256 && object(checkpoint.results), "Invalid checkpoint configuration");
     const recovery = await recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime);
-    for (const [key, items] of groups) if (checkpoint.results[key]?.status === "complete-ai") await verifyResult(root, checkpoint.results[key], items, manifest, content, runtime);
-    return { root, ...recovery, completedKeys: [...groups.keys()].filter((key) => checkpoint.results[key]?.status === "complete-ai") };
+    for (const [key, items] of groups) if (COMPLETE.has(checkpoint.results[key]?.status)) await verifyResult(root, checkpoint.results[key], items, manifest, content, runtime);
+    return { root, ...recovery, completedKeys: [...groups.keys()].filter((key) => COMPLETE.has(checkpoint.results[key]?.status)) };
   } finally { lock.release(); }
 }
 /** Outstanding estimates persist across refill waves; resident usage is not subtracted twice. */
@@ -388,7 +422,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
     const recovery = await recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime);
     for (const [key, items] of groups) {
       const record = checkpoint.results[key];
-      if (record?.status === "complete-ai") {
+      if (COMPLETE.has(record?.status)) {
         await verifyResult(root, record, items, manifest, content, runtime); reused++;
       } else pending.push([key, items]);
     }
@@ -448,9 +482,9 @@ export async function verifyCandidate(candidate, manifestSha256, receiptSha256, 
   }
   for (const [key, items] of groups) {
     const record = receipt.results[key];
-    need(record.status === "complete-ai", "Only completed AI evidence is eligible for prepared publishing");
+    need(record.status === completeStatus(manifest.assessment), "Only complete evidence is eligible for prepared publishing");
     const verified = await verifyResult(candidate, record, items, manifest, undefined, runtime);
-    need(verified.eligible, "Prepared AI evidence is incomplete");
+    need(verified.eligible, "Prepared evidence is incomplete");
     expected.add(record.summary); for (const sarif of record.sarif) expected.add(sarif.path);
   }
   const actual = regularFiles(candidate);
@@ -473,10 +507,10 @@ export async function mergePrepared({ manifestPath, manifestSha256, content, con
       const source = json(readRegular(receiptPath)), sourceRoot = dirname(receiptPath);
       need(source.format === "aih-scan-prepared-receipt/1" && source.execution === "local" && source.configSha256 === configSha256 && fingerprint(source.config) === configSha256 && object(source.results), "Merge configuration mismatch");
       for (const [key, record] of Object.entries(source.results)) {
-        if (!groups.has(key) || record.status !== "complete-ai") continue;
+        if (!groups.has(key) || !COMPLETE.has(record.status)) continue;
         await verifyResult(sourceRoot, record, groups.get(key), manifest, content, runtime);
         const prior = checkpoint.results[key];
-        if (prior?.status === "complete-ai") {
+        if (COMPLETE.has(prior?.status)) {
           await verifyResult(root, prior, groups.get(key), manifest, content, runtime);
           need(prior.summarySha256 === record.summarySha256 && canonical(prior.sarif.map(({ sha256 }) => sha256).sort()) === canonical(record.sarif.map(({ sha256 }) => sha256).sort()), "Conflicting completed results for the same key; retain both for review");
           continue;
@@ -506,7 +540,7 @@ export async function exportCandidate({ manifestPath, manifestSha256, content, c
   const scannerBytes = readRegular(tarball); need(digest(scannerBytes) === original.scanner.tarballSha256, "Scanner tarball changed during export");
   const root = dirname(receiptPath), results = {}, entries = [{ path: "manifest.json", bytes: manifestBytes }, { path: "scanner.tgz", bytes: scannerBytes }];
   for (const key of chosen) {
-    const record = receipt.results[key]; need(record?.status === "complete-ai", "Selected key has no complete AI result");
+    const record = receipt.results[key]; need(record?.status === completeStatus(manifest.assessment), `Selected key has no complete ${manifest.assessment.mode === "static" ? "static" : "AI"} result`);
     await verifyResult(root, record, groups.get(key), original, content, runtime);
     const prefix = `targets/${runtime.contracts.keyFolderName(key)}`;
     const exported = { ...record, summary: `${prefix}/summary.json`, sarif: record.sarif.map((entry) => ({ path: `${prefix}/sarif/${entry.path.split("/").at(-1)}`, sha256: entry.sha256 })) };

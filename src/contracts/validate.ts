@@ -62,11 +62,23 @@ export interface SummaryFile {
   readonly sha256: string;
 }
 
+/**
+ * How a tool's AI pass ran. `effort` is present only when Scan applied an explicit effort;
+ * `client` names the signed-in agent CLI and the version it reported (`via: cli` only).
+ */
+export type AiProvenance = Readonly<{
+  via: "cli" | "local" | "provider";
+  provider: string;
+  model: string;
+  effort?: string;
+  client?: Readonly<{ name: string; version: string }>;
+}>;
+
 export interface SummaryTool {
   readonly tool: string;
   readonly version: string;
   readonly mode: ScanMode;
-  readonly ai?: Readonly<{ via: "cli" | "local" | "provider"; provider: string; model: string }>;
+  readonly ai?: AiProvenance;
   readonly result: ToolResult;
   readonly reason?: string;
   readonly counts: Readonly<Partial<Record<SeverityCountKey, number>>>;
@@ -444,12 +456,31 @@ function summaryTool(value: unknown, at: string): SummaryTool {
   result.counts = Object.freeze(result.counts);
   if (tool.ai !== undefined) {
     const ai = object(tool.ai, `${at}.ai`);
-    keys(ai, `${at}.ai`, ["via", "provider", "model"]);
-    result.ai = Object.freeze({
+    keys(ai, `${at}.ai`, ["via", "provider", "model"], ["effort", "client"]);
+    const provenance: {
+      via: "cli" | "local" | "provider";
+      provider: string;
+      model: string;
+      effort?: string;
+      client?: Readonly<{ name: string; version: string }>;
+    } = {
       via: oneOf(ai.via, `${at}.ai.via`, ["cli", "local", "provider"]),
       provider: text(ai.provider, `${at}.ai.provider`, 128),
       model: text(ai.model, `${at}.ai.model`, 256),
-    });
+    };
+    if (ai.effort !== undefined) {
+      provenance.effort = text(ai.effort, `${at}.ai.effort`, 32);
+      if (!/^[a-z]+$/u.test(provenance.effort)) invalid(`${at}.ai.effort is not an effort level`);
+    }
+    if (ai.client !== undefined) {
+      const client = object(ai.client, `${at}.ai.client`);
+      keys(client, `${at}.ai.client`, ["name", "version"]);
+      provenance.client = Object.freeze({
+        name: text(client.name, `${at}.ai.client.name`, 64),
+        version: text(client.version, `${at}.ai.client.version`, 64),
+      });
+    }
+    result.ai = Object.freeze(provenance);
   }
   if (tool.reason !== undefined)
     result.reason = text(tool.reason, `${at}.reason`, limits.output.reason);
