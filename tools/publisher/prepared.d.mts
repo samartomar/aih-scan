@@ -1,7 +1,7 @@
 export interface PreparedFile { path: string; mode: string; sha256: string }
 export interface PreparedItem { path: string; scanKey: string; files: PreparedFile[]; labels?: Record<string, string>; source?: { locator: string; revision: string } }
 export interface PreparedScanner { name: string; version: string; tarballSha256: string }
-export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number }; skillspector?: { version: string; wheelSha256: string; tp4: { maxFiles: number; maxFindings: number; maxBatches: number } } }
+export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; effort?: string; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number }; skillspector?: { version: string; wheelSha256: string; tp4: { maxFiles: number; maxFindings: number; maxBatches: number } } }
 export interface PreparedManifest { format: string; scanner: PreparedScanner; assessment: PreparedAssessment; items: PreparedItem[]; parentManifestSha256?: string }
 export interface PreparedRuntime {
   host: typeof import("../../src/public/host.js");
@@ -15,6 +15,9 @@ export function validateManifest(bytes: Uint8Array, expectedSha256: string): Pre
 export function loadRuntime(consumer: string, tarball: string, scanner: PreparedScanner): Promise<PreparedRuntime>;
 export function validateContent(manifest: PreparedManifest, content: string, runtime: PreparedRuntime): Promise<Map<string, PreparedItem[]>>;
 export function aiEligible(summary: unknown, manifest: { assessment: PreparedAssessment }): boolean;
+export function staticEligible(summary: unknown, manifest: { assessment: PreparedAssessment }): boolean;
+/** Whether a summary is publishable evidence for the manifest's assessment (static or AI). */
+export function eligibleEvidence(summary: unknown, manifest: { assessment: PreparedAssessment }): boolean;
 export function scanPrepared(options: PreparedOptions): Promise<{ receiptPath: string; receiptSha256: string; root: string; reused: number; completed: number; pending: number; uniqueKeys: number; references: number; cancelled: boolean }>;
 export function writeCheckpointAtomic(path: string, value: unknown): void;
 export function workerLaunchBudget(freeMiB: number, reserveMiB: number, poolCapacityMiB: number, reservedMiB: number): number;
@@ -25,4 +28,6 @@ export function exportCandidate(options: PreparedOptions & { receiptPath: string
 export function importCandidate(archive: string, archiveSha256: string, manifestSha256: string, receiptSha256: string, consumer: string, out: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 export function verifyCandidate(candidate: string, manifestSha256: string, receiptSha256: string, consumer: string, tarball: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 
+/** Claude CLI effort levels a prepared `claude_cli` profile may select. */
+export const AGENT_EFFORTS: readonly string[];
 export function maintenancePythonPath(executable: string, platform?: string): string;

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readJsonStdout, selectAnalyzer } from "../../src/host/analyzer-process.js";
 import { ciscoInvocation } from "../../src/host/cisco.js";
@@ -223,6 +226,48 @@ describe("SkillSpector AI setup (reads which settings exist, never their values)
         "linux",
       ),
     ).toMatchObject({ available: true, via: "provider" });
+  });
+
+  // The "linux" assertions look the CLI up in a POSIX-absolute PATH entry, which exists only on a
+  // POSIX host; the Windows refusal comes before any PATH lookup and holds everywhere.
+  it.skipIf(process.platform === "win32")(
+    "accepts an explicit Claude CLI effort on a POSIX host",
+    () => {
+      const bin = mkdtempSync(join(tmpdir(), "aih-scan-effort-"));
+      try {
+        writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 });
+        const env = {
+          SKILLSPECTOR_PROVIDER: "claude_cli",
+          AIH_SCAN_AI_EFFORT: " Medium ",
+          PATH: bin,
+        };
+        expect(skillSpectorAiSetup(env, "linux")).toEqual({
+          available: true,
+          provider: "claude_cli",
+          via: "cli",
+          effort: "medium",
+        });
+        expect(skillSpectorAiSetup({ ...env, AIH_SCAN_AI_EFFORT: " " }, "linux")).toEqual({
+          available: true,
+          provider: "claude_cli",
+          via: "cli",
+        });
+      } finally {
+        rmSync(bin, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("refuses an explicit Claude CLI effort on Windows before looking for the CLI", () => {
+    expect(
+      skillSpectorAiSetup(
+        { SKILLSPECTOR_PROVIDER: "claude_cli", AIH_SCAN_AI_EFFORT: "medium", Path: "C:\\tools" },
+        "win32",
+      ),
+    ).toEqual({
+      available: false,
+      reason: "AIH_SCAN_AI_EFFORT needs a POSIX host; Scan cannot apply it on Windows",
+    });
   });
 
   it("keeps the selected DeepSeek model and caller controls in a native HTTP-provider invocation", () => {
