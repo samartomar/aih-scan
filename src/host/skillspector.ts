@@ -498,8 +498,17 @@ function aiProvenance(
     const model = objectOf(raw)?.model;
     if (typeof model === "string" && model.length > 0 && model !== "redacted") models.add(model);
   }
+  // Record what SkillSpector reports it used when that differs from the request, so a slot
+  // override or substitution can never be signed as the requested model.
+  const reported = [...models].sort().join(", ");
   const model =
-    setup.model ?? (models.size > 0 ? [...models].sort().join(", ") : "provider default");
+    setup.model === undefined
+      ? models.size > 0
+        ? reported
+        : "provider default"
+      : models.size === 0 || (models.size === 1 && models.has(setup.model))
+        ? setup.model
+        : reported;
   return Object.freeze({
     via: setup.via,
     provider:
@@ -677,6 +686,8 @@ export function skillSpectorAdapter(options: SkillSpectorOptions = {}): ToolAdap
     async run(item: AssessItem, context: ToolContext): Promise<ToolRun> {
       const notes: string[] = [];
       let mode: ScanMode = "static";
+      if (context.mode !== "ai" && (env[AI_EFFORT_VARIABLE]?.trim() ?? "") !== "")
+        notes.push(`${AI_EFFORT_VARIABLE} has no effect in static mode`);
       if (context.mode === "ai") {
         const setup = options.ai ?? skillSpectorAiSetup(env, platform);
         if (setup.available) mode = "ai";
@@ -822,9 +833,12 @@ async function runInstalled(
 }
 
 /**
- * Prepares the signed-in agent CLI SkillSpector will start: records the client's own reported
- * version and, for an explicit effort, puts a private launcher first on SkillSpector's PATH that
- * starts the caller's CLI with `--effort <level>` on each `-p` call. Nothing supplied runs.
+ * Prepares the signed-in Claude CLI SkillSpector will start. Scan resolves the real binary on
+ * PATH and records the version it reports (running only that binary's `--version`; nothing from
+ * the scanned content runs). On a POSIX host it puts a private launcher first on SkillSpector's
+ * PATH that execs exactly that binary with the CLI's auto-updater disabled, so the recorded
+ * version is the one that runs, and adds `--effort <level>` to each `-p` call when an effort was
+ * selected. An explicit effort requires both the launcher and a reported version.
  */
 async function agentCli(
   setup: Extract<AiSetup, { available: true }>,
@@ -848,18 +862,24 @@ async function agentCli(
     /(?:^|\s)v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?:\s|$)/u,
     signal,
   );
+  if (setup.effort !== undefined && reported === undefined)
+    return `the ${name} CLI did not report its version; Scan cannot record which client applies ${AI_EFFORT_VARIABLE}`;
   const ai = Object.freeze({
     ...setup,
     ...(reported === undefined ? {} : { client: Object.freeze({ name, version: reported }) }),
   });
-  if (setup.effort === undefined) return Object.freeze({ ai, env });
-  if (settings.platform === "win32" || /['\n]/u.test(real))
-    return `Scan cannot apply ${AI_EFFORT_VARIABLE} to this ${name} CLI`;
+  const pinnable = settings.platform !== "win32" && !/['\n]/u.test(real);
+  if (!pinnable) {
+    if (setup.effort !== undefined)
+      return `Scan cannot apply ${AI_EFFORT_VARIABLE} to this ${name} CLI`;
+    return Object.freeze({ ai, env });
+  }
+  const effort = setup.effort === undefined ? "" : ` --effort '${setup.effort}'`;
   const bin = posix.join(settings.scratch, "agent-cli");
   mkdirSync(bin, { mode: 0o700 });
   writeFileSync(
     posix.join(bin, name),
-    `#!/bin/sh\nif [ "$1" = "-p" ]; then exec '${real}' "$@" --effort '${setup.effort}'; fi\nexec '${real}' "$@"\n`,
+    `#!/bin/sh\nDISABLE_AUTOUPDATER=1\nexport DISABLE_AUTOUPDATER\nif [ "$1" = "-p" ]; then exec '${real}' "$@"${effort}; fi\nexec '${real}' "$@"\n`,
     { mode: 0o700, flag: "wx" },
   );
   return Object.freeze({ ai, env: Object.freeze({ ...env, PATH: `${bin}:${env.PATH ?? ""}` }) });

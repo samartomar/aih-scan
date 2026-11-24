@@ -1194,7 +1194,7 @@ describe("SkillSpector AI mode (controlled CLI fixture; no provider is contacted
         "claude",
         `const a = process.argv.slice(2);
 if (a[0] === "--version") { process.stdout.write("2.1.330 (Claude Code)\\n"); process.exit(0); }
-process.stdout.write(JSON.stringify(a)); process.exit(0);`,
+process.stdout.write(JSON.stringify({ argv: a, updater: process.env.DISABLE_AUTOUPDATER ?? null })); process.exit(0);`,
       );
       const ss = skillspector(
         skillSpectorReport([], {
@@ -1215,13 +1215,10 @@ process.stdout.write(JSON.stringify(a)); process.exit(0);`,
       const { result, summary } = await run(folder, ss, { extra: { mode: "ai" }, env });
       expect(result).toMatchObject({ ai: { status: "available", via: "cli" } });
       const call = ss.calls().find((c) => c.args[0] === "scan")!;
-      expect(JSON.parse(call.agentStdout!)).toEqual([
-        "-p",
-        "--output-format",
-        "text",
-        "--effort",
-        "medium",
-      ]);
+      expect(JSON.parse(call.agentStdout!)).toEqual({
+        argv: ["-p", "--output-format", "text", "--effort", "medium"],
+        updater: "1",
+      });
       expect(toolOf(summary, "skillspector")).toMatchObject({
         mode: "ai",
         ai: {
@@ -1246,7 +1243,45 @@ process.stdout.write(JSON.stringify(a)); process.exit(0);`,
         .calls()
         .filter((c) => c.args[0] === "scan")
         .at(-1)!;
-      expect(JSON.parse(plainCall.agentStdout!)).toEqual(["-p", "--output-format", "text"]);
+      // Without an effort Scan still pins the probed binary and disables its auto-updater.
+      expect(JSON.parse(plainCall.agentStdout!)).toEqual({
+        argv: ["-p", "--output-format", "text"],
+        updater: "1",
+      });
+      // A model SkillSpector reports using, when it differs from the request, is what is recorded.
+      const substituted = skillspector(
+        skillSpectorReport([], {
+          llm: true,
+          provenance: {
+            provider: { effective_adapter: "claude_cli" },
+            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "claude-fable-5-2" }],
+          },
+        }),
+        { agentCli: "claude" },
+      );
+      const swapped = await run(folder, substituted, { extra: { mode: "ai" }, env });
+      expect(toolOf(swapped.summary, "skillspector").ai.model).toBe("claude-fable-5-2");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not start an effort-controlled pass when the CLI reports no version",
+    async () => {
+      const folder = fixture.folder("item", skill);
+      const bin = fixture.folder("bin", {});
+      nativeNodeCli(bin, "claude", "process.exit(0);");
+      const ss = skillspector(skillSpectorReport([], { llm: true }), { agentCli: "claude" });
+      const { summary } = await run(folder, ss, {
+        extra: { mode: "ai" },
+        env: {
+          SKILLSPECTOR_PROVIDER: "claude_cli",
+          SKILLSPECTOR_MODEL: "claude-opus-5-5",
+          AIH_SCAN_AI_EFFORT: "medium",
+          PATH: [bin, process.env.PATH ?? ""].join(delimiter),
+        },
+      });
+      expect(toolOf(summary, "skillspector")).toMatchObject({ mode: "ai", result: "not-run" });
+      expect(ss.calls().some((c) => c.args[0] === "scan")).toBe(false);
     },
   );
 
@@ -1271,6 +1306,10 @@ process.stdout.write(JSON.stringify(a)); process.exit(0);`,
       expect(result).toMatchObject({ ai: { status: "not-available", reason } });
       expect(toolOf(summary, "skillspector")).toMatchObject({ mode: "static" });
     }
+    const staticRun = await run(folder, ss, { env: { AIH_SCAN_AI_EFFORT: "medium" } });
+    expect(staticRun.entry).toMatchObject({
+      notes: expect.arrayContaining(["AIH_SCAN_AI_EFFORT has no effect in static mode"]),
+    });
   });
 
   it("keeps a configured AI pass that did not run or did not complete as a failed, partial result", async () => {

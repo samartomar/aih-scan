@@ -104,7 +104,7 @@ Credential values are read from `credentialVariable` (default
 `SKILLSPECTOR_COMPAT_API_KEY`) into each isolated child environment only; receipts and
 worker request files contain the variable name, never its value. Other provider,
 Python/Node loader, tracing, home configuration and credential environments are not
-inherited. Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
+inherited (the Claude CLI profile below is the one exception for `HOME`). Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
 requested, `AIH_SCAN_SKILL_SCANNER`; install them using the locked analyzer instructions.
 
 #### Static and signed-in agent-CLI assessments
@@ -121,7 +121,10 @@ requested tool is `pass`, `warn`, `fail` or `not-applicable`. Its receipt status
 `complete-static`. A partial static result stays `incomplete` and is refused, as before.
 
 The signed-in Claude CLI is the one agent-CLI provider the prepared route accepts. It needs an
-explicit model and effort and names no HTTP, credential or maintenance controls:
+exact, pinned Claude model id (`claude-<family>-<version>`, optionally with a date snapshot,
+for example `claude-opus-5-5`) and an explicit effort, and it names no HTTP, credential or
+maintenance controls. Aliases such as `opus`, `fable` or `default`, and `-latest` names, are
+refused: they name whatever the CLI or account resolves at run time.
 
 ```json
 "assessment": {
@@ -135,9 +138,19 @@ explicit model and effort and names no HTTP, credential or maintenance controls:
 
 Each isolated child gets `SKILLSPECTOR_PROVIDER=claude_cli`, `SKILLSPECTOR_MODEL` and Scan's
 `AIH_SCAN_AI_EFFORT` from the manifest, so no ambient model or effort applies. It also gets the
-operator's own `HOME`, because the signed-in CLI reads its sign-in from there. That is the one
-exception to the private home that other profiles use: use a host and account dedicated to
-this work. No credential value is read or recorded. The route needs Linux or macOS (see
+operator's own `HOME`, because the signed-in CLI reads its sign-in from there, and
+`PYTHONNOUSERSITE=1`, so user site-packages under that home stay out of the analyzer. That is
+the one exception to the private home that other profiles use: use a host and account
+dedicated to this work. The pinned SkillSpector starts the CLI with `--setting-sources=`, no
+tools, `dontAsk` permissions and no session persistence, so user settings, hooks and memory
+files are not loaded. With Claude CLI 2.1.330 an identical call carried about 0.7k input
+tokens, against about 2.8k with setting sources enabled on the same account. Confirm this on
+your host before a campaign. No credential value is read or recorded.
+
+Scan resolves the real `claude` binary on `PATH`, records the version that binary reports, and
+starts exactly that binary for every analysis call with its auto-updater disabled. A
+campaign's keys therefore record one client version unless the operator changes the CLI
+between keys; check that every published key names the same `client.version`. The route needs Linux or macOS (see
 [analyzers.md](analyzers.md)). A result is complete AI evidence (`complete-ai`) only when the
 signed summary records `via: cli`, `provider: claude_cli`, the manifest's exact model and
 effort, and the `claude` client with the version it reported. There is no model or effort

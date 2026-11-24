@@ -28,4 +28,6 @@ export function exportCandidate(options: PreparedOptions & { receiptPath: string
 export function importCandidate(archive: string, archiveSha256: string, manifestSha256: string, receiptSha256: string, consumer: string, out: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 export function verifyCandidate(candidate: string, manifestSha256: string, receiptSha256: string, consumer: string, tarball: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 
+/** Claude CLI effort levels a prepared `claude_cli` profile may select. */
+export const AGENT_EFFORTS: readonly string[];
 export function maintenancePythonPath(executable: string, platform?: string): string;

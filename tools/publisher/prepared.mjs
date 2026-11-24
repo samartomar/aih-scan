@@ -12,8 +12,12 @@ import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive
 const maintenanceArtifact = JSON.parse(readFileSync(new URL("../analyzers/skillspector/maintenance/artifact.json", import.meta.url), "utf8"));
 // The maintenance build is versioned `<standard release>+aih.1.<build id>`; the pin test binds that prefix to SKILLSPECTOR_VERSION.
 const standardSkillSpectorVersion = maintenanceArtifact.version.split("+")[0];
-// Effort levels the Claude CLI accepts; Scan applies one through AIH_SCAN_AI_EFFORT.
-const AGENT_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+// Effort levels the Claude CLI accepts; Scan applies one through AIH_SCAN_AI_EFFORT. A test
+// keeps this list equal to the scanner's AI_EFFORT_LEVELS.
+export const AGENT_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+// A pinned Claude model id (family plus numeric version, optionally a date snapshot). Aliases
+// such as `opus`, `default` or `claude-opus-latest` name whatever the CLI or account resolves.
+const PINNED_CLAUDE_MODEL = /^claude-[a-z]+(?:-[0-9]+)+$/;
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
 const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
@@ -68,7 +72,7 @@ export function validateManifest(bytes, expectedSha256) {
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
   if (assessment.mode === "ai" && assessment.provider === "claude_cli") {
     // A signed-in agent CLI: the operator's own sign-in, an explicit model and effort, no HTTP controls.
-    need(typeof assessment.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(assessment.model), "Prepared agent-CLI AI requires an explicitly selected model; no model fallback");
+    need(typeof assessment.model === "string" && assessment.model.length <= 128 && PINNED_CLAUDE_MODEL.test(assessment.model), "Prepared agent-CLI AI requires an exact, pinned Claude model id (for example claude-opus-5-5), not an alias or default; no model fallback");
     need(AGENT_EFFORTS.includes(assessment.effort), `Prepared agent-CLI AI requires an explicit effort: ${AGENT_EFFORTS.join(", ")}`);
     need(["baseUrl", "credentialVariable", "reasoningEffort", "structuredOutputMethod", "modelTokenLimits", "skillspector"].every((key) => assessment[key] === undefined), "Prepared agent-CLI AI must not name HTTP-provider or maintenance controls");
     if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
@@ -271,7 +275,8 @@ function childEnvironment(assessment, scratch) {
     // The signed-in CLI reads the operator's own sign-in from their HOME; no credential value is handled.
     need(process.platform !== "win32", "Prepared agent-CLI AI needs a POSIX host");
     need(typeof process.env.HOME === "string" && process.env.HOME.startsWith("/"), "HOME is not set; the signed-in claude CLI cannot be used");
-    Object.assign(env, { HOME: process.env.HOME, SKILLSPECTOR_PROVIDER: "claude_cli", SKILLSPECTOR_MODEL: assessment.model, AIH_SCAN_AI_EFFORT: assessment.effort });
+    // PYTHONNOUSERSITE keeps the operator's user site-packages out of the analyzer child.
+    Object.assign(env, { HOME: process.env.HOME, PYTHONNOUSERSITE: "1", SKILLSPECTOR_PROVIDER: "claude_cli", SKILLSPECTOR_MODEL: assessment.model, AIH_SCAN_AI_EFFORT: assessment.effort });
     if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
   } else if (assessment.mode === "ai") {
     const variable = assessment.credentialVariable ?? "SKILLSPECTOR_COMPAT_API_KEY";

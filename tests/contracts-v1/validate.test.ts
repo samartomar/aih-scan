@@ -224,6 +224,8 @@ describe("summary and withdrawal schemas", () => {
       { ...cli, client: { name: "claude" } },
       { ...cli, client: { name: "claude", version: "2.1.330", path: "/usr/bin/claude" } },
       { ...cli, extra: true },
+      { ...cli, via: "provider" },
+      { ...plain, via: "local", effort: "medium" },
     ]) {
       expect(readSummary(encode(withAi(bad))).status, JSON.stringify(bad)).toBe("invalid");
       expect(ajv(withAi(bad)), JSON.stringify(bad)).toBe(false);

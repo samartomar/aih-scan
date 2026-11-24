@@ -206,6 +206,9 @@ const summary = {
                 },
               },
             },
+            // effort and client describe a signed-in agent CLI pass only.
+            if: { properties: { via: { const: "cli" } } },
+            else: { not: { anyOf: [{ required: ["effort"] }, { required: ["client"] }] } },
           },
           result: { enum: ["pass", "warn", "fail", "not-run", "not-applicable"] },
           reason: { type: "string", minLength: 1 },

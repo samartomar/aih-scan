@@ -194,6 +194,29 @@
                   }
                 }
               }
+            },
+            "if": {
+              "properties": {
+                "via": {
+                  "const": "cli"
+                }
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "effort"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "client"
+                    ]
+                  }
+                ]
+              }
             }
           },
           "result": {

@@ -15,8 +15,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { AI_EFFORT_LEVELS } from "../../src/host/skillspector.js";
 import { checkPreparedCandidate } from "../../tools/publisher/candidate.mjs";
 import {
+  AGENT_EFFORTS,
   aiEligible,
   eligibleEvidence,
   exportCandidate,
@@ -318,6 +320,11 @@ describe("prepared manifest and exact inventory", () => {
       return validateManifest(bytes, hash(bytes));
     };
     expect(validate(cliAssessment).assessment).toEqual(cliAssessment);
+    expect(
+      validate({ ...cliAssessment, model: "claude-sonnet-4-5-20250929" }).assessment.model,
+    ).toBe("claude-sonnet-4-5-20250929");
+    // The publisher's effort list is the scanner's: a level cannot validate here and be refused there.
+    expect([...AGENT_EFFORTS]).toEqual([...AI_EFFORT_LEVELS]);
     expect(validate({ ...cliAssessment, llmConcurrency: 2 }).assessment).toMatchObject({
       llmConcurrency: 2,
     });
@@ -327,6 +334,16 @@ describe("prepared manifest and exact inventory", () => {
       noModel,
       noEffort,
       { ...cliAssessment, model: "" },
+      ...[
+        "opus",
+        "default",
+        "opusplan",
+        "fable",
+        "claude-opus",
+        "claude-opus-latest",
+        "claude-opus-5-5[1m]",
+        "Claude-Opus-5-5",
+      ].map((model) => ({ ...cliAssessment, model })),
       { ...cliAssessment, effort: "turbo" },
       { ...cliAssessment, provider: "gemini_cli" },
       { ...cliAssessment, baseUrl: "https://api.deepseek.com" },
@@ -723,6 +740,7 @@ describe.runIf(process.platform !== "win32")(
       expect(call.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_API_KEY");
       expect(call.env).not.toHaveProperty("SKILLSPECTOR_COMPAT_BASE_URL");
       expect(call.env).not.toHaveProperty("DEEPSEEK_API");
+      expect(call.env.PYTHONNOUSERSITE).toBe("1");
       expect(JSON.parse(call.agentStdout!)).toEqual({
         argv: ["-p", "--output-format", "text", "--effort", "medium"],
         home,

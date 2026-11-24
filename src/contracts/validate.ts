@@ -480,6 +480,8 @@ function summaryTool(value: unknown, at: string): SummaryTool {
         version: text(client.version, `${at}.ai.client.version`, 64),
       });
     }
+    if (provenance.via !== "cli" && (ai.effort !== undefined || ai.client !== undefined))
+      invalid(`${at}.ai.effort and ${at}.ai.client describe an agent CLI and need via cli`);
     result.ai = Object.freeze(provenance);
   }
   if (tool.reason !== undefined)
