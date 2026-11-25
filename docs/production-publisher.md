@@ -149,6 +149,12 @@ refused: they name whatever the CLI or account resolves at run time.
 }
 ```
 
+For Kimi Code CLI, set `provider` to `kimi_cli`, `model` to `kimi-for-coding`, and
+`effort` to `low`, `high` or `max`. The selected account must support the model and
+the chosen effort. Use the signed-in Kimi Code CLI and region described in
+[analyzer setup](analyzers.md#skillspector). Eligibility binds the exact provider, model
+and effort, and `client: { "name": "kimi", "version": "2.7.2" }`.
+
 Each isolated child gets `SKILLSPECTOR_PROVIDER=claude_cli`, `SKILLSPECTOR_MODEL` and Scan's
 `AIH_SCAN_AI_EFFORT` from the manifest, so no ambient model or effort applies. It also gets the
 operator's own `HOME`, because the signed-in CLI reads its sign-in from there, and

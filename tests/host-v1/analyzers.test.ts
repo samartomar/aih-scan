@@ -1301,7 +1301,7 @@ process.stdout.write(JSON.stringify({ argv: a, updater: process.env.DISABLE_AUTO
     const cases: [Record<string, string>, string][] = [
       [
         { SKILLSPECTOR_PROVIDER: "ollama", AIH_SCAN_AI_EFFORT: "medium" },
-        "AIH_SCAN_AI_EFFORT applies only to provider claude_cli",
+        "AIH_SCAN_AI_EFFORT applies only to provider claude_cli, kimi_cli",
       ],
       [
         { SKILLSPECTOR_PROVIDER: "claude_cli", AIH_SCAN_AI_EFFORT: "turbo", PATH },

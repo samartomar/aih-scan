@@ -1,5 +1,6 @@
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type HostExecutableV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
 import type { AiProvenance, ScanMode } from "../contracts/validate.js";
 import {
@@ -15,6 +16,7 @@ import {
   staticAnalyzerEnv,
 } from "./analyzer-process.js";
 import { analyzerFinding, notRun, objectOf } from "./analyzer-report.js";
+import { KIMI_EFFORTS, KIMI_MODEL, KIMI_VERSION } from "./kimi-inference.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
 /** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.6). */
@@ -50,7 +52,7 @@ export const AI_EFFORT_VARIABLE = "AIH_SCAN_AI_EFFORT";
 /** Effort levels the Claude CLI accepts for `--effort`. */
 export const AI_EFFORT_LEVELS = Object.freeze(["low", "medium", "high", "xhigh", "max"] as const);
 /** Providers whose CLI Scan can start with an explicit effort. */
-const EFFORT_PROVIDERS = new Set(["claude_cli"]);
+const EFFORT_PROVIDERS = new Set(["claude_cli", "kimi_cli"]);
 
 type Requirement = Readonly<{
   via: AiVia;
@@ -81,10 +83,11 @@ const PROVIDERS: Readonly<Record<string, Requirement>> = Object.freeze({
   },
   ollama: { via: "local" },
   claude_cli: { via: "cli", cli: "claude" },
+  kimi_cli: { via: "cli", cli: "kimi" },
   gemini_cli: { via: "cli", cli: "gemini" },
   opencode_cli: { via: "cli", cli: "opencode" },
 });
-const DISABLED_UPSTREAM = new Set(["codex_cli", "antigravity_cli"]);
+const DISABLED_UPSTREAM = new Set(["antigravity_cli"]);
 /** Providers SkillSpector 2.13.6 offers that Scan does not pass through yet. */
 const UNSUPPORTED_BY_SCAN = new Set(["gemini"]);
 
@@ -145,6 +148,11 @@ export function skillSpectorAiSetup(
   const named = env.SKILLSPECTOR_PROVIDER?.trim().toLowerCase() ?? "";
   if (named === "")
     return Object.freeze({ available: false as const, reason: "SKILLSPECTOR_PROVIDER is not set" });
+  if (named === "codex_cli")
+    return Object.freeze({
+      available: false as const,
+      reason: "Codex CLI has no verified tool-free inference configuration",
+    });
   if (DISABLED_UPSTREAM.has(named))
     return Object.freeze({
       available: false as const,
@@ -162,6 +170,15 @@ export function skillSpectorAiSetup(
       reason: "SKILLSPECTOR_PROVIDER names a provider SkillSpector does not support",
     });
   const effort = env[AI_EFFORT_VARIABLE]?.trim().toLowerCase() ?? "";
+  if (
+    named === "kimi_cli" &&
+    (env.SKILLSPECTOR_MODEL?.trim() !== KIMI_MODEL ||
+      !KIMI_EFFORTS.some((level) => level === effort))
+  )
+    return Object.freeze({
+      available: false as const,
+      reason: `Kimi CLI requires model ${KIMI_MODEL} and explicit effort: ${KIMI_EFFORTS.join(", ")}`,
+    });
   if (effort !== "") {
     if (!EFFORT_PROVIDERS.has(named))
       return Object.freeze({
@@ -501,6 +518,7 @@ function aiProvenance(
   // Record what SkillSpector reports it used when that differs from the request, so a slot
   // override or substitution can never be signed as the requested model.
   const reported = [...models].sort().join(", ");
+  const kimiTransport = setup.provider === "kimi_cli" && effective === "claude_cli";
   const model =
     setup.model === undefined
       ? models.size > 0
@@ -512,7 +530,7 @@ function aiProvenance(
   return Object.freeze({
     via: setup.via,
     provider:
-      typeof effective === "string" && /^[a-z0-9_]{1,64}$/u.test(effective)
+      !kimiTransport && typeof effective === "string" && /^[a-z0-9_]{1,64}$/u.test(effective)
         ? effective
         : setup.provider,
     model: model.slice(0, 256),
@@ -829,6 +847,20 @@ async function runInstalled(
       version,
       "Configured TP4 capacity requires the maintenance build",
     );
+  if (ai?.available && ai.provider === "kimi_cli") {
+    const provider = objectOf(objectOf(metadata.llm_provenance)?.provider);
+    if (
+      provider?.effective_adapter !== "claude_cli" ||
+      !existsSync(path.join(settings.scratch, "kimi-inference-completed"))
+    ) {
+      const run = skillSpectorRun(document, item, mode, undefined);
+      if (run.status !== "ran") return run;
+      return Object.freeze({
+        ...run,
+        failedPart: run.failedPart ?? "Kimi inference did not complete",
+      });
+    }
+  }
   return skillSpectorRun(document, item, mode, ai);
 }
 
@@ -850,7 +882,7 @@ async function agentCli(
   | Readonly<{ ai: Extract<AiSetup, { available: true }>; env: Readonly<Record<string, string>> }>
 > {
   const name = PROVIDERS[setup.provider]?.cli;
-  if (name !== "claude") return Object.freeze({ ai: setup, env });
+  if (name !== "claude" && name !== "kimi") return Object.freeze({ ai: setup, env });
   // SkillSpector finds the CLI on PATH; Scan resolves the same PATH entry through its runner.
   const found = resolveHostExecutableV1(name, env, settings.platform);
   if (found === undefined || found.foundIn !== "PATH") return `the ${name} CLI is not on PATH`;
@@ -862,6 +894,11 @@ async function agentCli(
     /(?:^|\s)v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?:\s|$)/u,
     signal,
   );
+  if (name === "kimi") {
+    if (reported !== KIMI_VERSION)
+      return `Kimi Code CLI ${KIMI_VERSION} is required for verified tool-free inference`;
+    return kimiTransport(real, setup, env, settings.scratch);
+  }
   if (setup.effort !== undefined && reported === undefined)
     return `the ${name} CLI did not report its version; Scan cannot record which client applies ${AI_EFFORT_VARIABLE}`;
   const ai = Object.freeze({
@@ -883,4 +920,47 @@ async function agentCli(
     { mode: 0o700, flag: "wx" },
   );
   return Object.freeze({ ai, env: Object.freeze({ ...env, PATH: `${bin}:${env.PATH ?? ""}` }) });
+}
+
+/** Reuse the analyzer's bounded, tool-free text transport with a Scan-owned Kimi client. */
+function kimiTransport(
+  binary: string,
+  setup: Extract<AiSetup, { available: true }>,
+  env: Readonly<Record<string, string>>,
+  scratch: string,
+) {
+  const home = env.KIMI_CODE_HOME ?? (env.HOME ? posix.join(env.HOME, ".kimi-code") : "");
+  if (!posix.isAbsolute(home)) return "Kimi Code requires an absolute login directory";
+  const moduleUrl = new URL(import.meta.url);
+  const launcher = fileURLToPath(
+    new URL(
+      moduleUrl.pathname.endsWith(".ts") ? "./kimi-inference.ts" : "./kimi-inference.js",
+      moduleUrl,
+    ),
+  );
+  const region = env.AIH_SCAN_KIMI_REGION ?? "global";
+  if (region !== "global" && region !== "mainland-cn")
+    return "AIH_SCAN_KIMI_REGION must be global or mainland-cn";
+  const argv = [process.execPath, launcher, binary, home, scratch, setup.effort ?? "", region];
+  if (argv.some((part) => /['\n]/u.test(part)))
+    return "Kimi Code launcher paths cannot be quoted safely";
+  const bin = posix.join(scratch, "agent-cli");
+  mkdirSync(bin, { mode: 0o700 });
+  writeFileSync(
+    posix.join(bin, "claude"),
+    `#!/bin/sh\nexec ${argv.map((part) => `'${part}'`).join(" ")} "$@"\n`,
+    { mode: 0o700, flag: "wx" },
+  );
+  const ai = Object.freeze({
+    ...setup,
+    client: Object.freeze({ name: "kimi", version: KIMI_VERSION }),
+  });
+  return Object.freeze({
+    ai,
+    env: Object.freeze({
+      ...env,
+      SKILLSPECTOR_PROVIDER: "claude_cli",
+      PATH: `${bin}:${env.PATH ?? ""}`,
+    }),
+  });
 }
