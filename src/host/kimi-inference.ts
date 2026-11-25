@@ -7,9 +7,14 @@ import { pathToFileURL } from "node:url";
 
 export const KIMI_VERSION = "2.7.2";
 export const KIMI_MODEL = "kimi-for-coding";
+export const KIMI_QUOTA_RECEIPT = "kimi-quota-refusal";
 export const KIMI_EFFORTS = Object.freeze(["low", "high", "max"] as const);
 const managedAlias = "kimi-code/kimi-for-coding";
 const maxBytes = 16 * 1024 * 1024;
+// Leave time to reap ACP before SkillSpector's 15s auth and 300s call limits.
+const authTimeoutMs = 14_000;
+const inferenceTimeoutMs = 299_000;
+const quotaMessage = "Kimi rate or quota limit refused the request.";
 
 function config(region: string, effort: string): string {
   const domain = region === "global" ? "kimi.ai" : "kimi.com";
@@ -47,7 +52,7 @@ oauth_host = "${oauthHost}"
 [models."${managedAlias}"]
 provider = "managed:kimi-code"
 model = "${KIMI_MODEL}"
-max_context_size = 262144
+max_context_size = 1048576
 capabilities = ["thinking", "always_thinking"]
 support_efforts = ["low", "high", "max"]
 default_effort = "${effort}"
@@ -58,8 +63,16 @@ type Reply = {
   sessionId?: unknown;
   configOptions?: { id: string; currentValue: string }[];
   agentInfo?: { name: string; version: string };
+  protocolVersion?: number;
   stopReason?: string;
 };
+
+function selectedConfig(options: Reply["configOptions"], effort: string) {
+  return (
+    options?.find((entry) => entry.id === "model")?.currentValue === managedAlias &&
+    options?.find((entry) => entry.id === "thinking")?.currentValue === effort
+  );
+}
 
 async function infer(
   binary: string,
@@ -106,6 +119,14 @@ async function infer(
       for (const reply of pending.values()) reply.reject();
       pending.clear();
     };
+    const timer = setTimeout(
+      () => {
+        classified = "Kimi inference did not respond before the request deadline.";
+        stop();
+        child.kill("SIGKILL");
+      },
+      prompt === undefined ? authTimeoutMs : inferenceTimeoutMs,
+    );
     child.once("error", stop);
     child.once("exit", stop);
     child.stdin.on("error", stop);
@@ -136,7 +157,9 @@ async function infer(
             case "available_commands_update":
             case "session_info_update":
             case "agent_thought_chunk":
+              break;
             case "config_option_update":
+              if (!selectedConfig(update.configOptions, effort)) throw new Error();
               break;
             default:
               throw new Error();
@@ -150,7 +173,7 @@ async function infer(
           event.error?.data?.statusCode === 429 ||
           /\b(?:rate.limit|quota|429)\b/iu.test(event.error?.message ?? "")
         )
-          classified = "Kimi rate or quota limit refused the request.";
+          classified = quotaMessage;
         if (event.method !== undefined || !pending.has(event.id) || event.error || !event.result)
           throw new Error();
         const reply = pending.get(event.id);
@@ -172,19 +195,16 @@ async function infer(
         child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
       });
     try {
-      const { agentInfo } = await call("initialize", {
+      const { agentInfo, protocolVersion } = await call("initialize", {
         protocolVersion: 1,
         clientCapabilities: {},
       });
-      if (agentInfo?.version !== KIMI_VERSION) throw new Error("Kimi version mismatch");
+      if (protocolVersion !== 1 || agentInfo?.version !== KIMI_VERSION)
+        throw new Error("Kimi version or protocol mismatch");
       const session = await call("session/new", { cwd, mcpServers: [] });
       if (typeof session.sessionId !== "string") throw new Error("Kimi session missing");
       sessionId = session.sessionId;
-      if (
-        session.configOptions?.find((entry) => entry.id === "model")?.currentValue !==
-          managedAlias ||
-        session.configOptions?.find((entry) => entry.id === "thinking")?.currentValue !== effort
-      )
+      if (!selectedConfig(session.configOptions, effort))
         throw new Error("Kimi model or effort mismatch");
       if (prompt === undefined) return '{"loggedIn":true}\n';
       const result = await call("session/prompt", {
@@ -195,8 +215,11 @@ async function infer(
         throw new Error("Kimi response incomplete");
       return text;
     } catch {
+      if (classified === quotaMessage)
+        writeFileSync(join(scratch, KIMI_QUOTA_RECEIPT), "", { mode: 0o600 });
       throw new InferenceError(classified);
     } finally {
+      clearTimeout(timer);
       lines.close();
       child.stdin.end();
       child.kill("SIGKILL");
@@ -234,7 +257,9 @@ async function main() {
     chunks.push(chunk);
   }
   const prompt = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
-  if (!prompt.trim()) throw new Error();
+  // ACP recognizes slash commands at the beginning of a prompt. Analyzer instructions
+  // start with ordinary text; refuse any input that could select a CLI command.
+  if (!prompt.trim() || prompt.trimStart().startsWith("/")) throw new Error();
   const output = await infer(binary, home, scratch, effort, region, prompt);
   writeFileSync(join(scratch, "kimi-inference-completed"), "", { mode: 0o600 });
   process.stdout.write(output);

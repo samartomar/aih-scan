@@ -16,7 +16,7 @@ import {
   staticAnalyzerEnv,
 } from "./analyzer-process.js";
 import { analyzerFinding, notRun, objectOf } from "./analyzer-report.js";
-import { KIMI_EFFORTS, KIMI_MODEL, KIMI_VERSION } from "./kimi-inference.js";
+import { KIMI_EFFORTS, KIMI_MODEL, KIMI_QUOTA_RECEIPT, KIMI_VERSION } from "./kimi-inference.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
 /** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.6). */
@@ -822,8 +822,17 @@ async function runInstalled(
   const metadata = objectOf(objectOf(document)?.metadata);
   if (metadata?.skillspector_version !== version)
     return notRun("failed", mode, version, "SkillSpector probe/report identity mismatch");
+  const kimiQuota =
+    ai?.available === true &&
+    ai.provider === "kimi_cli" &&
+    existsSync(path.join(settings.scratch, KIMI_QUOTA_RECEIPT));
   if (result.code === 2)
-    return notRun("failed", mode, version, `SkillSpector exited 2${failureDiagnostic(document)}`);
+    return notRun(
+      "failed",
+      mode,
+      version,
+      `SkillSpector exited 2${failureDiagnostic(document)}${kimiQuota ? "; Kimi rate or quota limit refused the request" : ""}`,
+    );
   if (version === SKILLSPECTOR_MAINTENANCE_VERSION) {
     const actual = objectOf(metadata?.aih_scan_tp4_limits);
     const expected = {
@@ -857,11 +866,16 @@ async function runInstalled(
       if (run.status !== "ran") return run;
       return Object.freeze({
         ...run,
-        failedPart: run.failedPart ?? "Kimi inference did not complete",
+        failedPart: kimiQuota
+          ? "Kimi rate or quota limit refused the request"
+          : (run.failedPart ?? "Kimi inference did not complete"),
       });
     }
   }
-  return skillSpectorRun(document, item, mode, ai);
+  const run = skillSpectorRun(document, item, mode, ai);
+  if (kimiQuota && run.status === "ran")
+    return Object.freeze({ ...run, failedPart: "Kimi rate or quota limit refused the request" });
+  return run;
 }
 
 /**

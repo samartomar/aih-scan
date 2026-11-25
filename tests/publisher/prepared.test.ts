@@ -716,6 +716,7 @@ describe.runIf(process.platform !== "win32")(
         effort: "max",
       };
       const setup = await prepared({ item: skill }, assessment);
+      const unsafeEvent = join(setup.folder, "unsafe-event");
       const bin = join(setup.folder, "bin");
       const home = join(setup.folder, "operator-home");
       mkdirSync(bin);
@@ -734,6 +735,7 @@ const config = fs.readFileSync(state + "/config.toml", "utf8");
 assert.ok(config.includes('enabled = ["*"]'));
 assert.ok(config.includes('effort = "max"'));
 assert.ok(config.includes('model = "kimi-for-coding"'));
+assert.ok(config.includes("max_context_size = 1048576"));
 assert.equal(fs.readlinkSync(state + "/credentials"), ${JSON.stringify(join(home, ".kimi-code", "credentials"))});
 assert.ok(!fs.existsSync(state + "/mcp.json"));
 assert.ok(!fs.existsSync(state + "/plugins"));
@@ -741,7 +743,7 @@ assert.notEqual(process.env.HOME, ${JSON.stringify(home)});
 const reply = (id, result) => console.log(JSON.stringify({ jsonrpc: "2.0", id, result }));
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const { id, method, params } = JSON.parse(line);
-  if (method === "initialize") reply(id, { agentInfo: { version: "2.7.2" } });
+  if (method === "initialize") reply(id, { protocolVersion: 1, agentInfo: { version: "2.7.2" } });
   else if (method === "session/new") {
     assert.deepEqual(params.mcpServers, []);
     reply(id, { sessionId: "fixture-only", configOptions: [
@@ -751,6 +753,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   } else if (method === "session/prompt") {
     assert.equal(params.sessionId, "fixture-only");
     assert.deepEqual(params.prompt, [{ type: "text", text: "prompt" }]);
+    if (fs.existsSync(${JSON.stringify(unsafeEvent)})) {
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: 99, method: "session/request_permission", params: {} }));
+    }
     console.log(JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{
       sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: {type:"text", text:'{"findings":[]}' } }
     }}));
@@ -797,6 +802,38 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       const resumed = await scanPrepared(setup);
       expect(resumed).toMatchObject({ reused: 1, completed: 0 });
       expect(ss.calls().filter((entry) => entry.args[0] === "scan")).toHaveLength(1);
+      const archive = join(setup.folder, "kimi.tar");
+      const exported = await exportCandidate({
+        ...setup,
+        receiptPath: resumed.receiptPath,
+        out: archive,
+      });
+      const imported = join(setup.folder, "kimi-imported");
+      await importCandidate(
+        archive,
+        exported.archiveSha256,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        imported,
+      );
+      expect(
+        (
+          await verifyCandidate(
+            imported,
+            exported.manifestSha256,
+            exported.receiptSha256,
+            consumer,
+            join(imported, "scanner.tgz"),
+          )
+        ).summaries,
+      ).toHaveLength(1);
+
+      writeFileSync(unsafeEvent, "");
+      const refused = await scanPrepared({ ...setup, out: join(setup.folder, "refused") });
+      const refusedReceipt = JSON.parse(readFileSync(refused.receiptPath, "utf8"));
+      expect(refusedReceipt.results[key].status).toBe("incomplete");
+      expect(ss.calls().filter((entry) => entry.args[0] === "scan")).toHaveLength(2);
     }, 120000);
     it("runs a signed-in Claude CLI with the selected model and effort and admits its honest provenance", async () => {
       const setup = await prepared({ item: skill }, cliAssessment);
