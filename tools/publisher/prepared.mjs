@@ -17,6 +17,10 @@ const standardSkillSpectorVersion = maintenanceArtifact.version.split("+")[0];
 export const AGENT_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 // A pinned Claude model id (family plus numeric version, optionally a date snapshot). Aliases
 // such as `opus`, `default` or `claude-opus-latest` name whatever the CLI or account resolves.
+const AGENT_CLIENTS = Object.freeze({ claude_cli: "claude", kimi_cli: "kimi" });
+const KIMI_EFFORTS = Object.freeze(["low", "high", "max"]);
+const KIMI_VERSION = "2.7.2";
+const isAgentProvider = (provider) => Object.hasOwn(AGENT_CLIENTS, provider);
 const PINNED_CLAUDE_MODEL = /^claude-[a-z]+(?:-[0-9]+)+$/;
 // An explicit manifest revision, carried into identities and requests only when present.
 const revisionOf = (value) => value.revision === undefined ? {} : { revision: value.revision };
@@ -74,14 +78,19 @@ export function validateManifest(bytes, expectedSha256) {
   keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "effort", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
-  if (assessment.mode === "ai" && assessment.provider === "claude_cli") {
+  if (assessment.mode === "ai" && isAgentProvider(assessment.provider)) {
     // A signed-in agent CLI: the operator's own sign-in, an explicit model and effort, no HTTP controls.
-    need(typeof assessment.model === "string" && assessment.model.length <= 128 && PINNED_CLAUDE_MODEL.test(assessment.model), "Prepared agent-CLI AI requires an exact, pinned Claude model id (for example claude-opus-5-5), not an alias or default; no model fallback");
-    need(AGENT_EFFORTS.includes(assessment.effort), `Prepared agent-CLI AI requires an explicit effort: ${AGENT_EFFORTS.join(", ")}`);
+    if (assessment.provider === "kimi_cli") {
+      need(assessment.model === "kimi-for-coding", "Prepared Kimi CLI AI requires model kimi-for-coding");
+      need(KIMI_EFFORTS.includes(assessment.effort), `Prepared Kimi CLI AI requires an explicit effort: ${KIMI_EFFORTS.join(", ")}`);
+    } else {
+      need(typeof assessment.model === "string" && assessment.model.length <= 128 && PINNED_CLAUDE_MODEL.test(assessment.model), "Prepared agent-CLI AI requires an exact, pinned Claude model id (for example claude-opus-5-5), not an alias or default; no model fallback");
+      need(AGENT_EFFORTS.includes(assessment.effort), `Prepared agent-CLI AI requires an explicit effort: ${AGENT_EFFORTS.join(", ")}`);
+    }
     need(["baseUrl", "credentialVariable", "reasoningEffort", "structuredOutputMethod", "modelTokenLimits", "skillspector"].every((key) => assessment[key] === undefined), "Prepared agent-CLI AI must not name HTTP-provider or maintenance controls");
     if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
   } else if (assessment.mode === "ai") {
-    need(assessment.provider === "openai_compatible" && typeof assessment.model === "string" && assessment.model.length > 0 && assessment.model.length <= 256 && plainText(assessment.model), "Prepared AI requires an explicitly selected HTTP provider/model or the claude_cli agent CLI; no model fallback");
+    need(assessment.provider === "openai_compatible" && typeof assessment.model === "string" && assessment.model.length > 0 && assessment.model.length <= 256 && plainText(assessment.model), "Prepared AI requires an explicitly selected HTTP provider/model or a supported agent CLI; no model fallback");
     need(assessment.effort === undefined, "Agent-CLI effort does not apply to an HTTP provider");
     const endpoint = new URL(assessment.baseUrl);
     const loopback = loopbackHost(endpoint.hostname);
@@ -178,10 +187,10 @@ export function aiEligible(summary, manifest) {
   if (manifest.assessment.mode !== "ai" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
   if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
-  if (manifest.assessment.provider === "claude_cli") {
+  if (isAgentProvider(manifest.assessment.provider)) {
     // Honest agent-CLI provenance: the exact model and effort Scan applied and the client it ran.
     const client = primary.ai.client;
-    if (primary.ai.via !== "cli" || primary.ai.effort !== manifest.assessment.effort || !object(client) || client.name !== "claude" || typeof client.version !== "string" || !client.version) return false;
+    if (primary.ai.via !== "cli" || primary.ai.effort !== manifest.assessment.effort || !object(client) || client.name !== AGENT_CLIENTS[manifest.assessment.provider] || typeof client.version !== "string" || !client.version || (client.name === "kimi" && client.version !== KIMI_VERSION)) return false;
   } else {
     const endpoint = new URL(manifest.assessment.baseUrl), host = endpoint.hostname;
     if (primary.ai.via !== (loopbackHost(host) ? "local" : "provider")) return false;
@@ -235,7 +244,7 @@ export async function verifyResult(root, record, items, manifest, content, runti
   return { summary, eligible };
 }
 function diagnosticNotes(item, assessment) {
-  const credential = assessment.mode === "ai" && assessment.provider !== "claude_cli" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
+  const credential = assessment.mode === "ai" && assessment.provider === "openai_compatible" ? process.env.SKILLSPECTOR_COMPAT_API_KEY : undefined;
   // Python's str.strip also removes NEL and the four ASCII information separators.
   const whitespace = (character) => character.trim() === "" || character === "\u0085" || character.codePointAt(0) >= 28 && character.codePointAt(0) <= 31;
   const characters = [...(credential ?? "")];
@@ -277,12 +286,16 @@ function childEnvironment(assessment, scratch) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) if (allowed.has(key.toUpperCase())) env[key] = value;
   Object.assign(env, { HOME: scratch, USERPROFILE: scratch, APPDATA: scratch, LOCALAPPDATA: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
-  if (assessment.mode === "ai" && assessment.provider === "claude_cli") {
+  if (assessment.mode === "ai" && isAgentProvider(assessment.provider)) {
     // The signed-in CLI reads the operator's own sign-in from their HOME; no credential value is handled.
     need(process.platform !== "win32", "Prepared agent-CLI AI needs a POSIX host");
-    need(typeof process.env.HOME === "string" && process.env.HOME.startsWith("/"), "HOME is not set; the signed-in claude CLI cannot be used");
+    need(typeof process.env.HOME === "string" && process.env.HOME.startsWith("/"), "HOME is not set; the signed-in AI CLI cannot be used");
     // PYTHONNOUSERSITE keeps the operator's user site-packages out of the analyzer child.
-    Object.assign(env, { HOME: process.env.HOME, PYTHONNOUSERSITE: "1", SKILLSPECTOR_PROVIDER: "claude_cli", SKILLSPECTOR_MODEL: assessment.model, AIH_SCAN_AI_EFFORT: assessment.effort });
+    Object.assign(env, { HOME: process.env.HOME, PYTHONNOUSERSITE: "1", SKILLSPECTOR_PROVIDER: assessment.provider, SKILLSPECTOR_MODEL: assessment.model, AIH_SCAN_AI_EFFORT: assessment.effort });
+    if (assessment.provider === "kimi_cli") {
+      if (process.env.KIMI_CODE_HOME !== undefined) env.KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
+      if (process.env.AIH_SCAN_KIMI_REGION !== undefined) env.AIH_SCAN_KIMI_REGION = process.env.AIH_SCAN_KIMI_REGION;
+    }
     if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
   } else if (assessment.mode === "ai") {
     const variable = assessment.credentialVariable ?? "SKILLSPECTOR_COMPAT_API_KEY";

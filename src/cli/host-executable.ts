@@ -11,8 +11,8 @@ import { posix, win32 } from "node:path";
  * Scan records and spawns, and only a path resolved here may be spawned by Scan's runner.
  */
 
-/** `claude` is the signed-in agent CLI SkillSpector starts for `claude_cli`; Scan only asks its version. */
-export type HostExecutableNameV1 = "skillspector" | "skill-scanner" | "claude";
+/** Known native analyzer and signed-in inference executables. */
+export type HostExecutableNameV1 = "skillspector" | "skill-scanner" | "claude" | "kimi";
 
 export type HostExecutableV1 = Readonly<{
   name: HostExecutableNameV1;

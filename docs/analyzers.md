@@ -98,7 +98,7 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
 
   **Claude CLI effort.** SkillSpector has no effort setting for `claude_cli`. Set Scan's own
   `AIH_SCAN_AI_EFFORT` to `low`, `medium`, `high`, `xhigh` or `max` to run the pass at that
-  effort. Scan records `effort` in the summary. The setting applies only to `claude_cli` on
+  effort. Scan records `effort` in the summary. For Claude, Scan applies the setting on
   Linux and macOS: another provider, an unknown level or a Windows host is reported as "AI not
   available here" with the reason, never silently ignored. In static mode the setting has no
   effect, and the result notes say so. Without it, the CLI uses its own default effort and no
@@ -113,19 +113,38 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   SkillSpector reports that its analyzers used a model other than `SKILLSPECTOR_MODEL`, the
   summary records the reported model, not the requested one.
 
+  **Kimi Code CLI.** On POSIX, set `SKILLSPECTOR_PROVIDER=kimi_cli`,
+  `SKILLSPECTOR_MODEL=kimi-for-coding` and `AIH_SCAN_AI_EFFORT` to `low`, `high` or
+  `max`. Use Kimi Code CLI 2.7.2 on PATH and sign in to the managed Kimi Code provider.
+  The model ID identifies K2.8 Preview for eligible accounts. The default login region is
+  `global`. For a mainland China login set `AIH_SCAN_KIMI_REGION=mainland-cn`. Scan uses
+  `KIMI_CODE_HOME` when set, otherwise `~/.kimi-code`.
+
+  Scan uses Kimi's ACP stdio protocol with a fresh private workspace and
+  settings that remove all model-callable tools. The Kimi client handles the existing
+  OAuth login. Scan verifies the selected model and effort in the Kimi session before
+  sending a prompt. Completed evidence records `kimi_cli`, `kimi-for-coding`, the
+  selected effort and `client: { "name": "kimi", "version": "2.7.2" }`.
+  The Kimi route reports incomplete analysis when authentication, provider response,
+  model or effort selection fails.
+
+  **Codex CLI.** Scan reports `codex_cli` unavailable because Codex CLI 0.171.0
+  lacks a verified public configuration that removes every model-callable tool.
+
   AI counts as set up when `SKILLSPECTOR_PROVIDER` names a supported provider and its
   required settings are present:
 
   | Provider | Via | Needs |
   |---|---|---|
   | `claude_cli`, `gemini_cli`, `opencode_cli` | cli | the `claude`, `gemini` or `opencode` CLI on PATH, signed in |
+  | `kimi_cli` | cli | Kimi Code CLI 2.7.2 on PATH, managed sign-in, exact model ID and explicit effort |
   | `ollama` | local | a local Ollama service |
   | `openai_compatible` | local for a loopback `SKILLSPECTOR_COMPAT_BASE_URL`, else provider | `SKILLSPECTOR_COMPAT_BASE_URL` and `SKILLSPECTOR_COMPAT_API_KEY` (both required, including for a local service) |
   | `openai`, `anthropic`, `anthropic_proxy`, `azure_openai`, `bedrock`, `nv_build`, `nv_inference` | provider | the provider's key or profile variables |
   | `gemini` | — | not supported by Scan yet (SkillSpector 2.13.6 offers it); reported as "AI not available here" |
 
   Scan never picks a provider for you: with `SKILLSPECTOR_PROVIDER` unset (or naming an
-  upstream-disabled provider such as `codex_cli`), the result says "AI not available here"
+  unavailable provider such as `codex_cli`), the result says "AI not available here"
   with the reason, SkillSpector runs static only, nothing is sent to an AI, and coverage is
   measured exactly as for a static scan. When AI is set up but its pass does not complete,
   the item is `partial` (reason `failed`). A usable partial report keeps its static and

@@ -708,6 +708,133 @@ describe.runIf(process.platform !== "win32")(
         }),
       ).rejects.toThrow("no complete static result");
     }, 120000);
+    it("runs Kimi ACP through the installed prepared scanner with verified max-effort provenance", async () => {
+      const assessment = {
+        ...cliAssessment,
+        provider: "kimi_cli",
+        model: "kimi-for-coding",
+        effort: "max",
+      };
+      const setup = await prepared({ item: skill }, assessment);
+      const unsafeEvent = join(setup.folder, "unsafe-event");
+      const bin = join(setup.folder, "bin");
+      const home = join(setup.folder, "operator-home");
+      mkdirSync(bin);
+      mkdirSync(home);
+      writeFileSync(
+        join(bin, "kimi"),
+        `#!${process.execPath}
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const readline = require("node:readline");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("2.7.2"); process.exit(0); }
+assert.deepEqual(args, ["acp"]);
+const state = process.env.KIMI_CODE_HOME;
+const config = fs.readFileSync(state + "/config.toml", "utf8");
+assert.ok(config.includes('enabled = ["*"]'));
+assert.ok(config.includes('effort = "max"'));
+assert.ok(config.includes('model = "kimi-for-coding"'));
+assert.ok(config.includes("max_context_size = 1048576"));
+assert.equal(fs.readlinkSync(state + "/credentials"), ${JSON.stringify(join(home, ".kimi-code", "credentials"))});
+assert.ok(!fs.existsSync(state + "/mcp.json"));
+assert.ok(!fs.existsSync(state + "/plugins"));
+assert.notEqual(process.env.HOME, ${JSON.stringify(home)});
+const reply = (id, result) => console.log(JSON.stringify({ jsonrpc: "2.0", id, result }));
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method, params } = JSON.parse(line);
+  if (method === "initialize") reply(id, { protocolVersion: 1, agentInfo: { version: "2.7.2" } });
+  else if (method === "session/new") {
+    assert.deepEqual(params.mcpServers, []);
+    reply(id, { sessionId: "fixture-only", configOptions: [
+      { id: "model", currentValue: "kimi-code/kimi-for-coding" },
+      { id: "thinking", currentValue: "max" },
+    ] });
+  } else if (method === "session/prompt") {
+    assert.equal(params.sessionId, "fixture-only");
+    assert.deepEqual(params.prompt, [{ type: "text", text: "prompt" }]);
+    if (fs.existsSync(${JSON.stringify(unsafeEvent)})) {
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: 99, method: "session/request_permission", params: {} }));
+    }
+    console.log(JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{
+      sessionId: params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: {type:"text", text:'{"findings":[]}' } }
+    }}));
+    reply(id, { stopReason: "end_turn" });
+  } else assert.fail("Unexpected ACP method");
+});
+`,
+        { mode: 0o755 },
+      );
+      const ss = fakeAnalyzer(setup.folder, "skillspector", {
+        versionText: "SkillSpector v2.13.6",
+        outputFlag: "--output",
+        agentCli: "claude",
+        agentModel: "kimi-for-coding",
+        report: skillSpectorReport([], {
+          llm: true,
+          analyzerStatuses: [{ analyzer_id: "semantic_security_discovery", status: "completed" }],
+          provenance: {
+            provider: { effective_adapter: "claude_cli" },
+            analyzers: [{ analyzer_id: "semantic_security_discovery", model: "kimi-for-coding" }],
+          },
+        }),
+      });
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", ss.path);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("KIMI_CODE_HOME", undefined);
+      vi.stubEnv("PATH", [bin, process.env.PATH ?? ""].join(":"));
+      const result = await scanPrepared(setup);
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const key = setup.manifest.items[0]!.scanKey;
+      expect(receipt.results[key].status).toBe("complete-ai");
+      const summary = JSON.parse(
+        readFileSync(join(result.root, receipt.results[key].summary), "utf8"),
+      );
+      expect(summary.tools.find((t: { tool: string }) => t.tool === "skillspector").ai).toEqual({
+        via: "cli",
+        provider: "kimi_cli",
+        model: "kimi-for-coding",
+        effort: "max",
+        client: { name: "kimi", version: "2.7.2" },
+      });
+      const call = ss.calls().find((entry) => entry.args[0] === "scan")!;
+      expect(JSON.parse(call.agentStdout!)).toEqual({ findings: [] });
+      const resumed = await scanPrepared(setup);
+      expect(resumed).toMatchObject({ reused: 1, completed: 0 });
+      expect(ss.calls().filter((entry) => entry.args[0] === "scan")).toHaveLength(1);
+      const archive = join(setup.folder, "kimi.tar");
+      const exported = await exportCandidate({
+        ...setup,
+        receiptPath: resumed.receiptPath,
+        out: archive,
+      });
+      const imported = join(setup.folder, "kimi-imported");
+      await importCandidate(
+        archive,
+        exported.archiveSha256,
+        exported.manifestSha256,
+        exported.receiptSha256,
+        consumer,
+        imported,
+      );
+      expect(
+        (
+          await verifyCandidate(
+            imported,
+            exported.manifestSha256,
+            exported.receiptSha256,
+            consumer,
+            join(imported, "scanner.tgz"),
+          )
+        ).summaries,
+      ).toHaveLength(1);
+
+      writeFileSync(unsafeEvent, "");
+      const refused = await scanPrepared({ ...setup, out: join(setup.folder, "refused") });
+      const refusedReceipt = JSON.parse(readFileSync(refused.receiptPath, "utf8"));
+      expect(refusedReceipt.results[key].status).toBe("incomplete");
+      expect(ss.calls().filter((entry) => entry.args[0] === "scan")).toHaveLength(2);
+    }, 120000);
     it("runs a signed-in Claude CLI with the selected model and effort and admits its honest provenance", async () => {
       const setup = await prepared({ item: skill }, cliAssessment);
       const bin = join(setup.folder, "bin");

@@ -24,6 +24,7 @@ export interface FakeAnalyzerBehaviour {
    * providers do (`<name> -p --output-format text`), and record its stdout as `agentStdout`.
    */
   readonly agentCli?: string;
+  readonly agentModel?: string;
 }
 
 export interface FakeCall {
@@ -83,7 +84,7 @@ if (args[0] === "scan") {
 }
 let agentStdout;
 if (args[0] === "scan" && b.agentCli) {
-  const agent = require("node:child_process").spawnSync(b.agentCli, ["-p", "--output-format", "text"], { input: "prompt", env: process.env, encoding: "utf8" });
+  const agent = require("node:child_process").spawnSync(b.agentCli, ["-p", "--output-format", "text", ...(b.agentModel ? ["--model", b.agentModel] : [])], { input: "prompt", env: process.env, encoding: "utf8" });
   agentStdout = agent.stdout;
 }
 fs.appendFileSync(
