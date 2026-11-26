@@ -164,8 +164,9 @@ def main():
             os.environ.get("SKILLSPECTOR_MODEL") != MODEL or len(sys.argv) < 3 or
             sys.argv[2] != "scan"):
         raise AdaptiveSsdInferenceError("Invalid adaptive SSD bootstrap configuration")
-    verify_source(detector, "12239663fad4520cce7638043818f824767e11e4d2239b5d4ee5bf4f9d9e249b")
-    verify_source(native, "c5a5e37d74f5a3377c6688dbf518769b4653819d84595024b0182f68ba18bf3e")
+    # SkillSpector v2.13.7. Review both upstream files when moving the runtime pin.
+    verify_source(detector, "0e9218573e1a8b597936960d2551a029c2ec62e88fcfd3ca18b5b948247d28ce")
+    verify_source(native, "1b9ed327894c2fb1af0ffd8055cf21dbb87eecef7a662c292b085ab20be6c0b0")
     socket_path()
     # Only this trusted detector's constructor changes; every other analyzer
     # continues to resolve its original LLMAnalyzerBase.
