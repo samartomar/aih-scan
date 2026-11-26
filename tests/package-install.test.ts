@@ -1,5 +1,6 @@
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
   copyFileSync,
   cpSync,
@@ -8,13 +9,17 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { npmCli } from "../tools/npm-cli.mjs";
@@ -56,6 +61,26 @@ let consumer: string;
 let bin: string;
 let packageDir: string;
 const servers: { close(): unknown }[] = [];
+
+function reviewOnlyEnvironment(): Record<string, string> {
+  const guard = join(work, "review-only.mjs");
+  writeFileSync(
+    guard,
+    `
+    import childProcess from "node:child_process";
+    import { syncBuiltinESMExports } from "node:module";
+    const forbidden = () => { throw new Error("review attempted to launch a child or call a provider"); };
+    for (const method of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"])
+      childProcess[method] = forbidden;
+    syncBuiltinESMExports();
+    globalThis.fetch = forbidden;
+  `,
+  );
+  return {
+    NODE_OPTIONS: `--import=${pathToFileURL(guard).href}`,
+    SKILLSPECTOR_PROVIDER: "claude_cli",
+  };
+}
 
 afterAll(async () => {
   for (const server of servers.splice(0)) await server.close();
@@ -378,9 +403,14 @@ describe("the packed tarball", () => {
       "./schemas/aih-scan-withdrawn-1.json",
       "./package.json",
     ]);
-    expect(Object.keys(manifest.dependencies).sort()).toEqual(["smol-toml", "yaml"]);
+    expect(manifest.dependencies).toEqual({
+      "@modelcontextprotocol/server": "2.4.0",
+      "smol-toml": "1.9.1",
+      yaml: "2.9.1",
+      zod: "4.6.7",
+    });
     const installed = readdirSync(join(consumer, "node_modules"));
-    for (const retired of ["@sigstore", "zod", "@babel"])
+    for (const retired of ["@sigstore", "@babel"])
       expect(installed, retired).not.toContain(retired);
     // The shipped trust snapshot is the exact pinned file.
     expect(
@@ -515,7 +545,7 @@ describe("the installed aih-scan CLI", () => {
   it("lists only the replacement commands and refuses the retired ones", async () => {
     const help = await cli(["--help"]);
     expect(help.code).toBe(0);
-    for (const command of ["scan", "advisories", "read", "findings", "verify", "sign"])
+    for (const command of ["scan", "advisories", "read", "findings", "review", "verify", "sign"])
       expect(help.stdout).toContain(`aih-scan ${command}`);
     for (const retired of [
       "capture",
@@ -594,6 +624,219 @@ describe("the installed aih-scan CLI", () => {
       2,
     );
   });
+
+  it("reviews saved coverage and findings together as JSON", async () => {
+    const source = folder("review-json", { ...riskySkill, "other/sample.bin": "\u0000\u0001" });
+    const scanned = await cli([
+      "scan",
+      source,
+      "--mode",
+      "static",
+      "--json",
+      "--out",
+      outFolder("review-json"),
+    ]);
+    expect(scanned.code, scanned.stderr).toBe(0);
+    const { summaryPath, scanKey } = json(scanned).targets[0].results[0];
+    const summary = json(await cli(["read", summaryPath, "--json"]));
+    const { findings } = json(await cli(["findings", summaryPath, "--key", scanKey, "--json"]));
+    expect(summary).toMatchObject({ scanKey, coverage: "partial", reason: "unavailable" });
+    expect(findings).not.toHaveLength(0);
+    const reviewed = await cli(["review", summaryPath], { env: reviewOnlyEnvironment() });
+    expect(reviewed.code, reviewed.stderr).toBe(0);
+    expect(json(reviewed)).toEqual({ status: "ok", summary, findings });
+  });
+
+  it("serves one saved review over stdio and pages coverage and findings after startup", async () => {
+    const source = folder("review-mcp", {
+      ...riskySkill,
+      "sample-one.bin": "\u0000\u0001",
+      "sample-two.bin": "\u0000\u0002",
+    });
+    const scanned = await cli([
+      "scan",
+      source,
+      "--mode",
+      "static",
+      "--json",
+      "--out",
+      outFolder("review-mcp"),
+    ]);
+    expect(scanned.code, scanned.stderr).toBe(0);
+    const { summaryPath, scanKey } = json(scanned).targets[0].results[0];
+    const { summary, findings } = json(await cli(["review", summaryPath]));
+    expect(summary.notAnalysed).toHaveLength(2);
+    expect(findings.length).toBeGreaterThan(1);
+
+    const child = spawn(process.execPath, [bin, "review", summaryPath, "--mcp"], {
+      cwd: work,
+      env: { ...process.env, ...reviewOnlyEnvironment() },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const closed = once(child, "close");
+    const replies = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (data: string) => {
+      stderr += data;
+    });
+    let id = 0;
+    async function request(method: string, params?: unknown) {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params })}\n`);
+      const reply = await replies.next();
+      if (reply.done) throw new Error(stderr || "MCP stream closed before replying");
+      const envelope = JSON.parse(reply.value);
+      expect(envelope.id).toBe(id);
+      return envelope;
+    }
+
+    try {
+      const initialized = await request("initialize", {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "scan-test", version: "1" },
+      });
+      expect(initialized.result.capabilities).toMatchObject({ tools: {} });
+      expect(initialized.result.capabilities.resources).toBeUndefined();
+      expect(initialized.result.capabilities.prompts).toBeUndefined();
+      child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+      const tools = await request("tools/list");
+      expect(tools.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+        "get_coverage",
+        "list_findings",
+      ]);
+
+      const resultFolder = dirname(summaryPath);
+      renameSync(resultFolder, `${resultFolder}-moved`);
+      async function call(name: string, args: Record<string, unknown>) {
+        return (await request("tools/call", { name, arguments: args })).result;
+      }
+      const coverage = JSON.parse((await call("get_coverage", { limit: 1 })).content[0].text);
+      expect(coverage).toMatchObject({
+        scanKey,
+        coverage: summary.coverage,
+        reason: summary.reason,
+        tools: summary.tools,
+        notAnalysed: [summary.notAnalysed[0]],
+        total: 2,
+        nextCursor: 1,
+      });
+      const next = JSON.parse(
+        (await call("get_coverage", { cursor: 1, limit: 1 })).content[0].text,
+      );
+      expect(next).toMatchObject({ notAnalysed: [summary.notAnalysed[1]], nextCursor: null });
+      const first = JSON.parse((await call("list_findings", { limit: 1 })).content[0].text);
+      expect(first).toEqual({
+        scanKey,
+        findings: [findings[0]],
+        total: findings.length,
+        nextCursor: 1,
+      });
+      const tail = JSON.parse((await call("list_findings", { cursor: 1 })).content[0].text);
+      expect(tail.findings[0]).toEqual(findings[1]);
+      expect((await call("list_findings", { path: "../other/summary.json" })).isError).toBe(true);
+      expect((await call("get_coverage", { limit: 11 })).isError).toBe(true);
+      expect((await call("list_findings", { cursor: -1 })).isError).toBe(true);
+    } finally {
+      child.stdin.end();
+      expect((await closed)[0], stderr).toBe(0);
+    }
+  });
+
+  it("refuses mismatched, malformed and linked saved evidence before review output or MCP startup", async () => {
+    const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
+      versionText: "SkillSpector v2.13.7",
+      outputFlag: "--output",
+      report: skillSpectorReport([skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8, "Fixture")]),
+    });
+    const source = folder("review-invalid", riskySkill);
+    const scanned = await cli(
+      ["scan", source, "--mode", "static", "--json", "--out", outFolder("review-invalid")],
+      {
+        env: { AIH_SCAN_SKILLSPECTOR: analyzer.path },
+      },
+    );
+    expect(scanned.code, scanned.stderr).toBe(0);
+    const { summaryPath } = json(scanned).targets[0].results[0];
+    const resultFolder = dirname(summaryPath);
+    const original = readFileSync(summaryPath, "utf8");
+    const summary = JSON.parse(original);
+    expect(summary.sarif).toHaveLength(2);
+    const [first, second] = summary.sarif;
+
+    async function refuse(path: string, diagnostic: string) {
+      for (const flags of [[], ["--mcp"]]) {
+        const run = await cli(["review", path, ...flags], { env: reviewOnlyEnvironment() });
+        expect(run.code, run.stderr).toBe(2);
+        expect(run.stdout).toBe("");
+        expect(run.stderr).toContain(diagnostic);
+      }
+    }
+
+    writeFileSync(summaryPath, "{not json");
+    await refuse(summaryPath, "summary invalid");
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({ ...summary, sarif: [{ ...first, path: "../outside.sarif" }] }),
+    );
+    await refuse(summaryPath, "summary refused");
+    if (process.platform === "win32") {
+      for (const path of [
+        "sarif/report.sarif.",
+        "sarif/report.sarif ",
+        "sarif/aux.sarif",
+        "sarif/report.sarif:ads",
+      ]) {
+        writeFileSync(summaryPath, JSON.stringify({ ...summary, sarif: [{ ...first, path }] }));
+        await refuse(summaryPath, "Findings don't match this scan");
+      }
+    }
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        ...summary,
+        sarif: [
+          { ...first, sha256: second.sha256 },
+          { ...second, sha256: first.sha256 },
+        ],
+      }),
+    );
+    await refuse(summaryPath, "Findings don't match this scan");
+    writeFileSync(
+      summaryPath,
+      JSON.stringify({ ...summary, scanKey: `git-sha1:${"0".repeat(40)}` }),
+    );
+    await refuse(summaryPath, "Findings don't match this scan");
+    writeFileSync(summaryPath, original);
+
+    const linked = `${resultFolder}-link`;
+    symlinkSync(resultFolder, linked, "junction");
+    try {
+      await refuse(join(linked, "summary.json"), "unlinked parents");
+    } finally {
+      rmSync(linked);
+    }
+    const sarif = join(resultFolder, "sarif");
+    const moved = `${sarif}-moved`;
+    renameSync(sarif, moved);
+    symlinkSync(moved, sarif, "junction");
+    try {
+      await refuse(summaryPath, "unlinked parents");
+    } finally {
+      rmSync(sarif);
+      renameSync(moved, sarif);
+    }
+
+    const secondPath = join(resultFolder, second.path);
+    renameSync(secondPath, `${secondPath}-missing`);
+    try {
+      await refuse(summaryPath, "pinned SARIF could not be read");
+    } finally {
+      renameSync(`${secondPath}-missing`, secondPath);
+    }
+    truncateSync(secondPath, 128 * 1024 * 1024 - 1);
+    await refuse(summaryPath, "saved review byte limit");
+  }, 30_000);
 
   it("scans a public Git repository and an item link from a local fixture repository", async () => {
     const repo = gitRepository(join(work, "git-fixture"));

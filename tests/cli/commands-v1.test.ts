@@ -7,6 +7,7 @@ import {
   runReadCommand,
   runScanCommandV1,
 } from "../../src/cli/commands-v1.js";
+import { runReviewCommand } from "../../src/cli/review-v1.js";
 import { corpusRoot } from "../support/scan-v1-corpus.js";
 import {
   cleanSkill,
@@ -100,6 +101,23 @@ describe("aih-scan read and findings over complete summary/SARIF fixtures", () =
     expect(wrong.err()).toBe("aih-scan: Findings don't match this scan\n");
     expect(wrong.out()).toBe("");
     expect(await runFindingsCommand([summary], capture().io)).toBe(exitCodes.input);
+  });
+});
+
+describe("aih-scan review", () => {
+  it("reports partial coverage with no findings and rejects unsupported flags", async () => {
+    const summary = corpus("clean");
+    const result = capture();
+    expect(await runReviewCommand([summary], result.io)).toBe(exitCodes.ok);
+    expect(JSON.parse(result.out())).toMatchObject({
+      status: "ok",
+      summary: { coverage: "partial", reason: "unavailable" },
+      findings: [],
+    });
+    const invalid = capture();
+    expect(await runReviewCommand([summary, "--mcp=remote"], invalid.io)).toBe(exitCodes.input);
+    expect(invalid.out()).toBe("");
+    expect(invalid.err()).toContain("--mcp takes no value");
   });
 });
 

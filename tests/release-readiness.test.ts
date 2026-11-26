@@ -304,7 +304,12 @@ describe("@aihq/scan release boundary (#12)", () => {
       "verify",
       "verify:workflow-action-pins",
     ]);
-    expect(Object.keys(manifest.dependencies as object).sort()).toEqual(["smol-toml", "yaml"]);
+    expect(Object.keys(manifest.dependencies as object).sort()).toEqual([
+      "@modelcontextprotocol/server",
+      "smol-toml",
+      "yaml",
+      "zod",
+    ]);
     // Runtime dependencies are pinned exactly.
     for (const version of Object.values(manifest.dependencies as Record<string, string>))
       expect(version).toMatch(/^\d+\.\d+\.\d+$/);
@@ -314,11 +319,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     };
     expect(lock.version).toBe("0.0.0-dev.1");
     expect(lock.packages[""]?.version).toBe("0.0.0-dev.1");
-    for (const retired of [
-      "node_modules/@sigstore/verify",
-      "node_modules/@sigstore/bundle",
-      "node_modules/zod",
-    ])
+    for (const retired of ["node_modules/@sigstore/verify", "node_modules/@sigstore/bundle"])
       expect(lock.packages[retired], retired).toBeUndefined();
     expect(read("src/public/package-identity.ts")).toContain('version: "0.0.0-dev.1"');
     expect(existsSync(resolve(root, "LICENSE"))).toBe(true);

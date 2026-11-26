@@ -20,7 +20,8 @@ service or a paid AI provider.
 uses the exact tarball named by `AIH_SCAN_PACKED_TARBALL`), installs it in fresh temporary
 consumers and uses only the public `@aihq/scan/host`, `/read`, `/contracts`, the schema
 exports and the `aih-scan` bin: every CLI path (`scan` of a folder, Git repository, npm
-package, npm tarball and `mcp-url:`; `read`; `findings`; `verify`; `sign`; `advisories`;
+package, npm tarball and `mcp-url:`; `read`; `findings`; JSON and stdio MCP `review`;
+`verify`; `sign`; `advisories`;
 `--fail-at` exits; cancellation), the portable `/read` and `/contracts` graph in a realm
 without Node globals or built-ins (including the shared Sigstore vectors and
 `checkAdvisories`), and refusal of the retired exports and formats. A test-only `--import`

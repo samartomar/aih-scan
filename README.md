@@ -47,6 +47,7 @@ aih-scan advisories <folder | summary.json | owner/repo | https-url | npm:packag
               [--internal-scope @scope] [--private] [--include-private]
 aih-scan read <summary.json>                               print the summary
 aih-scan findings <summary.json> --key <scanKey>           print one key's one-liners
+aih-scan review <summary.json> [--mcp]                     saved coverage and findings
 aih-scan verify <summary.json> --bundle <file>             check a published result's signature
 aih-scan sign <summary.json>                               sign with your own identity
 Optional: --fail-at CAUTION | DO_NOT_INSTALL               exit 1 at or above that label
@@ -117,10 +118,49 @@ aih-scan scan ./team-skills/reviewed-skill --mode ai --out ./scan-ai
 ```
 
 SkillSpector 2.13.7's optional `mcp` command exposes `scan_skill`. It scans a target
-anew and requests the AI pass by default (`use_llm: true`). The `read` and `findings`
-commands review saved Scan results without an MCP server.
-To give an assistant paginated access to one saved findings export, see the optional
-[read-only MCP example](https://github.com/samartomar/aih-scan/tree/main/examples/saved-findings-mcp).
+anew and requests the AI pass by default (`use_llm: true`). Use the saved-report
+command below to review an existing result.
+
+### Review one saved report
+
+Run `aih-scan review "$summary"` to get `{ status: "ok", summary, findings }` as JSON
+on standard output. It checks the summary and each referenced SARIF file before
+returning a result, including the SHA-256 pinned for that file and the scan key in
+its findings. Use `aih-scan verify` separately to authenticate a publisher's signature.
+
+For an assistant that supports local stdio MCP, add this server to the client's
+configuration once. Substitute the absolute path to the selected `summary.json`.
+Keep the summary with its SARIF files. Change the path and restart the server to
+review another item.
+
+```json
+{
+  "mcpServers": {
+    "scan-review": {
+      "command": "aih-scan",
+      "args": ["review", "/path/to/summary.json", "--mcp"]
+    }
+  }
+}
+```
+
+If the client cannot resolve `aih-scan` on its PATH, set `command` to the absolute
+path to Node and insert the installed package's `dist/cli.js` as the first argument.
+The server loads one snapshot at startup. `get_coverage` returns the recorded
+coverage, tool outcomes and a page of unanalysed files. `list_findings` pages the
+same findings as the JSON command. Each takes only `cursor` and `limit`, defaults
+to five entries, and returns at most ten. Start at `cursor: 0` and follow `nextCursor`
+until it is `null`.
+
+Both modes work from saved evidence without starting an analyzer or provider.
+The assistant can send findings it reads to its own model provider. Coverage stays
+as recorded in the original result. For clients without MCP support, run the JSON
+command and pass the saved output to your review tool.
+
+One review accepts at most 128 MiB of summary and SARIF bytes in total and up to
+100,000 findings. It refuses linked paths and files that change during a read.
+For larger results, use `read` for the summary and `readFindings` from the library
+for one SARIF file at a time.
 
 ## Library
 
