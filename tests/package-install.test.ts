@@ -435,7 +435,7 @@ describe("the installed public entries", () => {
       assert.deepEqual(read.summary.notAnalysed, []);
       assert.equal(read.summary.coverage, "partial");
       assert.deepEqual(read.summary.tools.find(t => t.tool === "skillspector"), {
-        tool: "skillspector", version: "2.13.6", mode: "static", result: "not-run",
+        tool: "skillspector", version: "2.13.7", mode: "static", result: "not-run",
         reason: "unavailable", counts: {} });
       assert.deepEqual(new Uint8Array(readFileSync(item + "/" + path)), bytes);
       console.log("installed-kiro-ok");
@@ -902,7 +902,7 @@ describe("the installed aih-scan CLI", () => {
               entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
             };
       const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport(
           [skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8, "Instruction Override")],
@@ -933,7 +933,7 @@ describe("the installed aih-scan CLI", () => {
       [2, "partial"],
     ] as const) {
       const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport([skillSpectorIssue("LP3", "SKILL.md", 1, "MEDIUM", 0.7, null)], {
           status: "partial",
@@ -995,7 +995,7 @@ describe("the installed aih-scan CLI", () => {
     "cancels on SIGINT with exit 130 and ends the analyzer's process tree",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -1026,7 +1026,7 @@ describe("the installed aih-scan CLI", () => {
     "stops at once on a second SIGINT, still ending the analyzer tree and removing Scan's temporary folders",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -1249,7 +1249,7 @@ describe.runIf(skillspector !== undefined)(
       expect(output.tools).toContainEqual(
         expect.objectContaining({
           tool: "skillspector",
-          version: "2.13.6",
+          version: "2.13.7",
           mode: "ai",
           result: "fail",
           ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
@@ -1327,12 +1327,17 @@ describe.runIf(skillspector !== undefined)(
 );
 
 describe.runIf((skillspector !== undefined && skillScanner !== undefined) || required)(
-  "the installed public API and CLI with the real SkillSpector 2.13.6 and Cisco skill-scanner 2.3.2",
+  "the installed public API and CLI with the real SkillSpector 2.13.7 and Cisco skill-scanner 2.3.2",
   () => {
     it("accepts the real runtime through installed host, contracts and reader interfaces", async () => {
       expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
       expect(skillScanner, "AIH_SCAN_TEST_SKILL_SCANNER").toBeDefined();
-      const item = folder("real-host-benign", cleanSkill);
+      const item = folder("real-host-benign", {
+        ...cleanSkill,
+        "scripts/count.ts": "export const count: number = 2;\n",
+        "scripts/label.tsx":
+          "export const Label = ({ text }: { text: string }) => <span>{text}</span>;\n",
+      });
       const script = join(consumer, "real-host.mjs");
       writeFileSync(
         script,
@@ -1351,10 +1356,10 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
           if (entry?.status !== "ok") throw new Error(JSON.stringify(result));
           const read = readSummary(new Uint8Array(readFileSync(entry.summaryPath)));
           if (read.status !== "ok") throw new Error("summary");
-          const key = await scanKeyOf([
-            { path: "SKILL.md", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "SKILL.md"))) },
-            { path: "scripts/greet.py", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "scripts/greet.py"))) },
-          ]);
+          const paths = ["SKILL.md", "scripts/count.ts", "scripts/greet.py", "scripts/label.tsx"];
+          const key = await scanKeyOf(paths.map((path) => ({
+            path, mode: "100644", bytes: new Uint8Array(readFileSync(join(item, path))),
+          })));
           if (key.status !== "ok") throw new Error("key");
           const findings = [];
           for (const path of entry.sarifPaths) {
@@ -1366,6 +1371,8 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
             status: result.status,
             coverage: read.summary.coverage,
             tools: read.summary.tools,
+            files: read.summary.files,
+            notAnalysed: read.summary.notAnalysed,
             scanKeyMatches: key.scanKey === read.summary.scanKey,
             findings,
           }));
@@ -1385,9 +1392,16 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       expect(output.status).toBe("ok");
       expect(output.coverage).toBe("complete");
       expect(output.scanKeyMatches).toBe(true);
+      expect(output.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "scripts/count.ts", part: "code" }),
+          expect.objectContaining({ path: "scripts/label.tsx", part: "code" }),
+        ]),
+      );
+      expect(output.notAnalysed).toEqual([]);
       expect(output.tools).toContainEqual({
         tool: "skillspector",
-        version: "2.13.6",
+        version: "2.13.7",
         mode: "static",
         result: "pass",
         counts: {},
@@ -1445,7 +1459,7 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       ).toEqual([
         "aih-trust-lint 1.0.0 static",
         "cisco 2.3.2 static",
-        "skillspector 2.13.6 static",
+        "skillspector 2.13.7 static",
       ]);
       expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
       expect(skill.notes).toEqual([

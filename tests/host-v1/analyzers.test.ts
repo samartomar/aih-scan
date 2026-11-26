@@ -66,7 +66,7 @@ const callerEnv = (extra: Record<string, string> = {}) => ({
 
 function skillspector(report: unknown, extra: Partial<Parameters<typeof fakeAnalyzer>[2]> = {}) {
   return fakeAnalyzer(fixture.root, "skillspector", {
-    versionText: "SkillSpector v2.13.6",
+    versionText: "SkillSpector v2.13.7",
     outputFlag: "--output",
     report,
     ...extra,
@@ -242,7 +242,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     expect(call.env.HOME).not.toBe(callerEnv().HOME);
     expect(toolOf(summary, "skillspector")).toEqual({
       tool: "skillspector",
-      version: "2.13.6",
+      version: "2.13.7",
       mode: "static",
       result: "fail",
       counts: { high: 2, medium: 1 },
@@ -358,7 +358,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     const old = skillspector(skillSpectorReport([]), { versionText: "SkillSpector v2.12.0" });
     const wrong = await run(folder, old);
     expect(wrong.entry).toMatchObject({
-      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.6"],
+      notes: ["skillspector: unavailable: the installed SkillSpector is 2.12.0; Scan runs 2.13.7"],
     });
     expect(old.calls().filter((call) => call.args[0] === "scan")).toHaveLength(0);
   });
@@ -760,7 +760,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
       "dependency_inspection missing",
     ],
   ])(
-    "fails closed on %s that a complete 2.13.6 status does not account for",
+    "fails closed on %s that a complete 2.13.7 status does not account for",
     async (_name, completeness, note) => {
       const folder = fixture.folder("unaccounted-2136", skill);
       const report = skillSpectorReport(
@@ -779,7 +779,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     },
   );
 
-  it("keeps an unrequested 2.13.6 dependency inspection summary complete", async () => {
+  it("keeps an unrequested 2.13.7 dependency inspection summary complete", async () => {
     const folder = fixture.folder("dependency-not-requested", skill);
     const { summary } = await run(folder, skillspector(skillSpectorReport([])));
     expect(summary.coverage).toBe("complete");

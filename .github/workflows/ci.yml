@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.15.0"
+          node-version: "24.22.3"
           cache: npm
       - name: Verify every PR commit has a DCO signoff, including merges
         if: github.event_name == 'pull_request'
@@ -57,7 +57,7 @@ jobs:
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         if: steps.route.outputs.analyzers == 'true'
         with:
-          version: "0.12.13"
+          version: "0.13.10"
       - name: Provision the locked SkillSpector and Cisco runtimes outside PATH
         if: steps.route.outputs.analyzers == 'true'
         shell: bash
@@ -70,10 +70,10 @@ jobs:
             uv sync --project tools/analyzers/cisco-skill-scanner --locked --no-install-project --python 3.13
           "$runtimes/skillspector/bin/skillspector" --version
           "$runtimes/cisco-skill-scanner/bin/skill-scanner" --version
-          source="$runtimes/SkillSpector-e2674da339b0bddc6e565d059c0577c6d9cd25da.tar.gz"
+          source="$runtimes/SkillSpector-c323ad4c43e3c8f2de051572cc25b2711d11e648.tar.gz"
           curl --fail --silent --show-error --location --output "$source" \
-            "https://codeload.github.com/NVIDIA/SkillSpector/tar.gz/e2674da339b0bddc6e565d059c0577c6d9cd25da"
-          echo "678f5dd59b5dff0c62181c045e15e8411727cc425c653a793b36e60fb50b11e1  $source" | sha256sum --check --strict
+            "https://codeload.github.com/NVIDIA/SkillSpector/tar.gz/c323ad4c43e3c8f2de051572cc25b2711d11e648"
+          echo "ba6db55083e904cd7d44d8b060977eedca5c6463bdb4b0d68681c10a367f5c7d  $source" | sha256sum --check --strict
           {
             echo "AIH_SCAN_TEST_SKILLSPECTOR=$runtimes/skillspector/bin/skillspector"
             echo "AIH_SCAN_TEST_SKILL_SCANNER=$runtimes/cisco-skill-scanner/bin/skill-scanner"
@@ -101,7 +101,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.15.0"
+          node-version: "24.22.3"
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run verify

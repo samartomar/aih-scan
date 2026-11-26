@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { scanWith } from "../../src/host/scan.js";
 import { corpusCase, corpusNow, corpusRoot, materialize } from "../support/scan-v1-corpus.js";
@@ -50,7 +50,7 @@ describe("the shared scan-v1 corpus", () => {
         writeFileSync(join(target, "content.json"), `${JSON.stringify(content, null, 2)}\n`);
         writeFileSync(join(target, "summary.json"), readFileSync(entry.summaryPath));
         for (const path of entry.sarifPaths)
-          writeFileSync(join(target, "sarif", path.split("/").at(-1)!), readFileSync(path));
+          writeFileSync(join(target, "sarif", basename(path)), readFileSync(path));
       }
       const committed = corpusCase(name);
       const folder = materialize(fixture, committed);

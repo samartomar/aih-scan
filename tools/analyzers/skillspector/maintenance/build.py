@@ -9,8 +9,8 @@ import subprocess
 import tarfile
 
 HERE = Path(__file__).resolve().parent
-UPSTREAM = "e2674da339b0bddc6e565d059c0577c6d9cd25da"
-SOURCE_SHA256 = "678f5dd59b5dff0c62181c045e15e8411727cc425c653a793b36e60fb50b11e1"
+UPSTREAM = "c323ad4c43e3c8f2de051572cc25b2711d11e648"
+SOURCE_SHA256 = "ba6db55083e904cd7d44d8b060977eedca5c6463bdb4b0d68681c10a367f5c7d"
 
 
 def digest(path):
@@ -28,7 +28,7 @@ def identity():
               "buildLockSha256": digest(HERE / "uv.lock"),
               "builderRecipeSha256": recipe_digest(HERE / "build.py")}
     build_id = hashlib.sha256(json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return {**inputs, "version": "2.13.6+aih.1." + build_id}
+    return {**inputs, "version": "2.13.7+aih.1." + build_id}
 
 
 def canonical_wheel(path):
@@ -79,9 +79,9 @@ def main():
     subprocess.run(["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "apply", str(HERE / "capacity.patch")], cwd=source, check=True)
     project = source / "pyproject.toml"
     text = project.read_text()
-    if text.count('version = "2.13.6"') != 1:
+    if text.count('version = "2.13.7"') != 1:
         raise ValueError("Unexpected upstream version source")
-    project.write_text(text.replace('version = "2.13.6"', 'version = "' + expected["version"] + '"'))
+    project.write_text(text.replace('version = "2.13.7"', 'version = "' + expected["version"] + '"'))
     (source / "src/skillspector/aih-scan-build.json").write_text(json.dumps(expected, sort_keys=True) + "\n", newline="\r\n")
     environment = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(args.out / "builder"), "SOURCE_DATE_EPOCH": "1793599200"}
     subprocess.run(["uv", "sync", "--project", str(HERE), "--locked", "--no-install-project"], env=environment, check=True)

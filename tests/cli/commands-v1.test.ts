@@ -50,7 +50,7 @@ describe("aih-scan read and findings over complete summary/SARIF fixtures", () =
     const plain = capture();
     expect(runReadCommand([summary], plain.io)).toBe(exitCodes.ok);
     expect(plain.out()).toContain("CAUTION (partial)  score 0");
-    expect(plain.out()).toContain("skillspector 2.13.6 static: not-run (unavailable)");
+    expect(plain.out()).toContain("skillspector 2.13.7 static: not-run (unavailable)");
     expect(runReadCommand([summary, "--fail-at", "CAUTION"], capture().io)).toBe(exitCodes.failAt);
     expect(runReadCommand([summary, "--fail-at", "DO_NOT_INSTALL"], capture().io)).toBe(
       exitCodes.ok,
@@ -214,10 +214,10 @@ describe("coverage-adjusted stored label through the CLI", () => {
         adapters: {
           skillspector: {
             id: "skillspector",
-            version: "2.13.6",
+            version: "2.13.7",
             run: async () => ({
               status: "ran",
-              version: "2.13.6",
+              version: "2.13.7",
               mode: "static",
               findings: [finding],
             }),

@@ -165,6 +165,7 @@ describe("SkillSpector AI setup (reads which settings exist, never their values)
       "SKILLSPECTOR_PROVIDER names a provider SkillSpector does not support",
     ],
     [{ SKILLSPECTOR_PROVIDER: "gemini" }, "Scan does not yet support the gemini provider"],
+    [{ SKILLSPECTOR_PROVIDER: "minimax" }, "Scan does not yet support the minimax provider"],
     [{ SKILLSPECTOR_PROVIDER: "openai" }, "OPENAI_API_KEY is not set for provider openai"],
     [
       {
