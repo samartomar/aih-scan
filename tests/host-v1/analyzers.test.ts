@@ -535,6 +535,64 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     });
   });
 
+  it.each([
+    ["the same analyzer has unaccounted work", 1, false, 0],
+    ["the missing reference is fatal", 0, true, 0],
+    ["the dependency lookup exhausted a positive time limit", 0, false, 1],
+    ["the dependency lookup reports no time limit", 0, false, undefined],
+  ])(
+    "retains partial coverage with disabled OSV and a reference when %s",
+    async (_, unaccounted, fatal, limitSeconds) => {
+      const folder = fixture.folder("unexplained-reference-and-osv", {
+        ...skill,
+        "requirements.txt": "requests==2.34.2\n",
+      });
+      const report = skillSpectorReport([], {
+        status: "partial",
+        analyzerStatuses: [
+          {
+            analyzer_id: "static_patterns_supply_chain",
+            status: "degraded",
+            planned_work: 2 + unaccounted,
+            completed: 1,
+            partial: 1,
+            skipped: 0,
+            failed: 0,
+            unaccounted,
+          },
+        ],
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            phase: "static",
+            reason_code: "runtime_limit",
+            path: "requirements.txt",
+            fatal: false,
+            analyzers: ["static_patterns_supply_chain_dependencies_runtime_limit"],
+            ...(limitSeconds === undefined ? {} : { limit_seconds: limitSeconds }),
+          },
+          {
+            outcome: "partial",
+            phase: "reference_resolution",
+            reason_code: "reference_missing",
+            path: "SKILL.md",
+            fatal,
+          },
+        ],
+        completeness: {
+          total_components: 2,
+          scanned_components: 1,
+          fully_inspected_files: 1,
+          partially_inspected_files: 1,
+          entirely_uninspected_files: 0,
+          limitations: ["Analyzer static_patterns_supply_chain status: degraded."],
+        },
+      });
+      const { summary } = await run(folder, skillspector(report));
+      expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    },
+  );
+
   it("keeps limitation-only partial reports and their usable findings partial through the public reader", async () => {
     const folder = fixture.folder("limitation-only", skill);
     const report = skillSpectorReport(
