@@ -64,6 +64,11 @@ export type AiSetup =
 /** Scan's own control for the effort of a signed-in Claude CLI pass. */
 export const AI_EFFORT_VARIABLE = "AIH_SCAN_AI_EFFORT";
 const AI_PROFILE_VARIABLE = "AIH_SCAN_AI_PROFILE";
+const INTERNAL_AI_VARIABLES = [
+  "AIH_SCAN_BATCH_PORT",
+  "AIH_SCAN_BATCH_TOKEN",
+  "AIH_SCAN_KIMI_BATCH_MODEL",
+];
 /** Effort levels the Claude CLI accepts for `--effort`. */
 export const AI_EFFORT_LEVELS = Object.freeze(["low", "medium", "high", "xhigh", "max"] as const);
 /** Providers whose CLI Scan can start with an explicit effort. */
@@ -297,7 +302,12 @@ export function skillSpectorInvocation(
     for (const [key, value] of Object.entries(input.env)) {
       if (value === undefined) continue;
       const name = input.platform === "win32" ? key.toUpperCase() : key;
-      if (PYTHON_LOADER_VARIABLES.includes(name) || name === "SKILLSPECTOR_OSV_TIMEOUT") continue;
+      if (
+        PYTHON_LOADER_VARIABLES.includes(name) ||
+        name === "SKILLSPECTOR_OSV_TIMEOUT" ||
+        INTERNAL_AI_VARIABLES.includes(name)
+      )
+        continue;
       env[key] = value;
     }
     Object.assign(env, fixed);
@@ -749,7 +759,11 @@ export interface SkillSpectorOptions {
   readonly platform?: NodeJS.Platform;
   /** The AI setup for `mode: ai` (computed once per scan); static runs ignore it. */
   readonly ai?: AiSetup;
+  /** Private rendezvous created by the prepared publisher for its own workers. */
+  readonly preparedBatching?: PreparedBatching;
 }
+
+export type PreparedBatching = Readonly<{ port: number; token: string }>;
 
 /**
  * The SkillSpector adapter: runs the installed SkillSpector 2.13.7 CLI natively (Windows
@@ -791,6 +805,7 @@ export function skillSpectorAdapter(options: SkillSpectorOptions = {}): ToolAdap
             platform,
             scratch: scratch.path,
             ai: options.ai ?? (mode === "ai" ? skillSpectorAiSetup(env, platform) : undefined),
+            preparedBatching: options.preparedBatching,
           }),
         );
       } finally {
@@ -825,6 +840,7 @@ async function runInstalled(
     platform: NodeJS.Platform;
     scratch: string;
     ai: AiSetup | undefined;
+    preparedBatching: PreparedBatching | undefined;
   }>,
 ): Promise<ToolRun> {
   const probeEnv = staticAnalyzerEnv(settings.env, settings.scratch, settings.platform);
@@ -859,38 +875,46 @@ async function runInstalled(
   let ai = settings.ai;
   let runEnv = invocation.env;
   if (mode === "ai" && ai?.available === true && ai.via === "cli") {
-    const agent = await agentCli(ai, invocation.env, settings, context.signal);
+    const agent = await agentCli(ai, runEnv, settings, context.signal);
     if (typeof agent === "string") return notRun("failed", mode, version, agent);
     ai = agent.ai;
     runEnv = agent.env;
   }
+  if (mode === "ai" && settings.preparedBatching) {
+    const { port, token } = settings.preparedBatching;
+    runEnv = Object.freeze({
+      ...runEnv,
+      AIH_SCAN_BATCH_PORT: String(port),
+      AIH_SCAN_BATCH_TOKEN: token,
+    });
+  }
   let argv = invocation.argv;
-  if (ai?.available && ai.profile === ADAPTIVE_SSD_PROFILE) {
-    const socket = runEnv.AIH_SCAN_SSD_SOCKET;
-    if (!socket || !posix.isAbsolute(socket))
-      return notRun(
-        "unavailable",
-        mode,
-        version,
-        "Adaptive SSD requires its prepared broker socket",
-      );
-    try {
-      if (!statSync(socket).isSocket()) throw new Error();
-    } catch {
-      return notRun("unavailable", mode, version, "Adaptive SSD broker socket is unavailable");
+  if (mode === "ai" && ai?.available) {
+    if (ai.profile === ADAPTIVE_SSD_PROFILE) {
+      const socket = runEnv.AIH_SCAN_SSD_SOCKET;
+      if (!socket || !posix.isAbsolute(socket))
+        return notRun(
+          "unavailable",
+          mode,
+          version,
+          "Adaptive SSD requires its prepared broker socket",
+        );
+      try {
+        if (!statSync(socket).isSocket()) throw new Error();
+      } catch {
+        return notRun("unavailable", mode, version, "Adaptive SSD broker socket is unavailable");
+      }
     }
     const python = selectSkillSpectorPythonV1(executable);
-    if (!python)
+    const bootstrap = fileURLToPath(new URL("../../runtime/provider-batching.py", import.meta.url));
+    if (!python || !existsSync(bootstrap))
       return notRun(
         "unavailable",
         mode,
         version,
-        "Adaptive SSD requires SkillSpector's Python environment",
+        "AI batching requires SkillSpector's Python environment and Scan's analyzer bridge",
       );
-    const bootstrap = fileURLToPath(new URL("../../runtime/adaptive-ssd.py", import.meta.url));
-    if (!existsSync(bootstrap))
-      return notRun("unavailable", mode, version, "Adaptive SSD analyzer bridge is unavailable");
-    argv = Object.freeze([python, "-I", bootstrap, ...invocation.argv]);
+    argv = Object.freeze([python, "-I", "-X", "utf8", bootstrap, version, ...invocation.argv]);
   }
   const result = await runAnalyzer(argv, {
     cwd: invocation.cwd,
@@ -903,6 +927,22 @@ async function runInstalled(
     return notRun(context.signal.aborted ? "cancelled" : "timeout", mode, version);
   if (result.termination !== undefined)
     return notRun("failed", mode, version, `SkillSpector ${result.termination}`);
+  if (mode === "ai" && existsSync(path.join(settings.scratch, "aih-scan-python-version-mismatch")))
+    return notRun("failed", mode, version, "SkillSpector executable and Python environment differ");
+  if (
+    mode === "ai" &&
+    existsSync(path.join(settings.scratch, "aih-scan-model-limits-unavailable"))
+  ) {
+    const detail =
+      "AI model token limits are unknown. Select an exact SKILLSPECTOR_MODEL with known limits or supply its context_length and max_output_tokens via SKILLSPECTOR_MODEL_REGISTRY";
+    const fallback = await runInstalled(executable, item, context, "static", {
+      ...settings,
+      ai: undefined,
+    });
+    return fallback.status === "ran"
+      ? Object.freeze({ ...fallback, failedPart: detail })
+      : Object.freeze({ ...fallback, notes: Object.freeze([detail, ...(fallback.notes ?? [])]) });
+  }
   // Exit 1 means SkillSpector's own risk threshold was crossed: a finished run.
   if (![0, 1, 2].includes(result.code ?? -1))
     return notRun("failed", mode, version, `SkillSpector exited ${result.code}`);
@@ -965,6 +1005,7 @@ async function runInstalled(
       provider?.effective_adapter !== "claude_cli" ||
       !(
         existsSync(path.join(settings.scratch, KIMI_INFERENCE_RECEIPT)) ||
+        metadata.aih_scan_batched_inference_completed === true ||
         (ai.profile === ADAPTIVE_SSD_PROFILE && metadata.aih_scan_ssd_inference_completed === true)
       )
     ) {
@@ -1090,6 +1131,7 @@ function kimiTransport(
       ...env,
       SKILLSPECTOR_PROVIDER: "claude_cli",
       SKILLSPECTOR_MODEL: model,
+      AIH_SCAN_KIMI_BATCH_MODEL: model,
       PATH: `${bin}:${env.PATH ?? ""}`,
     }),
   });

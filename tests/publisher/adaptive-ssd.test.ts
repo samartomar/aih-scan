@@ -61,7 +61,7 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === "win32")("adaptive SSD trusted broker", () => {
-  it("groups native jobs and attributes reversed replies to their opaque keys", async () => {
+  it("groups native jobs and confirms the positive reply against its original input", async () => {
     const prompts: string[] = [];
     const broker = await startAdaptiveSsd({
       batchDelayMs: 100,
@@ -84,12 +84,15 @@ describe.skipIf(process.platform === "win32")("adaptive SSD trusted broker", () 
         request(broker.socketPath, "SKILL.md clean fixture", 19),
       ]),
     ).toEqual([{ result: { findings: [finding(17)] } }, { result: { findings: [] } }]);
-    expect(prompts).toHaveLength(1);
+    expect(prompts.map((prompt) => decode(prompt).map(({ document }) => document))).toEqual([
+      ["SKILL.md positive fixture", "SKILL.md clean fixture"],
+      ["SKILL.md positive fixture"],
+    ]);
     expect(broker.stats()).toEqual({
       submittedTasks: 2,
       validatedTasks: 2,
       failedTasks: 0,
-      modelRequests: 1,
+      modelRequests: 2,
       multiItemRequests: 1,
       maxBatchWidth: 2,
     });
@@ -100,8 +103,8 @@ describe.skipIf(process.platform === "win32")("adaptive SSD trusted broker", () 
   it("splits a ready pack on output reservation and rejects an oversized singleton before inference", async () => {
     const widths: number[] = [];
     const broker = await startAdaptiveSsd({
-      contextTokens: 21_000,
-      outputTokens: 16_835,
+      contextTokens: 6_000,
+      outputTokens: 800,
       batchDelayMs: 75,
       async infer(prompt: string) {
         const inputs = decode(prompt);

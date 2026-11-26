@@ -64,6 +64,10 @@ function select(changes, explicitFull) {
     (path) =>
       analyzerDependencies.has(path) ||
       path.startsWith("tools/analyzers/") ||
+      path === "tools/publisher/prepared.mjs" ||
+      path === "tools/publisher/provider-batching.mjs" ||
+      path.startsWith("tests/host-v1/provider-batching") ||
+      path === "tests/publisher/prepared.test.ts" ||
       path === "tests/host-v1/real-analyzers.test.ts",
   );
   if (analyzers) tests.add("tests/host-v1/analyzer-pins.test.ts");

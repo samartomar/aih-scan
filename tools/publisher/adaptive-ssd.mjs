@@ -8,7 +8,6 @@ const profile = "adaptive-ssd/1";
 const maxFrame = 2 * 1024 * 1024;
 const outputFraming = 256;
 // These are conservative planning reservations, not claims about the provider's limits.
-const reasoningReserve = 16_384;
 const frameReserve = 2_048;
 const tokensForItem = (item) => 96 + 12 * item.lines;
 const bytes = (text) => Buffer.byteLength(text, "utf8");
@@ -48,7 +47,7 @@ function promptFor(items) {
   ].join("\n\n");
 }
 
-function fits(items, { contextTokens, outputTokens }) {
+function fits(items, { contextTokens, outputTokens, reasoningReserve }) {
   const reserved = reasoningReserve + outputFraming + items.reduce((sum, item) => sum + tokensForItem(item), 0);
   // One token per UTF-8 byte deliberately overestimates typical input, including escaping.
   return reserved <= outputTokens && bytes(promptFor(items)) + frameReserve + reserved <= contextTokens;
@@ -111,13 +110,13 @@ function outputsFor(text, items) {
  * owns model selection and must honor cancellation.
  */
 export async function startAdaptiveSsd({
-  signal, infer, contextTokens = 1_048_576, outputTokens = 32_768, batchDelayMs = 300,
+  signal, infer, contextTokens = 262_144, outputTokens = 32_768, batchDelayMs = 300,
 }) {
   if (typeof infer !== "function" || ![contextTokens, outputTokens].every(Number.isSafeInteger) ||
-    contextTokens <= outputTokens || outputTokens <= reasoningReserve ||
+    contextTokens <= outputTokens || outputTokens < 1 ||
     !Number.isSafeInteger(batchDelayMs) || batchDelayMs < 0) throw new TypeError("Invalid adaptive SSD settings");
   signal?.throwIfAborted();
-  const limits = { contextTokens, outputTokens };
+  const limits = { contextTokens, outputTokens, reasoningReserve: Math.floor(outputTokens / 2) };
   const root = mkdtempSync(join(tmpdir(), "aih-ssd-"));
   chmodSync(root, 0o700);
   const socketPath = join(root, "bridge.sock");
@@ -184,6 +183,8 @@ export async function startAdaptiveSsd({
       if (!live(item)) continue;
       const result = outputs.get(item.key);
       if (result === undefined) missing.push(item);
+      // Generate persistent evidence using only the original request's document.
+      else if (items.length > 1 && result.findings.length) await dispatch([item]);
       else settle(item, { result });
     }
     // A malformed or truncated envelope cannot produce two conflicting assignments.

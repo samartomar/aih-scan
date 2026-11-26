@@ -85,16 +85,30 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   call. Scan never passes `--transitive*`, `--mcp-registry`, `--use-shipped-baseline`
   (author-supplied suppressions) or a URL input.
 - **AI (`--mode ai`).** The static checks plus SkillSpector's AI pass, using the AI you
-  already set up through SkillSpector's own settings, passed through unchanged:
-  `SKILLSPECTOR_PROVIDER`, `SKILLSPECTOR_MODEL` and the provider's variables. Scan adds no
-  model, budget or credential store and records only how the AI ran (`cli`, `local` or
-  `provider`), the provider and the model, never a credential. The command says before
-  scanning that the scanned content is sent to that AI.
+  already set up through SkillSpector's own settings, including `SKILLSPECTOR_PROVIDER`,
+  `SKILLSPECTOR_MODEL` and the provider's variables. A completed assessment records how
+  the AI ran (`cli`, `local` or `provider`), the provider and the model. The command says
+  before scanning that the scanned content is sent to that AI.
 
   For a signed-in agent CLI that reports its version, the summary's `ai` record also names the
-  client and that version (`client: { "name": "claude", "version": "2.1.330" }`), so a reader can tell an
-  agent-CLI pass from an HTTP provider. Without `SKILLSPECTOR_MODEL` the model is recorded as
-  `provider default`: the CLI's own choice, which Scan cannot see.
+  client and that version (`client: { "name": "claude", "version": "2.1.330" }`).
+
+  **Model limits and batching.** Run AI scans with the Python interpreter paired with the
+  selected SkillSpector installation, such as its managed virtual environment. Scan batches
+  compatible detector inputs within an ordinary scan item automatically with the selected provider's native transport,
+  structured output method and reasoning effort. The planner checks the complete prompt and
+  schema against the model's input limit and reserves output space for each original input and
+  for reasoning. It keeps each result attached to its original source location. A group that
+  cannot fit is split, and ambiguous results are retried individually through the same route.
+
+  Scan checks model limits before sending content. For a CLI with an opaque default, select
+  the exact model with `SKILLSPECTOR_MODEL`. For an uncataloged model or deployment alias, set
+  `SKILLSPECTOR_MODEL_REGISTRY` to the path of a SkillSpector registry with `context_length` and
+  `max_output_tokens` for that exact model. When `AZURE_OPENAI_DEPLOYMENT` selects an alias
+  different from the model label, the registry entry must name that deployment. For Ollama,
+  use the deployed model's configured context and output limits in the registry. If limits
+  remain unknown, Scan runs static analysis and records the AI pass as incomplete without
+  submitting an inference request.
 
   **Claude CLI effort.** SkillSpector has no effort setting for `claude_cli`. Set Scan's own
   `AIH_SCAN_AI_EFFORT` to `low`, `medium`, `high`, `xhigh` or `max` to run the pass at that
@@ -133,8 +147,12 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   The prepared broker and the pinned SkillSpector runtime must both support this profile.
   Scan records it as `ai.profile` after verifying that the semantic security discovery
   detector used the selected path. The profile changes the detector prompt context and
-  is a distinct evidence configuration. Ordinary Kimi K3 and K2.8 assessments retain
-  their existing one-request detector behavior.
+  is a distinct evidence configuration. Ordinary Kimi K3 and K2.8 assessments use the
+  same automatic model-limited batching as other providers.
+  For K3, Scan plans within the 262,144-token context available on every eligible tier.
+  It reserves space within a 32,768-token output planning budget because the ACP adapter
+  takes no request output cap. An explicit registry can record larger verified limits for
+  the selected account. [Kimi Code model configuration](https://www.kimi.com/en/help/kimi-code/models)
 
   **Codex CLI.** Scan reports `codex_cli` unavailable because Codex CLI 0.171.0
   lacks a verified public configuration that removes every model-callable tool.
@@ -171,9 +189,9 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   two AI scans with different caps can carry the same identity. A lowered cap still surfaces
   as an inspection gap and leaves the item `partial`. Static mode and prepared publisher
   profiles forward only an allowlist, so ambient caps never apply there.
-  SkillSpector 2.13.7 runs semantic security batches asynchronously through its shared
-  concurrency control (`SKILLSPECTOR_MAX_LLM_CONCURRENCY`), preserving batch result
-  order. A lossless formatting repair can complete; a field-recovered assessment remains
+  SkillSpector 2.13.7 runs model requests asynchronously through its shared concurrency
+  control (`SKILLSPECTOR_MAX_LLM_CONCURRENCY`). Scan keeps result order for the original
+  inputs. A lossless formatting repair can complete; a field-recovered assessment remains
   `partial` even when upstream accepts its formatting-recovery policy. Refusals, unfinished
   or unusable AI responses remain incomplete inspection and distinct from security findings.
   Scan's ten-minute per-tool deadline remains the outer bound, even though this
@@ -234,6 +252,9 @@ $env:SKILLSPECTOR_PROVIDER = 'openai_compatible'
 $env:SKILLSPECTOR_COMPAT_BASE_URL = 'https://api.deepseek.com'
 $env:SKILLSPECTOR_COMPAT_API_KEY = $env:DEEPSEEK_API_KEY
 $env:SKILLSPECTOR_MODEL = 'deepseek-flash'
+$registry = Join-Path $env:TEMP ("aih-scan-deepseek-{0}.json" -f [guid]::NewGuid())
+'{"models":{"deepseek-flash":{"context_length":1048576,"max_output_tokens":393216}}}' | Set-Content -Encoding utf8 $registry
+$env:SKILLSPECTOR_MODEL_REGISTRY = $registry
 $env:SKILLSPECTOR_REASONING_EFFORT = 'none'
 $env:SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD = 'function_calling'
 aih-scan scan 'C:\skills\example' --mode ai --out 'C:\scan-output\example' --json
@@ -241,9 +262,9 @@ aih-scan scan 'C:\skills\example' --mode ai --out 'C:\scan-output\example' --jso
 
 Remove any existing `SKILLSPECTOR_MODEL_<SLOT>` overrides if you intend every analyzer
 to use `deepseek-flash`; SkillSpector otherwise honors those more-specific caller settings.
-Scan does not select another model or a paid fallback. The pinned SkillSpector's bundled
-model metadata predates this alias, so it warns and uses its existing 128,000-token
-fallback for context budgeting; it still requests the exact `deepseek-flash` model.
+The pinned SkillSpector model registry predates this alias. Verify the context and output
+values for the selected model before setting its registry entry.
+[DeepSeek model metadata](https://api-docs.deepseek.com/api/list-models/)
 
 Having the endpoint and key set establishes configuration readiness; authentication,
 balance, quota and parsed findings are established only by the run. Failed or malformed

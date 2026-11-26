@@ -52,7 +52,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const dir = __dirname;
 const b = JSON.parse(fs.readFileSync(path.join(dir, "behaviour.json"), "utf8"));
-const args = process.argv.slice(2);
+const args = process.argv.slice(process.argv[2] === "-I" ? process.argv.indexOf("scan") : 2);
 const list = (root, prefix = "") => {
   const out = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
@@ -123,6 +123,7 @@ export function fakeAnalyzer(
   const dir = join(root, `${name}-cli-${installed}`);
   mkdirSync(dir, { recursive: true });
   const path = nativeNodeCli(dir, name, program);
+  if (name === "skillspector") nativeNodeCli(dir, "python", program);
   writeFileSync(join(dir, "behaviour.json"), JSON.stringify(behaviour));
   return {
     path,

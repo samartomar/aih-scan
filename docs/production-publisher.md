@@ -67,6 +67,7 @@ Hash the exact UTF-8 JSON bytes as SHA-256. This tooling-only format does not ch
     "provider": "openai_compatible",
     "baseUrl": "https://api.deepseek.com",
     "model": "deepseek-flash",
+    "modelTokenLimits": { "contextLength": 1048576, "maxOutputTokens": 393216 },
     "reasoningEffort": "none",
     "structuredOutputMethod": "function_calling",
     "credentialVariable": "DEEPSEEK_API"
@@ -190,7 +191,11 @@ operator's own `HOME`, because the signed-in CLI reads its sign-in from there, a
 the one exception to the private home that other profiles use: use a host and account
 dedicated to this work. The pinned SkillSpector starts the CLI with `--setting-sources=`, no
 tools, `dontAsk` permissions and no session persistence, so user settings, hooks and memory
-files are not loaded. With Claude CLI 2.1.330 an identical call carried about 0.7k input
+files are not loaded. The invocation also disables skills and commands, uses an empty
+tool list, and selects strict MCP configuration without adding a server. It does not
+pass literal `--bare`: Claude CLI 2.1.330 documents that this mode skips subscription
+OAuth and keychain reads. The prepared receipt does not measure plugin startup overhead.
+With Claude CLI 2.1.330 an identical call carried about 0.7k input
 tokens, against about 2.8k with setting sources enabled on the same account. Confirm this on
 your host before a campaign. No credential value is read or recorded.
 
@@ -205,10 +210,16 @@ fallback: a usage-limit refusal or any unfinished AI pass leaves the key `incomp
 later retry on the same profile. Changing the model or effort creates a separate
 configuration and resume namespace.
 
+Compatible tasks can share a provider request within one prepared run while its workers
+are active. Separate runs have independent queues. Scan applies the model's input and
+output limits and verifies each key's result on resume. A response that would add a
+finding or other model-written text to a key is checked again using only that key's
+original task before the text can enter its report.
+
 AI assessments may also set `llmConcurrency` to an explicit positive safe integer, for
 example `"llmConcurrency": 24`. The helper passes it only to its isolated scan child as
 SkillSpector's existing `SKILLSPECTOR_MAX_LLM_CONCURRENCY` setting. Omitting it preserves
-the upstream default of 10; an ambient parent setting is not inherited. This controls
+the pinned upstream defaults of two concurrent requests for CLI providers and ten for HTTP providers. An ambient parent setting is not inherited. This controls
 concurrent LLM requests within each item, separately from the per-key worker scheduling
 below. There is no model-specific cap or timeout change. Static assessments must omit
 all AI controls. The explicit value is part of the assessment/configuration identity:
@@ -219,14 +230,19 @@ AI assessments may supply `"modelTokenLimits": { "contextLength": 1048576,
 "maxOutputTokens": 131072 }`. Both fields are required positive safe integers, with
 `maxOutputTokens` no larger than `contextLength`. The operator must verify these values
 against the selected model's supported limits. They are model metadata, not a request to
-change the model, reasoning effort, response method or tool deadline.
+change the model, reasoning effort, response method or tool deadline. The field applies
+to HTTP and agent-CLI profiles, including `adaptive-ssd/1`. Without an override, the K3
+profile uses the 262,144-token context available on every eligible tier and a planning
+output budget of 32,768 tokens.
 
 For each attempt the helper writes a nonsecret `model-registry.json` inside that child's
 isolated scratch directory, containing only the exact selected model and these limits.
 It passes the generated absolute path through upstream `SKILLSPECTOR_MODEL_REGISTRY`;
 caller registry paths are not accepted, and ambient registry settings are not inherited.
 The file is local attempt evidence, excluded from candidate archives. Omitting the
-control preserves the upstream registry/default and existing configuration identities.
+control uses the selected model's known registry limits and preserves the existing
+configuration identity. For an uncataloged model or deployment alias, provide both
+values so Scan can start inference.
 Supplying or changing either limit creates a distinct configuration; completed results
 are reused only when returning to the same profile. Static assessments reject it.
 
@@ -238,10 +254,8 @@ provider generate more output and increase output-token cost; it does not reserv
 guarantee that output. For DeepSeek, verify current context/output capabilities with
 the [model metadata](https://api-docs.deepseek.com/api/list-models/) and
 [chat-completion controls](https://api-docs.deepseek.com/api/create-chat-completion/).
-The locked OpenAI-compatible adapter sends this budget as `max_completion_tokens`.
-DeepSeek documents `max_tokens` and can ignore the adapter's field, retaining its
-default output limit. Registry metadata alone therefore does not prove that a provider
-honors the requested budget; verify the actual transport before relying on it.
+On the official DeepSeek HTTPS endpoint, Scan sends the selected output budget as
+`max_tokens`. Other OpenAI-compatible endpoints retain their adapter's wire format.
 
 ### Local validation, parallel scan and resume
 
@@ -274,6 +288,14 @@ included in the completed-output candidate archive. Older records without notes 
 valid. Worker stderr is not persisted as a diagnostic log.
 
 #### Diagnose coverage before retrying
+
+When the goal is to close an incomplete AI assessment, first run the static profile on
+the same captured bytes with the candidate scanner. If it reproduces a hard inspection
+gap, resolve that gap before retrying AI. A successful static replay establishes static
+coverage only. For a cost-sensitive retry, measure representative detector requests and
+prompt volume offline, and check that live request counts and batch widths will be
+observable before spending quota. Model limits bound a group; they do not bound the
+total requests or input volume for an item.
 
 Read the verified summary and the matching receipt entry together. The tool results,
 `coverage`, `reason`, `notAnalysed` and available diagnostic notes measure different

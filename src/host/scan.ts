@@ -25,7 +25,12 @@ import { assessItem, routeFiles } from "./assess.js";
 import { ciscoAdapter } from "./cisco.js";
 import { discoverItems } from "./discover.js";
 import { cloneCommit } from "./inventory.js";
-import { type AiSetup, skillSpectorAdapter, skillSpectorAiSetup } from "./skillspector.js";
+import {
+  type AiSetup,
+  type PreparedBatching,
+  skillSpectorAdapter,
+  skillSpectorAiSetup,
+} from "./skillspector.js";
 import { hostNameProblem, readFolder, type SnapshotFile, writeSnapshot } from "./snapshot.js";
 import type { ToolAdapter } from "./tools.js";
 import { trustLintAdapter } from "./trust-lint-tool.js";
@@ -112,9 +117,9 @@ export interface Acquisition {
 }
 
 /**
- * AI mode only: whether the caller's existing SkillSpector AI settings were usable. With
- * `available`, SkillSpector sent the scanned content to that AI; otherwise the scan stayed
- * static ("AI not available here") and `reason` says why. Never holds a credential.
+ * AI mode only: whether the caller configured an available provider. Consult each item's
+ * tool mode, provenance and coverage for actual inference or a static-only result.
+ * An unavailable configuration includes its reason. Never holds a credential.
  */
 export type AiAvailability =
   | Readonly<{ status: "available"; provider: string; via: "cli" | "local" | "provider" }>
@@ -159,6 +164,8 @@ export interface ScanInternals {
   /** The HTTPS client for npm registry acquisition (a local stub in tests). */
   readonly fetch?: FetchLike;
   readonly sharedOutput?: SharedOutput;
+  /** A private Scan runner handoff for concurrent prepared workers. */
+  readonly preparedBatching?: PreparedBatching;
   /** The environment analyzers are found in and AI settings are read from (default `process.env`). */
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** The host platform for file names and modes (default `process.platform`). */
@@ -585,7 +592,13 @@ export async function scanWith(
     [
       "skillspector",
       internals.adapters?.skillspector ??
-        skillSpectorAdapter({ env, ...(aiSetup === undefined ? {} : { ai: aiSetup }) }),
+        skillSpectorAdapter({
+          env,
+          ...(aiSetup === undefined ? {} : { ai: aiSetup }),
+          ...(internals.preparedBatching === undefined
+            ? {}
+            : { preparedBatching: internals.preparedBatching }),
+        }),
     ],
     ["cisco", internals.adapters?.cisco ?? ciscoAdapter({ env })],
   ]);

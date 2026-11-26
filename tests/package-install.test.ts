@@ -337,6 +337,7 @@ describe("the packed tarball", () => {
       "docs/verification.md",
       "package.json",
       "runtime/adaptive-ssd.py",
+      "runtime/provider-batching.py",
       "schemas/aih-scan-request-1.json",
       "schemas/aih-scan-source-1.json",
       "schemas/aih-scan-summary-1.json",
@@ -1305,6 +1306,17 @@ const skillspector = process.env.AIH_SCAN_TEST_SKILLSPECTOR;
 const skillScanner = process.env.AIH_SCAN_TEST_SKILL_SCANNER;
 const required = process.env.AIH_SCAN_REQUIRE_REAL_ANALYZERS === "1";
 
+function compatibleFixtureRegistry(maxOutputTokens = 8192) {
+  const path = join(work, `fixture-model-${maxOutputTokens}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      models: { "deepseek-flash": { context_length: 131072, max_output_tokens: maxOutputTokens } },
+    }),
+  );
+  return path;
+}
+
 describe.runIf(skillspector !== undefined)(
   "the installed CLI with real SkillSpector and a synthetic compatible inference service",
   () => {
@@ -1348,6 +1360,7 @@ describe.runIf(skillspector !== undefined)(
                 SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
                 SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
                 SKILLSPECTOR_MODEL: "deepseek-flash",
+                SKILLSPECTOR_MODEL_REGISTRY: compatibleFixtureRegistry(),
                 SKILLSPECTOR_REASONING_EFFORT: "none",
                 SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
                 SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
@@ -1481,6 +1494,7 @@ describe.runIf(skillspector !== undefined)(
         SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
         SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
         SKILLSPECTOR_MODEL: "deepseek-flash",
+        SKILLSPECTOR_MODEL_REGISTRY: compatibleFixtureRegistry(),
         SKILLSPECTOR_REASONING_EFFORT: "none",
         SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
         SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",
@@ -1530,6 +1544,7 @@ describe.runIf(skillspector !== undefined)(
             SKILLSPECTOR_COMPAT_BASE_URL: service.endpoint,
             SKILLSPECTOR_COMPAT_API_KEY: "fixture-only-not-a-real-key",
             SKILLSPECTOR_MODEL: "deepseek-flash",
+            SKILLSPECTOR_MODEL_REGISTRY: compatibleFixtureRegistry(420),
             SKILLSPECTOR_REASONING_EFFORT: "none",
             SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD: "function_calling",
             SKILLSPECTOR_MAX_LLM_CONCURRENCY: "2",

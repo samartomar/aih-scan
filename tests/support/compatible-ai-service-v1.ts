@@ -3,7 +3,12 @@ import type { AddressInfo } from "node:net";
 
 /** A synthetic inference service: real SkillSpector parses these fixed responses; no model runs. */
 export async function compatibleAiServiceV1(
-  options: { delayMs?: number; tp4Mismatch?: boolean } = {},
+  options: {
+    delayMs?: number;
+    tp4Mismatch?: boolean;
+    attributedFindings?: boolean;
+    ambiguousGroup?: boolean;
+  } = {},
 ) {
   const requests: Record<string, unknown>[] = [];
   let outcome:
@@ -15,6 +20,7 @@ export async function compatibleAiServiceV1(
     | "quota"
     | "unfinished" = "complete";
   let securityInitial = 0;
+  let grouping = options.ambiguousGroup ? "ambiguous" : "complete";
   const security = { started: 0, completed: 0, active: 0, maxActive: 0 };
   const server = createServer(async (request, response) => {
     let body = "";
@@ -47,6 +53,43 @@ export async function compatibleAiServiceV1(
     }
     const choice = payload.tool_choice as { function?: { name?: string } } | undefined;
     const prompt = JSON.stringify(payload.messages);
+    const content = (payload.messages as { content: string }[]).at(-1)?.content ?? "";
+    const grouped = content.split("\nAIH_SCAN_TASKS\n")[1]?.split("\n")[0];
+    if (grouped && grouping === "context") {
+      response.writeHead(400).end(
+        JSON.stringify({
+          error: { message: "fixture request exceeded context", code: "context_length_exceeded" },
+        }),
+      );
+      return;
+    }
+    const resultFor = (input: string) => {
+      if (input.includes("Determine whether a skill"))
+        return {
+          is_mismatch: options.tp4Mismatch ?? false,
+          confidence: 0.9,
+          declared_purpose_summary: "Calculations",
+          actual_behavior_summary: "Network",
+          mismatched_capabilities: [body.slice(-180)],
+          explanation: body.slice(-180),
+        };
+      if (options.attributedFindings && semantic && input.includes("alpha-fixture"))
+        return {
+          findings: [
+            {
+              rule_id: "SSD-1",
+              message: grouped ? "cross-key prose sentinel" : "Alpha fixture finding",
+              severity: "HIGH",
+              start_line: 6,
+              end_line: 6,
+              confidence: 0.8,
+              explanation: "Alpha evidence",
+              remediation: "Review the alpha text",
+            },
+          ],
+        };
+      return { findings: [] };
+    };
     const recoveryField = prompt.match(/Requested field: ([a-z_]+)/)?.[1];
     const message: Record<string, unknown> = { role: "assistant", content: null };
     if (outcome === "recovered" && semantic && recoveryField) {
@@ -74,16 +117,16 @@ export async function compatibleAiServiceV1(
                   findings: { rule_id: "SSD-1", severity: "HIGH", start_line: 1 },
                 })
               : JSON.stringify(
-                  prompt.includes("Determine whether a skill")
+                  grouped
                     ? {
-                        is_mismatch: options.tp4Mismatch ?? false,
-                        confidence: 0.9,
-                        declared_purpose_summary: "Calculations",
-                        actual_behavior_summary: "Network",
-                        mismatched_capabilities: [body.slice(-180)],
-                        explanation: body.slice(-180),
+                        items: (JSON.parse(grouped) as { key: string; prompt: string }[])
+                          .reverse()
+                          .map(({ key, prompt }) => ({
+                            key: grouping === "ambiguous" ? "t0" : key,
+                            result: resultFor(prompt),
+                          })),
                       }
-                    : { findings: [] },
+                    : resultFor(content),
                 );
       message.tool_calls = [
         {
@@ -98,7 +141,7 @@ export async function compatibleAiServiceV1(
         id: "chatcmpl-fixture",
         object: "chat.completion",
         created: 1793750400,
-        model: "deepseek-flash",
+        model: payload.model,
         choices: [
           {
             index: 0,
@@ -126,6 +169,9 @@ export async function compatibleAiServiceV1(
       outcome = value;
       securityInitial = 0;
       requests.length = 0;
+    },
+    setGrouping(value: "ambiguous" | "complete" | "context") {
+      grouping = value;
     },
     close: () =>
       new Promise<void>((resolve, reject) =>

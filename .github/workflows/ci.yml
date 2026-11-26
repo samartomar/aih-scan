@@ -90,7 +90,7 @@ jobs:
         run: node tools/ci-route.mjs --run-tests ci-plan.json
       - name: Prove the real analyzers from source and from the installed package
         if: steps.route.outputs.analyzers == 'true'
-        run: npx vitest run tests/host-v1/analyzer-pins.test.ts tests/host-v1/real-analyzers.test.ts tests/package-install.test.ts
+        run: npx vitest run tests/host-v1/analyzer-pins.test.ts tests/host-v1/real-analyzers.test.ts tests/host-v1/provider-batching*.test.ts tests/package-install.test.ts
 
   verify-windows:
     runs-on: windows-latest

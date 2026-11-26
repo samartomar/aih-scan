@@ -8,6 +8,7 @@ import { dirname, join, relative, resolve, sep, win32, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive, safePath, writeArchive } from "./prepared-archive.mjs";
+import { startPreparedBatching } from "./provider-batching.mjs";
 
 const maintenanceArtifact = JSON.parse(readFileSync(new URL("../analyzers/skillspector/maintenance/artifact.json", import.meta.url), "utf8"));
 // The maintenance build is versioned `<standard release>+aih.1.<build id>`; the pin test binds that prefix to SKILLSPECTOR_VERSION.
@@ -92,8 +93,7 @@ export function validateManifest(bytes, expectedSha256) {
       need(typeof assessment.model === "string" && assessment.model.length <= 128 && PINNED_CLAUDE_MODEL.test(assessment.model), "Prepared agent-CLI AI requires an exact, pinned Claude model id (for example claude-opus-5-5), not an alias or default; no model fallback");
       need(AGENT_EFFORTS.includes(assessment.effort), `Prepared agent-CLI AI requires an explicit effort: ${AGENT_EFFORTS.join(", ")}`);
     }
-    need(["baseUrl", "credentialVariable", "reasoningEffort", "structuredOutputMethod", "modelTokenLimits", "skillspector"].every((key) => assessment[key] === undefined), "Prepared agent-CLI AI must not name HTTP-provider or maintenance controls");
-    if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
+    need(["baseUrl", "credentialVariable", "reasoningEffort", "structuredOutputMethod", "skillspector"].every((key) => assessment[key] === undefined), "Prepared agent-CLI AI must not name HTTP-provider or maintenance controls");
   } else if (assessment.mode === "ai") {
     need(assessment.provider === "openai_compatible" && typeof assessment.model === "string" && assessment.model.length > 0 && assessment.model.length <= 256 && plainText(assessment.model), "Prepared AI requires an explicitly selected HTTP provider/model or a supported agent CLI; no model fallback");
     need(assessment.effort === undefined, "Agent-CLI effort does not apply to an HTTP provider");
@@ -109,14 +109,14 @@ export function validateManifest(bytes, expectedSha256) {
       keys(assessment.skillspector.tp4, ["maxFiles", "maxFindings", "maxBatches"]);
       need(Object.values(assessment.skillspector.tp4).every((value) => Number.isSafeInteger(value) && value > 0 && value <= 4096), "Invalid TP4 capacity; expected integers from 1 to 4096");
     }
-    if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
-    if (assessment.modelTokenLimits !== undefined) {
-      const limits = assessment.modelTokenLimits;
-      keys(limits, ["contextLength", "maxOutputTokens"]);
-      need([limits.contextLength, limits.maxOutputTokens].every((value) => Number.isSafeInteger(value) && value > 0), "Invalid model token limits; expected positive safe integers");
-      need(limits.maxOutputTokens <= limits.contextLength, "Model output token limit exceeds its context length");
-    }
   } else need(Object.keys(assessment).length === 2, "Static assessment must not name AI controls");
+  if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
+  if (assessment.modelTokenLimits !== undefined) {
+    const limits = assessment.modelTokenLimits;
+    keys(limits, ["contextLength", "maxOutputTokens"]);
+    need([limits.contextLength, limits.maxOutputTokens].every((value) => Number.isSafeInteger(value) && value > 0), "Invalid model token limits; expected positive safe integers");
+    need(limits.maxOutputTokens <= limits.contextLength, "Model output token limit exceeds its context length");
+  }
   need(Array.isArray(manifest.items) && manifest.items.length > 0, "Prepared manifest has no items");
   const roots = new Set();
   for (const item of manifest.items) {
@@ -264,11 +264,26 @@ function diagnosticNotes(item, assessment) {
   return [...new Set(notes.filter((note) => typeof note === "string").map((note) => [...credentials.reduce((text, secret) => text.split(secret).join("[REDACTED]"), note)].map((character) => plainText(character) ? character : " ").join("").slice(0, 4096)).filter(Boolean))].slice(0, 32);
 }
 async function worker(requestPath) {
+  const controller = new AbortController();
+  const batching = process.connected && await new Promise((resolveBatching) => {
+    process.once("disconnect", () => { controller.abort(); resolveBatching(undefined); });
+    process.on("message", (message) => {
+      if (message?.cancel === true) controller.abort();
+      if (message?.start === true) resolveBatching(message.batching);
+    });
+  });
   const job = json(readRegular(requestPath));
   const runtime = await loadRuntime(job.consumer, job.tarball, job.scanner);
-  const controller = new AbortController(); process.once("disconnect", () => controller.abort()); process.on("message", () => controller.abort());
   const started = Date.now();
-  const result = await runtime.host.scan({ format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, ...revisionOf(job), items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] }, { outDir: job.out, signal: controller.signal });
+  const request = { format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, ...revisionOf(job), items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] };
+  const options = { outDir: job.out, signal: controller.signal };
+  let result;
+  if (batching) {
+    need(Number.isSafeInteger(batching.port) && batching.port > 0 && batching.port <= 65535 && hash(batching.token), "Invalid prepared batching handoff");
+    const adapter = resolve(job.consumer, "node_modules/@aihq/scan/dist/host/scan.js");
+    const { scanWith } = await import(pathToFileURL(adapter).href);
+    result = await scanWith(request, options, { preparedBatching: batching });
+  } else result = await runtime.host.scan(request, options);
   const item = result.results[0];
   let record;
   if (item?.status !== "ok") record = { status: "failed", detail: result.status, elapsedMs: Date.now() - started };
@@ -306,7 +321,6 @@ function childEnvironment(assessment, scratch, ssdSocket) {
       if (process.env.KIMI_CODE_HOME !== undefined) env.KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
       if (process.env.AIH_SCAN_KIMI_REGION !== undefined) env.AIH_SCAN_KIMI_REGION = process.env.AIH_SCAN_KIMI_REGION;
     }
-    if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
   } else if (assessment.mode === "ai") {
     const variable = assessment.credentialVariable ?? "SKILLSPECTOR_COMPAT_API_KEY";
     need(typeof process.env[variable] === "string" && process.env[variable].trim(), `${variable} is not set; no AI request started`);
@@ -315,16 +329,16 @@ function childEnvironment(assessment, scratch, ssdSocket) {
       const { maxFiles, maxFindings, maxBatches } = assessment.skillspector.tp4;
       Object.assign(env, { SKILLSPECTOR_TP4_MAX_FILES: String(maxFiles), SKILLSPECTOR_TP4_MAX_FINDINGS: String(maxFindings), SKILLSPECTOR_TP4_MAX_BATCHES: String(maxBatches) });
     }
-    if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
-    if (assessment.modelTokenLimits !== undefined) {
-      const registryPath = resolve(scratch, "model-registry.json");
-      writeJson(registryPath, { models: { [assessment.model]: { context_length: assessment.modelTokenLimits.contextLength, max_output_tokens: assessment.modelTokenLimits.maxOutputTokens } } });
-      env.SKILLSPECTOR_MODEL_REGISTRY = registryPath;
-    }
+  }
+  if (assessment.llmConcurrency !== undefined) env.SKILLSPECTOR_MAX_LLM_CONCURRENCY = String(assessment.llmConcurrency);
+  if (assessment.modelTokenLimits !== undefined) {
+    const registryPath = resolve(scratch, "model-registry.json");
+    writeJson(registryPath, { models: { [assessment.model]: { context_length: assessment.modelTokenLimits.contextLength, max_output_tokens: assessment.modelTokenLimits.maxOutputTokens } } });
+    env.SKILLSPECTOR_MODEL_REGISTRY = registryPath;
   }
   return env;
 }
-function launch(jobPath, assessment, signal, ssdSocket) {
+function launch(jobPath, assessment, signal, ssdSocket, batching) {
   return new Promise((resolveResult, reject) => {
     const child = fork(new URL(import.meta.url), ["worker", jobPath], { env: childEnvironment(assessment, dirname(jobPath), ssdSocket), windowsHide: true, silent: true, execArgv: [] });
     let result; let stderrBytes = 0;
@@ -334,6 +348,7 @@ function launch(jobPath, assessment, signal, ssdSocket) {
     child.once("message", (value) => { result = value; });
     child.once("error", reject);
     child.once("exit", (code) => { signal.removeEventListener("abort", cancel); if (code === 0 && result) resolveResult(result); else resolveResult({ status: "failed", detail: "worker-failed", elapsedMs: 0 }); });
+    child.send({ start: true, ...(batching ? { batching: { port: batching.port, token: batching.token } } : {}) });
   });
 }
 function acquireLock(folder) {
@@ -452,7 +467,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
   const controller = new AbortController();
   const cancel = () => controller.abort(); signal.addEventListener("abort", cancel, { once: true });
   if (signal.aborted) controller.abort();
-  let broker;
+  let broker, batching;
   try {
     const recovery = await recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime);
     for (const [key, items] of groups) {
@@ -461,13 +476,19 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
         await verifyResult(root, record, items, manifest, content, runtime); reused++;
       } else pending.push([key, items]);
     }
+    if (pending.length > 1 && concurrency > 1 && !controller.signal.aborted && manifest.assessment.mode === "ai")
+      batching = await startPreparedBatching(controller.signal);
     if (pending.length && !controller.signal.aborted && manifest.assessment.profile === "adaptive-ssd/1") {
       const { startAdaptiveSsd } = await import("./adaptive-ssd.mjs");
       const adapter = resolve(consumer, "node_modules/@aihq/scan/dist/host/kimi-inference.js");
       const { inferAdaptiveSsd } = await import(pathToFileURL(adapter).href);
+      const contextTokens = manifest.assessment.modelTokenLimits?.contextLength ?? 262_144;
+      const outputTokens = Math.min(Math.floor(contextTokens / 4), manifest.assessment.modelTokenLimits?.maxOutputTokens ?? 32_768);
       broker = await startAdaptiveSsd({
         signal: controller.signal,
         infer: (prompt, signal) => inferAdaptiveSsd(prompt, signal, root),
+        contextTokens,
+        outputTokens,
       });
     }
     let poolCapacityMiB = Math.max(0, freemem() / 1024 ** 2 - reserveMemoryMiB);
@@ -483,7 +504,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
         const id = randomUUID(), work = join(root, "attempts", id); mkdirSync(work, { recursive: true });
         const requestPath = join(work, "request.json");
         writeJson(requestPath, { scanner: manifest.scanner, assessment: manifest.assessment, ...revisionOf(manifest), consumer: resolve(consumer), tarball: resolve(tarball), folder: resolve(content, ...item.path.split("/")), item, out: join(work, "output") });
-        const job = launch(requestPath, manifest.assessment, controller.signal, broker?.socketPath).then(async (record) => {
+        const job = launch(requestPath, manifest.assessment, controller.signal, broker?.socketPath, batching).then(async (record) => {
           if (record.summary) {
             record.summary = relative(root, record.summary).split(sep).join("/");
             record.sarif = record.sarif.map((entry) => ({ ...entry, path: relative(root, entry.path).split(sep).join("/") }));
@@ -505,7 +526,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
   } catch (error) { controller.abort(); await Promise.allSettled(active); throw error; }
   finally {
     signal.removeEventListener("abort", cancel);
-    try { await broker?.close(); } finally { lock.release(); }
+    try { await Promise.all([broker?.close(), batching?.close()]); } finally { lock.release(); }
   }
 }
 export async function verifyCandidate(candidate, manifestSha256, receiptSha256, consumer, tarball) {

@@ -276,7 +276,7 @@ export async function runScanCommandV1(args: readonly string[], io: CommandIo): 
       const setup = skillSpectorAiSetup(io.internals?.env ?? process.env);
       io.stderr(
         setup.available
-          ? `aih-scan: AI mode: SkillSpector sends the content it scans to the AI you set up (provider ${setup.provider}, via ${setup.via}); static checks run too.\n`
+          ? `aih-scan: AI mode: SkillSpector is configured for ${setup.provider} (via ${setup.via}) and sends scanned content when the selected model's limits are known.\n`
           : `aih-scan: AI not available here: ${safe(setup.reason, 200)}. SkillSpector runs static checks only; no content is sent to an AI.\n`,
       );
     }

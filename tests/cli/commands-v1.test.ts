@@ -307,9 +307,7 @@ describe("aih-scan scan --mode ai", () => {
     expect(
       await runScanCommandV1([item, "--mode", "ai", "--json", "--out", fixture.path("o2")], setIo),
     ).toBe(exitCodes.ok);
-    expect(set.err()).toContain(
-      "AI mode: SkillSpector sends the content it scans to the AI you set up (provider anthropic, via provider)",
-    );
+    expect(set.err()).toContain("AI mode: SkillSpector is configured for anthropic (via provider)");
     expect(JSON.parse(set.out()).targets[0].ai).toEqual({
       status: "available",
       provider: "anthropic",
