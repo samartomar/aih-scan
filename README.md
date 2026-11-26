@@ -248,6 +248,9 @@ Scan hashes each folder exactly as given and returns one result per folder. JSON
 
 ## Results
 
+The [Catalog Scan coverage report](https://github.com/samartomar/aih-catalog/blob/main/docs/scan-coverage.md)
+lets you look up a Catalog item or edition and find any published report for its exact Scan key.
+
 - **Summary** (`aih-scan-summary/1`): one scan key, its revision and origin, the scanner,
   routing and scoring versions, `score`, `label`, `coverage` (with `reason` when partial),
   every file's path, mode, part and SHA-256, each tool's version, mode, result and counts,
