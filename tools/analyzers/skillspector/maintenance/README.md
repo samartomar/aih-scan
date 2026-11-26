@@ -19,9 +19,9 @@ MCP Tool Poisoning tag change to `AML.T0110`. The capacity and report behavior i
 | `SKILLSPECTOR_TP4_MAX_FILES` | Retained | The maintenance build keeps its reviewed 1–4096 bound, 128 default and warning-without-echo behavior. The bound stays below the 10000-record report bound. |
 | `SKILLSPECTOR_TP4_MAX_FINDINGS` | Retained | Upstream 2.13.7 fixes TP4 findings at 64. |
 | Existing `SKILLSPECTOR_TP4_MAX_BATCHES` support | Retained unchanged | Upstream already supplies this control, its 256 default and 1–4096 validation. The patch does not replace it. |
-| Upstream TP4 byte capacities (`SKILLSPECTOR_TP4_MAX_TOTAL_CODE_BYTES`, `_TOTAL_INPUT_BYTES`, `_FILE_CODE_BYTES`) | Not patched | These are new upstream controls with upstream defaults. Prepared profiles do not forward them, and static runs scrub them. |
+| Upstream TP4 byte capacities (`SKILLSPECTOR_TP4_MAX_TOTAL_CODE_BYTES`, `_TOTAL_INPUT_BYTES`, `_FILE_CODE_BYTES`) | Retained upstream | Prepared profiles omit these settings, and static runs scrub them. |
 | `metadata.aih_scan_tp4_limits` in JSON reports | Retained unchanged | Scan must compare the producer's resolved numeric file/finding/batch capacities with the requested configuration before accepting observations. Upstream does not emit this maintenance metadata. |
-| `soft_wrap=True` for `--version` | Moved, behavior unchanged | Upstream moved the version callback to `skillspector/cli_entry.py`, which is now the console entry point. The full bound maintenance version must remain on one line for Scan's executable probe; upstream still uses Rich's default wrapping. |
+| `soft_wrap=True` for `--version` | Retained in `skillspector/cli_entry.py` | The full bound maintenance version must remain on one line for Scan's executable probe. |
 | Upstream source and runtime inputs | Replaced | The source and runtime lock match the standard 2.13.7 runtime. The separately locked builder uses Hatchling 1.31.0, and the artifact receipt binds the new inputs. |
 | Prior maintenance identities | Historical | New observations require the exact 2.13.7 producer and wheel. Public readers keep each historical observation's original identity. |
 

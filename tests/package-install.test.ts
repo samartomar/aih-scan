@@ -1332,7 +1332,11 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
     it("accepts the real runtime through installed host, contracts and reader interfaces", async () => {
       expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
       expect(skillScanner, "AIH_SCAN_TEST_SKILL_SCANNER").toBeDefined();
-      const item = folder("real-host-benign", cleanSkill);
+      const item = folder("real-host-benign", {
+        ...cleanSkill,
+        "scripts/count.ts": "export const count: number = 2;\n",
+        "scripts/label.tsx": "export const Label = ({ text }: { text: string }) => <span>{text}</span>;\n",
+      });
       const script = join(consumer, "real-host.mjs");
       writeFileSync(
         script,
@@ -1351,10 +1355,10 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
           if (entry?.status !== "ok") throw new Error(JSON.stringify(result));
           const read = readSummary(new Uint8Array(readFileSync(entry.summaryPath)));
           if (read.status !== "ok") throw new Error("summary");
-          const key = await scanKeyOf([
-            { path: "SKILL.md", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "SKILL.md"))) },
-            { path: "scripts/greet.py", mode: "100644", bytes: new Uint8Array(readFileSync(join(item, "scripts/greet.py"))) },
-          ]);
+          const paths = ["SKILL.md", "scripts/count.ts", "scripts/greet.py", "scripts/label.tsx"];
+          const key = await scanKeyOf(paths.map((path) => ({
+            path, mode: "100644", bytes: new Uint8Array(readFileSync(join(item, path))),
+          })));
           if (key.status !== "ok") throw new Error("key");
           const findings = [];
           for (const path of entry.sarifPaths) {
@@ -1366,6 +1370,8 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
             status: result.status,
             coverage: read.summary.coverage,
             tools: read.summary.tools,
+            files: read.summary.files,
+            notAnalysed: read.summary.notAnalysed,
             scanKeyMatches: key.scanKey === read.summary.scanKey,
             findings,
           }));
@@ -1385,6 +1391,13 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       expect(output.status).toBe("ok");
       expect(output.coverage).toBe("complete");
       expect(output.scanKeyMatches).toBe(true);
+      expect(output.files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "scripts/count.ts", part: "code" }),
+          expect.objectContaining({ path: "scripts/label.tsx", part: "code" }),
+        ]),
+      );
+      expect(output.notAnalysed).toEqual([]);
       expect(output.tools).toContainEqual({
         tool: "skillspector",
         version: "2.13.7",
