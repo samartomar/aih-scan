@@ -251,6 +251,15 @@ describe("summary and withdrawal schemas", () => {
         profileRead.summary.tools.find((tool) => tool.tool === "skillspector")?.ai,
     ).toEqual(adaptive);
     expect(ajv(withAi(adaptive))).toBe(true);
+    for (const property of [{ tool: "cisco" }, { mode: "static" }]) {
+      const report = withAi(adaptive);
+      Object.assign(
+        report.tools.find((entry: { tool: string }) => entry.tool === "skillspector"),
+        property,
+      );
+      expect(readSummary(encode(report)).status).not.toBe("ok");
+      expect(ajv(report)).toBe(false);
+    }
     for (const bad of [
       { ...adaptive, profile: "adaptive-ssd/2" },
       { ...adaptive, via: "local" },

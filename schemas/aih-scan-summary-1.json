@@ -129,6 +129,28 @@
           "result",
           "counts"
         ],
+        "if": {
+          "required": [
+            "ai"
+          ],
+          "properties": {
+            "ai": {
+              "required": [
+                "profile"
+              ]
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "tool": {
+              "const": "skillspector"
+            },
+            "mode": {
+              "const": "ai"
+            }
+          }
+        },
         "properties": {
           "tool": {
             "type": "string",

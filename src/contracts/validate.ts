@@ -501,6 +501,8 @@ function summaryTool(value: unknown, at: string): SummaryTool {
     if (ai.profile !== undefined) {
       if (
         ai.profile !== ADAPTIVE_SSD_PROFILE ||
+        tool.tool !== "skillspector" ||
+        tool.mode !== "ai" ||
         provenance.via !== "cli" ||
         provenance.provider !== "kimi_cli" ||
         provenance.model !== KIMI_K3_MODEL ||
