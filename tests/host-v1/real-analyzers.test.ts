@@ -328,6 +328,23 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.7 (static, -
     noSentinels();
   }, 120_000);
 
+  it("keeps a missing reference advisory alongside only the disabled OSV lookup", async () => {
+    if (skillspector === undefined) throw new Error("SkillSpector runtime required");
+    const folder = fixture.folder("reference-with-disabled-osv", {
+      "SKILL.md":
+        "---\nname: reference-and-osv\ndescription: Summarize the supplied guide.\n---\nRead [guide](docs/guide.md).\n",
+      "requirements.txt": "requests==2.34.2\n",
+    });
+    const { entry, summary } = await scanOnce(folder, {
+      AIH_SCAN_SKILLSPECTOR: unshare ? offline(skillspector, "skillspector") : skillspector,
+    });
+    expect(summary.coverage).toBe("complete");
+    expect(summary.notAnalysed).toEqual([]);
+    expect(entry.notes).toEqual([
+      "SkillSpector reported inspection caveats: reference_missing SKILL.md",
+    ]);
+  }, 120_000);
+
   it("scans a benign skill offline: ran, pass, complete", async () => {
     const executable = unshare ? offline(skillspector!, "skillspector") : skillspector!;
     const { summary } = await scanOnce(benignFixture(), { AIH_SCAN_SKILLSPECTOR: executable });

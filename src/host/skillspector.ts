@@ -390,6 +390,8 @@ function completenessOf(
   const excludedLimitations = new Map<string, number>();
   const excludedPaths = new Set<string>();
   let positiveExclusion = false;
+  let onlyDisabledOsv = true;
+  let onlyAdvisoryReferences = true;
   for (const raw of list(completeness.ledger_exceptions)) {
     const exception = objectOf(raw);
     if (exception === undefined) continue;
@@ -414,13 +416,24 @@ function completenessOf(
       (part === undefined || part === null || !ANALYZED_PARTS.has(part));
     if (osvOnly || unrouted) {
       positiveExclusion = true;
+      onlyDisabledOsv &&=
+        osvOnly &&
+        part === "dependencies" &&
+        exception.phase === "static" &&
+        exception.outcome === "partial" &&
+        exception.fatal === false;
       if (path !== undefined) excludedPaths.add(path);
       for (const name of analyzers) ignorable.add(name);
       continue;
     }
     const detail = `${String(exception.reason_code)}${path === undefined ? "" : ` ${path}`}`;
-    if (exception.reason_code === "reference_missing") caveats.add(detail);
-    else gaps.add(detail);
+    if (exception.reason_code === "reference_missing") {
+      caveats.add(detail);
+      onlyAdvisoryReferences &&=
+        exception.phase === "reference_resolution" &&
+        exception.outcome === "partial" &&
+        exception.fatal === false;
+    } else gaps.add(detail);
   }
   for (const raw of list(completeness.warnings)) {
     const warning = objectOf(raw);
@@ -460,8 +473,8 @@ function completenessOf(
     ),
   );
   const aiGaps: string[] = [];
-  for (const raw of list(completeness.analyzer_statuses)) {
-    const status = objectOf(raw);
+  const analyzerStatuses = list(completeness.analyzer_statuses).map(objectOf);
+  for (const status of analyzerStatuses) {
     if (status === undefined) continue;
     const id = String(status.analyzer_id);
     const state = String(status.status);
@@ -497,11 +510,33 @@ function completenessOf(
       if (typeof count === "number" && count > 0) gaps.add(`${name}: ${count}`);
     }
   const shown = (values: Iterable<string>) => [...new Set(values)].sort().slice(0, 8).join(", ");
+  const osvStatuses = analyzerStatuses.filter((status) => status?.analyzer_id === OSV_ANALYZER);
+  const osv = osvStatuses[0];
+  // SkillSpector's aggregate can be partial solely because it counts the OSV lookup
+  // Scan disables. Accept the reference caveat only with exact file and analyzer accounting.
+  const disabledOsvExplainsPartial =
+    completeness.status === "partial" &&
+    completeness.is_complete === false &&
+    onlyDisabledOsv &&
+    onlyAdvisoryReferences &&
+    completeness.entirely_uninspected_files === 0 &&
+    omitted > 0 &&
+    omitted === excludedPaths.size &&
+    osvStatuses.length === 1 &&
+    osv?.status === "degraded" &&
+    osv.partial === omitted &&
+    osv.skipped === 0 &&
+    osv.failed === 0 &&
+    osv.unaccounted === 0 &&
+    typeof osv.completed === "number" &&
+    Number.isSafeInteger(osv.completed) &&
+    osv.completed >= 0 &&
+    osv.planned_work === osv.completed + omitted;
   const caveatOnly =
     gaps.size === 0 &&
     caveats.size > 0 &&
-    completeness.status === "complete_with_caveats" &&
-    completeness.is_complete === true;
+    ((completeness.status === "complete_with_caveats" && completeness.is_complete === true) ||
+      disabledOsvExplainsPartial);
   const unexplained =
     gaps.size === 0 &&
     caveats.size === 0 &&

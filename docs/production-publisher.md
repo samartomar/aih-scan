@@ -273,6 +273,31 @@ they do not affect summaries, scores, eligibility or cryptographic trust. They a
 included in the completed-output candidate archive. Older records without notes remain
 valid. Worker stderr is not persisted as a diagnostic log.
 
+#### Diagnose coverage before retrying
+
+Read the verified summary and the matching receipt entry together. The tool results,
+`coverage`, `reason`, `notAnalysed` and available diagnostic notes measure different
+things. For example, an unrouted text file can be checked for secrets and still be listed
+in `notAnalysed`, independently of whether the routed checks completed. SkillSpector's
+diagnostic line is bounded to eight details, so it cannot establish that adjacent causes
+are absent.
+
+| Observation | Recovery decision |
+| --- | --- |
+| `reference_missing` | Verify the referenced path against the exact prepared input. Correct a genuinely omitted companion through the owning source or declaration, then prepare the resulting key. A reference-only advisory stays visible when the analyzer confirms completeness or exact accounting attributes the remaining omissions to the intentionally disabled dependency OSV lookup. |
+| `static_parse_limit`, referenced content left uninspected, or degraded inspection | Reproduce using the same verified analyzer and bytes in static mode. A source correction or verified parser improvement can change the outcome. Repeating AI alone cannot repair a persistent static inspection gap. |
+| Tool `not-run` with reason `timeout` | The published deadline is ten minutes for one tool on one item. Check static work, routed input, host pressure and the effective analyzer/provider configuration first. A timeout cannot establish which provider requests started, completed or incurred usage. |
+| Provider, model or AI inspection failure | Confirm the provider, client version where applicable, model, effort and assessment profile. Reproduce configuration and batching capability offline where possible. A recovered static result is evidence about static inspection only. |
+
+For cost and throughput estimates, include the verified scanner and analyzer identities,
+the exact AI selection, the effective model context and output limits, and whether the
+selected runtime supports grouping for that assessment. Prepared runs with more than one
+pending item and worker can also group compatible detector tasks across workers. Model
+limits, compatible work, response attribution and native fallback determine the actual
+request count. Worker concurrency or availability of the batching bridge cannot establish
+requests, included usage or billing. Use an explicitly selected retry manifest and retain
+the complete observations already verified for that exact configuration.
+
 Concurrency defaults to available CPU parallelism. Optional arguments after concurrency
 are estimated MiB per worker (default 512) and memory reserve MiB (default the larger
 of 1 GiB or 10% of physical RAM). These are configurable scheduling estimates, not model
