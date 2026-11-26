@@ -1335,7 +1335,8 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       const item = folder("real-host-benign", {
         ...cleanSkill,
         "scripts/count.ts": "export const count: number = 2;\n",
-        "scripts/label.tsx": "export const Label = ({ text }: { text: string }) => <span>{text}</span>;\n",
+        "scripts/label.tsx":
+          "export const Label = ({ text }: { text: string }) => <span>{text}</span>;\n",
       });
       const script = join(consumer, "real-host.mjs");
       writeFileSync(
