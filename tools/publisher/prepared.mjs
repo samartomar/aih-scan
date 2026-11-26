@@ -75,13 +75,18 @@ export function validateManifest(bytes, expectedSha256) {
   keys(manifest.scanner, ["name", "version", "tarballSha256"]);
   need(manifest.scanner.name === "@aihq/scan" && /^\d+\.\d+\.\d+(?:-dev\.\d+)?$/.test(manifest.scanner.version) && hash(manifest.scanner.tarballSha256), "Invalid scanner identity");
   const assessment = manifest.assessment;
-  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "effort", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
+  keys(assessment, ["mode", "tools"], ["provider", "baseUrl", "model", "effort", "profile", "reasoningEffort", "structuredOutputMethod", "credentialVariable", "llmConcurrency", "modelTokenLimits", "skillspector"]);
   need(["static", "ai"].includes(assessment.mode) && Array.isArray(assessment.tools) && assessment.tools.length > 0 && assessment.tools.every((tool) => ["skillspector", "aih-trust-lint", "cisco"].includes(tool)) && new Set(assessment.tools).size === assessment.tools.length, "Invalid requested assessment");
   need(assessment.tools.includes("skillspector") && assessment.tools.includes("aih-trust-lint"), "Prepared assessment requires the primary tools");
+  if (assessment.profile !== undefined) {
+    need(assessment.profile === "adaptive-ssd/1" && assessment.mode === "ai" &&
+      assessment.provider === "kimi_cli" && assessment.model === "k3" && assessment.effort === "max",
+      "Adaptive SSD requires the Kimi CLI with K3 at max effort");
+  }
   if (assessment.mode === "ai" && isAgentProvider(assessment.provider)) {
     // A signed-in agent CLI: the operator's own sign-in, an explicit model and effort, no HTTP controls.
     if (assessment.provider === "kimi_cli") {
-      need(assessment.model === "kimi-for-coding", "Prepared Kimi CLI AI requires model kimi-for-coding");
+      need(assessment.model === "kimi-for-coding" || (assessment.model === "k3" && assessment.effort === "max"), "Prepared Kimi CLI AI requires model kimi-for-coding or k3 at max effort");
       need(KIMI_EFFORTS.includes(assessment.effort), `Prepared Kimi CLI AI requires an explicit effort: ${KIMI_EFFORTS.join(", ")}`);
     } else {
       need(typeof assessment.model === "string" && assessment.model.length <= 128 && PINNED_CLAUDE_MODEL.test(assessment.model), "Prepared agent-CLI AI requires an exact, pinned Claude model id (for example claude-opus-5-5), not an alias or default; no model fallback");
@@ -186,7 +191,7 @@ const requestedToolsFinished = (summary, manifest) => manifest.assessment.tools.
 export function aiEligible(summary, manifest) {
   if (manifest.assessment.mode !== "ai" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
-  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model) return false;
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary?.mode !== "ai" || !["pass", "warn", "fail"].includes(primary.result) || primary.ai?.provider !== manifest.assessment.provider || primary.ai.model !== manifest.assessment.model || primary.ai.profile !== manifest.assessment.profile) return false;
   if (isAgentProvider(manifest.assessment.provider)) {
     // Honest agent-CLI provenance: the exact model and effort Scan applied and the client it ran.
     const client = primary.ai.client;
@@ -281,7 +286,7 @@ async function worker(requestPath) {
   writeCheckpointAtomic(receiptPath, { format: "aih-scan-prepared-attempt/1", configSha256: fingerprint(configIdentity({ scanner: job.scanner, assessment: job.assessment, revision: job.revision }, runtime)), scanKey: job.item.scanKey, record: durable });
   return record;
 }
-function childEnvironment(assessment, scratch) {
+function childEnvironment(assessment, scratch, ssdSocket) {
   const allowed = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "LANG", "LC_ALL", "LC_CTYPE", "AIH_SCAN_SKILLSPECTOR", "AIH_SCAN_SKILL_SCANNER"]);
   const env = {};
   for (const [key, value] of Object.entries(process.env)) if (allowed.has(key.toUpperCase())) env[key] = value;
@@ -292,6 +297,11 @@ function childEnvironment(assessment, scratch) {
     need(typeof process.env.HOME === "string" && process.env.HOME.startsWith("/"), "HOME is not set; the signed-in AI CLI cannot be used");
     // PYTHONNOUSERSITE keeps the operator's user site-packages out of the analyzer child.
     Object.assign(env, { HOME: process.env.HOME, PYTHONNOUSERSITE: "1", SKILLSPECTOR_PROVIDER: assessment.provider, SKILLSPECTOR_MODEL: assessment.model, AIH_SCAN_AI_EFFORT: assessment.effort });
+    if (assessment.profile === "adaptive-ssd/1") {
+      need(typeof ssdSocket === "string" && posix.isAbsolute(ssdSocket), "Adaptive SSD coordinator unavailable");
+      env.AIH_SCAN_AI_PROFILE = assessment.profile;
+      env.AIH_SCAN_SSD_SOCKET = ssdSocket;
+    }
     if (assessment.provider === "kimi_cli") {
       if (process.env.KIMI_CODE_HOME !== undefined) env.KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
       if (process.env.AIH_SCAN_KIMI_REGION !== undefined) env.AIH_SCAN_KIMI_REGION = process.env.AIH_SCAN_KIMI_REGION;
@@ -314,9 +324,9 @@ function childEnvironment(assessment, scratch) {
   }
   return env;
 }
-function launch(jobPath, assessment, signal) {
+function launch(jobPath, assessment, signal, ssdSocket) {
   return new Promise((resolveResult, reject) => {
-    const child = fork(new URL(import.meta.url), ["worker", jobPath], { env: childEnvironment(assessment, dirname(jobPath)), windowsHide: true, silent: true, execArgv: [] });
+    const child = fork(new URL(import.meta.url), ["worker", jobPath], { env: childEnvironment(assessment, dirname(jobPath), ssdSocket), windowsHide: true, silent: true, execArgv: [] });
     let result; let stderrBytes = 0;
     const cancel = () => { if (child.connected) child.send({ cancel: true }); };
     signal.addEventListener("abort", cancel, { once: true });
@@ -442,6 +452,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
   const controller = new AbortController();
   const cancel = () => controller.abort(); signal.addEventListener("abort", cancel, { once: true });
   if (signal.aborted) controller.abort();
+  let broker;
   try {
     const recovery = await recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, content, runtime);
     for (const [key, items] of groups) {
@@ -449,6 +460,15 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
       if (COMPLETE.has(record?.status)) {
         await verifyResult(root, record, items, manifest, content, runtime); reused++;
       } else pending.push([key, items]);
+    }
+    if (pending.length && !controller.signal.aborted && manifest.assessment.profile === "adaptive-ssd/1") {
+      const { startAdaptiveSsd } = await import("./adaptive-ssd.mjs");
+      const adapter = resolve(consumer, "node_modules/@aihq/scan/dist/host/kimi-inference.js");
+      const { inferAdaptiveSsd } = await import(pathToFileURL(adapter).href);
+      broker = await startAdaptiveSsd({
+        signal: controller.signal,
+        infer: (prompt, signal) => inferAdaptiveSsd(prompt, signal, root),
+      });
     }
     let poolCapacityMiB = Math.max(0, freemem() / 1024 ** 2 - reserveMemoryMiB);
     while ((pending.length || active.size) && !signal.aborted) {
@@ -463,7 +483,7 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
         const id = randomUUID(), work = join(root, "attempts", id); mkdirSync(work, { recursive: true });
         const requestPath = join(work, "request.json");
         writeJson(requestPath, { scanner: manifest.scanner, assessment: manifest.assessment, ...revisionOf(manifest), consumer: resolve(consumer), tarball: resolve(tarball), folder: resolve(content, ...item.path.split("/")), item, out: join(work, "output") });
-        const job = launch(requestPath, manifest.assessment, controller.signal).then(async (record) => {
+        const job = launch(requestPath, manifest.assessment, controller.signal, broker?.socketPath).then(async (record) => {
           if (record.summary) {
             record.summary = relative(root, record.summary).split(sep).join("/");
             record.sarif = record.sarif.map((entry) => ({ ...entry, path: relative(root, entry.path).split(sep).join("/") }));
@@ -478,11 +498,15 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
     }
     await Promise.all(active);
     lock.owned(); atomicJson(checkpointPath, checkpoint);
-    const receipt = { format: "aih-scan-prepared-receipt/1", execution: "local", manifestSha256, config, configSha256, scheduler: { concurrency, workerMemoryMiB, reserveMemoryMiB }, results: Object.fromEntries([...groups.keys()].map((key) => [key, checkpoint.results[key] ?? { status: "pending" }])) };
+    const adaptiveStats = broker ? { adaptiveSsd: broker.stats() } : {};
+    const receipt = { format: "aih-scan-prepared-receipt/1", execution: "local", manifestSha256, config, configSha256, scheduler: { concurrency, workerMemoryMiB, reserveMemoryMiB }, ...adaptiveStats, results: Object.fromEntries([...groups.keys()].map((key) => [key, checkpoint.results[key] ?? { status: "pending" }])) };
     const receiptPath = join(root, `receipt-${randomUUID()}.json`); writeJson(receiptPath, receipt);
-    return { receiptPath, receiptSha256: digest(readRegular(receiptPath)), manifestSha256, root, reused, completed, recovered: recovery.recovered, pending: pending.length, uniqueKeys: groups.size, references: manifest.items.length, cancelled: signal.aborted };
+    return { receiptPath, receiptSha256: digest(readRegular(receiptPath)), manifestSha256, root, reused, completed, recovered: recovery.recovered, pending: pending.length, uniqueKeys: groups.size, references: manifest.items.length, cancelled: signal.aborted, ...adaptiveStats };
   } catch (error) { controller.abort(); await Promise.allSettled(active); throw error; }
-  finally { signal.removeEventListener("abort", cancel); lock.release(); }
+  finally {
+    signal.removeEventListener("abort", cancel);
+    try { await broker?.close(); } finally { lock.release(); }
+  }
 }
 export async function verifyCandidate(candidate, manifestSha256, receiptSha256, consumer, tarball) {
   const manifestBytes = readRegular(join(candidate, "manifest.json"));

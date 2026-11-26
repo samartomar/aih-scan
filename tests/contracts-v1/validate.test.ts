@@ -237,7 +237,37 @@ describe("summary and withdrawal schemas", () => {
     expect(ajv(withAi(cli))).toBe(true);
     const { effort: _effort, client: _client, ...plain } = cli;
     expect(readSummary(encode(withAi(plain))).status).toBe("ok");
+    const adaptive = {
+      via: "cli",
+      provider: "kimi_cli",
+      model: "k3",
+      effort: "max",
+      client: { name: "kimi", version: "2.7.2" },
+      profile: "adaptive-ssd/1",
+    };
+    const profileRead = readSummary(encode(withAi(adaptive)));
+    expect(
+      profileRead.status === "ok" &&
+        profileRead.summary.tools.find((tool) => tool.tool === "skillspector")?.ai,
+    ).toEqual(adaptive);
+    expect(ajv(withAi(adaptive))).toBe(true);
+    for (const property of [{ tool: "cisco" }, { mode: "static" }]) {
+      const report = withAi(adaptive);
+      Object.assign(
+        report.tools.find((entry: { tool: string }) => entry.tool === "skillspector"),
+        property,
+      );
+      expect(readSummary(encode(report)).status).not.toBe("ok");
+      expect(ajv(report)).toBe(false);
+    }
     for (const bad of [
+      { ...adaptive, profile: "adaptive-ssd/2" },
+      { ...adaptive, via: "local" },
+      { ...adaptive, provider: "claude_cli" },
+      { ...adaptive, model: "kimi-for-coding" },
+      { ...adaptive, effort: "high" },
+      { ...adaptive, client: undefined },
+      { ...adaptive, client: { name: "kimi", version: "2.7.3" } },
       { ...cli, effort: "" },
       { ...cli, effort: "Medium!" },
       { ...cli, client: { name: "claude" } },

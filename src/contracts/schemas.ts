@@ -1,3 +1,4 @@
+import { ADAPTIVE_SSD_PROFILE, KIMI_CLIENT_VERSION, KIMI_K3_MODEL } from "./ai-profile.js";
 import { formats } from "./formats.js";
 import { GIT_REPOSITORY_URL_PATTERN } from "./git-url.js";
 import { limits } from "./limits.js";
@@ -184,6 +185,8 @@ const summary = {
         type: "object",
         additionalProperties: false,
         required: ["tool", "version", "mode", "result", "counts"],
+        if: { not: { required: ["ai"], properties: { ai: { required: ["profile"] } } } },
+        else: { properties: { tool: { const: "skillspector" }, mode: { const: "ai" } } },
         properties: {
           tool: { type: "string", minLength: 1 },
           version: { type: "string", minLength: 1 },
@@ -196,6 +199,7 @@ const summary = {
               via: { enum: ["cli", "local", "provider"] },
               provider: { type: "string", minLength: 1 },
               model: { type: "string", minLength: 1 },
+              profile: { const: ADAPTIVE_SSD_PROFILE },
               effort: { type: "string", minLength: 1, maxLength: 32, pattern: "^[a-z]+$" },
               client: {
                 type: "object",
@@ -210,6 +214,26 @@ const summary = {
             // effort and client describe a signed-in agent CLI pass only.
             if: { properties: { via: { const: "cli" } } },
             else: { not: { anyOf: [{ required: ["effort"] }, { required: ["client"] }] } },
+            allOf: [
+              {
+                if: { not: { required: ["profile"] } },
+                else: {
+                  required: ["effort", "client"],
+                  properties: {
+                    via: { const: "cli" },
+                    provider: { const: "kimi_cli" },
+                    model: { const: KIMI_K3_MODEL },
+                    effort: { const: "max" },
+                    client: {
+                      properties: {
+                        name: { const: "kimi" },
+                        version: { const: KIMI_CLIENT_VERSION },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
           },
           result: { enum: ["pass", "warn", "fail", "not-run", "not-applicable"] },
           reason: { type: "string", minLength: 1 },

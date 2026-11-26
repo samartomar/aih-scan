@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type HostExecutableV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
+import {
+  type HostExecutableV1,
+  resolveHostExecutableV1,
+  selectSkillSpectorPythonV1,
+} from "../cli/host-executable.js";
+import { ADAPTIVE_SSD_PROFILE, KIMI_K3_MODEL } from "../contracts/ai-profile.js";
 import type { AiProvenance, ScanMode } from "../contracts/validate.js";
 import {
   ANALYZER_REPORT_MAX_BYTES,
@@ -16,7 +21,15 @@ import {
   staticAnalyzerEnv,
 } from "./analyzer-process.js";
 import { analyzerFinding, notRun, objectOf } from "./analyzer-report.js";
-import { KIMI_EFFORTS, KIMI_MODEL, KIMI_QUOTA_RECEIPT, KIMI_VERSION } from "./kimi-inference.js";
+import {
+  KIMI_EFFORTS,
+  KIMI_INFERENCE_RECEIPT,
+  KIMI_MODEL,
+  KIMI_QUOTA_RECEIPT,
+  KIMI_VERSION,
+  kimiLogin,
+  supportedKimiSelection,
+} from "./kimi-inference.js";
 import type { AssessItem, ToolAdapter, ToolContext, ToolFinding, ToolRun } from "./tools.js";
 
 /** The SkillSpector release Scan runs (NVIDIA/SkillSpector tag v2.13.6). */
@@ -42,6 +55,7 @@ export type AiSetup =
       model?: string;
       /** An effort Scan applies to the agent CLI (`AIH_SCAN_AI_EFFORT`); absent means the CLI's own. */
       effort?: string;
+      profile?: typeof ADAPTIVE_SSD_PROFILE;
       /** The agent CLI and the version it reported, filled in when Scan runs it. */
       client?: Readonly<{ name: string; version: string }>;
     }>
@@ -49,6 +63,7 @@ export type AiSetup =
 
 /** Scan's own control for the effort of a signed-in Claude CLI pass. */
 export const AI_EFFORT_VARIABLE = "AIH_SCAN_AI_EFFORT";
+const AI_PROFILE_VARIABLE = "AIH_SCAN_AI_PROFILE";
 /** Effort levels the Claude CLI accepts for `--effort`. */
 export const AI_EFFORT_LEVELS = Object.freeze(["low", "medium", "high", "xhigh", "max"] as const);
 /** Providers whose CLI Scan can start with an explicit effort. */
@@ -170,14 +185,23 @@ export function skillSpectorAiSetup(
       reason: "SKILLSPECTOR_PROVIDER names a provider SkillSpector does not support",
     });
   const effort = env[AI_EFFORT_VARIABLE]?.trim().toLowerCase() ?? "";
+  const model = env.SKILLSPECTOR_MODEL?.trim();
+  const profile = env[AI_PROFILE_VARIABLE];
   if (
-    named === "kimi_cli" &&
-    (env.SKILLSPECTOR_MODEL?.trim() !== KIMI_MODEL ||
-      !KIMI_EFFORTS.some((level) => level === effort))
+    profile !== undefined &&
+    (profile !== ADAPTIVE_SSD_PROFILE ||
+      named !== "kimi_cli" ||
+      model !== KIMI_K3_MODEL ||
+      effort !== "max")
   )
     return Object.freeze({
       available: false as const,
-      reason: `Kimi CLI requires model ${KIMI_MODEL} and explicit effort: ${KIMI_EFFORTS.join(", ")}`,
+      reason: `${AI_PROFILE_VARIABLE} requires ${ADAPTIVE_SSD_PROFILE} with Kimi K3/max`,
+    });
+  if (named === "kimi_cli" && !supportedKimiSelection(model, effort))
+    return Object.freeze({
+      available: false as const,
+      reason: `Kimi CLI requires ${KIMI_K3_MODEL} with max effort, or ${KIMI_MODEL} and explicit effort: ${KIMI_EFFORTS.join(", ")}`,
     });
   if (effort !== "") {
     if (!EFFORT_PROVIDERS.has(named))
@@ -211,13 +235,13 @@ export function skillSpectorAiSetup(
     named === "openai_compatible" && isLoopbackUrl(env.SKILLSPECTOR_COMPAT_BASE_URL)
       ? ("local" as const)
       : requirement.via;
-  const model = env.SKILLSPECTOR_MODEL?.trim();
   return Object.freeze({
     available: true as const,
     provider: named,
     via,
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
+    ...(profile === ADAPTIVE_SSD_PROFILE ? { profile } : {}),
   });
 }
 
@@ -536,6 +560,7 @@ function aiProvenance(
     model: model.slice(0, 256),
     ...(setup.effort === undefined ? {} : { effort: setup.effort }),
     ...(setup.client === undefined ? {} : { client: setup.client }),
+    ...(setup.profile === undefined ? {} : { profile: setup.profile }),
   });
 }
 
@@ -709,6 +734,8 @@ export function skillSpectorAdapter(options: SkillSpectorOptions = {}): ToolAdap
       if (context.mode === "ai") {
         const setup = options.ai ?? skillSpectorAiSetup(env, platform);
         if (setup.available) mode = "ai";
+        else if (env[AI_PROFILE_VARIABLE] !== undefined)
+          return notRun("unavailable", "ai", SKILLSPECTOR_VERSION, setup.reason);
         else
           notes.push(`AI not available here: ${setup.reason}; SkillSpector ran static checks only`);
       }
@@ -801,7 +828,35 @@ async function runInstalled(
     ai = agent.ai;
     runEnv = agent.env;
   }
-  const result = await runAnalyzer(invocation.argv, {
+  let argv = invocation.argv;
+  if (ai?.available && ai.profile === ADAPTIVE_SSD_PROFILE) {
+    const socket = runEnv.AIH_SCAN_SSD_SOCKET;
+    if (!socket || !posix.isAbsolute(socket))
+      return notRun(
+        "unavailable",
+        mode,
+        version,
+        "Adaptive SSD requires its prepared broker socket",
+      );
+    try {
+      if (!statSync(socket).isSocket()) throw new Error();
+    } catch {
+      return notRun("unavailable", mode, version, "Adaptive SSD broker socket is unavailable");
+    }
+    const python = selectSkillSpectorPythonV1(executable);
+    if (!python)
+      return notRun(
+        "unavailable",
+        mode,
+        version,
+        "Adaptive SSD requires SkillSpector's Python environment",
+      );
+    const bootstrap = fileURLToPath(new URL("../../runtime/adaptive-ssd.py", import.meta.url));
+    if (!existsSync(bootstrap))
+      return notRun("unavailable", mode, version, "Adaptive SSD analyzer bridge is unavailable");
+    argv = Object.freeze([python, "-I", bootstrap, ...invocation.argv]);
+  }
+  const result = await runAnalyzer(argv, {
     cwd: invocation.cwd,
     env: runEnv,
     signal: context.signal,
@@ -825,7 +880,8 @@ async function runInstalled(
   const kimiQuota =
     ai?.available === true &&
     ai.provider === "kimi_cli" &&
-    existsSync(path.join(settings.scratch, KIMI_QUOTA_RECEIPT));
+    (existsSync(path.join(settings.scratch, KIMI_QUOTA_RECEIPT)) ||
+      (ai.profile === ADAPTIVE_SSD_PROFILE && metadata.aih_scan_ssd_quota_refused === true));
   if (result.code === 2)
     return notRun(
       "failed",
@@ -856,11 +912,25 @@ async function runInstalled(
       version,
       "Configured TP4 capacity requires the maintenance build",
     );
+  if (ai?.available && ai.profile === ADAPTIVE_SSD_PROFILE) {
+    if (metadata.aih_scan_ai_profile !== ADAPTIVE_SSD_PROFILE)
+      return notRun(
+        "failed",
+        mode,
+        version,
+        "SkillSpector did not attest the adaptive SSD profile",
+      );
+    if (aiProvenance(metadata, ai).model !== KIMI_K3_MODEL)
+      return notRun("failed", mode, version, "Adaptive SSD effective model mismatch");
+  }
   if (ai?.available && ai.provider === "kimi_cli") {
     const provider = objectOf(objectOf(metadata.llm_provenance)?.provider);
     if (
       provider?.effective_adapter !== "claude_cli" ||
-      !existsSync(path.join(settings.scratch, "kimi-inference-completed"))
+      !(
+        existsSync(path.join(settings.scratch, KIMI_INFERENCE_RECEIPT)) ||
+        (ai.profile === ADAPTIVE_SSD_PROFILE && metadata.aih_scan_ssd_inference_completed === true)
+      )
     ) {
       const run = skillSpectorRun(document, item, mode, undefined);
       if (run.status !== "ran") return run;
@@ -943,8 +1013,11 @@ function kimiTransport(
   env: Readonly<Record<string, string>>,
   scratch: string,
 ) {
-  const home = env.KIMI_CODE_HOME ?? (env.HOME ? posix.join(env.HOME, ".kimi-code") : "");
-  if (!posix.isAbsolute(home)) return "Kimi Code requires an absolute login directory";
+  const login = kimiLogin(env);
+  if (typeof login === "string") return login;
+  const model = setup.model ?? "";
+  if (!supportedKimiSelection(model, setup.effort ?? ""))
+    return "Kimi Code model or effort is unsupported";
   const moduleUrl = new URL(import.meta.url);
   const launcher = fileURLToPath(
     new URL(
@@ -952,10 +1025,16 @@ function kimiTransport(
       moduleUrl,
     ),
   );
-  const region = env.AIH_SCAN_KIMI_REGION ?? "global";
-  if (region !== "global" && region !== "mainland-cn")
-    return "AIH_SCAN_KIMI_REGION must be global or mainland-cn";
-  const argv = [process.execPath, launcher, binary, home, scratch, setup.effort ?? "", region];
+  const argv = [
+    process.execPath,
+    launcher,
+    binary,
+    login.home,
+    scratch,
+    setup.effort ?? "",
+    login.region,
+    model,
+  ];
   if (argv.some((part) => /['\n]/u.test(part)))
     return "Kimi Code launcher paths cannot be quoted safely";
   const bin = posix.join(scratch, "agent-cli");
@@ -974,6 +1053,7 @@ function kimiTransport(
     env: Object.freeze({
       ...env,
       SKILLSPECTOR_PROVIDER: "claude_cli",
+      SKILLSPECTOR_MODEL: model,
       PATH: `${bin}:${env.PATH ?? ""}`,
     }),
   });

@@ -280,6 +280,7 @@ describe("@aihq/scan release boundary (#12)", () => {
       files: [
         "dist",
         "schemas",
+        "runtime/adaptive-ssd.py",
         "trust",
         "docs/scan-sources.md",
         "docs/analyzers.md",

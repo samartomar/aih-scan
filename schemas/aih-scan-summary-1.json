@@ -129,6 +129,30 @@
           "result",
           "counts"
         ],
+        "if": {
+          "not": {
+            "required": [
+              "ai"
+            ],
+            "properties": {
+              "ai": {
+                "required": [
+                  "profile"
+                ]
+              }
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "tool": {
+              "const": "skillspector"
+            },
+            "mode": {
+              "const": "ai"
+            }
+          }
+        },
         "properties": {
           "tool": {
             "type": "string",
@@ -167,6 +191,9 @@
               "model": {
                 "type": "string",
                 "minLength": 1
+              },
+              "profile": {
+                "const": "adaptive-ssd/1"
               },
               "effort": {
                 "type": "string",
@@ -217,7 +244,48 @@
                   }
                 ]
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "not": {
+                    "required": [
+                      "profile"
+                    ]
+                  }
+                },
+                "else": {
+                  "required": [
+                    "effort",
+                    "client"
+                  ],
+                  "properties": {
+                    "via": {
+                      "const": "cli"
+                    },
+                    "provider": {
+                      "const": "kimi_cli"
+                    },
+                    "model": {
+                      "const": "k3"
+                    },
+                    "effort": {
+                      "const": "max"
+                    },
+                    "client": {
+                      "properties": {
+                        "name": {
+                          "const": "kimi"
+                        },
+                        "version": {
+                          "const": "2.7.2"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
           },
           "result": {
             "enum": [

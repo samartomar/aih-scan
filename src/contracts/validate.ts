@@ -1,3 +1,4 @@
+import { ADAPTIVE_SSD_PROFILE, KIMI_CLIENT_VERSION, KIMI_K3_MODEL } from "./ai-profile.js";
 import { formatProblem, formats, type Problem } from "./formats.js";
 import type { FileMode } from "./git-tree.js";
 import { SCAN_KEY_PATTERN } from "./git-tree.js";
@@ -76,6 +77,7 @@ export type AiProvenance = Readonly<{
   provider: string;
   model: string;
   effort?: string;
+  profile?: typeof ADAPTIVE_SSD_PROFILE;
   client?: Readonly<{ name: string; version: string }>;
 }>;
 
@@ -469,12 +471,13 @@ function summaryTool(value: unknown, at: string): SummaryTool {
   result.counts = Object.freeze(result.counts);
   if (tool.ai !== undefined) {
     const ai = object(tool.ai, `${at}.ai`);
-    keys(ai, `${at}.ai`, ["via", "provider", "model"], ["effort", "client"]);
+    keys(ai, `${at}.ai`, ["via", "provider", "model"], ["effort", "client", "profile"]);
     const provenance: {
       via: "cli" | "local" | "provider";
       provider: string;
       model: string;
       effort?: string;
+      profile?: typeof ADAPTIVE_SSD_PROFILE;
       client?: Readonly<{ name: string; version: string }>;
     } = {
       via: oneOf(ai.via, `${at}.ai.via`, ["cli", "local", "provider"]),
@@ -495,6 +498,21 @@ function summaryTool(value: unknown, at: string): SummaryTool {
     }
     if (provenance.via !== "cli" && (ai.effort !== undefined || ai.client !== undefined))
       invalid(`${at}.ai.effort and ${at}.ai.client describe an agent CLI and need via cli`);
+    if (ai.profile !== undefined) {
+      if (
+        ai.profile !== ADAPTIVE_SSD_PROFILE ||
+        tool.tool !== "skillspector" ||
+        tool.mode !== "ai" ||
+        provenance.via !== "cli" ||
+        provenance.provider !== "kimi_cli" ||
+        provenance.model !== KIMI_K3_MODEL ||
+        provenance.effort !== "max" ||
+        provenance.client?.name !== "kimi" ||
+        provenance.client.version !== KIMI_CLIENT_VERSION
+      )
+        invalid(`${at}.ai.profile requires the verified Kimi K3/max client`);
+      provenance.profile = ADAPTIVE_SSD_PROFILE;
+    }
     result.ai = Object.freeze(provenance);
   }
   if (tool.reason !== undefined)

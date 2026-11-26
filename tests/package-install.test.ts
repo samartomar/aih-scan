@@ -311,6 +311,7 @@ describe("the packed tarball", () => {
       "docs/scan-sources.md",
       "docs/verification.md",
       "package.json",
+      "runtime/adaptive-ssd.py",
       "schemas/aih-scan-request-1.json",
       "schemas/aih-scan-source-1.json",
       "schemas/aih-scan-summary-1.json",

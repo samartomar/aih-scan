@@ -143,6 +143,33 @@ export function selectHostExecutableV1(
   return Object.freeze({ name, path, foundIn: "selected" as const });
 }
 
+/** Resolve the interpreter entry in an already selected SkillSpector POSIX venv. */
+export function selectSkillSpectorPythonV1(executable: HostExecutableV1): string | undefined {
+  if (
+    process.platform === "win32" ||
+    executable.name !== "skillspector" ||
+    !registered.has(executable.path)
+  )
+    return undefined;
+  const bin = posix.dirname(executable.path);
+  const python = posix.join(bin, "python");
+  try {
+    const interpreter = statSync(python);
+    if (
+      posix.basename(bin) !== "bin" ||
+      !statSync(posix.join(bin, "..", "pyvenv.cfg")).isFile() ||
+      !interpreter.isFile() ||
+      (interpreter.mode & 0o111) === 0
+    )
+      return undefined;
+  } catch {
+    return undefined;
+  }
+  // Python locates pyvenv.cfg relative to the invoked symlink spelling.
+  registered.add(python);
+  return python;
+}
+
 /** `true` only for a path this module resolved; Scan's runner spawns nothing else by path. */
 export function isRegisteredHostExecutableV1(path: string): boolean {
   return registered.has(path);

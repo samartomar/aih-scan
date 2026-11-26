@@ -115,7 +115,8 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
 
   **Kimi Code CLI.** On POSIX, set `SKILLSPECTOR_PROVIDER=kimi_cli`,
   `SKILLSPECTOR_MODEL=kimi-for-coding` and `AIH_SCAN_AI_EFFORT` to `low`, `high` or
-  `max`. Use Kimi Code CLI 2.7.2 on PATH and sign in to the managed Kimi Code provider.
+  `max`. For Kimi K3, set `SKILLSPECTOR_MODEL=k3` and `AIH_SCAN_AI_EFFORT=max`.
+  Use Kimi Code CLI 2.7.2 on PATH and sign in to the managed Kimi Code provider.
   The model ID identifies K2.8 Preview for eligible accounts. The default login region is
   `global`. For a mainland China login set `AIH_SCAN_KIMI_REGION=mainland-cn`. Scan uses
   `KIMI_CODE_HOME` when set, otherwise `~/.kimi-code`.
@@ -123,10 +124,17 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   Scan uses Kimi's ACP stdio protocol with a fresh private workspace and
   settings that remove all model-callable tools. The Kimi client handles the existing
   OAuth login. Scan verifies the selected model and effort in the Kimi session before
-  sending a prompt. Completed evidence records `kimi_cli`, `kimi-for-coding`, the
+  sending a prompt. Completed evidence records `kimi_cli`, the effective model, the
   selected effort and `client: { "name": "kimi", "version": "2.7.2" }`.
   The Kimi route reports incomplete analysis when authentication, provider response,
   model or effort selection fails.
+
+  Prepared campaigns can explicitly select `adaptive-ssd/1` with Kimi K3 at max effort.
+  The prepared broker and the pinned SkillSpector runtime must both support this profile.
+  Scan records it as `ai.profile` after verifying that the semantic security discovery
+  detector used the selected path. The profile changes the detector prompt context and
+  is a distinct evidence configuration. Ordinary Kimi K3 and K2.8 assessments retain
+  their existing one-request detector behavior.
 
   **Codex CLI.** Scan reports `codex_cli` unavailable because Codex CLI 0.171.0
   lacks a verified public configuration that removes every model-callable tool.
