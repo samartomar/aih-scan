@@ -191,7 +191,11 @@ operator's own `HOME`, because the signed-in CLI reads its sign-in from there, a
 the one exception to the private home that other profiles use: use a host and account
 dedicated to this work. The pinned SkillSpector starts the CLI with `--setting-sources=`, no
 tools, `dontAsk` permissions and no session persistence, so user settings, hooks and memory
-files are not loaded. With Claude CLI 2.1.330 an identical call carried about 0.7k input
+files are not loaded. The invocation also disables skills and commands, uses an empty
+tool list, and selects strict MCP configuration without adding a server. It does not
+pass literal `--bare`: Claude CLI 2.1.330 documents that this mode skips subscription
+OAuth and keychain reads. The prepared receipt does not measure plugin startup overhead.
+With Claude CLI 2.1.330 an identical call carried about 0.7k input
 tokens, against about 2.8k with setting sources enabled on the same account. Confirm this on
 your host before a campaign. No credential value is read or recorded.
 
@@ -215,7 +219,7 @@ original task before the text can enter its report.
 AI assessments may also set `llmConcurrency` to an explicit positive safe integer, for
 example `"llmConcurrency": 24`. The helper passes it only to its isolated scan child as
 SkillSpector's existing `SKILLSPECTOR_MAX_LLM_CONCURRENCY` setting. Omitting it preserves
-the upstream default of 10; an ambient parent setting is not inherited. This controls
+the pinned upstream defaults of two concurrent requests for CLI providers and ten for HTTP providers. An ambient parent setting is not inherited. This controls
 concurrent LLM requests within each item, separately from the per-key worker scheduling
 below. There is no model-specific cap or timeout change. Static assessments must omit
 all AI controls. The explicit value is part of the assessment/configuration identity:
@@ -284,6 +288,14 @@ included in the completed-output candidate archive. Older records without notes 
 valid. Worker stderr is not persisted as a diagnostic log.
 
 #### Diagnose coverage before retrying
+
+When the goal is to close an incomplete AI assessment, first run the static profile on
+the same captured bytes with the candidate scanner. If it reproduces a hard inspection
+gap, resolve that gap before retrying AI. A successful static replay establishes static
+coverage only. For a cost-sensitive retry, measure representative detector requests and
+prompt volume offline, and check that live request counts and batch widths will be
+observable before spending quota. Model limits bound a group; they do not bound the
+total requests or input volume for an item.
 
 Read the verified summary and the matching receipt entry together. The tool results,
 `coverage`, `reason`, `notAnalysed` and available diagnostic notes measure different
