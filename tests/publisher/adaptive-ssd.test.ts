@@ -165,4 +165,23 @@ describe.skipIf(process.platform === "win32")("adaptive SSD trusted broker", () 
     expect(responses).toEqual([{ error: "inference-failed" }, { error: "inference-failed" }]);
     expect(calls).toBe(3);
   });
+  it("scopes a classified quota refusal to the affected provider request", async () => {
+    const broker = await startAdaptiveSsd({
+      batchDelayMs: 75,
+      async infer(prompt: string) {
+        const rows = decode(prompt);
+        if (rows.some(({ document }) => document === "quota-a"))
+          throw Object.assign(new Error("private provider detail"), { code: "kimi-quota-refusal" });
+        return JSON.stringify({ items: rows.map(({ key }) => result(key)) });
+      },
+    });
+    closures.push(broker.close);
+    await expect(
+      Promise.all([request(broker.socketPath, "quota-a"), request(broker.socketPath, "quota-b")]),
+    ).resolves.toEqual([{ error: "quota-refused" }, { error: "quota-refused" }]);
+    await expect(request(broker.socketPath, "unaffected")).resolves.toEqual({
+      result: { findings: [] },
+    });
+    expect(broker.stats()).toMatchObject({ modelRequests: 2, failedTasks: 2, validatedTasks: 1 });
+  });
 });

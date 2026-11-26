@@ -237,8 +237,11 @@ async function infer(
         throw new Error("Kimi response incomplete");
       return text;
     } catch {
-      if (classified === quotaMessage)
-        writeFileSync(join(scratch, KIMI_QUOTA_RECEIPT), "", { mode: 0o600 });
+      if (classified === quotaMessage) {
+        if (signal === undefined)
+          writeFileSync(join(scratch, KIMI_QUOTA_RECEIPT), "", { mode: 0o600 });
+        throw new InferenceError(classified, "kimi-quota-refusal");
+      }
       throw new InferenceError(classified);
     } finally {
       clearTimeout(timer);
@@ -253,7 +256,14 @@ async function infer(
   }
 }
 
-class InferenceError extends Error {}
+class InferenceError extends Error {
+  constructor(
+    message: string,
+    readonly code?: "kimi-quota-refusal",
+  ) {
+    super(message);
+  }
+}
 
 export function kimiLogin(env: Readonly<NodeJS.ProcessEnv>) {
   const home = env.KIMI_CODE_HOME ?? (env.HOME ? posix.join(env.HOME, ".kimi-code") : "");

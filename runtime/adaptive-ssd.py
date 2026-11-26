@@ -18,6 +18,7 @@ MODEL = "k3"
 RULES = {"SSD-1", "SSD-2", "SSD-3", "SSD-4"}
 SELECTED = False
 INFERENCE_COMPLETED = False
+QUOTA_REFUSED = False
 
 
 class AdaptiveSsdInferenceError(RuntimeError):
@@ -104,7 +105,7 @@ class AdaptiveSsd(native.LLMAnalyzerBase):
         return batch, await self._adaptive_findings(batch)
 
     async def _adaptive_findings(self, batch):
-        global INFERENCE_COMPLETED
+        global INFERENCE_COMPLETED, QUOTA_REFUSED
         self._require_time_remaining()
         remaining = self._remaining_timeout()
         timeout = min(remaining, 300) if remaining is not None else 300
@@ -129,6 +130,9 @@ class AdaptiveSsd(native.LLMAnalyzerBase):
                 key = (finding.rule_id, finding.file, finding.start_line, finding.end_line, finding.message)
                 unique.setdefault(key, finding)
             return list(unique.values())
+        if reply.get("error") == "quota-refused":
+            QUOTA_REFUSED = True
+            raise AdaptiveSsdInferenceError("Adaptive SSD inference quota refused")
         if reply.get("error") == "invalid-output":
             raise native._StructuredResponseValidationError()
         if set(reply) != {"result"}:
@@ -187,6 +191,8 @@ def main():
                 if not (SELECTED or no_tasks):
                     return original_write(result, output, format)
                 report["metadata"]["aih_scan_ai_profile"] = PROFILE
+                if QUOTA_REFUSED:
+                    report["metadata"]["aih_scan_ssd_quota_refused"] = True
                 if INFERENCE_COMPLETED:
                     report["metadata"]["aih_scan_ssd_inference_completed"] = True
                 result = dict(result, report_body=json.dumps(report, ensure_ascii=False))

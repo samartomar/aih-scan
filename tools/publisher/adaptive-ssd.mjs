@@ -155,8 +155,9 @@ export async function startAdaptiveSsd({
       if (items.length > 1) counts.multiItemRequests++;
       response = await infer(promptFor(items), controller.signal);
       controller.signal.throwIfAborted();
-    } catch {
-      for (const item of items) settle(item, { error: "inference-failed" });
+    } catch (error) {
+      const classification = error?.code === "kimi-quota-refusal" ? "quota-refused" : "inference-failed";
+      for (const item of items) settle(item, { error: classification });
       return;
     } finally {
       clearTimeout(timer);

@@ -880,7 +880,8 @@ async function runInstalled(
   const kimiQuota =
     ai?.available === true &&
     ai.provider === "kimi_cli" &&
-    existsSync(path.join(settings.scratch, KIMI_QUOTA_RECEIPT));
+    (existsSync(path.join(settings.scratch, KIMI_QUOTA_RECEIPT)) ||
+      (ai.profile === ADAPTIVE_SSD_PROFILE && metadata.aih_scan_ssd_quota_refused === true));
   if (result.code === 2)
     return notRun(
       "failed",
