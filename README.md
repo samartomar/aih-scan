@@ -85,6 +85,41 @@ source route's public Git clone or npm tarball, before the scan. `--mode ai` add
 SkillSpector's AI pass with the AI you already set up, says where the content goes before
 scanning, and falls back to static with "AI not available here" when nothing is set up.
 
+### Start with static evidence
+
+Scan the collection once, then choose a result by its printed item path, scan key and
+summary path. Keep the summary and its `sarif/` directory together. Substitute the
+chosen scan key for `git-sha1:<hex>` below.
+
+```sh
+aih-scan scan ./team-skills --mode static --out ./scan-static
+key='git-sha1:<hex>'
+summary="./scan-static/git-sha1-${key#git-sha1:}/summary.json"
+aih-scan read "$summary"
+aih-scan findings "$summary" --key "$key"
+```
+
+The read commands use the saved evidence without starting analyzers. Use `--json` on
+either command to pass the result to another program. Check the summary's coverage,
+reason, tool modes and unanalysed files alongside the findings. An empty findings list
+can accompany partial coverage. An analyst can review the saved results and selected
+source excerpts without running Scan again. That review leaves the recorded scan
+coverage and tool modes unchanged.
+
+If you need the full SkillSpector AI pass, use a new output directory and pass the
+single skill folder that owns the selected result. Use the same file bytes and modes
+as the static scan, and compare the new scan key with the original. AI mode runs static
+checks again and sends the selected content to your configured AI. Check the resulting
+tool mode and coverage to see what completed.
+
+```sh
+aih-scan scan ./team-skills/reviewed-skill --mode ai --out ./scan-ai
+```
+
+SkillSpector 2.13.7's optional `mcp` command exposes `scan_skill`. It scans a target
+anew and requests the AI pass by default (`use_llm: true`). The `read` and `findings`
+commands review saved Scan results without an MCP server.
+
 ## Library
 
 Three entry points, six functions. No function throws on bad input: every result has a
@@ -131,6 +166,33 @@ const match = await matchScan(verified, files);       // files: [{ path, mode, b
 
 `matchScan` takes the signer only from the exact object `verifySummary` returned; a copy or
 a hand-built look-alike matches with `signer: null`.
+
+For the same static-first workflow in Node, call `scan` with `mode: "static"` and use the
+chosen result's `summaryPath`. Read each SARIF file listed in that summary. `readFindings`
+checks the SARIF digest and scan key on each read.
+
+```js
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { readFindings, readSummary } from "@aihq/scan/read";
+
+export async function reviewSummary(summaryPath) {
+  const read = readSummary(await readFile(summaryPath));
+  if (read.status !== "ok") throw new Error(`Summary: ${read.status}`);
+  const { summary } = read;
+  const findings = [];
+  for (const { path } of summary.sarif) {
+    const bytes = await readFile(join(dirname(summaryPath), path));
+    const result = await readFindings(summary, bytes, summary.scanKey);
+    if (result.status !== "ok") throw new Error(`Findings: ${result.status}`);
+    findings.push(...result.findings);
+  }
+  return { summary, findings };
+}
+```
+
+For an optional full AI pass on the selected item, pass `mode: "ai"` and a single
+`items` entry with its exact folder path. Keep the static run in its own output folder.
 
 The request (`aih-scan-request/1`) carries either a `source` (`aih-scan-source/1`) or
 caller-prepared `items` (`[{ path, executable?, label? }]`), plus `origin`, and optional
