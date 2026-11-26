@@ -536,11 +536,13 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
   });
 
   it.each([
-    ["the same analyzer has unaccounted work", 1, false],
-    ["the missing reference is fatal", 0, true],
+    ["the same analyzer has unaccounted work", 1, false, 0],
+    ["the missing reference is fatal", 0, true, 0],
+    ["the dependency lookup exhausted a positive time limit", 0, false, 1],
+    ["the dependency lookup reports no time limit", 0, false, undefined],
   ])(
     "retains partial coverage with disabled OSV and a reference when %s",
-    async (_, unaccounted, fatal) => {
+    async (_, unaccounted, fatal, limitSeconds) => {
       const folder = fixture.folder("unexplained-reference-and-osv", {
         ...skill,
         "requirements.txt": "requests==2.34.2\n",
@@ -567,6 +569,7 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
             path: "requirements.txt",
             fatal: false,
             analyzers: ["static_patterns_supply_chain_dependencies_runtime_limit"],
+            ...(limitSeconds === undefined ? {} : { limit_seconds: limitSeconds }),
           },
           {
             outcome: "partial",

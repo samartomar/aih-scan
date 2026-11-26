@@ -418,6 +418,7 @@ function completenessOf(
       positiveExclusion = true;
       onlyDisabledOsv &&=
         osvOnly &&
+        exception.limit_seconds === 0 &&
         part === "dependencies" &&
         exception.phase === "static" &&
         exception.outcome === "partial" &&

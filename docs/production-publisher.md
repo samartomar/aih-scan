@@ -284,7 +284,7 @@ are absent.
 
 | Observation | Recovery decision |
 | --- | --- |
-| `reference_missing` | Verify the referenced path against the exact prepared input. Correct a genuinely omitted companion through the owning source or declaration, then prepare the resulting key. A reference-only advisory stays visible when the analyzer confirms completeness or exact accounting attributes the remaining omissions to the intentionally disabled dependency OSV lookup. |
+| `reference_missing` | Verify the referenced path against the exact prepared input. Correct a genuinely omitted companion through the owning source or declaration, then prepare the resulting key. A reference-only advisory stays visible when the analyzer confirms completeness or exact accounting attributes the remaining omissions to the disabled dependency OSV lookup with its recorded zero-second limit. |
 | `static_parse_limit`, referenced content left uninspected, or degraded inspection | Reproduce using the same verified analyzer and bytes in static mode. A source correction or verified parser improvement can change the outcome. Repeating AI alone cannot repair a persistent static inspection gap. |
 | Tool `not-run` with reason `timeout` | The published deadline is ten minutes for one tool on one item. Check static work, routed input, host pressure and the effective analyzer/provider configuration first. A timeout cannot establish which provider requests started, completed or incurred usage. |
 | Provider, model or AI inspection failure | Confirm the provider, client version where applicable, model, effort and assessment profile. Reproduce configuration and batching capability offline where possible. A recovered static result is evidence about static inspection only. |
