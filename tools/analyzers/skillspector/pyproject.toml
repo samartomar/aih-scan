@@ -1,11 +1,11 @@
 [project]
 name = "aih-scan-skillspector"
 version = "0.0.0"
-description = "Pinned SkillSpector 2.13.6 runtime for aih-scan (not a package)."
+description = "Pinned SkillSpector 2.13.7 runtime for aih-scan (not a package)."
 requires-python = ">=3.12,<3.14"
-# SkillSpector is not published on PyPI; v2.13.6 is this tag commit.
+# Use the same v2.13.7 source commit for the standard runtime and maintenance wheel.
 dependencies = [
-  "skillspector @ git+https://github.com/NVIDIA/SkillSpector@e2674da339b0bddc6e565d059c0577c6d9cd25da",
+  "skillspector @ git+https://github.com/NVIDIA/SkillSpector@c323ad4c43e3c8f2de051572cc25b2711d11e648",
 ]
 
 [tool.uv]

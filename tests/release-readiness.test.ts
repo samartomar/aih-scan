@@ -107,7 +107,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain("actions/upload-artifact@");
     expect(workflow).toContain("actions/download-artifact@");
     expect(workflow).toContain(
-      "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3",
+      "anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4",
     );
     expect(workflow).toContain(
       ["artifact-ids: $", "{{ needs.verify-and-pack.outputs.artifact_id }}"].join(""),

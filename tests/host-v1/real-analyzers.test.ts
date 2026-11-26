@@ -12,7 +12,7 @@ import { type FixtureRoot, fixtureRoot, readBytes } from "../support/scan-v1-fix
  * Real static runs of the installed analyzers on small benign temporary fixtures. They run only
  * when the analyzer executables are provided (see docs/analyzers.md for the pinned installs):
  *
- *   AIH_SCAN_TEST_SKILLSPECTOR=<path to skillspector 2.13.6>
+ *   AIH_SCAN_TEST_SKILLSPECTOR=<path to skillspector 2.13.7>
  *   AIH_SCAN_TEST_SKILL_SCANNER=<path to skill-scanner 2.3.2>
  *
  * No AI provider is configured or contacted here; live AI is not part of these tests.
@@ -165,7 +165,7 @@ async function scanOnce(folder: string, env: Record<string, string>, tools?: str
 
 const noSentinels = () => expect(readdirSync(sentinels)).toEqual([]);
 
-describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.6 (static, --no-llm)", () => {
+describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.7 (static, --no-llm)", () => {
   it("inspects Kiro hook instructions under their original filename without executing hook actions", async () => {
     if (skillspector === undefined) throw new Error("SkillSpector runtime required");
     const path = "session-summary.kiro.hook";
@@ -333,7 +333,7 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.6 (static, -
     const { summary } = await scanOnce(benignFixture(), { AIH_SCAN_SKILLSPECTOR: executable });
     expect(summary.tools.find((tool) => tool.tool === "skillspector")).toEqual({
       tool: "skillspector",
-      version: "2.13.6",
+      version: "2.13.7",
       mode: "static",
       result: "pass",
       counts: {},
@@ -371,7 +371,7 @@ describe.skipIf(skillspector === undefined)("real SkillSpector 2.13.6 (static, -
 });
 
 describe.skipIf(skillspector === undefined || process.platform === "win32")(
-  "real SkillSpector 2.13.6 in CLI AI mode with a controlled `claude` CLI",
+  "real SkillSpector 2.13.7 in CLI AI mode with a controlled `claude` CLI",
   () => {
     // The `claude` here is a POSIX fixture that records its calls and answers with fixed text; it is
     // not Claude and no provider is contacted. Installed HTTP fixtures cover native Windows AI.

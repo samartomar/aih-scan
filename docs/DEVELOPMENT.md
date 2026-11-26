@@ -29,8 +29,8 @@ npm registry, OSV, Fulcio and Rekor traffic at those local services.
 
 ## Analyzer runtimes
 
-SkillSpector 2.13.6 and Cisco skill-scanner 2.3.2 are locked in `tools/analyzers/<tool>`
-(`pyproject.toml` + `uv.lock`). Provision them outside `PATH`:
+SkillSpector 2.13.7 and Cisco skill-scanner 2.3.2 are locked in `tools/analyzers/<tool>`
+(`pyproject.toml` + `uv.lock`). CI uses uv 0.13.10. Provision the runtimes outside `PATH`:
 
 ```sh
 UV_PROJECT_ENVIRONMENT="$HOME/.cache/aih-scan/skillspector" \

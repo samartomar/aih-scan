@@ -218,7 +218,7 @@ describe("prepared manifest and exact inventory", () => {
         {
           tool: "skillspector",
           mode: "ai",
-          version: "2.13.6",
+          version: "2.13.7",
           result: "pass",
           ai: {
             via: "cli",
@@ -592,7 +592,7 @@ describe.runIf(process.platform !== "win32")(
   () => {
     function analyzer(folder: string, complete = true) {
       return fakeAnalyzer(folder, "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           llm: complete,
@@ -694,7 +694,7 @@ describe.runIf(process.platform !== "win32")(
     it("exports, imports and verifies complete static evidence while partial static keys stay incomplete", async () => {
       const setup = await prepared({ item: skill }, staticAssessment);
       const ss = fakeAnalyzer(setup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport([]),
       });
@@ -736,7 +736,7 @@ describe.runIf(process.platform !== "win32")(
 
       const partialSetup = await prepared({ item: skill }, staticAssessment);
       const partial = fakeAnalyzer(partialSetup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport([], {
           analyzerStatuses: [{ analyzer_id: "static_patterns_tool_misuse", status: "degraded" }],
@@ -814,7 +814,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         { mode: 0o755 },
       );
       const ss = fakeAnalyzer(setup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         agentCli: "claude",
         agentModel: "kimi-for-coding",
@@ -893,7 +893,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         { mode: 0o755 },
       );
       const ss = fakeAnalyzer(setup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         agentCli: "claude",
         report: skillSpectorReport([], {
@@ -970,7 +970,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     it("writes, binds and verifies an operator-supplied revision through scan, export and import", async () => {
       const setup = await prepared({ item: skill }, staticAssessment);
       const ss = fakeAnalyzer(setup.folder, "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport([]),
       });
@@ -1045,7 +1045,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       async (secret, effectiveSecret) => {
         const setup = await prepared({ item: skill });
         const ss = fakeAnalyzer(setup.folder, "skillspector", {
-          versionText: "SkillSpector v2.13.6",
+          versionText: "SkillSpector v2.13.7",
           outputFlag: "--output",
           report: skillSpectorReport([], {
             llm: false,
@@ -1428,7 +1428,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
                 entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
               };
         const ss = fakeAnalyzer(setup.folder, "skillspector", {
-          versionText: "SkillSpector v2.13.6",
+          versionText: "SkillSpector v2.13.7",
           outputFlag: "--output",
           report: skillSpectorReport([], {
             llm: true,
@@ -1701,7 +1701,7 @@ describe("prepared transport and eligibility", () => {
         { tool: "aih-trust-lint", result: "pass" },
         {
           tool: "skillspector",
-          version: "2.13.6",
+          version: "2.13.7",
           result: "pass",
           mode: "ai",
           ai: { via: "provider", provider: "openai_compatible", model: "deepseek-flash" },
@@ -1723,7 +1723,7 @@ describe("prepared transport and eligibility", () => {
       coverage: "complete",
       tools: [
         { tool: "aih-trust-lint", version: "1.0.0", mode: "static", result: "warn" },
-        { tool: "skillspector", version: "2.13.6", mode: "static", result: "pass" },
+        { tool: "skillspector", version: "2.13.7", mode: "static", result: "pass" },
       ],
     };
     const manifest = { assessment: staticAssessment };
@@ -1760,7 +1760,7 @@ describe("prepared transport and eligibility", () => {
         { tool: "aih-trust-lint", result: "pass" },
         {
           tool: "skillspector",
-          version: "2.13.6",
+          version: "2.13.7",
           result: "pass",
           mode: "ai",
           ai: { ...ai, ...patch },
@@ -1830,8 +1830,8 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
             llmConcurrency: 24,
             skillspector: {
               version:
-                "2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81",
-              wheelSha256: "6edbd210f237cb0ca0b950d2e45b4941f3bf13efcbb0fe068e740969fc9f3261",
+                "2.13.7+aih.1.9a867b5e3f4e5142c27bad050c8c72a89cad4d9f21ee7b3157f61d19148952e7",
+              wheelSha256: "934716fbdc5665b94ec6656f046fbdd0cf46eda68cf4b65712563b78bbe9794e",
               tp4: { maxFiles: 256, maxFindings: 256, maxBatches: 256 },
             },
           },
@@ -1846,7 +1846,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
       expect(summary.files).toHaveLength(130);
       expect(
         summary.tools.find((tool: { tool: string }) => tool.tool === "skillspector").version,
-      ).toBe("2.13.6+aih.1.06fc3defc5b6f792396162f5f3678f7f07c32adf1f440194637392bfadac9e81");
+      ).toBe("2.13.7+aih.1.9a867b5e3f4e5142c27bad050c8c72a89cad4d9f21ee7b3157f61d19148952e7");
       const sarif = record.sarif
         .map((entry: { path: string }) => readFileSync(join(result.root, entry.path), "utf8"))
         .join("\n");

@@ -435,7 +435,7 @@ describe("the installed public entries", () => {
       assert.deepEqual(read.summary.notAnalysed, []);
       assert.equal(read.summary.coverage, "partial");
       assert.deepEqual(read.summary.tools.find(t => t.tool === "skillspector"), {
-        tool: "skillspector", version: "2.13.6", mode: "static", result: "not-run",
+        tool: "skillspector", version: "2.13.7", mode: "static", result: "not-run",
         reason: "unavailable", counts: {} });
       assert.deepEqual(new Uint8Array(readFileSync(item + "/" + path)), bytes);
       console.log("installed-kiro-ok");
@@ -902,7 +902,7 @@ describe("the installed aih-scan CLI", () => {
               entirely_uninspected_files: field === "entirely_uninspected_files" ? 1 : 0,
             };
       const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport(
           [skillSpectorIssue("P1", "SKILL.md", 6, "HIGH", 0.8, "Instruction Override")],
@@ -933,7 +933,7 @@ describe("the installed aih-scan CLI", () => {
       [2, "partial"],
     ] as const) {
       const analyzer = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: skillSpectorReport([skillSpectorIssue("LP3", "SKILL.md", 1, "MEDIUM", 0.7, null)], {
           status: "partial",
@@ -995,7 +995,7 @@ describe("the installed aih-scan CLI", () => {
     "cancels on SIGINT with exit 130 and ends the analyzer's process tree",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -1026,7 +1026,7 @@ describe("the installed aih-scan CLI", () => {
     "stops at once on a second SIGINT, still ending the analyzer tree and removing Scan's temporary folders",
     async () => {
       const hanging = fakeAnalyzer(join(work, "fakes"), "skillspector", {
-        versionText: "SkillSpector v2.13.6",
+        versionText: "SkillSpector v2.13.7",
         outputFlag: "--output",
         report: null,
         hang: true,
@@ -1249,7 +1249,7 @@ describe.runIf(skillspector !== undefined)(
       expect(output.tools).toContainEqual(
         expect.objectContaining({
           tool: "skillspector",
-          version: "2.13.6",
+          version: "2.13.7",
           mode: "ai",
           result: "fail",
           ai: { via: "local", provider: "openai_compatible", model: "deepseek-flash" },
@@ -1327,7 +1327,7 @@ describe.runIf(skillspector !== undefined)(
 );
 
 describe.runIf((skillspector !== undefined && skillScanner !== undefined) || required)(
-  "the installed public API and CLI with the real SkillSpector 2.13.6 and Cisco skill-scanner 2.3.2",
+  "the installed public API and CLI with the real SkillSpector 2.13.7 and Cisco skill-scanner 2.3.2",
   () => {
     it("accepts the real runtime through installed host, contracts and reader interfaces", async () => {
       expect(skillspector, "AIH_SCAN_TEST_SKILLSPECTOR").toBeDefined();
@@ -1387,7 +1387,7 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       expect(output.scanKeyMatches).toBe(true);
       expect(output.tools).toContainEqual({
         tool: "skillspector",
-        version: "2.13.6",
+        version: "2.13.7",
         mode: "static",
         result: "pass",
         counts: {},
@@ -1445,7 +1445,7 @@ describe.runIf((skillspector !== undefined && skillScanner !== undefined) || req
       ).toEqual([
         "aih-trust-lint 1.0.0 static",
         "cisco 2.3.2 static",
-        "skillspector 2.13.6 static",
+        "skillspector 2.13.7 static",
       ]);
       expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
       expect(skill.notes).toEqual([

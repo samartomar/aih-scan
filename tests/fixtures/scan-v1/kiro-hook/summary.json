@@ -31,7 +31,7 @@
     },
     {
       "tool": "skillspector",
-      "version": "2.13.6",
+      "version": "2.13.7",
       "mode": "static",
       "result": "not-run",
       "reason": "unavailable",
