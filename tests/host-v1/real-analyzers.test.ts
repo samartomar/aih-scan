@@ -413,7 +413,8 @@ describe.skipIf(skillspector === undefined || process.platform === "win32")(
             PATH: `${bin}:/usr/bin:/bin`,
             HOME: fixture.path("home"),
             SKILLSPECTOR_PROVIDER: "claude_cli",
-            AIH_SCAN_SKILLSPECTOR: unshare ? offline(skillspector!, "skillspector") : skillspector!,
+            SKILLSPECTOR_MODEL: "claude-opus-5-5",
+            AIH_SCAN_SKILLSPECTOR: skillspector!,
             AIH_SCAN_SKILL_SCANNER: "none",
           },
         },
@@ -429,9 +430,11 @@ describe.skipIf(skillspector === undefined || process.platform === "win32")(
       expect(tool).toMatchObject({ mode: "ai", ai: { via: "cli", provider: "claude_cli" } });
       const calls = readFileSync(log, "utf8").trim().split("\n");
       expect(calls).toContain("auth status");
-      expect(calls.some((call) => call.startsWith("-p --output-format text --allowed-tools"))).toBe(
-        true,
-      );
+      expect(
+        calls.some((call) =>
+          call.startsWith("-p --output-format text --model claude-opus-5-5 --allowed-tools"),
+        ),
+      ).toBe(true);
       // Supplied content reached the CLI only through stdin, never its argv.
       expect(readFileSync(stdin, "utf8")).toContain("Ignore all previous instructions");
       expect(calls.join("\n")).not.toContain("Ignore all previous instructions");

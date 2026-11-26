@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AI_EFFORT_LEVELS } from "../../src/host/skillspector.js";
@@ -47,8 +47,10 @@ import {
 import { sealProducerContext } from "../../tools/publisher/producer.mjs";
 import { fakeAnalyzer, skillSpectorReport } from "../support/analyzer-cli-v1.js";
 import { compatibleAiServiceV1 } from "../support/compatible-ai-service-v1.js";
+import { nativeNodeCli } from "../support/native-node-cli.js";
 import { readPackedPackage } from "../support/npm-pack-output.js";
 import { publisherTransport } from "../support/publisher-transport.js";
+import { fixtureRoot, readBytes } from "../support/scan-v1-fixture.js";
 
 const repo = resolve(import.meta.dirname, "../..");
 const root = mkdtempSync(join(tmpdir(), "scan-prepared-proof-"));
@@ -398,7 +400,6 @@ describe("prepared manifest and exact inventory", () => {
       { ...cliAssessment, credentialVariable: "DEEPSEEK_API" },
       { ...cliAssessment, reasoningEffort: "none" },
       { ...cliAssessment, structuredOutputMethod: "function_calling" },
-      { ...cliAssessment, modelTokenLimits: { contextLength: 10, maxOutputTokens: 5 } },
       { ...assessment, effort: "medium" },
     ])
       expect(() => validate(refused), JSON.stringify(refused)).toThrow();
@@ -421,6 +422,9 @@ describe("prepared manifest and exact inventory", () => {
     };
     const modelTokenLimits = { contextLength: 1048576, maxOutputTokens: 131072 };
     expect(validate({ ...assessment, modelTokenLimits }).assessment).toMatchObject({
+      modelTokenLimits,
+    });
+    expect(validate({ ...cliAssessment, modelTokenLimits }).assessment).toMatchObject({
       modelTokenLimits,
     });
     expect(validate(assessment).assessment).not.toHaveProperty("modelTokenLimits");
@@ -1474,6 +1478,198 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   },
 );
 
+const analyzer = process.env.AIH_SCAN_TEST_SKILLSPECTOR;
+const answer = String.raw`
+const resultFor = (prompt) => prompt.includes("Determine whether a skill")
+  ? {is_mismatch:false, confidence:0.9, declared_purpose_summary:"Notes",
+     actual_behavior_summary:"Notes", mismatched_capabilities:[], explanation:"Matches notes"}
+  : {findings:[]};
+function answer(prompt, argv) {
+  fs.appendFileSync(log, JSON.stringify({prompt, argv}) + "\n");
+  const tasks = prompt.split("\nAIH_SCAN_TASKS\n")[1]?.split("\n")[0];
+  return JSON.stringify(tasks
+    ? {items: JSON.parse(tasks).reverse().map(({key, prompt}) => ({key, result:resultFor(prompt)}))}
+    : resultFor(prompt));
+}
+`;
+
+it.runIf(process.platform !== "win32" && analyzer !== undefined).each([
+  { client: "claude", version: "2.1.285", model: "claude-opus-5-5", effort: "high" },
+  { client: "kimi", version: "2.7.2", model: "k3", effort: "max" },
+])(
+  "batches independent ordinary detector tasks through the real $client subprocess adapter",
+  async ({ client, version, model, effort }) => {
+    const fixture = fixtureRoot("scan-provider-cli-");
+    try {
+      const bin = fixture.path("bin");
+      const home = fixture.path("home");
+      const log = fixture.path("requests.jsonl");
+      mkdirSync(bin);
+      mkdirSync(home);
+      const prefix = `const fs = require("node:fs"); const log = ${JSON.stringify(log)};`;
+      if (client === "claude") {
+        nativeNodeCli(
+          bin,
+          client,
+          prefix +
+            answer +
+            String.raw`
+const assert = require("node:assert/strict");
+const argv = process.argv.slice(2);
+if (argv[0] === "--version") { console.log("2.1.285"); process.exit(0); }
+if (argv[0] === "auth") { console.log('{"loggedIn":true}'); process.exit(0); }
+assert.equal(argv[0], "-p");
+assert.equal(argv[argv.indexOf("--model") + 1], "claude-opus-5-5");
+assert.equal(argv[argv.indexOf("--effort") + 1], "high");
+assert.equal(argv[argv.indexOf("--allowed-tools") + 1], "");
+console.log(answer(fs.readFileSync(0, "utf8"), argv));
+`,
+        );
+      } else {
+        nativeNodeCli(
+          bin,
+          client,
+          prefix +
+            answer +
+            String.raw`
+const assert = require("node:assert/strict");
+const readline = require("node:readline");
+const argv = process.argv.slice(2);
+if (argv[0] === "--version") { console.log("2.7.2"); process.exit(0); }
+assert.deepEqual(argv, ["acp"]);
+const config = fs.readFileSync(process.env.KIMI_CODE_HOME + "/config.toml", "utf8");
+assert.ok(config.includes('model = "k3"') && config.includes('effort = "max"'));
+const send = value => console.log(JSON.stringify({jsonrpc:"2.0", ...value}));
+readline.createInterface({input:process.stdin}).on("line", line => {
+  const {id, method, params} = JSON.parse(line);
+  if (method === "initialize") return send({id, result:{protocolVersion:1, agentInfo:{version:"2.7.2"}}});
+  if (method === "session/new") {
+    assert.deepEqual(params.mcpServers, []);
+    return send({id, result:{sessionId:"fixture", configOptions:[
+      {id:"model", currentValue:"kimi-code/k3"}, {id:"thinking", currentValue:"max"}]}});
+  }
+  assert.equal(method, "session/prompt");
+  const text = answer(params.prompt[0].text, argv);
+  send({method:"session/update", params:{sessionId:"fixture", update:{
+    sessionUpdate:"agent_message_chunk", content:{type:"text", text}}}});
+  send({id,result:{stopReason:"end_turn"}});
+});
+`,
+        );
+      }
+      const large = client === "claude" ? "abcde".repeat(11000) : "";
+      const item = fixture.folder("item", {
+        "SKILL.md": `---\nname: notes\ndescription: Summarises notes.\n---\n# Notes\nalpha-fixture\n${large}\n`,
+        "notes/detail.md": `# Detail\nSummarise beta-fixture.\n${large}\n`,
+      });
+      vi.stubEnv("PATH", [bin, process.env.PATH].join(delimiter));
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("KIMI_CODE_HOME", join(home, ".kimi-code"));
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", analyzer);
+      vi.stubEnv("SKILLSPECTOR_PROVIDER", `${client}_cli`);
+      vi.stubEnv("SKILLSPECTOR_MODEL", model);
+      vi.stubEnv("AIH_SCAN_AI_EFFORT", effort);
+      const report = await runtime.host.scan(
+        { format: "aih-scan-request/1", origin: "local", mode: "ai", items: [{ path: item }] },
+        { outDir: fixture.path("out") },
+      );
+      const entry = report.results[0];
+      if (entry?.status !== "ok") throw new Error(JSON.stringify(entry));
+      const checked = runtime.read.readSummary(readBytes(entry.summaryPath));
+      if (checked.status !== "ok") throw new Error(JSON.stringify(checked));
+      expect(checked.summary.coverage, JSON.stringify(entry.notes)).toBe("complete");
+      expect(checked.summary.tools.find((tool) => tool.tool === "skillspector")?.ai).toEqual({
+        via: "cli",
+        provider: `${client}_cli`,
+        model,
+        effort,
+        client: { name: client, version },
+      });
+      expect(existsSync(log)).toBe(true);
+      const requests = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { prompt: string });
+      const ssd = requests.filter(({ prompt }) =>
+        prompt.includes("intent and attack-phrasing risks"),
+      );
+      expect(ssd).toHaveLength(1);
+      expect(ssd[0]?.prompt).toContain("AIH_SCAN_TASKS");
+      expect(ssd[0]?.prompt).toContain("alpha-fixture");
+      expect(ssd[0]?.prompt).toContain("beta-fixture");
+      if (large) expect(Buffer.byteLength(ssd[0]?.prompt ?? "")).toBeGreaterThan(96000);
+    } finally {
+      fixture.dispose();
+    }
+  },
+  90_000,
+);
+
+it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
+  "batches compatible prepared keys on the same native HTTP request and keeps their findings separate",
+  async () => {
+    const service = await compatibleAiServiceV1({ attributedFindings: true });
+    try {
+      const setup = await prepared(
+        {
+          alpha: { "SKILL.md": `${skill["SKILL.md"]}alpha-fixture\n` },
+          beta: { "SKILL.md": `${skill["SKILL.md"]}beta-fixture\n` },
+        },
+        {
+          ...assessment,
+          baseUrl: service.endpoint,
+          modelTokenLimits: { contextLength: 131072, maxOutputTokens: 8192 },
+        },
+      );
+      vi.stubEnv("AIH_SCAN_SKILLSPECTOR", process.env.AIH_SCAN_TEST_SKILLSPECTOR);
+      vi.stubEnv("DEEPSEEK_API", "fixture-only-not-a-real-key");
+      const result = await scanPrepared(setup);
+      expect(result).toMatchObject({ completed: 2, pending: 0, cancelled: false });
+      const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+      const semantic = service.requests.filter((request) =>
+        JSON.stringify(request.messages).includes("intent and attack-phrasing risks"),
+      );
+      expect(semantic).toHaveLength(2);
+      expect(JSON.stringify(semantic[0]?.messages)).toContain("alpha-fixture");
+      expect(JSON.stringify(semantic[0]?.messages)).toContain("beta-fixture");
+      expect(semantic[0]).toMatchObject({
+        model: "deepseek-flash",
+        max_completion_tokens: 8192,
+        reasoning_effort: "none",
+        tool_choice: { function: { name: "GroupedResponse" } },
+      });
+      expect(JSON.stringify(semantic[1]?.messages)).toContain("alpha-fixture");
+      expect(JSON.stringify(semantic[1]?.messages)).not.toContain("beta-fixture");
+      expect(semantic[1]?.tool_choice).toMatchObject({ function: { name: "LLMAnalysisResult" } });
+      for (const item of setup.manifest.items) {
+        const record = receipt.results[item.scanKey];
+        expect(record.status, JSON.stringify(record.notes)).toBe("complete-ai");
+        const checked = await verifyResult(
+          result.root,
+          record,
+          [item],
+          setup.manifest,
+          setup.content,
+          runtime,
+        );
+        const tool = checked.summary.tools.find((entry) => entry.tool === "skillspector");
+        expect(tool?.ai).toMatchObject({ provider: "openai_compatible", model: "deepseek-flash" });
+        expect(tool?.counts?.high ?? 0).toBe(item.path === "alpha" ? 1 : 0);
+        const sarif = record.sarif
+          .map((entry: { path: string }) => readFileSync(join(result.root, entry.path), "utf8"))
+          .join("\n");
+        expect(sarif).not.toContain("cross-key prose sentinel");
+      }
+      const requestCount = service.requests.length;
+      expect(await scanPrepared(setup)).toMatchObject({ reused: 2, completed: 0 });
+      expect(service.requests).toHaveLength(requestCount);
+    } finally {
+      await service.close();
+    }
+  },
+  180_000,
+);
+
 it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
   "binds real prepared child HTTP output budgets to explicit token metadata and reuses both profiles",
   async () => {
@@ -1546,7 +1742,12 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
         const bytes = Buffer.from(
           JSON.stringify({
             ...setup.manifest,
-            assessment: { ...assessment, baseUrl: service.endpoint, llmConcurrency },
+            assessment: {
+              ...assessment,
+              baseUrl: service.endpoint,
+              llmConcurrency,
+              modelTokenLimits: { contextLength: 131072, maxOutputTokens: 420 },
+            },
           }),
         );
         writeFileSync(setup.manifestPath, bytes);
@@ -1828,6 +2029,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
             ...assessment,
             baseUrl: service.endpoint,
             llmConcurrency: 24,
+            modelTokenLimits: { contextLength: 131072, maxOutputTokens: 8192 },
             skillspector: {
               version:
                 "2.13.7+aih.1.9a867b5e3f4e5142c27bad050c8c72a89cad4d9f21ee7b3157f61d19148952e7",

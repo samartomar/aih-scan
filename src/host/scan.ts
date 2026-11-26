@@ -25,7 +25,12 @@ import { assessItem, routeFiles } from "./assess.js";
 import { ciscoAdapter } from "./cisco.js";
 import { discoverItems } from "./discover.js";
 import { cloneCommit } from "./inventory.js";
-import { type AiSetup, skillSpectorAdapter, skillSpectorAiSetup } from "./skillspector.js";
+import {
+  type AiSetup,
+  type PreparedBatching,
+  skillSpectorAdapter,
+  skillSpectorAiSetup,
+} from "./skillspector.js";
 import { hostNameProblem, readFolder, type SnapshotFile, writeSnapshot } from "./snapshot.js";
 import type { ToolAdapter } from "./tools.js";
 import { trustLintAdapter } from "./trust-lint-tool.js";
@@ -159,6 +164,8 @@ export interface ScanInternals {
   /** The HTTPS client for npm registry acquisition (a local stub in tests). */
   readonly fetch?: FetchLike;
   readonly sharedOutput?: SharedOutput;
+  /** A private Scan runner handoff for concurrent prepared workers. */
+  readonly preparedBatching?: PreparedBatching;
   /** The environment analyzers are found in and AI settings are read from (default `process.env`). */
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** The host platform for file names and modes (default `process.platform`). */
@@ -585,7 +592,13 @@ export async function scanWith(
     [
       "skillspector",
       internals.adapters?.skillspector ??
-        skillSpectorAdapter({ env, ...(aiSetup === undefined ? {} : { ai: aiSetup }) }),
+        skillSpectorAdapter({
+          env,
+          ...(aiSetup === undefined ? {} : { ai: aiSetup }),
+          ...(internals.preparedBatching === undefined
+            ? {}
+            : { preparedBatching: internals.preparedBatching }),
+        }),
     ],
     ["cisco", internals.adapters?.cisco ?? ciscoAdapter({ env })],
   ]);

@@ -67,6 +67,7 @@ Hash the exact UTF-8 JSON bytes as SHA-256. This tooling-only format does not ch
     "provider": "openai_compatible",
     "baseUrl": "https://api.deepseek.com",
     "model": "deepseek-flash",
+    "modelTokenLimits": { "contextLength": 1048576, "maxOutputTokens": 393216 },
     "reasoningEffort": "none",
     "structuredOutputMethod": "function_calling",
     "credentialVariable": "DEEPSEEK_API"
@@ -205,6 +206,12 @@ fallback: a usage-limit refusal or any unfinished AI pass leaves the key `incomp
 later retry on the same profile. Changing the model or effort creates a separate
 configuration and resume namespace.
 
+Compatible tasks can share a provider request within one prepared run while its workers
+are active. Separate runs have independent queues. Scan applies the model's input and
+output limits and verifies each key's result on resume. A response that would add a
+finding or other model-written text to a key is checked again using only that key's
+original task before the text can enter its report.
+
 AI assessments may also set `llmConcurrency` to an explicit positive safe integer, for
 example `"llmConcurrency": 24`. The helper passes it only to its isolated scan child as
 SkillSpector's existing `SKILLSPECTOR_MAX_LLM_CONCURRENCY` setting. Omitting it preserves
@@ -219,14 +226,19 @@ AI assessments may supply `"modelTokenLimits": { "contextLength": 1048576,
 "maxOutputTokens": 131072 }`. Both fields are required positive safe integers, with
 `maxOutputTokens` no larger than `contextLength`. The operator must verify these values
 against the selected model's supported limits. They are model metadata, not a request to
-change the model, reasoning effort, response method or tool deadline.
+change the model, reasoning effort, response method or tool deadline. The field applies
+to HTTP and agent-CLI profiles, including `adaptive-ssd/1`. Without an override, the K3
+profile uses the 262,144-token context available on every eligible tier and a planning
+output budget of 32,768 tokens.
 
 For each attempt the helper writes a nonsecret `model-registry.json` inside that child's
 isolated scratch directory, containing only the exact selected model and these limits.
 It passes the generated absolute path through upstream `SKILLSPECTOR_MODEL_REGISTRY`;
 caller registry paths are not accepted, and ambient registry settings are not inherited.
 The file is local attempt evidence, excluded from candidate archives. Omitting the
-control preserves the upstream registry/default and existing configuration identities.
+control uses the selected model's known registry limits and preserves the existing
+configuration identity. For an uncataloged model or deployment alias, provide both
+values so Scan can start inference.
 Supplying or changing either limit creates a distinct configuration; completed results
 are reused only when returning to the same profile. Static assessments reject it.
 
