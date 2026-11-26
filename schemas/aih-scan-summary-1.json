@@ -130,18 +130,20 @@
           "counts"
         ],
         "if": {
-          "required": [
-            "ai"
-          ],
-          "properties": {
-            "ai": {
-              "required": [
-                "profile"
-              ]
+          "not": {
+            "required": [
+              "ai"
+            ],
+            "properties": {
+              "ai": {
+                "required": [
+                  "profile"
+                ]
+              }
             }
           }
         },
-        "then": {
+        "else": {
           "properties": {
             "tool": {
               "const": "skillspector"

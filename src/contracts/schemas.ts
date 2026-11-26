@@ -185,8 +185,8 @@ const summary = {
         type: "object",
         additionalProperties: false,
         required: ["tool", "version", "mode", "result", "counts"],
-        if: { required: ["ai"], properties: { ai: { required: ["profile"] } } },
-        then: { properties: { tool: { const: "skillspector" }, mode: { const: "ai" } } },
+        if: { not: { required: ["ai"], properties: { ai: { required: ["profile"] } } } },
+        else: { properties: { tool: { const: "skillspector" }, mode: { const: "ai" } } },
         properties: {
           tool: { type: "string", minLength: 1 },
           version: { type: "string", minLength: 1 },
