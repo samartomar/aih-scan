@@ -1,0 +1,10 @@
+{
+  "name": "aih-scan-saved-findings-mcp-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
+  }
+}

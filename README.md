@@ -119,6 +119,8 @@ aih-scan scan ./team-skills/reviewed-skill --mode ai --out ./scan-ai
 SkillSpector 2.13.7's optional `mcp` command exposes `scan_skill`. It scans a target
 anew and requests the AI pass by default (`use_llm: true`). The `read` and `findings`
 commands review saved Scan results without an MCP server.
+To give an assistant paginated access to one saved findings export, see the optional
+[read-only MCP example](https://github.com/samartomar/aih-scan/tree/main/examples/saved-findings-mcp).
 
 ## Library
 
