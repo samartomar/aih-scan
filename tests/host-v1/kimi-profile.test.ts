@@ -11,7 +11,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(model: string, reply = true) {
+function fixture(model: string, reply = true, stopReason = "end_turn") {
   const root = mkdtempSync(join(tmpdir(), "aih-scan-kimi-profile-"));
   roots.push(root);
   vi.stubEnv("PATH", root);
@@ -48,7 +48,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     emit({ method: "session/update", params: { sessionId: "fixture", update: {
       sessionUpdate: "agent_message_chunk", content: { type: "text", text: JSON.stringify({ findings: [] }) },
     } } });
-    emit({ id, result: { stopReason: "end_turn" } });
+    emit({ id, result: { stopReason: ${JSON.stringify(stopReason)} } });
   } else assert.fail("unexpected ACP method");
 }
 `,
@@ -81,4 +81,14 @@ it.skipIf(process.platform === "win32")("cancels a pending adaptive ACP request"
   } finally {
     clearTimeout(timer);
   }
+});
+
+it.skipIf(process.platform === "win32")("classifies explicit ACP output truncation", async () => {
+  await expect(
+    inferAdaptiveSsd(
+      "synthetic detector prompt",
+      new AbortController().signal,
+      fixture("kimi-code/k3", true, "max_tokens"),
+    ),
+  ).rejects.toMatchObject({ code: "kimi-output-limit" });
 });

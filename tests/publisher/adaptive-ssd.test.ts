@@ -22,7 +22,12 @@ const finding = (start_line: number) => ({
   start_line,
 });
 
-function request(socketPath: string, document: string, startLine = 1): Promise<Output> {
+function request(
+  socketPath: string,
+  document: string,
+  startLine = 1,
+  timeoutMs = 10_000,
+): Promise<Output> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
     let output = "";
@@ -36,7 +41,7 @@ function request(socketPath: string, document: string, startLine = 1): Promise<O
           document,
           lines: 1,
           startLine,
-          timeoutMs: 10_000,
+          timeoutMs,
         })}\n`,
       );
     });
@@ -183,5 +188,70 @@ describe.skipIf(process.platform === "win32")("adaptive SSD trusted broker", () 
       result: { findings: [] },
     });
     expect(broker.stats()).toMatchObject({ modelRequests: 2, failedTasks: 2, validatedTasks: 1 });
+  });
+
+  it("expires only the short-lived task and cancels inference once all tasks expire", async () => {
+    let release: (() => void) | undefined;
+    let sharedSignal: AbortSignal | undefined;
+    let observeAbort: (() => void) | undefined;
+    const aborted = new Promise<void>((resolve) => {
+      observeAbort = resolve;
+    });
+    const broker = await startAdaptiveSsd({
+      batchDelayMs: 10,
+      async infer(prompt, signal) {
+        const rows = decode(prompt);
+        sharedSignal = signal;
+        await new Promise<void>((resolve, reject) => {
+          release = resolve;
+          signal.addEventListener(
+            "abort",
+            () => {
+              observeAbort?.();
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+        return JSON.stringify({ items: rows.map(({ key }) => result(key)) });
+      },
+    });
+    closures.push(broker.close);
+    const [short, long] = [
+      request(broker.socketPath, "short", 1, 100),
+      request(broker.socketPath, "long", 1, 10_000),
+    ];
+    await expect(short).resolves.toEqual({ error: "deadline-expired" });
+    expect(sharedSignal?.aborted).toBe(false);
+    release?.();
+    await expect(long).resolves.toEqual({ result: { findings: [] } });
+    await expect(request(broker.socketPath, "alone", 1, 100)).resolves.toEqual({
+      error: "deadline-expired",
+    });
+    await aborted;
+    expect(sharedSignal?.aborted).toBe(true);
+    expect(broker.stats()).toMatchObject({ modelRequests: 2, maxBatchWidth: 2 });
+  });
+
+  it("reconciles an explicit output limit only by shrinking the group", async () => {
+    const widths: number[] = [];
+    const broker = await startAdaptiveSsd({
+      batchDelayMs: 75,
+      async infer(prompt) {
+        const rows = decode(prompt);
+        widths.push(rows.length);
+        if (rows.length > 1 || rows.some(({ document }) => document === "too-verbose"))
+          throw Object.assign(new Error("Kimi response limit"), { code: "kimi-output-limit" });
+        return JSON.stringify({ items: rows.map(({ key }) => result(key)) });
+      },
+    });
+    closures.push(broker.close);
+    await expect(
+      Promise.all([
+        request(broker.socketPath, "normal"),
+        request(broker.socketPath, "too-verbose"),
+      ]),
+    ).resolves.toEqual([{ result: { findings: [] } }, { error: "invalid-output" }]);
+    expect(widths).toEqual([2, 1, 1]);
   });
 });

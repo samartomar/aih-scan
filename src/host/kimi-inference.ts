@@ -233,10 +233,13 @@ async function infer(
         sessionId,
         prompt: [{ type: "text", text: prompt }],
       });
+      if (!failed && signal !== undefined && result.stopReason === "max_tokens")
+        throw new InferenceError("Kimi reached its response limit.", "kimi-output-limit");
       if (failed || result.stopReason !== "end_turn" || !text.trim())
         throw new Error("Kimi response incomplete");
       return text;
-    } catch {
+    } catch (error) {
+      if (error instanceof InferenceError && error.code === "kimi-output-limit") throw error;
       if (classified === quotaMessage) {
         if (signal === undefined)
           writeFileSync(join(scratch, KIMI_QUOTA_RECEIPT), "", { mode: 0o600 });
@@ -259,7 +262,7 @@ async function infer(
 class InferenceError extends Error {
   constructor(
     message: string,
-    readonly code?: "kimi-quota-refusal",
+    readonly code?: "kimi-quota-refusal" | "kimi-output-limit",
   ) {
     super(message);
   }

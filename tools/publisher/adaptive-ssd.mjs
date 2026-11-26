@@ -131,44 +131,57 @@ export async function startAdaptiveSsd({
   const settle = (item, reply) => {
     if (item.socket.destroyed || item.done) return;
     item.done = true;
+    clearTimeout(item.timer);
+    if (item.expires <= Date.now()) reply = { error: "deadline-expired" };
     if (reply.result) counts.validatedTasks++; else counts.failedTasks++;
     item.socket.end(`${JSON.stringify(reply)}\n`);
+    item.onSettled?.();
+  };
+
+  const live = (item) => {
+    if (item.expires <= Date.now()) settle(item, { error: "deadline-expired" });
+    return !item.socket.destroyed && !item.done;
   };
 
   const dispatch = async (items) => {
-    items = items.filter((item) => !item.socket.destroyed && !item.done);
+    items = items.filter(live);
     if (!items.length || closed) return;
     const controller = new AbortController();
-    const expires = Math.min(...items.map((item) => item.expires));
-    const timer = setTimeout(() => controller.abort(), Math.max(0, expires - Date.now()));
     const abandon = () => {
       if (items.every((item) => item.socket.destroyed || item.done)) controller.abort();
     };
-    for (const item of items) item.socket.once("close", abandon);
+    for (const item of items) {
+      item.onSettled = abandon;
+      item.socket.once("close", abandon);
+    }
     running.add(controller);
     let response;
     try {
-      if (expires <= Date.now()) controller.abort();
-      controller.signal.throwIfAborted();
       counts.modelRequests++;
       counts.maxBatchWidth = Math.max(counts.maxBatchWidth, items.length);
       if (items.length > 1) counts.multiItemRequests++;
       response = await infer(promptFor(items), controller.signal);
       controller.signal.throwIfAborted();
     } catch (error) {
-      const classification = error?.code === "kimi-quota-refusal" ? "quota-refused" : "inference-failed";
-      for (const item of items) settle(item, { error: classification });
-      return;
+      if (error?.code !== "kimi-output-limit") {
+        const classification = error?.code === "kimi-quota-refusal" ? "quota-refused" : "inference-failed";
+        for (const item of items) settle(item, { error: classification });
+        return;
+      }
+      // No part of an explicitly truncated result is attributable without its full envelope.
     } finally {
-      clearTimeout(timer);
       running.delete(controller);
-      for (const item of items) item.socket.removeListener("close", abandon);
+      for (const item of items) {
+        delete item.onSettled;
+        item.socket.removeListener("close", abandon);
+      }
     }
 
     let outputs;
     try { outputs = outputsFor(response, items); } catch { outputs = new Map(); }
     const missing = [];
     for (const item of items) {
+      if (!live(item)) continue;
       const result = outputs.get(item.key);
       if (result === undefined) missing.push(item);
       else settle(item, { result });
@@ -191,7 +204,7 @@ export async function startAdaptiveSsd({
     clearTimeout(queue.timer);
     let pack = [];
     for (const item of queue.items) {
-      if (item.socket.destroyed || item.done) continue;
+      if (!live(item)) continue;
       if (!fits([item], limits)) {
         settle(item, { error: "input-budget" });
         continue;
@@ -221,6 +234,8 @@ export async function startAdaptiveSsd({
         const value = requestOf(new TextDecoder("utf-8", { fatal: true }).decode(collected));
         collected = Buffer.alloc(0);
         const item = {...value, socket, key: randomUUID(), expires: Date.now() + value.timeoutMs };
+        item.timer = setTimeout(() => settle(item, { error: "deadline-expired" }), value.timeoutMs);
+        socket.once("close", () => clearTimeout(item.timer));
         const id = JSON.stringify([value.instructions,value.schema]);
         if (!queued.has(id)) queued.set(id, { items: [], timer: setTimeout(() => flush(id), batchDelayMs) });
         queued.get(id).items.push(item);
