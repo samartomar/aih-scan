@@ -189,6 +189,54 @@ describe("prepared manifest and exact inventory", () => {
     },
   );
 
+  it("binds the adaptive detector profile to explicit K3 max assessments and summaries", async () => {
+    const setup = await prepared({ item: skill });
+    const single = { ...cliAssessment, provider: "kimi_cli", model: "k3", effort: "max" };
+    const profile = "adaptive-ssd/1" as const;
+    const adaptive = { ...single, profile };
+    const validate = (assessment: object) => {
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, assessment }));
+      return validateManifest(bytes, hash(bytes)).assessment;
+    };
+    expect(validate(single)).toEqual(single);
+    expect(validate(adaptive)).toEqual(adaptive);
+    for (const invalid of [
+      { ...adaptive, model: "kimi-for-coding" },
+      { ...adaptive, effort: "low" },
+      { ...adaptive, profile: "adaptive-ssd/2" },
+      { ...cliAssessment, profile },
+      { ...assessment, profile },
+      { ...staticAssessment, profile },
+    ])
+      expect(() => validate(invalid)).toThrow();
+
+    const summary = (profileFields: object) => ({
+      origin: "published",
+      coverage: "complete",
+      tools: [
+        { tool: "aih-trust-lint", result: "pass" },
+        {
+          tool: "skillspector",
+          mode: "ai",
+          version: "2.13.6",
+          result: "pass",
+          ai: {
+            via: "cli",
+            provider: "kimi_cli",
+            model: "k3",
+            effort: "max",
+            client: { name: "kimi", version: "2.7.2" },
+            ...profileFields,
+          },
+        },
+      ],
+    });
+    expect(aiEligible(summary({ profile }), { assessment: adaptive })).toBe(true);
+    expect(aiEligible(summary({}), { assessment: adaptive })).toBe(false);
+    expect(aiEligible(summary({ profile }), { assessment: single })).toBe(false);
+    expect(aiEligible(summary({}), { assessment: single })).toBe(true);
+  });
+
   it("locates the maintenance verifier interpreter beside the selected executable", () => {
     expect(maintenancePythonPath("C:\\tools\\venv\\Scripts\\skillspector.exe", "win32")).toBe(
       "C:\\tools\\venv\\Scripts\\python.exe",
@@ -1532,6 +1580,101 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
     } finally {
       await service.close();
     }
+  },
+  180000,
+);
+
+it.runIf(process.platform !== "win32" && Boolean(process.env.AIH_SCAN_TEST_SKILLSPECTOR))(
+  "runs adaptive SSD inside the locked analyzer and verifies the installed reports across resume",
+  async () => {
+    const adaptive: PreparedAssessment = {
+      mode: "ai",
+      tools: ["aih-trust-lint", "skillspector"],
+      provider: "kimi_cli",
+      model: "k3",
+      effort: "max",
+      profile: "adaptive-ssd/1",
+    };
+    const files = { ...skill, "notes/guide.md": "# Guide\nSummarise the document.\n" };
+    const setup = await prepared(
+      {
+        alpha: files,
+        beta: { ...files, "notes/other.md": "# Other\nSummarise these notes.\n" },
+      },
+      adaptive,
+    );
+    const bin = join(setup.folder, "kimi-bin");
+    const home = join(setup.folder, "operator");
+    mkdirSync(bin);
+    mkdirSync(home);
+    writeFileSync(
+      join(bin, "kimi"),
+      `#!${process.execPath}
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const readline = require("node:readline");
+if (process.argv[2] === "--version") { console.log("2.7.2"); process.exit(0); }
+assert.deepEqual(process.argv.slice(2), ["acp"]);
+const config = fs.readFileSync(process.env.KIMI_CODE_HOME + "/config.toml", "utf8");
+assert.ok(config.includes('model = "k3"') && config.includes('effort = "max"'));
+const send = value => console.log(JSON.stringify({jsonrpc:"2.0", ...value}));
+readline.createInterface({input:process.stdin}).on("line", line => {
+  const {id, method, params} = JSON.parse(line);
+  if (method === "initialize") return send({id, result:{protocolVersion:1, agentInfo:{version:"2.7.2"}}});
+  if (method === "session/new") {
+    assert.deepEqual(params.mcpServers, []);
+    return send({id, result:{sessionId:"fixture", configOptions:[
+      {id:"model", currentValue:"kimi-code/k3"}, {id:"thinking",currentValue:"max"}]}});
+  }
+  assert.equal(method, "session/prompt");
+  const prompt = params.prompt[0].text;
+  let answer = {findings:[]};
+  const last = prompt.split("\\n\\n").at(-1);
+  if (last.startsWith('[{"key":')) {
+    const rows = JSON.parse(last);
+    answer = {items: rows.map(({key}) => ({key, result:{findings:[]}}))};
+    fs.appendFileSync(${JSON.stringify(join(setup.folder, "batch-widths"))}, rows.length + "\\n");
+  } else if (prompt.includes("Determine whether a skill")) {
+    answer = {is_mismatch:false, confidence:0.9, declared_purpose_summary:"Documents",
+      actual_behavior_summary:"Documents", mismatched_capabilities:[], explanation:"Matches documents"};
+  }
+  send({method:"session/update", params:{sessionId:"fixture", update:{
+    sessionUpdate:"agent_message_chunk", content:{type:"text", text:JSON.stringify(answer)}}}});
+  send({id,result:{stopReason:"end_turn"}});
+});
+`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", bin + ":" + process.env.PATH);
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("KIMI_CODE_HOME", join(home, ".kimi-code"));
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR", process.env.AIH_SCAN_TEST_SKILLSPECTOR!);
+    const opts = { ...setup, concurrency: 2 };
+    const result = await scanPrepared(opts);
+    expect(result).toMatchObject({ completed: 2, pending: 0, cancelled: false });
+    const receipt = JSON.parse(readFileSync(result.receiptPath, "utf8"));
+    for (const item of setup.manifest.items) {
+      const record = receipt.results[item.scanKey];
+      expect(record.status, JSON.stringify(record.notes)).toBe("complete-ai");
+      const checked = await verifyResult(
+        result.root,
+        record,
+        [item],
+        setup.manifest,
+        setup.content,
+        runtime,
+      );
+      expect(checked.summary.tools.find((tool) => tool.tool === "skillspector")?.ai).toMatchObject({
+        provider: "kimi_cli",
+        model: "k3",
+        effort: "max",
+        profile: "adaptive-ssd/1",
+      });
+    }
+    const widths = readFileSync(join(setup.folder, "batch-widths"), "utf8");
+    expect(Math.max(...widths.trim().split("\n").map(Number))).toBeGreaterThan(1);
+    expect(await scanPrepared(opts)).toMatchObject({ reused: 2, completed: 0 });
+    expect(readFileSync(join(setup.folder, "batch-widths"), "utf8")).toBe(widths);
   },
   180000,
 );

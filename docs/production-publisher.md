@@ -117,7 +117,7 @@ Credential values are read from `credentialVariable` (default
 `SKILLSPECTOR_COMPAT_API_KEY`) into each isolated child environment only; receipts and
 worker request files contain the variable name, never its value. Other provider,
 Python/Node loader, tracing, home configuration and credential environments are not
-inherited (the Claude CLI profile below is the one exception for `HOME`). Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
+inherited (the signed-in CLI profiles below use the operator's `HOME`). Set explicit analyzer executable paths in `AIH_SCAN_SKILLSPECTOR` and, if
 requested, `AIH_SCAN_SKILL_SCANNER`; install them using the locked analyzer instructions.
 
 #### Static and signed-in agent-CLI assessments
@@ -133,7 +133,7 @@ A complete static result is publishing evidence: the summary has `coverage: comp
 requested tool is `pass`, `warn`, `fail` or `not-applicable`. Its receipt status is
 `complete-static`. A partial static result stays `incomplete` and is refused, as before.
 
-The signed-in Claude CLI is the one agent-CLI provider the prepared route accepts. It needs an
+The prepared route accepts signed-in Claude and Kimi Code clients. Claude needs an
 exact, pinned Claude model id (`claude-<family>-<version>`, optionally with a date snapshot,
 for example `claude-opus-5-5`) and an explicit effort, and it names no HTTP, credential or
 maintenance controls. Aliases such as `opus`, `fable` or `default`, and `-latest` names, are
@@ -155,7 +155,35 @@ the chosen effort. Use the signed-in Kimi Code CLI and region described in
 [analyzer setup](analyzers.md#skillspector). Eligibility binds the exact provider, model
 and effort, and `client: { "name": "kimi", "version": "2.7.2" }`.
 
-Each isolated child gets `SKILLSPECTOR_PROVIDER=claude_cli`, `SKILLSPECTOR_MODEL` and Scan's
+Select K3 with `model: "k3"` and `effort: "max"`. To group semantic security discovery
+(SSD) tasks, include the explicit profile in the assessment.
+
+```json
+"assessment": {
+  "mode": "ai",
+  "tools": ["aih-trust-lint", "skillspector"],
+  "provider": "kimi_cli",
+  "model": "k3",
+  "effort": "max",
+  "profile": "adaptive-ssd/1"
+}
+```
+
+The local coordinator collects ready SSD tasks from the pinned SkillSpector runtime.
+Each grouped prompt carries separate keys and source lines. The planner fits groups
+to its input and output allowances. Version 1 conservatively counts each serialized
+UTF-8 byte as one input token. Its 32,768-token output planning allowance includes
+16,384 tokens reserved for reasoning; these figures size groups and do not set the
+provider's generation limit. Oversized detector segments split before inference.
+Actual group width depends on the files ready at
+dispatch, so even a large manifest can produce one-task requests. Each result goes
+back to its original detector for validation and scoring. Other detectors run their
+usual analysis. Related tasks share model context, which can influence findings and
+severity. The effective profile is recorded on the SkillSpector AI result and is part
+of the prepared configuration and checkpoint identity. Select items suitable for
+sharing a model context in the same campaign.
+
+Each isolated Claude child gets `SKILLSPECTOR_PROVIDER=claude_cli`, `SKILLSPECTOR_MODEL` and Scan's
 `AIH_SCAN_AI_EFFORT` from the manifest, so no ambient model or effort applies. It also gets the
 operator's own `HOME`, because the signed-in CLI reads its sign-in from there, and
 `PYTHONNOUSERSITE=1`, so user site-packages under that home stay out of the analyzer. That is

@@ -1,22 +1,26 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
-export const KIMI_VERSION = "2.7.2";
+import { pathDirectoriesV1, resolveHostExecutableV1 } from "../cli/host-executable.js";
+import { KIMI_CLIENT_VERSION, KIMI_K3_MODEL } from "../contracts/ai-profile.js";
+
+export const KIMI_VERSION = KIMI_CLIENT_VERSION;
 export const KIMI_MODEL = "kimi-for-coding";
+export const KIMI_INFERENCE_RECEIPT = "kimi-inference-completed";
 export const KIMI_QUOTA_RECEIPT = "kimi-quota-refusal";
 export const KIMI_EFFORTS = Object.freeze(["low", "high", "max"] as const);
-const managedAlias = "kimi-code/kimi-for-coding";
 const maxBytes = 16 * 1024 * 1024;
 // Leave time to reap ACP before SkillSpector's 15s auth and 300s call limits.
 const authTimeoutMs = 14_000;
 const inferenceTimeoutMs = 299_000;
 const quotaMessage = "Kimi rate or quota limit refused the request.";
 
-function config(region: string, effort: string): string {
+function config(region: string, effort: string, model: string): string {
+  const managedAlias = modelAlias(model);
   const domain = region === "global" ? "kimi.ai" : "kimi.com";
   const baseUrl = `https://api.${domain}/coding/v1`;
   const oauthHost = `https://auth.${domain}`;
@@ -51,7 +55,7 @@ oauth_host = "${oauthHost}"
 
 [models."${managedAlias}"]
 provider = "managed:kimi-code"
-model = "${KIMI_MODEL}"
+model = "${model}"
 max_context_size = 1048576
 capabilities = ["thinking", "always_thinking"]
 support_efforts = ["low", "high", "max"]
@@ -67,9 +71,17 @@ type Reply = {
   stopReason?: string;
 };
 
-function selectedConfig(options: Reply["configOptions"], effort: string) {
+const modelAlias = (model: string) => `kimi-code/${model}`;
+
+export function supportedKimiSelection(model: string | undefined, effort: string): boolean {
+  return model === KIMI_K3_MODEL
+    ? effort === "max"
+    : model === KIMI_MODEL && KIMI_EFFORTS.some((level) => level === effort);
+}
+
+function selectedConfig(options: Reply["configOptions"], effort: string, model: string) {
   return (
-    options?.find((entry) => entry.id === "model")?.currentValue === managedAlias &&
+    options?.find((entry) => entry.id === "model")?.currentValue === modelAlias(model) &&
     options?.find((entry) => entry.id === "thinking")?.currentValue === effort
   );
 }
@@ -80,8 +92,11 @@ async function infer(
   scratch: string,
   effort: string,
   region: string,
+  model: string,
   prompt?: string,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   if (region !== "mainland-cn" && region !== "global") throw new Error("Unknown Kimi login region");
   const cwd = mkdtempSync(join(scratch, "kimi-call-"));
   try {
@@ -90,12 +105,12 @@ async function infer(
     // The signed-in client owns credential handling and token refresh. All other Kimi state
     // is created from scratch, including the configuration, plug-ins, hooks and MCP registry.
     symlinkSync(join(home, "credentials"), join(state, "credentials"), "dir");
-    writeFileSync(join(state, "config.toml"), config(region, effort), { mode: 0o600 });
+    writeFileSync(join(state, "config.toml"), config(region, effort, model), { mode: 0o600 });
     writeFileSync(join(state, "region"), region, { mode: 0o600 });
     const child = spawn(binary, ["acp"], {
       cwd,
       env: {
-        PATH: process.env.PATH,
+        PATH: pathDirectoriesV1(process.env).join(":"),
         HOME: cwd,
         KIMI_CODE_HOME: state,
         KIMI_CODE_OAUTH_HOST:
@@ -119,6 +134,13 @@ async function infer(
       for (const reply of pending.values()) reply.reject();
       pending.clear();
     };
+    const abort = () => {
+      classified = "Kimi inference was cancelled.";
+      stop();
+      child.kill("SIGKILL");
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     const timer = setTimeout(
       () => {
         classified = "Kimi inference did not respond before the request deadline.";
@@ -159,7 +181,7 @@ async function infer(
             case "agent_thought_chunk":
               break;
             case "config_option_update":
-              if (!selectedConfig(update.configOptions, effort)) throw new Error();
+              if (!selectedConfig(update.configOptions, effort, model)) throw new Error();
               break;
             default:
               throw new Error();
@@ -204,7 +226,7 @@ async function infer(
       const session = await call("session/new", { cwd, mcpServers: [] });
       if (typeof session.sessionId !== "string") throw new Error("Kimi session missing");
       sessionId = session.sessionId;
-      if (!selectedConfig(session.configOptions, effort))
+      if (!selectedConfig(session.configOptions, effort, model))
         throw new Error("Kimi model or effort mismatch");
       if (prompt === undefined) return '{"loggedIn":true}\n';
       const result = await call("session/prompt", {
@@ -220,6 +242,7 @@ async function infer(
       throw new InferenceError(classified);
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       lines.close();
       child.stdin.end();
       child.kill("SIGKILL");
@@ -232,23 +255,47 @@ async function infer(
 
 class InferenceError extends Error {}
 
+export function kimiLogin(env: Readonly<NodeJS.ProcessEnv>) {
+  const home = env.KIMI_CODE_HOME ?? (env.HOME ? posix.join(env.HOME, ".kimi-code") : "");
+  if (!posix.isAbsolute(home)) return "Kimi Code requires an absolute login directory";
+  const region = env.AIH_SCAN_KIMI_REGION ?? "global";
+  if (region !== "global" && region !== "mainland-cn")
+    return "AIH_SCAN_KIMI_REGION must be global or mainland-cn";
+  return { home, region };
+}
+
+/** Run one adaptive detector prompt with the same isolated ACP transport as ordinary Kimi AI. */
+export async function inferAdaptiveSsd(prompt: string, signal: AbortSignal, scratch: string) {
+  if (process.platform === "win32") throw new InferenceError("Kimi Code AI requires a POSIX host.");
+  const binary = resolveHostExecutableV1("kimi", process.env)?.path;
+  const login = kimiLogin(process.env);
+  if (!binary) throw new InferenceError("Kimi Code CLI is unavailable.");
+  if (typeof login === "string") throw new InferenceError(login);
+  if (!validPrompt(prompt) || Buffer.byteLength(prompt) > maxBytes)
+    throw new InferenceError("Kimi inference prompt refused.");
+  return infer(binary, login.home, scratch, "max", login.region, KIMI_K3_MODEL, prompt, signal);
+}
+
+const validPrompt = (prompt: string) => prompt.trim() && !prompt.trimStart().startsWith("/");
+
 async function main() {
-  const [binary, home, scratch, effort, region, ...flags] = process.argv.slice(2);
+  const [binary, home, scratch, effort, region, model, ...flags] = process.argv.slice(2);
   if (
     !binary ||
     !home ||
     !scratch ||
     !region ||
+    !model ||
     !effort ||
-    !KIMI_EFFORTS.some((level) => level === effort)
+    !supportedKimiSelection(model, effort)
   )
     throw new Error();
   if (flags.length === 2 && flags[0] === "auth" && flags[1] === "status") {
     // ACP session creation requires a signed-in client and checks the selected configuration.
-    process.stdout.write(await infer(binary, home, scratch, effort, region));
+    process.stdout.write(await infer(binary, home, scratch, effort, region, model));
     return;
   }
-  if (flags[0] !== "-p" || flags[flags.indexOf("--model") + 1] !== KIMI_MODEL) throw new Error();
+  if (flags[0] !== "-p" || flags[flags.indexOf("--model") + 1] !== model) throw new Error();
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of process.stdin) {
@@ -259,9 +306,9 @@ async function main() {
   const prompt = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
   // ACP recognizes slash commands at the beginning of a prompt. Analyzer instructions
   // start with ordinary text; refuse any input that could select a CLI command.
-  if (!prompt.trim() || prompt.trimStart().startsWith("/")) throw new Error();
-  const output = await infer(binary, home, scratch, effort, region, prompt);
-  writeFileSync(join(scratch, "kimi-inference-completed"), "", { mode: 0o600 });
+  if (!validPrompt(prompt)) throw new Error();
+  const output = await infer(binary, home, scratch, effort, region, model, prompt);
+  writeFileSync(join(scratch, KIMI_INFERENCE_RECEIPT), "", { mode: 0o600 });
   process.stdout.write(output);
 }
 
