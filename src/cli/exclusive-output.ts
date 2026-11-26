@@ -65,7 +65,7 @@ export function safeOutputParents(path: string): readonly DirectorySnapshot[] {
   }
 }
 
-function sameParents(
+export function sameParents(
   left: readonly DirectorySnapshot[],
   right: readonly DirectorySnapshot[],
 ): boolean {

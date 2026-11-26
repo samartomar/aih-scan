@@ -8,6 +8,8 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 
 ### Added
 
+- `aih-scan review` reads one saved summary with its matching findings as JSON or
+  serves the same evidence through a paginated local stdio MCP connection.
 - Text assessment of `.kiro.hook` instruction files without renaming them or changing
   their bytes, modes or content keys; existing Config and Code routing takes precedence.
 

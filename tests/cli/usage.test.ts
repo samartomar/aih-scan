@@ -8,6 +8,7 @@ import {
   runScanCommandV1,
   scanUsage,
 } from "../../src/cli/commands-v1.js";
+import { reviewUsage, runReviewCommand } from "../../src/cli/review-v1.js";
 import {
   runSignCommand,
   runVerifyCommand,
@@ -16,7 +17,15 @@ import {
 } from "../../src/cli/sign-verify-v1.js";
 import { commandsUsage } from "../../src/cli/usage.js";
 
-const usages = { scanUsage, advisoriesUsage, readUsage, findingsUsage, verifyUsage, signUsage };
+const usages = {
+  scanUsage,
+  advisoriesUsage,
+  readUsage,
+  findingsUsage,
+  reviewUsage,
+  verifyUsage,
+  signUsage,
+};
 
 describe("command help", () => {
   it("composes the top-level usage from every command's own usage lines", () => {
@@ -40,6 +49,7 @@ describe("command help", () => {
       [advisoriesUsage, () => runAdvisoriesCommand(["--help"], io as never)],
       [readUsage, () => runReadCommand(["--help"], io)],
       [findingsUsage, () => runFindingsCommand(["--help"], io)],
+      [reviewUsage, () => runReviewCommand(["--help"], io)],
       [verifyUsage, () => runVerifyCommand(["--help"], io)],
       [signUsage, () => runSignCommand(["--help"], io as never)],
     ];

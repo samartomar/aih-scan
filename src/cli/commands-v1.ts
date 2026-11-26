@@ -143,18 +143,24 @@ function failAtOf(value: string | undefined): RiskLabel | undefined {
 
 const safe = (value: string, max: number = limits.output.findingPath) => sanitizeText(value, max);
 
-export function readSummaryFile(path: string): { summary: Summary } | { problem: string } {
+type SavedSummary = { summary: Summary } | { problem: string };
+
+export function decodeSavedSummary(bytes: Uint8Array): SavedSummary {
+  const read = readSummary(bytes);
+  if (read.status !== "ok")
+    return {
+      problem: `summary ${read.status}${read.detail ? `: ${safe(read.detail, 300)}` : ""}`,
+    };
+  return { summary: read.summary };
+}
+
+export function readSummaryFile(path: string): SavedSummary {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile()) return { problem: "summary is not a regular file" };
     if (stat.size > limits.output.summaryBytes)
       return { problem: "summary exceeds the size limit" };
-    const read = readSummary(new Uint8Array(readFileSync(path)));
-    if (read.status !== "ok")
-      return {
-        problem: `summary ${read.status}${read.detail ? `: ${safe(read.detail, 300)}` : ""}`,
-      };
-    return { summary: read.summary };
+    return decodeSavedSummary(new Uint8Array(readFileSync(path)));
   } catch {
     return { problem: "summary could not be read" };
   }
@@ -398,6 +404,44 @@ function findingLine(finding: Finding): string {
   return `${finding.severity.padEnd(8)} ${finding.code}  ${safe(finding.path)}:${finding.line}  [${finding.tool} ${finding.ruleId}] ${finding.text}\n`;
 }
 
+type PinnedSarifReader = (
+  path: string,
+  sha256: string,
+) => { bytes: Uint8Array } | { problem: string };
+
+function readSarifFile(path: string): ReturnType<PinnedSarifReader> {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > limits.output.sarifBytes) throw new Error("not a file");
+    return { bytes: new Uint8Array(readFileSync(path)) };
+  } catch {
+    return { problem: "a pinned SARIF file could not be read" };
+  }
+}
+
+export async function readSavedFindings(
+  path: string,
+  summary: Summary,
+  key: string,
+  readSarif: PinnedSarifReader = readSarifFile,
+  maximumFindings = Number.POSITIVE_INFINITY,
+): Promise<{ findings: Finding[] } | { problem: string }> {
+  const findings: Finding[] = [];
+  for (const entry of summary.sarif) {
+    if (pathProblem(entry.path, limits.input.pathLength, limits.input.depth) !== undefined)
+      return { problem: FINDINGS_MISMATCH_MESSAGE };
+    const input = readSarif(join(dirname(path), ...entry.path.split("/")), entry.sha256);
+    if ("problem" in input) return input;
+    const result = await readFindings(summary, input.bytes, key);
+    if (result.status !== "ok")
+      return { problem: "message" in result ? result.message : `SARIF ${result.status}` };
+    if (findings.length + result.findings.length > maximumFindings)
+      return { problem: "saved report exceeds the review findings limit" };
+    for (const finding of result.findings) findings.push(finding);
+  }
+  return { findings };
+}
+
 /** `aih-scan findings <summary.json> --key <scanKey>`: one line per finding from every pinned SARIF. */
 export async function runFindingsCommand(args: readonly string[], io: CommandIo): Promise<number> {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
@@ -415,29 +459,12 @@ export async function runFindingsCommand(args: readonly string[], io: CommandIo)
       io.stderr(`aih-scan: ${read.problem}\n`);
       return exitCodes.input;
     }
-    const findings: Finding[] = [];
-    for (const entry of read.summary.sarif) {
-      if (pathProblem(entry.path, limits.input.pathLength, limits.input.depth) !== undefined) {
-        io.stderr(`aih-scan: ${FINDINGS_MISMATCH_MESSAGE}\n`);
-        return exitCodes.input;
-      }
-      let bytes: Uint8Array;
-      try {
-        const file = join(dirname(path), ...entry.path.split("/"));
-        const stat = lstatSync(file);
-        if (!stat.isFile() || stat.size > limits.output.sarifBytes) throw new Error("not a file");
-        bytes = new Uint8Array(readFileSync(file));
-      } catch {
-        io.stderr("aih-scan: a pinned SARIF file could not be read\n");
-        return exitCodes.input;
-      }
-      const result = await readFindings(read.summary, bytes, key);
-      if (result.status !== "ok") {
-        io.stderr(`aih-scan: ${"message" in result ? result.message : `SARIF ${result.status}`}\n`);
-        return exitCodes.input;
-      }
-      findings.push(...result.findings);
+    const saved = await readSavedFindings(path, read.summary, key);
+    if ("problem" in saved) {
+      io.stderr(`aih-scan: ${saved.problem}\n`);
+      return exitCodes.input;
     }
+    const { findings } = saved;
     if (parsed.flags.has("--json"))
       io.stdout(`${JSON.stringify({ status: "ok", findings }, null, 2)}\n`);
     else if (findings.length === 0) io.stdout("No findings.\n");

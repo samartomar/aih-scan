@@ -9,6 +9,7 @@ import {
   runScanCommandV1,
   scanUsage,
 } from "./cli/commands-v1.js";
+import { reviewUsage, runReviewCommand } from "./cli/review-v1.js";
 import { runSignCommand, runVerifyCommand, signUsage, verifyUsage } from "./cli/sign-verify-v1.js";
 import { commandsUsage } from "./cli/usage.js";
 import { stopNowSync } from "./shared/emergency-stop.js";
@@ -18,6 +19,7 @@ const usage = commandsUsage([
   advisoriesUsage,
   readUsage,
   findingsUsage,
+  reviewUsage,
   verifyUsage,
   signUsage,
 ]);
@@ -78,6 +80,9 @@ async function main(): Promise<void> {
       return;
     case "findings":
       process.exitCode = await runFindingsCommand(args, io);
+      return;
+    case "review":
+      process.exitCode = await runReviewCommand(args, io);
       return;
     case "verify":
       process.exitCode = await runVerifyCommand(args, io);
