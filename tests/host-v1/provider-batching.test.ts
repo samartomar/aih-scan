@@ -13,6 +13,7 @@ describe.runIf(executable)("offline provider wire requests", () => {
     ["openai", "gpt-5"],
     ["azure_openai", "gpt-4o"],
     ["openai_compatible", "llama-3.1-70b-versatile"],
+    ["openai_compatible", "deepseek-flash"],
     ["anthropic", "claude-sonnet-4-6"],
     ["anthropic_proxy", "claude-sonnet-4-6"],
     ["bedrock", "us.anthropic.claude-sonnet-4-6"],
@@ -22,7 +23,7 @@ describe.runIf(executable)("offline provider wire requests", () => {
     ["gemini_cli", "gemini-2.5-pro"],
     ["opencode_cli", "anthropic/claude-sonnet-4-6"],
   ])(
-    "%s groups eligible inputs into one attributable request",
+    "%s / %s groups eligible inputs into one attributable request",
     (provider, model) => {
       const root = mkdtempSync(join(tmpdir(), "scan-batching-test-"));
       try {

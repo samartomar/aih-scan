@@ -390,12 +390,31 @@ async def run_batched(self, batches, *, max_concurrency=None, **kwargs):
 
 
 def configure_provider():
-    if os.environ.get("SKILLSPECTOR_PROVIDER", "").strip().lower() == "anthropic_proxy":
+    selected = os.environ.get("SKILLSPECTOR_PROVIDER", "").strip().lower()
+    if selected == "anthropic_proxy":
         # The locked Anthropic SDK requires its httpx2 client. Keep SkillSpector's
         # endpoint, request rewriting, TLS verification and bearer-token handling.
         import httpx2
         from skillspector.providers.anthropic_proxy import provider
         provider.httpx = httpx2
+    elif selected == "openai_compatible":
+        from urllib.parse import urlsplit
+        endpoint = urlsplit(os.environ.get("SKILLSPECTOR_COMPAT_BASE_URL", "").strip())
+        if endpoint.scheme != "https" or endpoint.netloc.lower() not in {"api.deepseek.com", "api.deepseek.com:443"}:
+            return
+        from functools import partial
+        from skillspector.providers import chat_models
+        from skillspector.providers.openai_compatible import provider
+
+        class DeepSeekChat(chat_models.ChatOpenAI):
+            def _get_request_payload(self, *args, **kwargs):
+                payload = super()._get_request_payload(*args, **kwargs)
+                if "max_completion_tokens" in payload:
+                    payload["max_tokens"] = payload.pop("max_completion_tokens")
+                return payload
+
+        provider.create_openai_compatible_chat_model = partial(
+            chat_models.create_openai_compatible_chat_model, chat_model_class=DeepSeekChat)
 
 
 def activate_batching():

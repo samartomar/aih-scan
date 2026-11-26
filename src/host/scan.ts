@@ -117,9 +117,9 @@ export interface Acquisition {
 }
 
 /**
- * AI mode only: whether the caller's existing SkillSpector AI settings were usable. With
- * `available`, SkillSpector sent the scanned content to that AI; otherwise the scan stayed
- * static ("AI not available here") and `reason` says why. Never holds a credential.
+ * AI mode only: whether the caller configured an available provider. Consult each item's
+ * tool mode, provenance and coverage for actual inference or a static-only result.
+ * An unavailable configuration includes its reason. Never holds a credential.
  */
 export type AiAvailability =
   | Readonly<{ status: "available"; provider: string; via: "cli" | "local" | "provider" }>

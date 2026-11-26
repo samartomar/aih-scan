@@ -45,6 +45,11 @@ def exercise(provider, model, count=2, deployment=None):
     requests = []
     if deployment:
         os.environ["AZURE_OPENAI_DEPLOYMENT"] = deployment
+    deepseek = model == "deepseek-flash"
+    if deepseek:
+        os.environ.update(SKILLSPECTOR_COMPAT_BASE_URL="https://api.deepseek.com/v1",
+                          SKILLSPECTOR_REASONING_EFFORT="none",
+                          SKILLSPECTOR_STRUCTURED_OUTPUT_METHOD="function_calling")
 
     def reply(url, data):
         requests.append((unquote(str(url)), data))
@@ -121,7 +126,7 @@ def exercise(provider, model, count=2, deployment=None):
     with patch.object(httpx.HTTPTransport, "handle_request", httpx_send_sync), \
          patch.object(httpx.AsyncHTTPTransport, "handle_async_request", httpx_send), \
          patch.object(HTTPConnectionPool, "urlopen", pool_send):
-        if deployment or provider == "ollama":
+        if deployment or provider == "ollama" or deepseek:
             try:
                 run()
             except bridge["ModelLimitsUnavailable"]:
@@ -144,7 +149,10 @@ def exercise(provider, model, count=2, deployment=None):
     assert all(f"fixture-{label}" in wire for label in labels), (provider, wire)
     if deployment:
         assert deployment in url
-    if deployment or provider == "ollama":
+    if deepseek:
+        assert url == "https://api.deepseek.com/v1/chat/completions"
+        assert data.get("max_tokens") == 4096 and "max_completion_tokens" not in data
+    elif deployment or provider == "ollama":
         assert 0 < data.get("max_completion_tokens", data.get("max_tokens", 0)) <= 4096, data.keys()
     elif provider != "anthropic_proxy":  # This native adapter strips the model and encodes it in its endpoint.
         assert data.get("model") == model or model in url, (provider, url, data.get("model"))
