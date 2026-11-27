@@ -2072,16 +2072,14 @@ it.runIf(
           ],
           { encoding: "utf8", windowsHide: true },
         ),
-      );
+      ).targets[0].results[0];
     const refused = cliScan("bad-wheel");
-    expect(JSON.parse(readFileSync(refused.results[0].summaryPath, "utf8")).coverage).toBe(
-      "partial",
-    );
+    expect(JSON.parse(readFileSync(refused.summaryPath, "utf8")).coverage).toBe("partial");
     await expect(scanPrepared(setup)).rejects.toThrow("wheel digest mismatch");
 
     vi.stubEnv("AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL", wheel);
     const local = cliScan("good-wheel");
-    const summary = JSON.parse(readFileSync(local.results[0].summaryPath, "utf8"));
+    const summary = JSON.parse(readFileSync(local.summaryPath, "utf8"));
     expect(summary.coverage).toBe("complete");
     expect(summary.tools).toContainEqual(
       expect.objectContaining({ tool: "skillspector", version: staticVersion, mode: "static" }),
