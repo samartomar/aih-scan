@@ -379,6 +379,120 @@ function recognizedCompleteness(completeness: Record<string, unknown>): boolean 
   return true;
 }
 
+/** Prove that a native static partial report accounts only for known unrouted files. */
+function unroutedFilesExplainPartial(
+  completeness: Record<string, unknown>,
+  item: AssessItem,
+): boolean {
+  const omitted = completeness.partially_inspected_files;
+  if (
+    completeness.status !== "partial" ||
+    completeness.total_components !== item.routed.size ||
+    completeness.entirely_uninspected_files !== 0 ||
+    !Array.isArray(completeness.scope_exclusions) ||
+    completeness.scope_exclusions.length !== 0
+  )
+    return false;
+
+  const paths = new Set<string>();
+  const pathsByAnalyzer = new Map<string, Set<string>>();
+  for (const raw of completeness.ledger_exceptions as unknown[]) {
+    const row = objectOf(raw);
+    const path = row?.path;
+    if (
+      row === undefined ||
+      typeof path !== "string" ||
+      path.includes("!/") ||
+      !item.routed.has(path) ||
+      row.outcome !== "partial" ||
+      row.fatal !== false
+    )
+      return false;
+    const part = item.routed.get(path)?.part;
+    if (row.reason_code === "reference_missing") {
+      if (
+        row.phase !== "reference_resolution" ||
+        part === undefined ||
+        part === null ||
+        !ANALYZED_PARTS.has(part) ||
+        (row.analyzers != null && (!Array.isArray(row.analyzers) || row.analyzers.length > 0))
+      )
+        return false;
+      continue;
+    }
+    if (
+      row.phase !== "static" ||
+      part !== null ||
+      (row.reason_code !== "static_parse_limit" &&
+        row.reason_code !== "obfuscated_instruction_text") ||
+      !Array.isArray(row.analyzers) ||
+      row.analyzers.length === 0
+    )
+      return false;
+    paths.add(path);
+    for (const name of row.analyzers as unknown[]) {
+      if (
+        typeof name !== "string" ||
+        !/^static_patterns_[a-z_]+$/.test(name) ||
+        (row.reason_code === "static_parse_limit" && name !== "static_patterns_tool_misuse")
+      )
+        return false;
+      const files = pathsByAnalyzer.get(name) ?? new Set<string>();
+      if (files.has(path)) return false;
+      files.add(path);
+      pathsByAnalyzer.set(name, files);
+    }
+  }
+  if (paths.size === 0 || paths.size !== omitted) return false;
+
+  const seen = new Set<string>();
+  const limitations: string[] = [];
+  for (const raw of completeness.analyzer_statuses as unknown[]) {
+    const row = objectOf(raw);
+    const id = row?.analyzer_id;
+    const state = row?.status;
+    const completed = row?.completed;
+    if (
+      row === undefined ||
+      typeof id !== "string" ||
+      id.length === 0 ||
+      seen.has(id) ||
+      typeof state !== "string" ||
+      typeof completed !== "number" ||
+      !Number.isSafeInteger(completed) ||
+      completed < 0 ||
+      row.skipped !== 0 ||
+      row.failed !== 0 ||
+      row.unaccounted !== 0
+    )
+      return false;
+    seen.add(id);
+    const partial = pathsByAnalyzer.get(id)?.size ?? 0;
+    if (
+      row.partial !== partial ||
+      row.planned_work !== completed + partial ||
+      (partial > 0
+        ? state !== "degraded" || row.planned_work !== completeness.total_components
+        : !OK_ANALYZER.has(state) || (state !== "completed" && completed !== 0))
+    )
+      return false;
+    if (partial > 0) {
+      if (
+        row.message !== undefined &&
+        (typeof row.message !== "string" || row.message.length === 0)
+      )
+        return false;
+      limitations.push(row.message ?? `Analyzer ${id} status: degraded.`);
+    }
+  }
+  if ([...pathsByAnalyzer.keys()].some((id) => !seen.has(id))) return false;
+  const reported = [...(completeness.limitations as string[])].sort();
+  return (
+    reported.length === limitations.length &&
+    limitations.sort().every((message, index) => message === reported[index])
+  );
+}
+
 /**
  * What SkillSpector itself reported it did not fully inspect, as one unsigned note, and whether
  * its AI pass (the analyzers its LLM provenance names) failed to complete. Gaps on files Scan does
@@ -552,7 +666,8 @@ function completenessOf(
     gaps.size === 0 &&
     caveats.size > 0 &&
     ((completeness.status === "complete_with_caveats" && completeness.is_complete === true) ||
-      disabledOsvExplainsPartial);
+      disabledOsvExplainsPartial ||
+      (mode === "static" && unroutedFilesExplainPartial(completeness, item)));
   const unexplained =
     gaps.size === 0 &&
     caveats.size === 0 &&
