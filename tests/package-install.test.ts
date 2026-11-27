@@ -1530,6 +1530,7 @@ describe.runIf(skillspector !== undefined)(
     it("completes every semantic security file with bounded concurrent HTTP requests", async () => {
       const service = await compatibleAiServiceV1({ delayMs: 100 });
       servers.push(service);
+      service.expectSecurityOverlap(2);
       const files: Record<string, string> = { "SKILL.md": cleanSkill["SKILL.md"] };
       for (let index = 0; index < 6; index++)
         files[`notes/topic-${index}.md`] =

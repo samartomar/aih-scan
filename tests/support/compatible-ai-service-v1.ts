@@ -22,6 +22,7 @@ export async function compatibleAiServiceV1(
   let securityInitial = 0;
   let grouping = options.ambiguousGroup ? "ambiguous" : "complete";
   const security = { started: 0, completed: 0, active: 0, maxActive: 0 };
+  let securityOverlap: { arrive(): Promise<boolean>; release(reached: boolean): void } | undefined;
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
@@ -37,10 +38,21 @@ export async function compatibleAiServiceV1(
       security.active++;
       security.maxActive = Math.max(security.maxActive, security.active);
     }
-    if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+    const reachedOverlap =
+      !semantic || securityOverlap === undefined || (await securityOverlap.arrive());
+    if (reachedOverlap && options.delayMs)
+      await new Promise((resolve) => setTimeout(resolve, options.delayMs));
     if (semantic) {
       security.active--;
       security.completed++;
+    }
+    if (!reachedOverlap) {
+      response.writeHead(400, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          error: { message: "Fixture did not receive the concurrent requests" },
+        }),
+      );
+      return;
     }
     response.setHeader("Content-Type", "application/json");
     if (outcome === "quota") {
@@ -165,6 +177,25 @@ export async function compatibleAiServiceV1(
     endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
     security,
+    /** Hold the first responses until the expected number of security requests are in flight. */
+    expectSecurityOverlap(count: number) {
+      const promise: Promise<boolean> = new Promise((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const release = (reached: boolean) => {
+          clearTimeout(timer);
+          securityOverlap = undefined;
+          resolve(reached);
+        };
+        securityOverlap = {
+          arrive() {
+            if (security.active >= count) release(true);
+            else timer ??= setTimeout(() => release(false), 10_000);
+            return promise;
+          },
+          release,
+        };
+      });
+    },
     setOutcome(value: typeof outcome) {
       outcome = value;
       securityInitial = 0;
@@ -173,9 +204,11 @@ export async function compatibleAiServiceV1(
     setGrouping(value: "ambiguous" | "complete" | "context") {
       grouping = value;
     },
-    close: () =>
-      new Promise<void>((resolve, reject) =>
+    close() {
+      securityOverlap?.release(false);
+      return new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      );
+    },
   };
 }

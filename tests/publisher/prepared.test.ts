@@ -1757,6 +1757,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
       const serialReceipt = JSON.parse(readFileSync(serial.receiptPath, "utf8"));
       expect(serialReceipt.results[setup.manifest.items[0]!.scanKey].status).toBe("complete-ai");
       expect(service.security).toEqual({ started: 7, completed: 7, active: 0, maxActive: 1 });
+      service.expectSecurityOverlap(3);
       const parallel = await scanPrepared(profile(3));
       expect(parallel).toMatchObject({ reused: 0, completed: 1 });
       expect(parallel.root).not.toBe(serial.root);
