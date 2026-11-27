@@ -70,9 +70,9 @@ describe("pinned analyzer runtimes", () => {
     );
   });
 
-  it.runIf(maintenanceSource !== undefined)(
-    "reproduces the reviewed maintenance wheel from authenticated source on this platform",
-    () => {
+  it.runIf(maintenanceSource !== undefined).each(["maintenance", "maintenance/static"])(
+    "reproduces the reviewed %s wheel from authenticated source on this platform",
+    (profile) => {
       if (maintenanceSource === undefined) throw new Error("AIH_SCAN_TEST_SKILLSPECTOR_SOURCE");
       expect(existsSync(maintenanceSource), "AIH_SCAN_TEST_SKILLSPECTOR_SOURCE").toBe(true);
       const python = process.platform === "win32" ? "python" : "python3";
@@ -82,7 +82,7 @@ describe("pinned analyzer runtimes", () => {
         execFileSync(
           python,
           [
-            "tools/analyzers/skillspector/maintenance/build.py",
+            `tools/analyzers/skillspector/${profile}/build.py`,
             "--source",
             maintenanceSource,
             "--out",
@@ -98,7 +98,7 @@ describe("pinned analyzer runtimes", () => {
             stdio: "pipe",
           },
         );
-        const artifactText = read("tools/analyzers/skillspector/maintenance/artifact.json");
+        const artifactText = read(`tools/analyzers/skillspector/${profile}/artifact.json`);
         const receiptText = readFileSync(join(out, "receipt.json"), "utf8");
         expect(receiptText).toBe(artifactText);
         const artifact = JSON.parse(artifactText);

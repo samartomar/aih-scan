@@ -1,0 +1,22 @@
+{
+  "upstream": "c323ad4c43e3c8f2de051572cc25b2711d11e648",
+  "sourceSha256": "ba6db55083e904cd7d44d8b060977eedca5c6463bdb4b0d68681c10a367f5c7d",
+  "patches": [
+    {
+      "name": "literal-json.patch",
+      "sha256": "3e2139159226fe275561c7bdfab2f8ae16e4aba72574fd4a3c42cdcc29dde328"
+    },
+    {
+      "name": "fenced-typescript.patch",
+      "sha256": "21a2accefc14da6ada5c74ccb023d926e5ca5a97c6f8e7ab4b0ddf632523da29"
+    }
+  ],
+  "runtimeLockSha256": "bbf191c6fe87f1f164f23d9a9d495dc85fc158657127f5661a4e355ac9d77120",
+  "buildLockSha256": "749ad0309a104d4708570e978f362fffa8bebe16ac416b399ac2d085b20b0a56",
+  "buildProjectSha256": "4a0211c499a7e6e3fe68837e9cef8d617e337de0feb9f4ae972e716b595a0ca8",
+  "sharedBuilderSha256": "42a6aff0aea105b35e1ae299887a6b14210df92e2c4864d348b8cdd4a678d6da",
+  "builderRecipeSha256": "f7bef9606505d5b1a598cbae7bfffa5d8455bb89e5b6b065c0336ea3a0c13ca3",
+  "version": "2.13.7+aih.static.1.924357fc6289fe9a9f5398d8d9c0dee264aa7f68b73ae084945d1c7d18ec548a",
+  "wheel": "skillspector-2.13.7+aih.static.1.924357fc6289fe9a9f5398d8d9c0dee264aa7f68b73ae084945d1c7d18ec548a-py3-none-any.whl",
+  "wheelSha256": "48fa3cb55c838a74e53ec88b44996a75c5f80eb72909f89fdb5f95ec06e77e81"
+}

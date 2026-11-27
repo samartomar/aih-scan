@@ -1,0 +1,96 @@
+diff --git a/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py b/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py
+index 098d1c1e..1905b449 100644
+--- a/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py
++++ b/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py
+@@ -15285,9 +15285,19 @@ def _has_bounded_parse_exhaustion(
+         )
+         if complete_context and structural_quote_closers is not None:
+             for start, end, language in document_fences:
+-                if language not in {"python", "py"} or end >= len(content):
++                if end >= len(content) or language not in {"typescript", "ts", "python", "py"}:
+                     continue
+                 section = original_document[start:end]
++                if language in {"typescript", "ts"}:
++                    if "`" in section and content[start:end] == section:
++                        spans = _javascript_template_spans(
++                            section, check_runtime, dialect="typescript"
++                        )
++                        if spans is not None:
++                            # The native parser owns these closing backticks.
++                            # Keep the openings, bodies and finding input raw.
++                            structural_quote_closers.update(start + upper - 1 for upper in spans[1])
++                    continue
+                 if '"""' not in section and "'''" not in section:
+                     continue
+                 spans = _python_literal_spans(section, check_runtime)
+diff --git a/tests/nodes/analyzers/test_markdown_typescript_template_closers.py b/tests/nodes/analyzers/test_markdown_typescript_template_closers.py
+new file mode 100644
+index 00000000..12dcf579
+--- /dev/null
++++ b/tests/nodes/analyzers/test_markdown_typescript_template_closers.py
+@@ -0,0 +1,65 @@
++"""TypeScript closing delimiters retain Markdown bounds without hiding code."""
++
++import pytest
++
++from skillspector.inspection_ledger import LedgerOutcome, ParserCheck
++from skillspector.nodes.analyzers import static_patterns_tool_misuse as tm
++from skillspector.nodes.analyzers import static_runner
++
++_BODY = (
++    "function greeting(name: string) {\n"
++    "  if (!name) throw new Error(`greeting: missing name (${name})`);\n"
++    "  return name;\n"
++    "}\n"
++)
++
++
++def _example(body: str = _BODY, language: str = "typescript") -> str:
++    return f"```{language}\n{body}```\n" + "The page contains ordinary text.\n" * 128
++
++
++@pytest.mark.parametrize("language", ["ts", "typescript"])
++def test_closing_typescript_template_is_not_a_shell_expansion(language: str) -> None:
++    result = static_runner.run_static_patterns_with_ledger(
++        {"components": ["guide.md"], "file_cache": {"guide.md": _example(language=language)}}, [tm]
++    )
++    assert result["findings"] == []
++    assert result["inspection_ledger"][0]["outcome"] is LedgerOutcome.COMPLETED
++
++
++def test_closing_offset_accounts_for_multibyte_typescript() -> None:
++    source = _example(_BODY.replace("name", "café"))
++    assert tm.bounded_parse_diagnostic(source, lambda: None, file_type="markdown") is None
++
++
++@pytest.mark.parametrize(
++    "source",
++    [
++        pytest.param(_example(language="sh"), id="shell-fence"),
++        pytest.param(_example("const :;\n" + _BODY), id="malformed-typescript"),
++        pytest.param(
++            _example(
++                "import { exec } from 'node:child_process';\n"
++                + _BODY
++                + "exec(`printf ${value}`);\n"
++            ),
++            id="unresolved-execution",
++        ),
++        pytest.param(_example().replace("\n```\n", "\n", 1), id="unclosed-fence"),
++    ],
++)
++def test_unproven_templates_keep_existing_diagnostics(source: str) -> None:
++    assert tm.bounded_parse_diagnostic(source, lambda: None, file_type="markdown") is not None
++
++
++def test_later_real_shell_runtime_remains_partial() -> None:
++    source = _example() + '\n```sh\neval "$message"\n```\n'
++    diagnostic = tm.bounded_parse_diagnostic(source, lambda: None, file_type="markdown")
++    assert diagnostic is not None
++    assert diagnostic.check is ParserCheck.COMMAND_STRING_RUNTIME
++    assert diagnostic.start > source.index("eval")
++
++
++def test_existing_finding_inside_typescript_string_survives() -> None:
++    source = _example(_BODY.replace("greeting: missing name", "mode=0o777"))
++    assert any(finding.rule_id == "TM3" for finding in tm.analyze(source, "guide.md", "markdown"))
