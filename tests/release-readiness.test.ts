@@ -282,6 +282,8 @@ describe("@aihq/scan release boundary (#12)", () => {
         "schemas",
         "runtime/adaptive-ssd.py",
         "runtime/provider-batching.py",
+        "tools/analyzers/skillspector/maintenance/verify.py",
+        "tools/analyzers/skillspector/maintenance/static/artifact.json",
         "trust",
         "docs/scan-sources.md",
         "docs/analyzers.md",
