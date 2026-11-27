@@ -132,8 +132,16 @@ jobs:
           fi
           node tools/publisher/candidate.mjs select candidate "$SELECTION_SHA" selected > selection.txt
           while read -r _digest path; do
-            node dist/cli.js read "selected/$path" > /dev/null
+            if [ -f candidate/prepared-import.json ]; then
+              node dist/cli.js read "selected/$path" > /dev/null
+            else
+              node dist/cli.js read "selected/$path" --json |
+                jq -e '.coverage == "complete" and .origin == "published"' > /dev/null
+            fi
           done < selection.txt
+          if [ -f candidate/prepared-import.json ] && [ -f candidate/partial-review.json ]; then
+            cp candidate/partial-review.json selected/partial-review.json
+          fi
           cp selection.txt selected/selection.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
