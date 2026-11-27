@@ -3,7 +3,12 @@ import type { AddressInfo } from "node:net";
 
 /** A synthetic inference service: real SkillSpector parses these fixed responses; no model runs. */
 export async function compatibleAiServiceV1(
-  options: { tp4Mismatch?: boolean; attributedFindings?: boolean; ambiguousGroup?: boolean } = {},
+  options: {
+    delayMs?: number;
+    tp4Mismatch?: boolean;
+    attributedFindings?: boolean;
+    ambiguousGroup?: boolean;
+  } = {},
 ) {
   const requests: Record<string, unknown>[] = [];
   let outcome:
@@ -32,19 +37,22 @@ export async function compatibleAiServiceV1(
       security.started++;
       security.active++;
       security.maxActive = Math.max(security.maxActive, security.active);
-      const reachedOverlap = securityOverlap === undefined || (await securityOverlap.arrive());
+    }
+    const reachedOverlap =
+      !semantic || securityOverlap === undefined || (await securityOverlap.arrive());
+    if (reachedOverlap && options.delayMs)
+      await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+    if (semantic) {
       security.active--;
       security.completed++;
-      if (!reachedOverlap) {
-        response
-          .writeHead(400, { "Content-Type": "application/json" })
-          .end(
-            JSON.stringify({
-              error: { message: "Fixture did not receive the concurrent requests" },
-            }),
-          );
-        return;
-      }
+    }
+    if (!reachedOverlap) {
+      response.writeHead(400, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          error: { message: "Fixture did not receive the concurrent requests" },
+        }),
+      );
+      return;
     }
     response.setHeader("Content-Type", "application/json");
     if (outcome === "quota") {

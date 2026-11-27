@@ -1729,7 +1729,7 @@ it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
 it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR !== undefined)(
   "uses the locked real SkillSpector concurrency control through prepared children and reuses each profile",
   async () => {
-    const service = await compatibleAiServiceV1();
+    const service = await compatibleAiServiceV1({ delayMs: 150 });
     try {
       const files = { ...skill } as Record<string, string>;
       for (let index = 0; index < 6; index++)
