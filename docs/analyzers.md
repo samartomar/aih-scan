@@ -213,8 +213,10 @@ file. Logs stay on stderr; truncated, malformed or mixed progress/JSON stdout is
   on files no tool is routed (binaries, dependency manifests) and the disabled upstream OSV
   lookup are not reported as gaps. Their derived limitations and aggregate omissions are
   excluded only when positively matched to those components; unrelated or excess omissions
-  remain partial. Only a positively identified reference-only `complete_with_caveats` report
-  stays `complete` and carries its caveat note instead. Fields that SkillSpector 2.13.5 added
+  remain partial. A reference-only advisory stays visible as a caveat when every routed file
+  was inspected. A native static partial report can establish this only when its ledger,
+  file totals, detector work and limitations fully account for the known unrouted files.
+  Scan still lists those files under `notAnalysed`. Fields that SkillSpector 2.13.5 added
   outside the status also leave the item `partial`: documentation `notices`, caller exclusions
   (`exclude_patterns` / `excluded_file_count`) and any `dependency_inspection` other than the
   untouched default (`enabled: false`, `status: "not_requested"`, no inspected artifacts). A

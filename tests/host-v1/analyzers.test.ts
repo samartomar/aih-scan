@@ -585,6 +585,109 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
   });
 
   it.each([
+    { name: "all native omissions are accounted for" },
+    { name: "a ledger path is unknown", ledger: { path: "unknown.tmpl" } },
+    { name: "a ledger path is a nested member", ledger: { path: "SKILL.md.tmpl!/nested.md" } },
+    { name: "a ledger path is routed", ledger: { path: "SKILL.md" } },
+    { name: "the ledger reports an output limit", ledger: { reason_code: "output_limit" } },
+    { name: "a ledger row is malformed", ledger: { fatal: undefined } },
+    { name: "a ledger detector is missing", ledger: { analyzers: [] } },
+    { name: "detector work failed", detector: { failed: 1 } },
+    { name: "detector work is unaccounted", detector: { unaccounted: 1 } },
+    { name: "detector work does not match the ledger", detector: { partial: 1 } },
+    { name: "detector totals are inconsistent", detector: { planned_work: 2 } },
+    { name: "the detector limitation is missing", completeness: { limitations: [] } },
+    {
+      name: "the native totals omit a file",
+      completeness: { total_components: 2, scanned_components: 0, fully_inspected_files: 0 },
+    },
+    {
+      name: "a native warning remains",
+      completeness: { warnings: [{ reason_code: "unexplained_warning" }] },
+    },
+  ])(
+    "reconciles native unrouted omissions only if $name",
+    async ({ ledger, detector, completeness }) => {
+      const folder = fixture.folder("unrouted-with-caveat", {
+        "SKILL.md": "---\nname: fixture\ndescription: Formats notes.\n---\n# Fixture\n",
+        "SKILL.md.tmpl": "A build-time template.\n",
+        "schema.xsd": "<schema/>\n",
+      });
+      const analyzer = "static_patterns_tool_misuse";
+      const ss = skillspector(
+        skillSpectorReport([skillSpectorIssue("PE2", "SKILL.md", 5, "HIGH", 1)], {
+          status: "partial",
+          analyzerStatuses: [
+            {
+              analyzer_id: analyzer,
+              status: "degraded",
+              planned_work: 3,
+              completed: 1,
+              partial: 2,
+              skipped: 0,
+              failed: 0,
+              unaccounted: 0,
+              ...detector,
+            },
+          ],
+          completeness: {
+            total_components: 3,
+            scanned_components: 1,
+            fully_inspected_files: 1,
+            partially_inspected_files: 2,
+            limitations: [`Analyzer ${analyzer} status: degraded.`],
+            ...completeness,
+          },
+          ledgerExceptions: [
+            {
+              outcome: "partial",
+              phase: "reference_resolution",
+              reason_code: "reference_missing",
+              path: "SKILL.md",
+              fatal: false,
+            },
+            {
+              outcome: "partial",
+              phase: "static",
+              reason_code: "static_parse_limit",
+              path: "SKILL.md.tmpl",
+              analyzers: [analyzer],
+              fatal: false,
+              ...ledger,
+            },
+            {
+              outcome: "partial",
+              phase: "static",
+              reason_code: "obfuscated_instruction_text",
+              path: "schema.xsd",
+              analyzers: [analyzer],
+              fatal: false,
+            },
+          ],
+        }),
+      );
+      const { entry, summary } = await run(folder, ss);
+      const complete = ledger === undefined && detector === undefined && completeness === undefined;
+      expect(summary).toMatchObject({
+        coverage: complete ? "complete" : "partial",
+        notAnalysed: [
+          { path: "SKILL.md.tmpl", secretsChecked: true },
+          { path: "schema.xsd", secretsChecked: true },
+        ],
+      });
+      expect(toolOf(summary, "skillspector")).toMatchObject({
+        result: "fail",
+        counts: { high: 1 },
+      });
+      if (complete) {
+        expect(entry).toMatchObject({
+          notes: ["SkillSpector reported inspection caveats: reference_missing SKILL.md"],
+        });
+      }
+    },
+  );
+
+  it.each([
     ["the same analyzer has unaccounted work", 1, false, 0],
     ["the missing reference is fatal", 0, true, 0],
     ["the dependency lookup exhausted a positive time limit", 0, false, 1],
