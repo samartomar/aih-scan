@@ -16,7 +16,10 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AI_EFFORT_LEVELS } from "../../src/host/skillspector.js";
-import { checkPreparedCandidate } from "../../tools/publisher/candidate.mjs";
+import {
+  checkPreparedCandidate,
+  validatePreparedImport,
+} from "../../tools/publisher/candidate.mjs";
 import {
   AGENT_EFFORTS,
   aiEligible,
@@ -614,6 +617,126 @@ describe("prepared manifest and exact inventory", () => {
     ).toBe(false);
   });
 });
+
+it("admits only explicitly reviewed exact partial evidence through hosted intake and signing preparation", async () => {
+  const setup = await prepared({ item: skill }, staticAssessment);
+  const partial = fakeAnalyzer(setup.folder, "skillspector", {
+    versionText: "SkillSpector v2.13.7",
+    outputFlag: "--output",
+    report: skillSpectorReport([], {
+      analyzerStatuses: [{ analyzer_id: "static_patterns_tool_misuse", status: "degraded" }],
+    }),
+  });
+  vi.stubEnv("AIH_SCAN_SKILLSPECTOR", partial.path);
+  const run = await scanPrepared(setup);
+  const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8"));
+  const key = setup.manifest.items[0]!.scanKey;
+  const original = readFileSync(join(run.root, receipt.results[key].summary));
+  const evidence = {
+    format: "aih-scan-complete-path-evidence/1",
+    scanKey: key,
+    attempts: [
+      {
+        receiptSha256: run.receiptSha256,
+        summarySha256: hash(original),
+        analyzerVersion: "2.13.7",
+        coverage: "partial",
+        reason: "failed",
+      },
+    ],
+  };
+  const evidenceBytes = JSON.stringify(evidence);
+  const evidencePath = join(setup.folder, "complete-path-evidence", `${hash(evidenceBytes)}.json`);
+  mkdirSync(dirname(evidencePath));
+  writeFileSync(evidencePath, evidenceBytes);
+  const review = {
+    format: "aih-scan-prepared-partial-review/1",
+    receiptSha256: run.receiptSha256,
+    results: {
+      [key]: {
+        summarySha256: hash(original),
+        reason: "failed",
+        limitation: "The static command check did not finish inspecting the document.",
+        completePathEvidenceSha256: hash(evidenceBytes),
+      },
+    },
+  };
+  const partialReviewPath = join(setup.folder, "review.json");
+  const reviewBytes = JSON.stringify(review);
+  writeFileSync(partialReviewPath, reviewBytes);
+  const options = {
+    ...setup,
+    receiptPath: run.receiptPath,
+    partialReviewPath,
+    partialReviewSha256: hash(reviewBytes),
+    out: join(setup.folder, "partial.tar"),
+  };
+  await expect(
+    exportCandidate({ ...options, partialReviewSha256: hash("wrong review") }),
+  ).rejects.toThrow("Reviewed partial publication digest mismatch");
+  writeFileSync(evidencePath, "{}");
+  await expect(exportCandidate(options)).rejects.toThrow("Complete-path evidence digest mismatch");
+  writeFileSync(evidencePath, evidenceBytes);
+  const sarifPath = join(run.root, receipt.results[key].sarif[0].path);
+  const sarifBytes = readFileSync(sarifPath);
+  rmSync(sarifPath);
+  await expect(exportCandidate(options)).rejects.toThrow("ENOENT");
+  writeFileSync(sarifPath, sarifBytes);
+  const exported = await exportCandidate(options);
+  const descriptor = {
+    format: "aih-scan-prepared-import/1",
+    url: "https://example.com/partial.tar",
+    allowedHosts: ["example.com"],
+    archiveSha256: exported.archiveSha256,
+    manifestSha256: exported.manifestSha256,
+    receiptSha256: exported.receiptSha256,
+    partialReviewSha256: exported.partialReviewSha256,
+  };
+  const descriptorBytes = Buffer.from(JSON.stringify(descriptor));
+  expect(validatePreparedImport(descriptorBytes, hash(descriptorBytes))).toEqual(descriptor);
+  const intakeArgs = [
+    options.out,
+    descriptor.archiveSha256,
+    descriptor.manifestSha256,
+    descriptor.receiptSha256,
+    consumer,
+  ] as const;
+  await expect(importCandidate(...intakeArgs, join(setup.folder, "refused"))).rejects.toThrow(
+    "partial publication opt-in mismatch",
+  );
+  const imported = join(setup.folder, "reviewed-partial");
+  const checked = await importCandidate(...intakeArgs, imported, options.partialReviewSha256);
+  expect(readFileSync(join(imported, checked.summaries[0]!))).toEqual(original);
+  expect(JSON.parse(original.toString("utf8"))).toMatchObject({
+    coverage: "partial",
+    reason: "failed",
+  });
+  expect(readFileSync(join(imported, "partial-review.json"), "utf8")).toBe(reviewBytes);
+  const { format: _format, url: _url, allowedHosts: _hosts, ...metadata } = descriptor;
+  writeFileSync(
+    join(imported, "prepared-import.json"),
+    JSON.stringify({ execution: "local", ...metadata }),
+  );
+  expect(await checkPreparedCandidate(imported, consumer)).toEqual({
+    execution: "local",
+    count: 1,
+  });
+  writeFileSync(join(imported, "partial-review.json"), "{}");
+  await expect(checkPreparedCandidate(imported, consumer)).rejects.toThrow(
+    "Reviewed partial publication digest mismatch",
+  );
+
+  const complete = fakeAnalyzer(join(setup.folder, "complete"), "skillspector", {
+    versionText: "SkillSpector v2.13.7",
+    outputFlag: "--output",
+    report: skillSpectorReport([]),
+  });
+  vi.stubEnv("AIH_SCAN_SKILLSPECTOR", complete.path);
+  await scanPrepared(setup);
+  await expect(
+    exportCandidate({ ...options, out: join(setup.folder, "stale.tar") }),
+  ).rejects.toThrow("Complete evidence already exists in the prepared checkpoint");
+}, 120000);
 
 describe.runIf(process.platform !== "win32")(
   "prepared local scans through the installed public API (synthetic analyzer)",

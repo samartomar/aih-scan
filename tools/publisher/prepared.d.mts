@@ -23,10 +23,10 @@ export function writeCheckpointAtomic(path: string, value: unknown): void;
 export function workerLaunchBudget(freeMiB: number, reserveMiB: number, poolCapacityMiB: number, reservedMiB: number): number;
 export function recoverPrepared(options: PreparedOptions): Promise<{ root: string; recovered: number; ignored: number; completedKeys: string[] }>;
 export function mergePrepared(options: PreparedOptions & { receipts: string[] }): Promise<{ root: string; imported: number; configSha256: string }>;
-export function verifyResult(root: string, record: PreparedRecord, items: PreparedItem[], manifest: PreparedManifest, content: string | undefined, runtime: PreparedRuntime): Promise<{ summary: import("../../src/public/contracts.js").Summary; eligible: boolean }>;
-export function exportCandidate(options: PreparedOptions & { receiptPath: string; selection?: string[] }): Promise<{ archiveSha256: string; manifestSha256: string; receiptSha256: string; bytes: number; keys: number; references: number }>;
-export function importCandidate(archive: string, archiveSha256: string, manifestSha256: string, receiptSha256: string, consumer: string, out: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
-export function verifyCandidate(candidate: string, manifestSha256: string, receiptSha256: string, consumer: string, tarball: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
+export function verifyResult(root: string, record: PreparedRecord, items: PreparedItem[], manifest: PreparedManifest, content: string | undefined, runtime: PreparedRuntime, requireToolOutputs?: boolean): Promise<{ summary: import("../../src/public/contracts.js").Summary; eligible: boolean }>;
+export function exportCandidate(options: PreparedOptions & { receiptPath: string; selection?: string[]; partialReviewPath?: string; partialReviewSha256?: string }): Promise<{ archiveSha256: string; manifestSha256: string; receiptSha256: string; bytes: number; keys: number; references: number; partialReviewSha256?: string }>;
+export function importCandidate(archive: string, archiveSha256: string, manifestSha256: string, receiptSha256: string, consumer: string, out: string, partialReviewSha256?: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
+export function verifyCandidate(candidate: string, manifestSha256: string, receiptSha256: string, consumer: string, tarball: string, partialReviewSha256?: string): Promise<{ summaries: string[]; manifest: PreparedManifest; receipt: PreparedReceipt }>;
 
 /** Claude CLI effort levels a prepared `claude_cli` profile may select. */
 export const AGENT_EFFORTS: readonly string[];

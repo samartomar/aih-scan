@@ -29,7 +29,7 @@ const PINNED_CLAUDE_MODEL = /^claude-[a-z]+(?:-[0-9]+)+$/;
 // An explicit manifest revision, carried into identities and requests only when present.
 const revisionOf = (value) => value.revision === undefined ? {} : { revision: value.revision };
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-const hash = (value) => /^[0-9a-f]{64}$/.test(value ?? "");
+const hash = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 const loopbackHost = (host) => host === "localhost" || host === "[::1]" || isIP(host) === 4 && host.startsWith("127.");
 const canonical = (value) => JSON.stringify(Array.isArray(value) ? value.map((entry) => JSON.parse(canonical(entry))) : object(value) ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, JSON.parse(canonical(value[key]))])) : value);
 const fingerprint = (value) => digest(canonical(value));
@@ -204,7 +204,8 @@ function configIdentity(manifest, runtime) {
   // An explicit revision changes every summary's bytes, so it is part of the configuration; omitting it keeps existing identities.
   return { scanner: manifest.scanner, assessment: manifest.assessment, ...revisionOf(manifest), routing: runtime.contracts.routing.format, scoring: runtime.contracts.scoring.format };
 }
-const requestedToolsFinished = (summary, manifest) => manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return tool && ["pass", "warn", "fail", "not-applicable"].includes(tool.result); });
+const toolRan = (tool) => ["pass", "warn", "fail"].includes(tool?.result);
+const requestedToolsFinished = (summary, manifest) => manifest.assessment.tools.every((id) => { const tool = summary.tools.find((entry) => entry.tool === id); return toolRan(tool) || tool?.result === "not-applicable"; });
 export function aiEligible(summary, manifest) {
   if (manifest.assessment.mode !== "ai" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
@@ -222,7 +223,7 @@ export function aiEligible(summary, manifest) {
 export function staticEligible(summary, manifest) {
   if (manifest.assessment.mode !== "static" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
-  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary.mode !== "static" || primary.ai !== undefined || !["pass", "warn", "fail"].includes(primary.result)) return false;
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary.mode !== "static" || primary.ai !== undefined || !toolRan(primary)) return false;
   return requestedToolsFinished(summary, manifest);
 }
 export function eligibleEvidence(summary, manifest) {
@@ -231,7 +232,65 @@ export function eligibleEvidence(summary, manifest) {
 /** The receipt status of a complete result: `complete-ai` keeps its meaning; static evidence is `complete-static`. */
 const completeStatus = (assessment) => assessment.mode === "static" ? "complete-static" : "complete-ai";
 const COMPLETE = new Set(["complete-ai", "complete-static"]);
-export async function verifyResult(root, record, items, manifest, content, runtime) {
+
+const partialReviewFile = "partial-review.json";
+function readPartialReview(bytes, expectedSha256) {
+  need(hash(expectedSha256) && digest(bytes) === expectedSha256, "Reviewed partial publication digest mismatch");
+  const review = json(bytes);
+  keys(review, ["format", "receiptSha256", "results"]);
+  need(review.format === "aih-scan-prepared-partial-review/1" && hash(review.receiptSha256) &&
+    object(review.results) && Object.keys(review.results).length > 0, "Invalid partial publication review");
+  for (const entry of Object.values(review.results)) {
+    keys(entry, ["summarySha256", "reason", "limitation", "completePathEvidenceSha256"]);
+    need(hash(entry.summarySha256) && hash(entry.completePathEvidenceSha256) &&
+      [entry.reason, entry.limitation].every((value) => typeof value === "string" &&
+        value.trim().length > 0 && value.length <= 4096 && plainText(value)),
+    "Invalid reviewed partial evidence or limitation");
+  }
+  return review;
+}
+
+function readCompletePathEvidence(root, scanKey, expectedSha256) {
+  const path = `complete-path-evidence/${expectedSha256}.json`;
+  const bytes = readRegular(join(root, ...path.split("/")));
+  need(digest(bytes) === expectedSha256, "Complete-path evidence digest mismatch");
+  const evidence = json(bytes);
+  keys(evidence, ["format", "scanKey", "attempts"]);
+  need(evidence.format === "aih-scan-complete-path-evidence/1" && evidence.scanKey === scanKey &&
+    Array.isArray(evidence.attempts) && evidence.attempts.length > 0, "Invalid complete-path evidence");
+  for (const attempt of evidence.attempts) {
+    keys(attempt, ["receiptSha256", "summarySha256", "analyzerVersion", "coverage", "reason"]);
+    need(hash(attempt.receiptSha256) && hash(attempt.summarySha256) && attempt.coverage === "partial" &&
+      [attempt.analyzerVersion, attempt.reason].every((value) => typeof value === "string" &&
+        value.trim().length > 0 && value.length <= 4096 && plainText(value)), "Invalid incomplete assessment attempt");
+  }
+  return { path, bytes, attempts: evidence.attempts };
+}
+
+function verifyPublishable(verified, record, manifest, review, originalReceiptSha256, evidence) {
+  if (review === undefined) {
+    need(verified.eligible, "Only complete evidence is eligible for prepared publishing");
+    return;
+  }
+  const { summary } = verified;
+  const assessment = manifest.assessment;
+  const primary = summary.tools.find(({ tool }) => tool === "skillspector");
+  const trustLint = summary.tools.find(({ tool }) => tool === "aih-trust-lint");
+  need(record.status === "incomplete" && summary.coverage === "partial" &&
+    summary.origin === "published" && summary.reason === "failed" && assessment.mode === "static" &&
+    primary?.version === (assessment.skillspector?.version ?? standardSkillSpectorVersion) &&
+    toolRan(primary) && toolRan(trustLint) && requestedToolsFinished(summary, manifest) &&
+    summary.tools.length === assessment.tools.length &&
+    summary.tools.every((tool) => tool.mode === "static" && tool.ai === undefined),
+  "Reviewed partial publication requires retained static analyzer outputs");
+  need(review.summarySha256 === record.summarySha256 && review.reason === summary.reason,
+    "Partial publication review does not match the original summary");
+  need(evidence.attempts.some((attempt) => attempt.receiptSha256 === originalReceiptSha256 &&
+    attempt.summarySha256 === record.summarySha256 && attempt.reason === summary.reason &&
+    attempt.analyzerVersion === primary.version), "Complete-path evidence does not match the retained assessment");
+}
+
+export async function verifyResult(root, record, items, manifest, content, runtime, requireToolOutputs = false) {
   keys(record, ["status", "summary", "summarySha256", "sarif", "elapsedMs"], ["detail", "notes"]);
   if (record.notes !== undefined) need(Array.isArray(record.notes) && record.notes.length <= 32 && record.notes.every((note) => typeof note === "string" && note.length > 0 && note.length <= 4096 && plainText(note)), "Invalid unsigned diagnostic notes");
   safePath(record.summary); need(hash(record.summarySha256) && Array.isArray(record.sarif) && (record.elapsedMs === null || typeof record.elapsedMs === "number" && Number.isFinite(record.elapsedMs) && record.elapsedMs >= 0), "Invalid result receipt");
@@ -245,11 +304,32 @@ export async function verifyResult(root, record, items, manifest, content, runti
   need(items.every((item) => canonical(inventory(item.files)) === canonical(inventory(summary.files))), "Summary differs from reviewed path/mode/hash inventory");
   const expectedSarif = summary.sarif.map((entry) => ({ path: `${record.summary.slice(0, -12)}${entry.path}`, sha256: entry.sha256 })).sort((a,b)=>a.path < b.path ? -1 : 1);
   need(canonical(record.sarif.slice().sort((a,b)=>a.path < b.path ? -1 : 1)) === canonical(expectedSarif), "SARIF inventory mismatch");
+  const sarifTools = new Set();
   for (const entry of record.sarif) {
     safePath(entry.path);
     const sarif = readRegular(join(root, ...entry.path.split("/")), runtime.contracts.limits.output.sarifBytes);
-    need(digest(sarif) === entry.sha256 && (await runtime.read.readFindings(summary, new Uint8Array(sarif), summary.scanKey)).status === "ok", "SARIF digest or findings mismatch");
+    need(digest(sarif) === entry.sha256, "SARIF digest mismatch");
+    const checked = await runtime.read.readFindings(summary, new Uint8Array(sarif), summary.scanKey);
+    need(checked.status === "ok", "SARIF findings mismatch");
+    if (requireToolOutputs) {
+      const runs = json(sarif).runs;
+      const run = runs[0];
+      const driver = run?.tool?.driver;
+      const tool = summary.tools.find(({ tool }) => tool === driver?.name);
+      need(runs.length === 1 && toolRan(tool) && driver.version === tool.version &&
+        !sarifTools.has(tool.tool) && run.invocations?.length === 1 &&
+        run.invocations[0]?.executionSuccessful === true, "Partial publication requires original per-tool SARIF");
+      const counts = {};
+      for (const finding of checked.findings) {
+        const severity = finding.severity.toLowerCase();
+        counts[severity] = (counts[severity] ?? 0) + 1;
+      }
+      need(canonical(counts) === canonical(tool.counts), "Partial publication SARIF counts differ from the summary");
+      sarifTools.add(tool.tool);
+    }
   }
+  if (requireToolOutputs) need(summary.tools.every((tool) => sarifTools.has(tool.tool) === toolRan(tool)),
+    "Partial publication requires every completed tool's SARIF");
   for (const item of content ? items : []) {
     const folder = join(content, ...item.path.split("/")), actual = regularFiles(folder);
     need(actual.length === item.files.length && actual.every(({ path }) => item.files.some((file) => file.path === path)), "Prepared inventory changed before matching");
@@ -551,31 +631,40 @@ export async function scanPrepared({ manifestPath, manifestSha256, content, cons
     try { await Promise.all([broker?.close(), batching?.close()]); } finally { lock.release(); }
   }
 }
-export async function verifyCandidate(candidate, manifestSha256, receiptSha256, consumer, tarball) {
+export async function verifyCandidate(candidate, manifestSha256, receiptSha256, consumer, tarball, partialReviewSha256) {
   const manifestBytes = readRegular(join(candidate, "manifest.json"));
   const manifest = validateManifest(manifestBytes, manifestSha256), receiptBytes = readRegular(join(candidate, "receipt.json"));
   need(hash(receiptSha256) && digest(receiptBytes) === receiptSha256, "Reviewed receipt digest mismatch");
   const receipt = json(receiptBytes), runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment);
-  keys(receipt, ["format", "execution", "manifestSha256", "config", "configSha256", "results"]);
+  keys(receipt, ["format", "execution", "manifestSha256", "config", "configSha256", "results"], ["partialReviewSha256"]);
   need(receipt.format === "aih-scan-prepared-receipt/1" && receipt.execution === "local" && receipt.manifestSha256 === manifestSha256 && receipt.configSha256 === fingerprint(configIdentity(manifest, runtime)) && fingerprint(receipt.config) === receipt.configSha256, "Candidate configuration/provenance mismatch");
+  need(receipt.partialReviewSha256 === partialReviewSha256, "Prepared partial publication opt-in mismatch");
   // Hosted intake checks reviewed inventory metadata, not reconstructed source bytes.
   // Actual-byte scanKeyOf/matchScan validation happens locally before export.
   const groups = new Map();
   for (const item of manifest.items) groups.set(item.scanKey, [...(groups.get(item.scanKey) ?? []), item]);
   need(object(receipt.results) && canonical(Object.keys(receipt.results).sort()) === canonical([...groups.keys()].sort()), "Candidate result inventory mismatch");
   const expected = new Set(["manifest.json", "receipt.json", "scanner.tgz"]);
+  let partialReview;
+  if (partialReviewSha256 !== undefined) {
+    partialReview = readPartialReview(readRegular(join(candidate, partialReviewFile)), partialReviewSha256);
+    need(canonical(Object.keys(partialReview.results).sort()) === canonical([...groups.keys()].sort()), "Partial publication review key inventory mismatch");
+    expected.add(partialReviewFile);
+  }
   if (existsSync(join(candidate, "prepared-import.json"))) {
     const imported = json(readRegular(join(candidate, "prepared-import.json")));
-    keys(imported, ["execution", "archiveSha256", "manifestSha256", "receiptSha256"], ["producerSha256"]);
+    keys(imported, ["execution", "archiveSha256", "manifestSha256", "receiptSha256"], ["producerSha256", "partialReviewSha256"]);
     if (imported.producerSha256 !== undefined) need(hash(imported.producerSha256), "Invalid producer context digest");
-    need(imported.execution === "local" && hash(imported.archiveSha256) && imported.manifestSha256 === manifestSha256 && imported.receiptSha256 === receiptSha256, "Prepared import receipt mismatch");
+    need(imported.execution === "local" && hash(imported.archiveSha256) && imported.manifestSha256 === manifestSha256 && imported.receiptSha256 === receiptSha256 && imported.partialReviewSha256 === partialReviewSha256, "Prepared import receipt mismatch");
     expected.add("prepared-import.json");
   }
   for (const [key, items] of groups) {
     const record = receipt.results[key];
-    need(record.status === completeStatus(manifest.assessment), "Only complete evidence is eligible for prepared publishing");
-    const verified = await verifyResult(candidate, record, items, manifest, undefined, runtime);
-    need(verified.eligible, "Prepared evidence is incomplete");
+    const verified = await verifyResult(candidate, record, items, manifest, undefined, runtime, partialReview !== undefined);
+    const review = partialReview?.results[key];
+    const evidence = review && readCompletePathEvidence(candidate, key, review.completePathEvidenceSha256);
+    verifyPublishable(verified, record, manifest, review, partialReview?.receiptSha256, evidence);
+    if (evidence) expected.add(evidence.path);
     expected.add(record.summary); for (const sarif of record.sarif) expected.add(sarif.path);
   }
   const actual = regularFiles(candidate);
@@ -620,36 +709,64 @@ export async function mergePrepared({ manifestPath, manifestSha256, content, con
     return { root, imported, configSha256 };
   } finally { lock.release(); }
 }
-export async function exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, selection }) {
-  const bytes = readRegular(manifestPath), original = validateManifest(bytes, manifestSha256), receipt = json(readRegular(receiptPath));
+export async function exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, selection, partialReviewPath, partialReviewSha256 }) {
+  const bytes = readRegular(manifestPath), original = validateManifest(bytes, manifestSha256);
+  const receiptBytes = readRegular(receiptPath), receipt = json(receiptBytes);
   const runtime = await loadRuntime(consumer, tarball, original.scanner, original.assessment), groups = await validateContent(original, content, runtime);
   need(receipt.configSha256 === fingerprint(configIdentity(original, runtime)) && receipt.manifestSha256 === manifestSha256, "Export receipt configuration mismatch");
-  const chosen = selection ?? [...groups.keys()];
+  let partialReviewBytes, partialReview;
+  if (partialReviewPath !== undefined || partialReviewSha256 !== undefined) {
+    need(partialReviewPath && !selection, "Partial publication requires an exclusive reviewed selection");
+    partialReviewBytes = readRegular(partialReviewPath);
+    partialReview = readPartialReview(partialReviewBytes, partialReviewSha256);
+    need(partialReview.receiptSha256 === digest(receiptBytes) && receipt.format === "aih-scan-prepared-receipt/1" &&
+      receipt.execution === "local" && fingerprint(receipt.config) === receipt.configSha256 && object(receipt.results),
+    "Partial publication review does not match the original receipt");
+  }
+  const chosen = partialReview ? Object.keys(partialReview.results) : selection ?? [...groups.keys()];
   need(Array.isArray(chosen) && chosen.length && new Set(chosen).size === chosen.length && chosen.every((key) => groups.has(key)), "Invalid explicit key selection");
   const manifest = { ...original, parentManifestSha256: manifestSha256, items: original.items.filter((item) => chosen.includes(item.scanKey)) };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), batchSha256 = digest(manifestBytes);
   const scannerBytes = readRegular(tarball); need(digest(scannerBytes) === original.scanner.tarballSha256, "Scanner tarball changed during export");
   const root = dirname(receiptPath), results = {}, entries = [{ path: "manifest.json", bytes: manifestBytes }, { path: "scanner.tgz", bytes: scannerBytes }];
+  if (partialReviewBytes) {
+    entries.push({ path: partialReviewFile, bytes: partialReviewBytes });
+    const checkpointPath = join(root, "checkpoint.json");
+    if (existsSync(checkpointPath)) {
+      const checkpoint = json(readRegular(checkpointPath));
+      need(checkpoint.format === "aih-scan-prepared-checkpoint/1" &&
+        checkpoint.configSha256 === receipt.configSha256 && object(checkpoint.results), "Invalid partial publication checkpoint");
+      need(chosen.every((key) => !COMPLETE.has(checkpoint.results[key]?.status)),
+        "Complete evidence already exists in the prepared checkpoint");
+    }
+  }
   for (const key of chosen) {
-    const record = receipt.results[key]; need(record?.status === completeStatus(manifest.assessment), `Selected key has no complete ${manifest.assessment.mode === "static" ? "static" : "AI"} result`);
-    await verifyResult(root, record, groups.get(key), original, content, runtime);
+    const record = receipt.results[key];
+    if (partialReview) need(record?.status === "incomplete", "Selected key has no retained incomplete result");
+    else need(record?.status === completeStatus(manifest.assessment), `Selected key has no complete ${manifest.assessment.mode === "static" ? "static" : "AI"} result`);
+    const verified = await verifyResult(root, record, groups.get(key), original, content, runtime, partialReview !== undefined);
+    const review = partialReview?.results[key];
+    const evidence = review && readCompletePathEvidence(dirname(partialReviewPath), key, review.completePathEvidenceSha256);
+    verifyPublishable(verified, record, original, review, partialReview?.receiptSha256, evidence);
+    if (evidence) entries.push({ path: evidence.path, bytes: evidence.bytes });
     const prefix = `targets/${runtime.contracts.keyFolderName(key)}`;
     const exported = { ...record, summary: `${prefix}/summary.json`, sarif: record.sarif.map((entry) => ({ path: `${prefix}/sarif/${entry.path.split("/").at(-1)}`, sha256: entry.sha256 })) };
     delete exported.notes;
+    if (partialReview) delete exported.detail;
     results[key] = exported;
     const summaryBytes = readRegular(join(root, ...record.summary.split("/"))); need(digest(summaryBytes) === record.summarySha256, "Summary changed during export");
     entries.push({ path: exported.summary, bytes: summaryBytes });
     record.sarif.forEach((entry, index) => { const bytes = readRegular(join(root, ...entry.path.split("/"))); need(digest(bytes) === entry.sha256, "SARIF changed during export"); entries.push({ path: exported.sarif[index].path, bytes }); });
   }
-  const exportedReceipt = { format: "aih-scan-prepared-receipt/1", execution: "local", manifestSha256: batchSha256, config: configIdentity(manifest, runtime), configSha256: fingerprint(configIdentity(manifest, runtime)), results };
-  const receiptBytes = Buffer.from(`${JSON.stringify(exportedReceipt, null, 2)}\n`); entries.push({ path: "receipt.json", bytes: receiptBytes });
+  const exportedReceipt = { format: "aih-scan-prepared-receipt/1", execution: "local", manifestSha256: batchSha256, config: configIdentity(manifest, runtime), configSha256: fingerprint(configIdentity(manifest, runtime)), results, ...(partialReview ? { partialReviewSha256 } : {}) };
+  const exportedReceiptBytes = Buffer.from(`${JSON.stringify(exportedReceipt, null, 2)}\n`); entries.push({ path: "receipt.json", bytes: exportedReceiptBytes });
   const archive = writeArchive(entries, out);
-  return { archiveSha256: archive.sha256, bytes: archive.bytes, manifestSha256: batchSha256, receiptSha256: digest(receiptBytes), keys: chosen.length, references: manifest.items.length };
+  return { archiveSha256: archive.sha256, bytes: archive.bytes, manifestSha256: batchSha256, receiptSha256: digest(exportedReceiptBytes), keys: chosen.length, references: manifest.items.length, ...(partialReview ? { partialReviewSha256 } : {}) };
 }
-export async function importCandidate(archive, archiveSha256, manifestSha256, receiptSha256, consumer, out) {
+export async function importCandidate(archive, archiveSha256, manifestSha256, receiptSha256, consumer, out, partialReviewSha256) {
   const bytes = readRegular(archive); need(hash(archiveSha256) && digest(bytes) === archiveSha256, "Candidate archive digest mismatch");
   extractArchive(bytes, out);
-  return verifyCandidate(out, manifestSha256, receiptSha256, consumer, join(out, "scanner.tgz"));
+  return verifyCandidate(out, manifestSha256, receiptSha256, consumer, join(out, "scanner.tgz"), partialReviewSha256);
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
@@ -660,12 +777,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       let result;
       if (command === "validate" && args.length === 5) { const [path, sha, content, consumer, tarball] = args; const manifest = validateManifest(readRegular(path), sha); const runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment); const groups = await validateContent(manifest, content, runtime); result = { references: manifest.items.length, uniqueKeys: groups.size }; }
       else if (command === "scan" && args.length >= 6 && args.length <= 9) { const [manifestPath, manifestSha256, content, consumer, tarball, out, concurrency, memory, reserve] = args; const controller = new AbortController(); process.once("SIGINT", () => controller.abort()); process.once("SIGTERM", () => controller.abort()); result = await scanPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, ...(concurrency ? { concurrency: Number(concurrency) } : {}), ...(memory ? { workerMemoryMiB: Number(memory) } : {}), ...(reserve ? { reserveMemoryMiB: Number(reserve) } : {}), signal: controller.signal }); }
-      else if (command === "verify" && args.length === 5) { const verified = await verifyCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
+      else if (command === "verify" && [5, 6].includes(args.length)) { const verified = await verifyCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
       else if (command === "archive" && args.length >= 7 && args.length <= 8) { const [manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, selectionPath] = args; result = await exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, ...(selectionPath ? { selection: json(readRegular(selectionPath)) } : {}) }); }
+      else if (command === "archive-partial" && args.length === 9) { const [manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, partialReviewPath, partialReviewSha256] = args; result = await exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, partialReviewPath, partialReviewSha256 }); }
       else if (command === "merge" && args.length === 7) { const [manifestPath, manifestSha256, content, consumer, tarball, out, receiptList] = args; result = await mergePrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, receipts: json(readRegular(receiptList)) }); }
       else if (command === "recover" && args.length === 6) { const [manifestPath, manifestSha256, content, consumer, tarball, out] = args; result = await recoverPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out }); }
-      else if (command === "import" && args.length === 6) { const verified = await importCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
-      else throw new Error("usage: prepared.mjs validate|scan|verify|archive|import <documented positional arguments>");
+      else if (command === "import" && [6, 7].includes(args.length)) { const verified = await importCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
+      else throw new Error("usage: prepared.mjs validate|scan|verify|archive|archive-partial|import <documented positional arguments>");
       process.stdout.write(`${JSON.stringify(result)}\n`);
     }
   } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : "Prepared operation failed"}\n`); process.exitCode = 1; }

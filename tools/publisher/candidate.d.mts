@@ -29,6 +29,7 @@ export interface PreparedImportDescriptor {
   archiveSha256: string;
   manifestSha256: string;
   receiptSha256: string;
+  partialReviewSha256?: string;
 }
 export declare function validatePreparedImport(bytes: Uint8Array, expectedSha256: string): PreparedImportDescriptor;
 export declare function importPreparedCandidate(bytes: Uint8Array, expectedSha256: string, consumer: string, out: string, producer?: { bytes: Uint8Array; sha256: string }): Promise<{ execution: string; count: number; manifestSha256: string; receiptSha256: string }>;

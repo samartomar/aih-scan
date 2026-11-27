@@ -132,7 +132,7 @@ A static assessment names only `mode` and `tools`:
 A complete static result is publishing evidence: the summary has `coverage: complete` and
 `origin: published`, SkillSpector ran in static mode at the pinned standard version, and every
 requested tool is `pass`, `warn`, `fail` or `not-applicable`. Its receipt status is
-`complete-static`. A partial static result stays `incomplete` and is refused, as before.
+`complete-static`. A partial static result stays `incomplete` and ordinary export refuses it.
 
 The prepared route accepts signed-in Claude and Kimi Code clients. Claude needs an
 exact, pinned Claude model id (`claude-<family>-<version>`, optionally with a date snapshot,
@@ -366,6 +366,73 @@ The final command reuses merged complete keys and scans only missing keys. Confl
 complete outputs for the same key are refused and retained for review. No shared service,
 credential transfer or mutable cross-machine index is introduced.
 
+### Reviewed last-resort partial publication
+
+Use the complete publication path first. Review the supported complete inspection paths
+for each exact key, retain the attempts and their outcomes, and stop considering partial
+publication wherever a complete result exists. The partial archive accepts a retained
+published static result whose required tools produced validated outputs and whose signed
+summary reports partial coverage. A crashed or unavailable tool, an absent result, a
+missing SARIF file, or a complete result cannot qualify.
+
+Create a separate JSON review for that receipt and select only the explicitly reviewed
+partial keys. Check that each public limitation accurately describes what inspection
+could not establish. Keep private notes and paths in the original evidence.
+
+```json
+{
+  "format": "aih-scan-prepared-partial-review/1",
+  "receiptSha256": "<original local receipt SHA-256>",
+  "results": {
+    "git-sha1:<exact 40-character key>": {
+      "summarySha256": "<original partial summary SHA-256>",
+      "reason": "failed",
+      "limitation": "The analyzer could not finish inspecting part of a supported source file.",
+      "completePathEvidenceSha256": "<retained evidence SHA-256>"
+    }
+  }
+}
+```
+
+```sh
+node tools/publisher/prepared.mjs archive-partial manifest.json "$MANIFEST_SHA" content consumer scanner.tgz "$RECEIPT_PATH" candidate.tar partial-review.json "$REVIEW_SHA"
+```
+
+The review hash binds the exact JSON bytes. Include the returned `partialReviewSha256`
+in the reviewed import descriptor below. The hosted candidate and signing preparation
+both require that opt-in and recheck the hash, exact key inventory, summary digest and
+reason, tool outputs, and SARIF. Beside the review file, put the typed evidence
+records at `complete-path-evidence/<SHA-256>.json`. The candidate includes and
+revalidates these exact records:
+
+```json
+{
+  "format": "aih-scan-complete-path-evidence/1",
+  "scanKey": "git-sha1:<exact 40-character key>",
+  "attempts": [{
+    "receiptSha256": "<original local receipt SHA-256>",
+    "summarySha256": "<original partial summary SHA-256>",
+    "analyzerVersion": "2.13.7",
+    "coverage": "partial",
+    "reason": "failed"
+  }]
+}
+```
+
+Each review needs an attempt matching the selected receipt, summary, coverage
+reason and SkillSpector version. Include other retained incomplete attempts when
+they were used in the review. The reviewer evaluates exhaustion using the
+underlying retained attempts and available supported paths. The publisher checks
+the review binding and cannot independently establish exhaustion.
+
+Signing preserves the original summary and SARIF bytes. The summary still carries
+`coverage: partial`, its coverage reason, its per-tool results and its existing risk
+score and label. The signed workflow output also carries the reviewed
+`partial-review.json`. That unsigned receipt identifies each exact signed summary by
+digest and supplies the scoped explanation. Keep it with the immutable published
+results if providing that explanation to consumers. Authentic partial evidence remains
+partial when measuring complete coverage.
+
 ### Output-only archive and checked hosted intake
 
 Export all requested keys, or name an explicit JSON array of selected keys for a smaller
@@ -464,7 +531,7 @@ inputs must equal them.
    head, by `samartomar`, with exactly the selected unexpired artifact and digest),
    downloads the artifact by ID with digest checking, selects the reviewed summaries
    (`candidate.mjs select`, which refuses links, a changed summary or a different listing)
-   and reads each with `aih-scan read`.
+   and reads each with `aih-scan read`. The sources route requires complete coverage.
 2. `signer` runs in the protected `scan-report-signing-prod` environment with
    `id-token: write` only. It checks out, installs and builds nothing: it checks the
    runtime's SHA-256 against the read-only job's output and runs only that CLI. It

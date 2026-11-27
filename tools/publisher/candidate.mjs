@@ -33,7 +33,15 @@ export function validatePreparedImport(bytes, expectedSha256) {
     fail("Reviewed prepared import digest mismatch");
   const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   const transportKeys = value?.githubRelease ? "githubRelease" : "allowedHosts,url";
-  if (!value || Object.keys(value).sort().join(",") !== `${transportKeys},archiveSha256,format,manifestSha256,receiptSha256`.split(",").sort().join(",") || value.format !== "aih-scan-prepared-import/1" || ![value.archiveSha256, value.manifestSha256, value.receiptSha256].every((hash) => /^[0-9a-f]{64}$/.test(hash))) fail("Invalid prepared import descriptor");
+  const fields = `${transportKeys},archiveSha256,format,manifestSha256,receiptSha256`.split(",");
+  const hashes = ["archiveSha256", "manifestSha256", "receiptSha256"];
+  if (value?.partialReviewSha256 !== undefined) {
+    fields.push("partialReviewSha256");
+    hashes.push("partialReviewSha256");
+  }
+  if (!value || Object.keys(value).sort().join(",") !== fields.sort().join(",") ||
+    value.format !== "aih-scan-prepared-import/1" ||
+    !hashes.every((field) => typeof value[field] === "string" && /^[0-9a-f]{64}$/.test(value[field]))) fail("Invalid prepared import descriptor");
   if (value.githubRelease) {
     const { validateReleaseAsset } = releaseTransport;
     validateReleaseAsset(value.githubRelease);
@@ -66,9 +74,9 @@ export async function importPreparedCandidate(bytes, expectedSha256, consumer, o
   const { importCandidate } = await import("./prepared.mjs");
   const archive = `${out}.download.tar`;
   await downloadArchive({ ...descriptor, sha256: descriptor.archiveSha256 }, archive);
-  const checked = await importCandidate(archive, descriptor.archiveSha256, descriptor.manifestSha256, descriptor.receiptSha256, consumer, out);
+  const checked = await importCandidate(archive, descriptor.archiveSha256, descriptor.manifestSha256, descriptor.receiptSha256, consumer, out, descriptor.partialReviewSha256);
   checkProducerReports(context, checked, out);
-  writeFileSync(join(out, "prepared-import.json"), `${JSON.stringify({ execution: "local", archiveSha256: descriptor.archiveSha256, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256, ...(producer ? { producerSha256: producer.sha256 } : {}) })}\n`, { flag: "wx" });
+  writeFileSync(join(out, "prepared-import.json"), `${JSON.stringify({ execution: "local", archiveSha256: descriptor.archiveSha256, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256, partialReviewSha256: descriptor.partialReviewSha256, ...(producer ? { producerSha256: producer.sha256 } : {}) })}\n`, { flag: "wx" });
   return { execution: "local", count: checked.summaries.length, manifestSha256: descriptor.manifestSha256, receiptSha256: descriptor.receiptSha256 };
 }
 
@@ -78,7 +86,7 @@ export async function checkPreparedCandidate(candidate, consumer, producer) {
   if (receipt.execution !== "local") fail("Prepared execution provenance refused");
   const context = producerFor(producer, consumer, receipt);
   if (producer && receipt.producerSha256 !== producer.sha256) fail("Reviewed producer context changed between phases");
-  const checked = await verifyCandidate(candidate, receipt.manifestSha256, receipt.receiptSha256, consumer, join(candidate, "scanner.tgz"));
+  const checked = await verifyCandidate(candidate, receipt.manifestSha256, receipt.receiptSha256, consumer, join(candidate, "scanner.tgz"), receipt.partialReviewSha256);
   checkProducerReports(context, checked, candidate);
   return { execution: "local", count: checked.summaries.length };
 }
