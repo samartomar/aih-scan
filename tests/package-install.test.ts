@@ -342,6 +342,8 @@ describe("the packed tarball", () => {
       "schemas/aih-scan-source-1.json",
       "schemas/aih-scan-summary-1.json",
       "schemas/aih-scan-withdrawn-1.json",
+      "tools/analyzers/skillspector/maintenance/static/artifact.json",
+      "tools/analyzers/skillspector/maintenance/verify.py",
       "trust/sigstore-trusted-root.json",
     ]);
     const dist = entries.filter((entry) => entry.startsWith("dist/"));

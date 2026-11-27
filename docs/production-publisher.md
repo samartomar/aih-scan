@@ -490,6 +490,25 @@ results are operations the owner authorizes separately. Clear the reviewed-head 
 after an authorized operation reaches a terminal state. Withdrawals
 (`aih-scan-withdrawn/1`) are signed the same way with `aih-scan sign <withdrawn.json>`.
 
+### Explicit static parser build
+
+For a prepared static assessment using the
+[reviewed parser wheel](../tools/analyzers/skillspector/maintenance/static/README.md),
+set `AIH_SCAN_SKILLSPECTOR` and `AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL` to the absolute
+environment entry point and wheel paths. In the manifest, the static assessment can
+add a `skillspector` object with the two exact fields `version` and `wheelSha256`
+from `tools/analyzers/skillspector/maintenance/static/artifact.json`.
+
+The helper verifies those pins and the installed analyzer before starting or reusing
+work. Each selected summary must record the requested static analyzer version,
+complete coverage and the reviewed input file inventory. The protected candidate
+and publisher steps verify the exact manifest, installed Scan package, analyzer pin
+carried by that package, and original summaries and SARIF. Only the output-only
+archive enters that process. The wheel and the original local source files stay with
+the operator. The signed summary records the analyzer version, and the reviewed
+candidate carries the wheel digest and receipt binding. Omit the object to use the
+standard 2.13.7 profile. TP4 and other AI controls are rejected in this static profile.
+
 ### Explicit TP4 maintenance capacity and producer transition
 
 For the separately identified maintenance build described in

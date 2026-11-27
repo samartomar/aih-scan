@@ -1,0 +1,206 @@
+diff --git a/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py b/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py
+index 098d1c1e..fda84739 100644
+--- a/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py
++++ b/src/skillspector/nodes/analyzers/static_patterns_tool_misuse.py
+@@ -15158,6 +15158,7 @@ def _has_bounded_parse_exhaustion(
+     shell_fence_ranges: list[tuple[int, int]] = []
+     json_strings: list[tuple[int, int]] = []
+     json_operand_spans: list[tuple[int, int]] = []
++    markdown_json_keys: list[tuple[int, int]] = []
+     python_source = None
+     javascript_source = None
+     unresolved_executables: list[int] = []
+@@ -15194,7 +15195,22 @@ def _has_bounded_parse_exhaustion(
+         structural_quote_closers = json_projection.closers
+         structural_quote_openers = json_projection.openers
+     elif file_type in {"json", "markdown"} and complete_context:
+-        json_strings = validated_json_string_spans(content, check_runtime)
++        json_strings = validated_json_string_spans(
++            content,
++            check_runtime,
++            literal_key_spans=(
++                markdown_json_keys
++                if file_type == "markdown" and (source_view is None or source_view.name == "raw")
++                else None
++            ),
++        )
++        # A bare property name has no shell operands. Keep compound names,
++        # expansions and executable-looking text on the existing analysis path.
++        markdown_json_keys = [
++            (start, end)
++            for start, end in markdown_json_keys
++            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", content[start + 1 : end - 1])
++        ]
+         structural_quote_closers = {end - 1 for _, end in json_strings}
+         structural_quote_openers = {start for start, _ in json_strings}
+     proven_decoded_json = (
+@@ -15364,7 +15380,9 @@ def _has_bounded_parse_exhaustion(
+         # Only validated host punctuation terminates command words. Every byte
+         # inside strings stays in the parser and original finding views remain raw.
+         shell_word_content = json_projection.text
+-    json_keys = frozenset(json_projection.key_spans) if json_projection is not None else frozenset()
++    json_keys = frozenset(
++        json_projection.key_spans if json_projection is not None else markdown_json_keys
++    )
+     native_backtick_bounds: dict[int, _NativeBacktickOperandBounds] = {}
+     json_word_roles = (
+         {
+@@ -15375,6 +15393,8 @@ def _has_bounded_parse_exhaustion(
+             "native_backtick_bounds": native_backtick_bounds,
+         }
+         if json_projection is not None
++        else {"json_key_spans": tuple(markdown_json_keys)}
++        if markdown_json_keys
+         else {}
+     )
+     quote_limits = None
+diff --git a/src/skillspector/security_reconstruction.py b/src/skillspector/security_reconstruction.py
+index 1cd08085..1f00d25c 100644
+--- a/src/skillspector/security_reconstruction.py
++++ b/src/skillspector/security_reconstruction.py
+@@ -952,14 +952,35 @@ def _json_string_spans(
+ 
+ 
+ def validated_json_string_spans(
+-    text: str, check_runtime: Callable[[], None] | None
++    text: str,
++    check_runtime: Callable[[], None] | None,
++    *,
++    literal_key_spans: list[tuple[int, int]] | None = None,
+ ) -> list[tuple[int, int]]:
+-    """Return exact string spans owned by complete JSON values, including both quotes."""
++    """Return exact string spans, optionally identifying keys in literal JSON examples."""
+     ranges = _validated_json_ranges(text, check_runtime)
+     spans: list[tuple[int, int]] = []
+     for start, end in ranges:
++        # Markdown has no decoded JSON finding view. A container with a possible
++        # escape or expansion must retain the original conservative analysis.
++        own_keys = literal_key_spans is not None and all(
++            text.find(marker, start, end) < 0 for marker in "\\$`"
++        )
+         for string_start, string_end in _json_string_spans(text[start:end], check_runtime):
+-            spans.append((start + string_start, start + string_end))
++            span = (start + string_start, start + string_end)
++            spans.append(span)
++            if not own_keys:
++                continue
++            cursor = span[1]
++            while cursor < end and text[cursor] in " \t\r\n":
++                if check_runtime is not None and cursor % 1024 == 0:
++                    check_runtime()
++                cursor += 1
++            # Only the already validated container can prove this colon owns
++            # the preceding string. Prefixes or text outside it grant no role.
++            if cursor < end and text[cursor] == ":":
++                assert literal_key_spans is not None
++                literal_key_spans.append(span)
+     return spans
+ 
+ 
+diff --git a/tests/nodes/analyzers/test_json_container_indentation.py b/tests/nodes/analyzers/test_json_container_indentation.py
+index 315f43c3..9e5e1e5f 100644
+--- a/tests/nodes/analyzers/test_json_container_indentation.py
++++ b/tests/nodes/analyzers/test_json_container_indentation.py
+@@ -129,9 +129,9 @@ def test_json_quote_caller_requires_complete_markdown_context(
+     calls: list[str] = []
+     real_validation = tm_module.validated_json_string_spans
+ 
+-    def record(text: str, check_runtime):
++    def record(text: str, check_runtime, **kwargs):
+         calls.append(text)
+-        return real_validation(text, check_runtime)
++        return real_validation(text, check_runtime, **kwargs)
+ 
+     monkeypatch.setattr(tm_module, "validated_json_string_spans", record)
+     exhausted = tm_module.has_bounded_parse_exhaustion(
+diff --git a/tests/nodes/analyzers/test_json_owned_runtime_bounds.py b/tests/nodes/analyzers/test_json_owned_runtime_bounds.py
+index 8fba43cb..56f121b7 100644
+--- a/tests/nodes/analyzers/test_json_owned_runtime_bounds.py
++++ b/tests/nodes/analyzers/test_json_owned_runtime_bounds.py
+@@ -49,10 +49,11 @@ def test_dense_owned_json_strings_have_bounded_total_parse_spans(
+     real_parser = tm_module._parse_shell_command_word
+     real_exhaustion = tm_module._has_shell_command_word_exhaustion
+ 
+-    def owned_spans(text, check_runtime):
++    def owned_spans(text, check_runtime, *, literal_key_spans=None):
+         # Column recognition has separate tests. Supply exact ownership here so
+         # a missing tab-container proof cannot hide overlapping parser work.
+         assert text == source
++        assert literal_key_spans == []
+         check_runtime()
+         return spans
+ 
+diff --git a/tests/nodes/analyzers/test_markdown_json_keys.py b/tests/nodes/analyzers/test_markdown_json_keys.py
+new file mode 100644
+index 00000000..4106dae8
+--- /dev/null
++++ b/tests/nodes/analyzers/test_markdown_json_keys.py
+@@ -0,0 +1,68 @@
++"""Static Markdown examples retain JSON syntax without hiding command values."""
++
++import json
++
++import pytest
++
++from skillspector.inspection_ledger import LedgerOutcome, ParserCheck
++from skillspector.nodes.analyzers import static_patterns_tool_misuse as tm
++from skillspector.nodes.analyzers import static_runner
++from skillspector.security_reconstruction import validated_json_string_spans
++
++
++def _example(body: str) -> str:
++    return f"A configuration example.\n\n```json\n{body}\n```\n"
++
++
++@pytest.mark.parametrize(
++    "body",
++    [
++        '{"timeout": 5}',
++        '{"settings": {\n    "timeout"\n    : 5,\n    "nice": true\n}}',
++        '{"timeout": "five seconds"}',
++    ],
++)
++def test_complete_json_key_does_not_start_a_shell_command(body: str) -> None:
++    result = static_runner.run_static_patterns_with_ledger(
++        {"components": ["guide.md"], "file_cache": {"guide.md": _example(body)}}, [tm]
++    )
++    assert result["findings"] == []
++    assert result["inspection_ledger"][0]["outcome"] is LedgerOutcome.COMPLETED
++
++
++@pytest.mark.parametrize("command", ['sh -c "$message"', "eval $message", "`printf hello`"])
++def test_possible_expansion_inside_valid_json_is_still_partial(command: str) -> None:
++    body = json.dumps({"timeout": 5, "command": command})
++    source = _example(body)
++    diagnostic = tm.bounded_parse_diagnostic(source, lambda: None, file_type="markdown")
++    assert diagnostic is not None
++    assert diagnostic.check is ParserCheck.COMMAND_WORD_BOUNDARY
++
++
++@pytest.mark.parametrize(
++    "source",
++    [
++        _example('{"timeout": 5,}'),
++        'A configuration example.\n\n```json\n{"timeout": 5}\n',
++        _example('{"timeout": 5}').replace("```json", "```sh"),
++        _example(json.dumps({"timeout": 5, "value": "a\nb"})),
++    ],
++)
++def test_unproven_key_never_acquires_json_ownership(source: str) -> None:
++    keys: list[tuple[int, int]] = []
++    validated_json_string_spans(source, lambda: None, literal_key_spans=keys)
++    assert keys == []
++
++
++def test_following_runtime_command_remains_partial() -> None:
++    source = _example('{"timeout": 5}') + '\n```sh\neval "$message"\n```\n'
++    diagnostic = tm.bounded_parse_diagnostic(source, lambda: None, file_type="markdown")
++    assert diagnostic is not None
++    assert diagnostic.check is ParserCheck.COMMAND_STRING_RUNTIME
++    assert diagnostic.start > source.index("eval")
++
++
++def test_finding_from_a_json_value_stays_visible() -> None:
++    body = json.dumps({"timeout": 5, "example": "mode=0o777"})
++    findings = tm.analyze(_example(body), "guide.md", "markdown")
++    assert [finding.rule_id for finding in findings] == ["TM3"]

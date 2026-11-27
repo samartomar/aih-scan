@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -39,6 +39,28 @@ export const SKILLSPECTOR_MAINTENANCE_VERSION =
   "2.13.7+aih.1.9a867b5e3f4e5142c27bad050c8c72a89cad4d9f21ee7b3157f61d19148952e7";
 /** Selects an exact SkillSpector executable, or `none` to disable it. */
 export const SKILLSPECTOR_VARIABLE = "AIH_SCAN_SKILLSPECTOR";
+/** Opts static assessment into the reviewed parser wheel installed beside the launcher. */
+export const SKILLSPECTOR_STATIC_WHEEL_VARIABLE = "AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL";
+const STATIC_ARTIFACT = new URL(
+  "../../tools/analyzers/skillspector/maintenance/static/artifact.json",
+  import.meta.url,
+);
+const VERIFY_WHEEL = new URL(
+  "../../tools/analyzers/skillspector/maintenance/verify.py",
+  import.meta.url,
+);
+
+function staticArtifact(): { version: string; wheelSha256: string } {
+  const pin = JSON.parse(readFileSync(STATIC_ARTIFACT, "utf8"));
+  if (
+    typeof pin?.version !== "string" ||
+    !/^2\.13\.7\+aih\.static\.1\.[a-f0-9]{64}$/u.test(pin.version) ||
+    typeof pin.wheelSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(pin.wheelSha256)
+  )
+    throw new Error("Invalid reviewed static SkillSpector pin");
+  return { version: pin.version, wheelSha256: pin.wheelSha256 };
+}
 
 /** How SkillSpector's AI pass would run: `cli` a signed-in AI CLI, `local` a local model, `provider` a hosted API. */
 export type AiVia = "cli" | "local" | "provider";
@@ -747,21 +769,20 @@ export function skillSpectorRun(
   item: AssessItem,
   mode: ScanMode,
   setup: AiSetup | undefined,
+  reviewedStaticVersion?: string,
 ): ToolRun {
   const document = objectOf(report);
   const metadata = objectOf(document?.metadata);
-  const acceptedVersion = [SKILLSPECTOR_VERSION, SKILLSPECTOR_MAINTENANCE_VERSION].includes(
-    String(metadata?.skillspector_version),
-  )
+  const supported =
+    reviewedStaticVersion === undefined
+      ? [SKILLSPECTOR_VERSION, SKILLSPECTOR_MAINTENANCE_VERSION]
+      : [reviewedStaticVersion];
+  const acceptedVersion = supported.includes(String(metadata?.skillspector_version))
     ? String(metadata?.skillspector_version)
     : SKILLSPECTOR_VERSION;
   if (document === undefined || metadata === undefined || !Array.isArray(document.issues))
     return notRun("failed", mode, acceptedVersion, "SkillSpector wrote no readable report");
-  if (
-    ![SKILLSPECTOR_VERSION, SKILLSPECTOR_MAINTENANCE_VERSION].includes(
-      String(metadata.skillspector_version),
-    )
-  )
+  if (!supported.includes(String(metadata.skillspector_version)))
     return notRun("failed", mode, SKILLSPECTOR_VERSION, "SkillSpector reported another version");
   const completeness = objectOf(document.analysis_completeness);
   if (
@@ -903,6 +924,14 @@ export function skillSpectorAdapter(options: SkillSpectorOptions = {}): ToolAdap
     async run(item: AssessItem, context: ToolContext): Promise<ToolRun> {
       const notes: string[] = [];
       let mode: ScanMode = "static";
+      const staticWheel = env[SKILLSPECTOR_STATIC_WHEEL_VARIABLE];
+      if (context.mode === "ai" && staticWheel !== undefined)
+        return notRun(
+          "unavailable",
+          "ai",
+          SKILLSPECTOR_VERSION,
+          "The reviewed parser wheel requires a static assessment",
+        );
       if (context.mode !== "ai" && (env[AI_EFFORT_VARIABLE]?.trim() ?? "") !== "")
         notes.push(`${AI_EFFORT_VARIABLE} has no effect in static mode`);
       if (context.mode === "ai") {
@@ -930,6 +959,7 @@ export function skillSpectorAdapter(options: SkillSpectorOptions = {}): ToolAdap
             scratch: scratch.path,
             ai: options.ai ?? (mode === "ai" ? skillSpectorAiSetup(env, platform) : undefined),
             preparedBatching: options.preparedBatching,
+            staticWheel,
           }),
         );
       } finally {
@@ -965,18 +995,48 @@ async function runInstalled(
     scratch: string;
     ai: AiSetup | undefined;
     preparedBatching: PreparedBatching | undefined;
+    staticWheel: string | undefined;
   }>,
 ): Promise<ToolRun> {
-  const probeEnv = staticAnalyzerEnv(settings.env, settings.scratch, settings.platform);
-  const version = await probeVersion(
-    executable,
-    probeEnv,
-    settings.scratch,
-    /SkillSpector v?(\d+\.\d+\.\d+(?:\+[0-9a-z.]+)?)(?:\s|$)/u,
-    context.signal,
-  );
+  const path = settings.platform === "win32" ? win32 : posix;
+  let reviewed: { version: string; wheelSha256: string } | undefined;
+  let python: string | undefined;
+  if (settings.staticWheel !== undefined) {
+    python = selectSkillSpectorPythonV1(executable);
+    if (!path.isAbsolute(settings.staticWheel) || !settings.env[SKILLSPECTOR_VARIABLE] || !python)
+      return notRun(
+        "unavailable",
+        mode,
+        SKILLSPECTOR_VERSION,
+        "The reviewed parser wheel requires absolute wheel and SkillSpector environment paths",
+      );
+    try {
+      reviewed = staticArtifact();
+    } catch {
+      return notRun(
+        "unavailable",
+        mode,
+        SKILLSPECTOR_VERSION,
+        "The reviewed parser wheel pin is unavailable",
+      );
+    }
+  }
+  const version =
+    reviewed?.version ??
+    (await probeVersion(
+      executable,
+      staticAnalyzerEnv(settings.env, settings.scratch, settings.platform),
+      settings.scratch,
+      /SkillSpector v?(\d+\.\d+\.\d+(?:\+[0-9a-z.]+)?)(?:\s|$)/u,
+      context.signal,
+    ));
   if (context.signal.aborted) return notRun("cancelled", mode, version ?? SKILLSPECTOR_VERSION);
-  if (version !== SKILLSPECTOR_VERSION && version !== SKILLSPECTOR_MAINTENANCE_VERSION)
+  if (
+    version === undefined ||
+    (reviewed === undefined &&
+      version !== SKILLSPECTOR_VERSION &&
+      version !== SKILLSPECTOR_MAINTENANCE_VERSION)
+  )
     return notRun(
       "unavailable",
       mode,
@@ -985,7 +1045,6 @@ async function runInstalled(
         ? "the installed SkillSpector did not report its version"
         : `the installed SkillSpector is ${version}; Scan runs ${SKILLSPECTOR_VERSION}`,
     );
-  const path = settings.platform === "win32" ? win32 : posix;
   const report = path.join(settings.scratch, "skillspector-report.json");
   const invocation = skillSpectorInvocation({
     executable: executable.path,
@@ -1013,6 +1072,20 @@ async function runInstalled(
     });
   }
   let argv = invocation.argv;
+  if (reviewed && python && settings.staticWheel !== undefined)
+    argv = [
+      python,
+      "-I",
+      "-B",
+      "-X",
+      "utf8",
+      fileURLToPath(VERIFY_WHEEL),
+      settings.staticWheel,
+      reviewed.wheelSha256,
+      reviewed.version,
+      "--static-scan",
+      ...invocation.argv.slice(1),
+    ];
   if (mode === "ai" && ai?.available) {
     if (ai.profile === ADAPTIVE_SSD_PROFILE) {
       const socket = runEnv.AIH_SCAN_SSD_SOCKET;
@@ -1143,7 +1216,7 @@ async function runInstalled(
       });
     }
   }
-  const run = skillSpectorRun(document, item, mode, ai);
+  const run = skillSpectorRun(document, item, mode, ai, reviewed?.version);
   if (kimiQuota && run.status === "ran")
     return Object.freeze({ ...run, failedPart: "Kimi rate or quota limit refused the request" });
   return run;

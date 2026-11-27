@@ -1,7 +1,7 @@
 export interface PreparedFile { path: string; mode: string; sha256: string }
 export interface PreparedItem { path: string; scanKey: string; files: PreparedFile[]; labels?: Record<string, string>; source?: { locator: string; revision: string } }
 export interface PreparedScanner { name: string; version: string; tarballSha256: string }
-export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; effort?: string; profile?: "adaptive-ssd/1"; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number }; skillspector?: { version: string; wheelSha256: string; tp4: { maxFiles: number; maxFindings: number; maxBatches: number } } }
+export interface PreparedAssessment { mode: string; tools: string[]; provider?: string; baseUrl?: string; model?: string; effort?: string; profile?: "adaptive-ssd/1"; reasoningEffort?: string; structuredOutputMethod?: string; credentialVariable?: string; llmConcurrency?: number; modelTokenLimits?: { contextLength: number; maxOutputTokens: number }; skillspector?: { version: string; wheelSha256: string; tp4?: { maxFiles: number; maxFindings: number; maxBatches: number } } }
 export interface PreparedManifest { format: string; scanner: PreparedScanner; assessment: PreparedAssessment; items: PreparedItem[]; parentManifestSha256?: string; /** Summary revision to write (default 1). */ revision?: number }
 export interface PreparedRuntime {
   host: typeof import("../../src/public/host.js");
@@ -12,7 +12,7 @@ export interface PreparedRecord { status: string; summary: string; summarySha256
 export interface PreparedReceipt { results: Record<string, PreparedRecord> }
 export interface PreparedOptions { manifestPath: string; manifestSha256: string; content: string; consumer: string; tarball: string; out: string; concurrency?: number; workerMemoryMiB?: number; reserveMemoryMiB?: number; signal?: AbortSignal }
 export function validateManifest(bytes: Uint8Array, expectedSha256: string): PreparedManifest;
-export function loadRuntime(consumer: string, tarball: string, scanner: PreparedScanner): Promise<PreparedRuntime>;
+export function loadRuntime(consumer: string, tarball: string, scanner: PreparedScanner, assessment?: PreparedAssessment): Promise<PreparedRuntime>;
 export function validateContent(manifest: PreparedManifest, content: string, runtime: PreparedRuntime): Promise<Map<string, PreparedItem[]>>;
 export function aiEligible(summary: unknown, manifest: { assessment: PreparedAssessment }): boolean;
 export function staticEligible(summary: unknown, manifest: { assessment: PreparedAssessment }): boolean;

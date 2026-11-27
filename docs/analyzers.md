@@ -369,3 +369,18 @@ maintenance wheels. Completed historical summaries and findings remain readable 
 producer identities through the existing public readers. Building/installing the
 maintenance artifact and increasing capacities are explicit operator choices; more
 source/batch work can cost more and does not guarantee complete inspection.
+
+## Optional static parser build
+
+Scan also supports a reviewed build of SkillSpector 2.13.7 with fixes for literal JSON
+keys and TypeScript template literals inside Markdown fences. Build its exact pinned wheel
+and install it in its own locked environment using the
+[static parser build instructions](https://github.com/samartomar/aih-scan/tree/main/tools/analyzers/skillspector/maintenance/static).
+Set `AIH_SCAN_SKILLSPECTOR` to the absolute path of that environment's `skillspector`
+entry point and `AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL` to the absolute path of the reviewed
+wheel. Then use the usual `aih-scan scan <folder>` command or the static host API.
+
+Scan checks the pinned wheel digest and the installed package bytes in the isolated
+Python interpreter that runs the scan. A mismatch makes the analyzer unavailable or
+failed, leaving coverage incomplete. This build supports static assessments only. The
+standard analyzer and the separate TP4 AI build keep their existing selection and identity.

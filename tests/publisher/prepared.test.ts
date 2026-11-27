@@ -171,6 +171,13 @@ const skill = {
   "SKILL.md": "---\nname: greeter\ndescription: Greets users.\n---\n# Greeting\nSay hello.\n",
 };
 const staticAssessment = { mode: "static", tools: ["aih-trust-lint", "skillspector"] };
+const { version: staticVersion, wheelSha256: staticWheelSha256 } = JSON.parse(
+  readFileSync(join(repo, "tools/analyzers/skillspector/maintenance/static/artifact.json"), "utf8"),
+);
+const reviewedStatic = {
+  ...staticAssessment,
+  skillspector: { version: staticVersion, wheelSha256: staticWheelSha256 },
+};
 const cliAssessment = {
   mode: "ai",
   tools: ["aih-trust-lint", "skillspector"],
@@ -362,6 +369,23 @@ describe("prepared manifest and exact inventory", () => {
     expect(() => validate({ mode: "static", tools: assessment.tools, llmConcurrency: 2 })).toThrow(
       "Static assessment",
     );
+  });
+  it("binds the exact reviewed parser pin to static manifests without admitting AI or TP4 controls", async () => {
+    const setup = await prepared({ item: skill });
+    const validate = (controls: Record<string, unknown>) => {
+      const bytes = Buffer.from(JSON.stringify({ ...setup.manifest, assessment: controls }));
+      return validateManifest(bytes, hash(bytes));
+    };
+    expect(validate(reviewedStatic).assessment).toEqual(reviewedStatic);
+    for (const wrong of [
+      { ...reviewedStatic.skillspector, version: "2.13.7" },
+      { ...reviewedStatic.skillspector, wheelSha256: "a".repeat(64) },
+      { ...reviewedStatic.skillspector, tp4: { maxFiles: 128 } },
+      { version: staticVersion },
+    ])
+      expect(() => validate({ ...reviewedStatic, skillspector: wrong })).toThrow();
+    expect(() => validate({ ...assessment, skillspector: reviewedStatic.skillspector })).toThrow();
+    expect(() => validate({ ...reviewedStatic, model: "fixture" })).toThrow("Static assessment");
   });
   it("accepts a signed-in Claude CLI profile only with an explicit model and effort and no HTTP controls", async () => {
     const setup = await prepared({ item: skill });
@@ -1939,6 +1963,11 @@ describe("prepared transport and eligibility", () => {
     });
     expect(eligibleEvidence(swap({ result: "not-run", reason: "timeout" }), manifest)).toBe(false);
     expect(eligibleEvidence(swap({ version: "2.13.3" }), manifest)).toBe(false);
+    expect(eligibleEvidence(summary, { assessment: reviewedStatic })).toBe(false);
+    expect(eligibleEvidence(swap({ version: staticVersion }), manifest)).toBe(false);
+    expect(eligibleEvidence(swap({ version: staticVersion }), { assessment: reviewedStatic })).toBe(
+      true,
+    );
     expect(
       eligibleEvidence(
         swap({ mode: "ai", ai: { via: "cli", provider: "claude_cli", model: "m" } }),
@@ -2011,6 +2040,89 @@ describe("prepared transport and eligibility", () => {
     expect(digest(bytes)).toBe(hash(bytes));
   });
 });
+
+it.runIf(
+  process.env.AIH_SCAN_TEST_SKILLSPECTOR_STATIC_EXECUTABLE !== undefined &&
+    process.env.AIH_SCAN_TEST_SKILLSPECTOR_STATIC_WHEEL !== undefined,
+)(
+  "checks the installed static producer in CLI, prepared export, and pre-sign validation",
+  async () => {
+    const setup = await prepared({ item: skill }, reviewedStatic);
+    const wheel = process.env.AIH_SCAN_TEST_SKILLSPECTOR_STATIC_WHEEL;
+    const executable = process.env.AIH_SCAN_TEST_SKILLSPECTOR_STATIC_EXECUTABLE;
+    if (!wheel || !executable)
+      throw new Error("Provide the reviewed wheel and its installed runtime");
+    const corrupt = join(setup.folder, "incorrect.whl");
+    writeFileSync(corrupt, "not the reviewed artifact");
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR", executable);
+    vi.stubEnv("AIH_SCAN_SKILL_SCANNER", "none");
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL", corrupt);
+
+    const cliScan = (name: string) =>
+      JSON.parse(
+        execFileSync(
+          process.execPath,
+          [
+            join(consumer, "node_modules/@aihq/scan/dist/cli.js"),
+            "scan",
+            join(setup.content, "item"),
+            "--out",
+            join(setup.folder, name),
+            "--json",
+          ],
+          { encoding: "utf8", windowsHide: true },
+        ),
+      ).targets[0].results[0];
+    const refused = cliScan("bad-wheel");
+    expect(JSON.parse(readFileSync(refused.summaryPath, "utf8")).coverage).toBe("partial");
+    await expect(scanPrepared(setup)).rejects.toThrow("wheel digest mismatch");
+
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL", wheel);
+    const local = cliScan("good-wheel");
+    const summary = JSON.parse(readFileSync(local.summaryPath, "utf8"));
+    expect(summary.coverage).toBe("complete");
+    expect(summary.tools).toContainEqual(
+      expect.objectContaining({ tool: "skillspector", version: staticVersion, mode: "static" }),
+    );
+
+    const result = await scanPrepared(setup);
+    expect(result).toMatchObject({ completed: 1, reused: 0, pending: 0 });
+    const archive = join(setup.folder, "parser-static.tar");
+    const exported = await exportCandidate({
+      ...setup,
+      receiptPath: result.receiptPath,
+      out: archive,
+    });
+    const imported = join(setup.folder, "parser-static-imported");
+    const checked = await importCandidate(
+      archive,
+      exported.archiveSha256,
+      exported.manifestSha256,
+      exported.receiptSha256,
+      consumer,
+      imported,
+    );
+    expect(checked.manifest.assessment).toEqual(reviewedStatic);
+    expect(checked.summaries).toHaveLength(1);
+    writeFileSync(
+      join(imported, "prepared-import.json"),
+      JSON.stringify({
+        execution: "local",
+        archiveSha256: exported.archiveSha256,
+        manifestSha256: exported.manifestSha256,
+        receiptSha256: exported.receiptSha256,
+      }),
+    );
+    expect(await checkPreparedCandidate(imported, consumer)).toEqual({
+      execution: "local",
+      count: 1,
+    });
+    expect(await scanPrepared(setup)).toMatchObject({ completed: 0, reused: 1, pending: 0 });
+    vi.stubEnv("AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL", corrupt);
+    await expect(scanPrepared(setup)).rejects.toThrow("wheel digest mismatch");
+  },
+  120_000,
+);
 
 it.runIf(process.env.AIH_SCAN_TEST_SKILLSPECTOR_WHEEL !== undefined)(
   "retains complete TP4 sources and findings through an explicit maintenance prepared profile",
