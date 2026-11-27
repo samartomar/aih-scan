@@ -52,6 +52,12 @@ adds the external-builder reproducibility proof to `tests/host-v1/analyzer-pins.
 downloads that exact archive, checks its pinned SHA-256 and runs the builder proof with the
 real analyzer tests; the maintenance README records its identity and manual build command.
 
+To exercise the installed static parser build through CLI, prepared export, and pre-sign
+validation, run the `tests/publisher/prepared.test.ts` suite with
+`AIH_SCAN_TEST_SKILLSPECTOR_STATIC_EXECUTABLE` pointing to the separate locked runtime's
+entry point and `AIH_SCAN_TEST_SKILLSPECTOR_STATIC_WHEEL` pointing to its exact reviewed
+wheel. This test uses temporary benign inputs and makes no AI calls.
+
 The real maintenance capacity proof uses the exact reviewed wheel and its separately
 provisioned maintenance executable (see `tools/analyzers/skillspector/maintenance/README.md`):
 

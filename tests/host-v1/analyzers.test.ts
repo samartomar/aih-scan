@@ -110,6 +110,38 @@ const toolOf = (summary: any, tool: string) =>
   summary.tools.find((entry: { tool: string }) => entry.tool === tool);
 
 describe("SkillSpector adapter (controlled CLI fixture)", () => {
+  it("does not accept a parser build by its reported version or launch it for AI", async () => {
+    const { version } = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../tools/analyzers/skillspector/maintenance/static/artifact.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    const folder = fixture.folder("reviewed-static-opt-in", skill);
+    const analyzer = skillspector(skillSpectorReport([]), {
+      versionText: `SkillSpector v${version}`,
+    });
+    const standard = await run(folder, analyzer);
+    expect(standard.summary.coverage).toBe("partial");
+    expect(toolOf(standard.summary, "skillspector")).toMatchObject({
+      result: "not-run",
+      version: "2.13.7",
+    });
+    const refused = await run(folder, analyzer, {
+      env: { AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL: fixture.path("not-a-wheel.whl") },
+      extra: { mode: "ai" },
+    });
+    expect(refused.summary.coverage).toBe("partial");
+    expect(toolOf(refused.summary, "skillspector")).toMatchObject({
+      mode: "ai",
+      result: "not-run",
+    });
+    expect(analyzer.calls().map((call) => call.args)).toEqual([["--version"]]);
+  });
+
   it("ignores ambient TP4 controls in a static maintenance scan", async () => {
     const folder = fixture.folder("maintenance-static", skill);
     const version = SKILLSPECTOR_MAINTENANCE_VERSION;

@@ -11,6 +11,9 @@ import { digest, extractArchive, MAX_ARCHIVE_BYTES, need, plainText, readArchive
 import { startPreparedBatching } from "./provider-batching.mjs";
 
 const maintenanceArtifact = JSON.parse(readFileSync(new URL("../analyzers/skillspector/maintenance/artifact.json", import.meta.url), "utf8"));
+const staticArtifactPath = "tools/analyzers/skillspector/maintenance/static/artifact.json";
+const staticArtifactUrl = new URL(`../../${staticArtifactPath}`, import.meta.url);
+const staticWheelVariable = "AIH_SCAN_SKILLSPECTOR_STATIC_WHEEL";
 // The maintenance build is versioned `<standard release>+aih.1.<build id>`; the pin test binds that prefix to SKILLSPECTOR_VERSION.
 const standardSkillSpectorVersion = maintenanceArtifact.version.split("+")[0];
 // Effort levels the Claude CLI accepts; Scan applies one through AIH_SCAN_AI_EFFORT. A test
@@ -109,7 +112,16 @@ export function validateManifest(bytes, expectedSha256) {
       keys(assessment.skillspector.tp4, ["maxFiles", "maxFindings", "maxBatches"]);
       need(Object.values(assessment.skillspector.tp4).every((value) => Number.isSafeInteger(value) && value > 0 && value <= 4096), "Invalid TP4 capacity; expected integers from 1 to 4096");
     }
-  } else need(Object.keys(assessment).length === 2, "Static assessment must not name AI controls");
+  } else {
+    need(Object.keys(assessment).every((field) => ["mode", "tools", "skillspector"].includes(field)), "Static assessment must not name AI controls");
+    if (assessment.skillspector !== undefined) {
+      keys(assessment.skillspector, ["version", "wheelSha256"]);
+      const reviewed = json(readRegular(fileURLToPath(staticArtifactUrl)));
+      need(/^2\.13\.7\+aih\.static\.1\.[a-f0-9]{64}$/.test(reviewed.version) && hash(reviewed.wheelSha256) &&
+        assessment.skillspector.version === reviewed.version && assessment.skillspector.wheelSha256 === reviewed.wheelSha256,
+        "Unsupported reviewed static analyzer identity");
+    }
+  }
   if (assessment.llmConcurrency !== undefined) need(Number.isSafeInteger(assessment.llmConcurrency) && assessment.llmConcurrency > 0, "Invalid AI LLM concurrency; expected a positive safe integer");
   if (assessment.modelTokenLimits !== undefined) {
     const limits = assessment.modelTokenLimits;
@@ -135,7 +147,7 @@ export function validateManifest(bytes, expectedSha256) {
   for (const root of roots) need(![...roots].some((other) => other !== root && root.startsWith(`${other}/`)), "Item roots must not overlap");
   return manifest;
 }
-export async function loadRuntime(consumer, tarball, scanner) {
+export async function loadRuntime(consumer, tarball, scanner, assessment) {
   const bytes = readRegular(tarball);
   need(digest(bytes) === scanner.tarballSha256, "Scanner tarball digest mismatch");
   const unpacked = readArchive(gunzipSync(bytes, { maxOutputLength: MAX_ARCHIVE_BYTES }));
@@ -150,6 +162,11 @@ export async function loadRuntime(consumer, tarball, scanner) {
   need(canonical(regularFiles(packageRoot).map(({ path }) => path).sort()) === canonical(expected.sort()), "Installed scanner file set differs from tarball");
   const manifest = json(readRegular(join(packageRoot, "package.json")));
   need(manifest.name === scanner.name && manifest.version === scanner.version, "Installed scanner identity mismatch");
+  if (assessment?.mode === "static" && assessment.skillspector !== undefined) {
+    const artifact = unpacked.get(`package/${staticArtifactPath}`);
+    need(artifact?.type === "file" && artifact.bytes.equals(readRegular(fileURLToPath(staticArtifactUrl))),
+      "Scanner tarball does not contain the reviewed static analyzer pin");
+  }
   const host = await import(pathToFileURL(join(packageRoot, "dist/public/host.js")).href);
   const read = await import(pathToFileURL(join(packageRoot, "dist/public/read.js")).href);
   const contracts = await import(pathToFileURL(join(packageRoot, "dist/public/contracts.js")).href);
@@ -205,7 +222,7 @@ export function aiEligible(summary, manifest) {
 export function staticEligible(summary, manifest) {
   if (manifest.assessment.mode !== "static" || summary.coverage !== "complete" || summary.origin !== "published") return false;
   const primary = summary.tools.find((tool) => tool.tool === "skillspector");
-  if (primary?.version !== standardSkillSpectorVersion || primary.mode !== "static" || primary.ai !== undefined || !["pass", "warn", "fail"].includes(primary.result)) return false;
+  if (primary?.version !== (manifest.assessment.skillspector?.version ?? standardSkillSpectorVersion) || primary.mode !== "static" || primary.ai !== undefined || !["pass", "warn", "fail"].includes(primary.result)) return false;
   return requestedToolsFinished(summary, manifest);
 }
 export function eligibleEvidence(summary, manifest) {
@@ -273,7 +290,7 @@ async function worker(requestPath) {
     });
   });
   const job = json(readRegular(requestPath));
-  const runtime = await loadRuntime(job.consumer, job.tarball, job.scanner);
+  const runtime = await loadRuntime(job.consumer, job.tarball, job.scanner, job.assessment);
   const started = Date.now();
   const request = { format: "aih-scan-request/1", origin: "published", mode: job.assessment.mode, tools: job.assessment.tools, ...revisionOf(job), items: [{ path: job.folder, executable: job.item.files.filter((file) => file.mode === "100755").map((file) => file.path) }] };
   const options = { outDir: job.out, signal: controller.signal };
@@ -306,6 +323,8 @@ function childEnvironment(assessment, scratch, ssdSocket) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) if (allowed.has(key.toUpperCase())) env[key] = value;
   Object.assign(env, { HOME: scratch, USERPROFILE: scratch, APPDATA: scratch, LOCALAPPDATA: scratch, TEMP: scratch, TMP: scratch, TMPDIR: scratch });
+  if (assessment.mode === "static" && assessment.skillspector !== undefined)
+    env[staticWheelVariable] = process.env[staticWheelVariable];
   if (assessment.mode === "ai" && isAgentProvider(assessment.provider)) {
     // The signed-in CLI reads the operator's own sign-in from their HOME; no credential value is handled.
     need(process.platform !== "win32", "Prepared agent-CLI AI needs a POSIX host");
@@ -417,7 +436,7 @@ async function recoverTemporaryCheckpoints(root, checkpoint, groups, manifest, c
   return { recovered, ignored };
 }
 export async function recoverPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out }) {
-  const manifest = validateManifest(readRegular(manifestPath), manifestSha256), runtime = await loadRuntime(consumer, tarball, manifest.scanner);
+  const manifest = validateManifest(readRegular(manifestPath), manifestSha256), runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment);
   const groups = await validateContent(manifest, content, runtime), configSha256 = fingerprint(configIdentity(manifest, runtime));
   const root = join(resolve(out), "configs", configSha256); mkdirSync(root, { recursive: true });
   const lock = acquireLock(root);
@@ -440,18 +459,21 @@ export function maintenancePythonPath(executable, platform = process.platform) {
 }
 function verifyMaintenanceRuntime(assessment) {
   if (assessment.skillspector === undefined) return;
-  const executable = process.env.AIH_SCAN_SKILLSPECTOR, wheel = process.env.AIH_SCAN_SKILLSPECTOR_WHEEL;
+  const staticBuild = assessment.mode === "static";
+  const wheelVariable = staticBuild ? staticWheelVariable : "AIH_SCAN_SKILLSPECTOR_WHEEL";
+  const executable = process.env.AIH_SCAN_SKILLSPECTOR, wheel = process.env[wheelVariable];
   need(typeof executable === "string" && typeof wheel === "string", "Maintenance executable and reviewed wheel paths are required");
   const binary = resolve(executable);
-  need(binary === executable && digest(readRegular(wheel)) === assessment.skillspector.wheelSha256, "Maintenance wheel digest mismatch");
+  need(binary === executable && (!staticBuild || resolve(wheel) === wheel) &&
+    digest(readRegular(wheel, staticBuild ? 32 * 1024 * 1024 : undefined)) === assessment.skillspector.wheelSha256, "Maintenance wheel digest mismatch");
   const python = maintenancePythonPath(binary);
   const env = {};
   for (const name of ["PATH", "SYSTEMROOT", "WINDIR"]) if (process.env[name] !== undefined) env[name] = process.env[name];
-  execFileSync(python, ["-I", fileURLToPath(new URL("../analyzers/skillspector/maintenance/verify.py", import.meta.url)), resolve(wheel), assessment.skillspector.wheelSha256, assessment.skillspector.version], { env, windowsHide: true, timeout: 30000, stdio: "pipe" });
+  execFileSync(python, ["-I", fileURLToPath(new URL("../analyzers/skillspector/maintenance/verify.py", import.meta.url)), resolve(wheel), assessment.skillspector.wheelSha256, assessment.skillspector.version, ...(staticBuild ? ["--static-probe"] : [])], { env, windowsHide: true, timeout: 30000, stdio: "pipe" });
 }
 export async function scanPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, concurrency = availableParallelism(), workerMemoryMiB = 512, reserveMemoryMiB = Math.ceil(Math.max(1024 ** 3, totalmem() / 10) / 1024 ** 2), signal = new AbortController().signal }) {
   const bytes = readRegular(manifestPath); const manifest = validateManifest(bytes, manifestSha256);
-  const runtime = await loadRuntime(consumer, tarball, manifest.scanner);
+  const runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment);
   const groups = await validateContent(manifest, content, runtime);
   need(Number.isSafeInteger(concurrency) && concurrency > 0 && Number.isFinite(workerMemoryMiB) && workerMemoryMiB > 0 && Number.isFinite(reserveMemoryMiB) && reserveMemoryMiB >= 0, "Invalid concurrency or memory settings");
   verifyMaintenanceRuntime(manifest.assessment);
@@ -533,7 +555,7 @@ export async function verifyCandidate(candidate, manifestSha256, receiptSha256, 
   const manifestBytes = readRegular(join(candidate, "manifest.json"));
   const manifest = validateManifest(manifestBytes, manifestSha256), receiptBytes = readRegular(join(candidate, "receipt.json"));
   need(hash(receiptSha256) && digest(receiptBytes) === receiptSha256, "Reviewed receipt digest mismatch");
-  const receipt = json(receiptBytes), runtime = await loadRuntime(consumer, tarball, manifest.scanner);
+  const receipt = json(receiptBytes), runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment);
   keys(receipt, ["format", "execution", "manifestSha256", "config", "configSha256", "results"]);
   need(receipt.format === "aih-scan-prepared-receipt/1" && receipt.execution === "local" && receipt.manifestSha256 === manifestSha256 && receipt.configSha256 === fingerprint(configIdentity(manifest, runtime)) && fingerprint(receipt.config) === receipt.configSha256, "Candidate configuration/provenance mismatch");
   // Hosted intake checks reviewed inventory metadata, not reconstructed source bytes.
@@ -564,7 +586,7 @@ export async function verifyCandidate(candidate, manifestSha256, receiptSha256, 
 /** Merge copied immutable worker receipts, never mutable indexes. Every reused key is reverified. */
 export async function mergePrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, receipts }) {
   const manifest = validateManifest(readRegular(manifestPath), manifestSha256);
-  const runtime = await loadRuntime(consumer, tarball, manifest.scanner), groups = await validateContent(manifest, content, runtime);
+  const runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment), groups = await validateContent(manifest, content, runtime);
   const config = configIdentity(manifest, runtime), configSha256 = fingerprint(config);
   const root = join(resolve(out), "configs", configSha256); mkdirSync(root, { recursive: true });
   const lock = acquireLock(root), checkpointPath = join(root, "checkpoint.json");
@@ -600,7 +622,7 @@ export async function mergePrepared({ manifestPath, manifestSha256, content, con
 }
 export async function exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, selection }) {
   const bytes = readRegular(manifestPath), original = validateManifest(bytes, manifestSha256), receipt = json(readRegular(receiptPath));
-  const runtime = await loadRuntime(consumer, tarball, original.scanner), groups = await validateContent(original, content, runtime);
+  const runtime = await loadRuntime(consumer, tarball, original.scanner, original.assessment), groups = await validateContent(original, content, runtime);
   need(receipt.configSha256 === fingerprint(configIdentity(original, runtime)) && receipt.manifestSha256 === manifestSha256, "Export receipt configuration mismatch");
   const chosen = selection ?? [...groups.keys()];
   need(Array.isArray(chosen) && chosen.length && new Set(chosen).size === chosen.length && chosen.every((key) => groups.has(key)), "Invalid explicit key selection");
@@ -636,7 +658,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     if (command === "worker" && args.length === 1) { const result = await worker(args[0]); if (process.send) process.send(result); if (process.connected) process.disconnect(); }
     else {
       let result;
-      if (command === "validate" && args.length === 5) { const [path, sha, content, consumer, tarball] = args; const manifest = validateManifest(readRegular(path), sha); const runtime = await loadRuntime(consumer, tarball, manifest.scanner); const groups = await validateContent(manifest, content, runtime); result = { references: manifest.items.length, uniqueKeys: groups.size }; }
+      if (command === "validate" && args.length === 5) { const [path, sha, content, consumer, tarball] = args; const manifest = validateManifest(readRegular(path), sha); const runtime = await loadRuntime(consumer, tarball, manifest.scanner, manifest.assessment); const groups = await validateContent(manifest, content, runtime); result = { references: manifest.items.length, uniqueKeys: groups.size }; }
       else if (command === "scan" && args.length >= 6 && args.length <= 9) { const [manifestPath, manifestSha256, content, consumer, tarball, out, concurrency, memory, reserve] = args; const controller = new AbortController(); process.once("SIGINT", () => controller.abort()); process.once("SIGTERM", () => controller.abort()); result = await scanPrepared({ manifestPath, manifestSha256, content, consumer, tarball, out, ...(concurrency ? { concurrency: Number(concurrency) } : {}), ...(memory ? { workerMemoryMiB: Number(memory) } : {}), ...(reserve ? { reserveMemoryMiB: Number(reserve) } : {}), signal: controller.signal }); }
       else if (command === "verify" && args.length === 5) { const verified = await verifyCandidate(...args); result = { execution: "local", summaries: verified.summaries }; }
       else if (command === "archive" && args.length >= 7 && args.length <= 8) { const [manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, selectionPath] = args; result = await exportCandidate({ manifestPath, manifestSha256, content, consumer, tarball, receiptPath, out, ...(selectionPath ? { selection: json(readRegular(selectionPath)) } : {}) }); }
