@@ -510,6 +510,55 @@ describe("SkillSpector adapter (controlled CLI fixture)", () => {
     });
   });
 
+  it("keeps native reasons in bounded notes when many analyzers are degraded", async () => {
+    const folder = fixture.folder("degraded-analyzers", {
+      "SKILL.md": "---\nname: fixture\ndescription: Formats notes.\n---\n# Fixture\n",
+    });
+    const prefix = "SkillSpector reported partial inspection: ";
+    const analyzerStatuses = Array.from({ length: 12 }, (_, index) => ({
+      analyzer_id: `static_fixture_${index}`,
+      status: "degraded",
+    }));
+    const ss = skillspector(
+      skillSpectorReport([skillSpectorIssue("PE2", "SKILL.md", 5, "HIGH", 1)], {
+        status: "partial",
+        analyzerStatuses,
+        completeness: {
+          total_components: 1,
+          partially_inspected_files: 1,
+          limitations: analyzerStatuses.map(
+            ({ analyzer_id }) => `Analyzer ${analyzer_id} status: degraded.`,
+          ),
+        },
+        ledgerExceptions: [
+          {
+            outcome: "partial",
+            phase: "static",
+            reason_code: "obfuscated_instruction_text",
+            path: "SKILL.md",
+            fatal: false,
+          },
+          {
+            outcome: "partial",
+            phase: "reference_resolution",
+            reason_code: "reference_missing",
+            path: "SKILL.md",
+            fatal: false,
+          },
+        ],
+      }),
+    );
+    const { entry, summary } = await run(folder, ss);
+    expect(summary).toMatchObject({ coverage: "partial", reason: "failed" });
+    expect(toolOf(summary, "skillspector")).toMatchObject({ result: "fail", counts: { high: 1 } });
+    if (entry?.status !== "ok") throw new Error("expected ok");
+    const reasons = entry.notes?.find((note) => note.startsWith(prefix))?.slice(prefix.length);
+    expect(reasons?.split(", ")).toHaveLength(8);
+    expect(reasons).toContain("obfuscated_instruction_text SKILL.md");
+    expect(reasons).toContain("reference_missing SKILL.md");
+    expect(reasons).toContain("Analyzer static_fixture_0 status: degraded.");
+  });
+
   it("keeps reference-only complete_with_caveats reports complete and their caveats visible", async () => {
     const folder = fixture.folder("item", skill);
     const ss = skillspector(

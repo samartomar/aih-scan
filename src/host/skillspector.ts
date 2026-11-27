@@ -397,6 +397,7 @@ function completenessOf(
   const ignorable = new Set<string>([OSV_ANALYZER]);
   const caveats = new Set<string>();
   const gaps = new Set<string>();
+  const ledgerGaps = new Set<string>();
   const excludedLimitations = new Map<string, number>();
   const excludedPaths = new Set<string>();
   let positiveExclusion = false;
@@ -444,7 +445,10 @@ function completenessOf(
         exception.phase === "reference_resolution" &&
         exception.outcome === "partial" &&
         exception.fatal === false;
-    } else gaps.add(detail);
+    } else {
+      gaps.add(detail);
+      ledgerGaps.add(detail);
+    }
   }
   for (const raw of list(completeness.warnings)) {
     const warning = objectOf(raw);
@@ -520,7 +524,8 @@ function completenessOf(
       const count = completeness[name];
       if (typeof count === "number" && count > 0) gaps.add(`${name}: ${count}`);
     }
-  const shown = (values: Iterable<string>) => [...new Set(values)].sort().slice(0, 8).join(", ");
+  const shown = (values: Iterable<string>, preferred: readonly string[] = []) =>
+    [...new Set([...preferred, ...[...values].sort()])].slice(0, 8).sort().join(", ");
   const osvStatuses = analyzerStatuses.filter((status) => status?.analyzer_id === OSV_ANALYZER);
   const osv = osvStatuses[0];
   // SkillSpector's aggregate can be partial solely because it counts the OSV lookup
@@ -564,7 +569,11 @@ function completenessOf(
       ? { note: `SkillSpector reported inspection caveats: ${shown(caveats)}` }
       : incomplete
         ? {
-            note: `SkillSpector reported partial inspection: ${shown([...gaps, ...caveats])}`,
+            // Keep native reasons visible when one gap degrades several analyzers.
+            note: `SkillSpector reported partial inspection: ${shown(
+              [...gaps, ...caveats],
+              [...[...ledgerGaps].sort(), ...[...caveats].sort()],
+            )}`,
           }
         : {}),
     ...(aiGaps.length === 0
