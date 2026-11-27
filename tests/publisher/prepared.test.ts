@@ -726,13 +726,12 @@ it("admits only explicitly reviewed exact partial evidence through hosted intake
     "Reviewed partial publication digest mismatch",
   );
 
-  const complete = fakeAnalyzer(join(setup.folder, "complete"), "skillspector", {
-    versionText: "SkillSpector v2.13.7",
-    outputFlag: "--output",
-    report: skillSpectorReport([]),
-  });
-  vi.stubEnv("AIH_SCAN_SKILLSPECTOR", complete.path);
-  await scanPrepared(setup);
+  // An older reviewed receipt must stop at the current checkpoint's complete claim.
+  // The gate does not need to launch another analyzer or trust the claim's bytes.
+  const checkpointPath = join(run.root, "checkpoint.json");
+  const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
+  checkpoint.results[key].status = "complete-static";
+  writeCheckpointAtomic(checkpointPath, checkpoint);
   await expect(
     exportCandidate({ ...options, out: join(setup.folder, "stale.tar") }),
   ).rejects.toThrow("Complete evidence already exists in the prepared checkpoint");
