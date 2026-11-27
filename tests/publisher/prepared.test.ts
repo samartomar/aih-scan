@@ -12,7 +12,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AI_EFFORT_LEVELS } from "../../src/host/skillspector.js";
@@ -620,24 +621,72 @@ describe("prepared manifest and exact inventory", () => {
 
 it("admits only explicitly reviewed exact partial evidence through hosted intake and signing preparation", async () => {
   const setup = await prepared({ item: skill }, staticAssessment);
-  const partial = fakeAnalyzer(setup.folder, "skillspector", {
-    versionText: "SkillSpector v2.13.7",
-    outputFlag: "--output",
-    report: skillSpectorReport([], {
-      analyzerStatuses: [{ analyzer_id: "static_patterns_tool_misuse", status: "degraded" }],
-    }),
-  });
-  vi.stubEnv("AIH_SCAN_SKILLSPECTOR", partial.path);
-  const run = await scanPrepared(setup);
+  // Preserve the real prepared configuration and the installed producer's output bytes.
+  // Control detector outcomes at the adapter boundary without a native child process.
+  const run = await scanPrepared({ ...setup, signal: AbortSignal.abort() });
   const receipt = JSON.parse(readFileSync(run.receiptPath, "utf8"));
   const key = setup.manifest.items[0]!.scanKey;
+  const modulePath = join(setup.consumer, "node_modules/@aihq/scan/dist/host/scan.js");
+  const { scanWith } = (await import(
+    pathToFileURL(modulePath).href
+  )) as typeof import("../../src/host/scan.js");
+  const retainedResult = async (coverage: "complete" | "partial") => {
+    const scanned = await scanWith(
+      {
+        format: "aih-scan-request/1",
+        origin: "published",
+        mode: "static",
+        tools: staticAssessment.tools,
+        items: [{ path: join(setup.content, "item") }],
+      },
+      { outDir: join(run.root, coverage) },
+      {
+        adapters: {
+          skillspector: {
+            id: "skillspector",
+            version: "2.13.7",
+            async run() {
+              return {
+                status: "ran",
+                version: "2.13.7",
+                mode: "static",
+                findings: [],
+                ...(coverage === "partial" && { failedPart: "Static command check incomplete" }),
+              };
+            },
+          },
+        },
+      },
+    );
+    const entry = scanned.results[0];
+    if (entry?.status !== "ok") throw new Error("Expected retained output from installed scanner");
+    const bytes = readFileSync(entry.summaryPath);
+    const parsed = runtime.read.readSummary(bytes);
+    if (parsed.status !== "ok") throw new Error("Expected an intact retained summary");
+    expect(parsed.summary.coverage).toBe(coverage);
+    const local = (path: string) => relative(run.root, path).split(sep).join("/");
+    return {
+      status: coverage === "complete" ? "complete-static" : "incomplete",
+      summary: local(entry.summaryPath),
+      summarySha256: hash(bytes),
+      sarif: parsed.summary.sarif.map(({ path, sha256 }) => ({
+        path: local(join(dirname(entry.summaryPath), ...path.split("/"))),
+        sha256,
+      })),
+      elapsedMs: null,
+    };
+  };
+  receipt.results[key] = await retainedResult("partial");
+  const receiptBytes = JSON.stringify(receipt);
+  writeFileSync(run.receiptPath, receiptBytes);
+  const receiptSha256 = hash(receiptBytes);
   const original = readFileSync(join(run.root, receipt.results[key].summary));
   const evidence = {
     format: "aih-scan-complete-path-evidence/1",
     scanKey: key,
     attempts: [
       {
-        receiptSha256: run.receiptSha256,
+        receiptSha256,
         summarySha256: hash(original),
         analyzerVersion: "2.13.7",
         coverage: "partial",
@@ -651,7 +700,7 @@ it("admits only explicitly reviewed exact partial evidence through hosted intake
   writeFileSync(evidencePath, evidenceBytes);
   const review = {
     format: "aih-scan-prepared-partial-review/1",
-    receiptSha256: run.receiptSha256,
+    receiptSha256,
     results: {
       [key]: {
         summarySha256: hash(original),
@@ -726,11 +775,10 @@ it("admits only explicitly reviewed exact partial evidence through hosted intake
     "Reviewed partial publication digest mismatch",
   );
 
-  // An older reviewed receipt must stop at the current checkpoint's complete claim.
-  // The gate does not need to launch another analyzer or trust the claim's bytes.
+  // A later complete result stops an older reviewed partial from qualifying.
   const checkpointPath = join(run.root, "checkpoint.json");
   const checkpoint = JSON.parse(readFileSync(checkpointPath, "utf8"));
-  checkpoint.results[key].status = "complete-static";
+  checkpoint.results[key] = await retainedResult("complete");
   writeCheckpointAtomic(checkpointPath, checkpoint);
   await expect(
     exportCandidate({ ...options, out: join(setup.folder, "stale.tar") }),
