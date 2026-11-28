@@ -9,6 +9,6 @@ This repository builds the `@aihq/scan` content-assessment package (`/host`, `/r
 [README.md](README.md) owns public usage and contract navigation. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) owns contributor checks (its helper setup is for outside contributors); [RELEASING.md](RELEASING.md) owns release requirements; [docs/agents/domain.md](docs/agents/domain.md) defines Scan's terms. Before changing or operating the report workflows, read [docs/production-publisher.md](docs/production-publisher.md); the publisher workflow's path is part of the default trusted signer identity.
 
 - Never run an installed aih-scan against this checkout. Exercise source and built product CLI behavior only against temporary fixture roots. Use direct repository checks for this tree.
-- Validate boundary input and fail closed on ambiguity. Do not read or print .env values, credentials, or local tool caches.
+- Validate boundary input and fail closed on ambiguity. Do not read or print `.env` values, credentials, or local tool caches.
 - Update generated artifacts through their owning scripts.
 - A report or new Scan ID is not scanner software: it does not alone require a new `@aihq/scan` version.

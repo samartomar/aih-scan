@@ -5,7 +5,7 @@
 - **Scan key**: the Git tree hash (`git-sha1:` / `git-sha256:`) of one item folder as Scan
   read it; results are addressed by it. Not a commit, item id or tool version.
 - **Item**: a skill folder, single-file agent, command or rule, a hooks folder or config,
-  or an MCP config — found on the `source` route or handed over on the `items` route.
+  or an MCP config. It is found on the `source` route or handed over on the `items` route.
 - **Remaining files**: source files outside every found item, scanned as one more result.
 - **Roll-up**: a source's highest risk label and its partial, NOT ASSESSED and
   not-selected counts.
