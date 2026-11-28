@@ -11,4 +11,4 @@ This repository builds the `@aihq/scan` content-assessment package (`/host`, `/r
 - Never run an installed aih-scan against this checkout. Exercise source and built product CLI behavior only against temporary fixture roots. Use direct repository checks for this tree.
 - Validate boundary input and fail closed on ambiguity. Do not read or print `.env` values, credentials, or local tool caches.
 - Update generated artifacts through their owning scripts.
-- A report or new Scan ID is not scanner software: it does not alone require a new `@aihq/scan` version.
+- A report or new summary is not scanner software: it does not alone require a new `@aihq/scan` version.
