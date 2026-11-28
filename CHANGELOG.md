@@ -9,10 +9,10 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 ### Added
 
 - `aih-scan review` reads one saved summary with its matching findings as JSON or
-  serves the same evidence through a paginated local stdio MCP connection.
+  serves the same evidence through a paginated local stdio MCP connection, using the
+  pinned `@modelcontextprotocol/server` and `zod` runtime dependencies.
 - Text assessment of `.kiro.hook` instruction files without renaming them or changing
   their bytes, modes or content keys; existing Config and Code routing takes precedence.
-
 - Three entry points: `@aihq/scan/host` (`scan`, `matchScan`), `@aihq/scan/read`
   (`readSummary`, `readFindings`, `verifySummary`, `matchScan`, `checkAdvisories`; browser
   safe) and `@aihq/scan/contracts` (formats, JSON Schemas, routing, scoring, codes, limits,
@@ -28,7 +28,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   packages by exact version, downloaded npm tarballs and remote MCP configuration (never
   contacted). Item discovery for skills, agents, commands, rules (steering included),
   hooks and MCP configs, with remaining files and a roll-up.
-- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.6 as the
+- Tools: the built-in aih-trust-lint baseline on every scan, SkillSpector 2.13.7 as the
   primary analyzer (static by default, optional AI pass through the caller's own setup)
   and the optional Cisco skill-scanner 2.3.2 second opinion; locked runtimes in
   `tools/analyzers`.
@@ -39,6 +39,9 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   positively identified reference-only caveat exception. SkillSpector 2.13.5+ documentation
   notices, caller exclusions and requested dependency-content inspection, which its status
   does not reflect, leave the item partial.
+- Support an explicitly identified reproducible SkillSpector 2.13.7 TP4 maintenance build
+  with configuration-bound source/finding capacity and strict installed artifact verification.
+  Preserve upstream defaults, completed producer identities and incomplete evidence.
 - Signing and verification profile `aih-sigstore-keyless/1`: `aih-scan sign` writes a
   Sigstore `messageSignature` bundle; `verifySummary` verifies offline, separates
   signature validity from signer trust and applies withdrawals through `throughRevision`.
@@ -49,7 +52,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
   dependency. Named config files (`hooks.json`, `.mcp.json`, `mcp.json`, `plugin.json`)
   may use JSONC comments and trailing commas; one that cannot be parsed is reported as
   aih-trust-lint `mcp.config-invalid` rather than passed over.
-- CLI: `scan`, `advisories`, `read`, `findings`, `verify` and `sign`, with exits 0
+- CLI: `scan`, `advisories`, `read`, `findings`, `review`, `verify` and `sign`, with exits 0
   (finished, complete or partial), 1 (only with `--fail-at`), 2 (could not scan or read)
   and 130 (cancelled).
 - An optional `revision` in `aih-scan-request/1` and in the prepared-content manifest: a
@@ -67,11 +70,7 @@ they read or wrote is accepted, and no compatibility reader is shipped.
 - The `capture`, old `sign`/`verify`, `baseline-*` and `project-core-evidence` commands;
   `--detector`, `--mcp-config`, `--artifact` and `--fail-on-findings` (replaced by
   `--tools`, discovery, `--out` and the opt-in `--fail-at`).
-- The `@sigstore/*`, `zod` and `jsonc-parser` runtime dependencies.
+- The `@sigstore/*` and `jsonc-parser` runtime dependencies.
 
 Historical published versions and tags are kept unchanged as release history; see
 [RELEASING.md](RELEASING.md).
-
-- Support an explicitly identified reproducible SkillSpector 2.13.6 TP4 maintenance build
-  with configuration-bound source/finding capacity and strict installed artifact verification.
-  Preserve upstream defaults, completed producer identities and incomplete evidence.
