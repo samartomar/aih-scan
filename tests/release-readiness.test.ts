@@ -37,14 +37,13 @@ describe("@aihq/scan release boundary (#12)", () => {
 
   it("pins a tag-only, main-bound workflow that separates candidate code from publication authority", () => {
     const workflow = read(".github/workflows/release.yml");
+    expect(workflow).toContain('- "v0.1.0"');
     expect(workflow).toContain('- "v-scan-*"');
     expect(workflow).not.toMatch(/workflow_dispatch|workflow_call|pull_request_target/);
     expect(workflow).toContain(
       "git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main",
     );
     expect(workflow).toContain('if [ "$GITHUB_SHA" != "$main_sha" ]; then');
-    expect(workflow).toContain(['tag="$', '{GITHUB_REF_NAME#v-scan-}"'].join(""));
-    expect(workflow).toContain('if [ "$ver" != "$tag" ]; then');
     expect(workflow).toContain("name: npm-publish");
     expect(workflow).toContain("https://www.npmjs.com/package/@aihq/scan");
     expect(workflow).toContain("verify-and-pack:");
@@ -95,7 +94,10 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(workflow).toContain('node-version: "24"');
     expect(workflow).toContain("package-manager-cache: false");
     expect(workflow).toContain("npm ci --ignore-scripts");
-    expect(workflow).toContain("npm run verify");
+    expect(workflow).toContain("npm run typecheck");
+    expect(workflow).toContain("npm run lint");
+    expect(workflow).toContain("npm run build");
+    expect(workflow).toContain("npm run verify:workflow-action-pins");
     expect(workflow.match(/npm pack --ignore-scripts/gmu)).toHaveLength(1);
     expect(workflow).toContain('tarball_sha256="$(sha256sum "$tarball" | awk \'{print $1}\')"');
     expect(workflow).toContain(
@@ -120,7 +122,6 @@ describe("@aihq/scan release boundary (#12)", () => {
     );
     expect(workflow).toContain('test "$actual_sha256" = "$EXPECTED_TARBALL_SHA256"');
     expect(workflow).toContain('if [ "$TARBALL" != "aihq-scan-$tag.tgz" ]; then');
-    expect(workflow).toContain('manifest.name !== "@aihq/scan" || manifest.version !== tag');
     expect(workflow).toContain(['file: "$', '{{ env.TARBALL }}"'].join(""));
     expect(workflow).toContain(['subject-path: "$', '{{ env.TARBALL }}"'].join(""));
     expect(workflow).toContain("upload-artifact: false");
@@ -194,36 +195,71 @@ describe("@aihq/scan release boundary (#12)", () => {
     }
   });
 
-  it("rejects a packed manifest that tries to redirect npm publication", () => {
+  it("requires real analyzers and installed acceptance of the artifact before upload", () => {
+    const workflow = read(".github/workflows/release.yml");
+    const candidateJob = workflow.slice(
+      workflow.indexOf("  verify-and-pack:\n"),
+      workflow.indexOf("  npm-publish:\n"),
+    );
+    const provision = candidateJob.indexOf("bash tools/analyzers/provision-test-runtimes.sh");
+    const pack = candidateJob.indexOf("id: pack\n");
+    const verify = candidateJob.indexOf("name: Verify the exact release candidate");
+    const upload = candidateJob.indexOf("actions/upload-artifact@");
+    expect(provision).toBeGreaterThanOrEqual(0);
+    expect(pack).toBeGreaterThan(provision);
+    expect(verify).toBeGreaterThan(pack);
+    expect(upload).toBeGreaterThan(verify);
+    expect(candidateJob.slice(verify, upload)).toContain(
+      [
+        "AIH_SCAN_PACKED_TARBALL: $",
+        "{{ github.workspace }}/$",
+        "{{ steps.pack.outputs.tarball }}",
+      ].join(""),
+    );
+    expect(candidateJob.slice(verify, upload)).toContain("npm test");
+  });
+
+  it("binds the packed package to the exact release ref", () => {
     const workflow = read(".github/workflows/release.yml");
     const validator = inlineModuleFollowing(workflow, "Validate packed manifest identity");
     const fixtureRoot = mkdtempSync(join(tmpdir(), "aih-scan-release-manifest-"));
     try {
       const packageRoot = join(fixtureRoot, "package");
       mkdirSync(packageRoot);
-      const validate = (publishConfig: Record<string, unknown>) => {
+      const validate = (
+        version: string,
+        ref: string,
+        publishConfig: Record<string, unknown> = { access: "public" },
+      ) => {
         writeFileSync(
           join(packageRoot, "package.json"),
           JSON.stringify({
             name: "@aihq/scan",
-            version: "0.1.2",
+            version,
             publishConfig,
           }),
         );
         execFileSync("tar", ["-czf", "candidate.tgz", "package"], {
           cwd: fixtureRoot,
         });
-        return spawnSync(process.execPath, ["--input-type=module", "-", "candidate.tgz", "0.1.2"], {
+        return spawnSync(process.execPath, ["--input-type=module", "-", "candidate.tgz", ref], {
           cwd: fixtureRoot,
           input: validator,
           encoding: "utf8",
         });
       };
 
-      expect(validate({ access: "public" }).status).toBe(0);
-      expect(validate({ access: "public", registry: "https://attacker.invalid/" }).status).not.toBe(
-        0,
-      );
+      expect(validate("0.1.0", "refs/tags/v0.1.0").status).toBe(0);
+      expect(validate("0.2.1", "refs/tags/v-scan-0.2.1").status).toBe(0);
+      expect(validate("0.1.0", "refs/tags/v-scan-0.1.0").status).not.toBe(0);
+      expect(validate("0.1.0", "refs/heads/v0.1.0").status).not.toBe(0);
+      expect(validate("0.2.1", "refs/tags/v0.1.0").status).not.toBe(0);
+      expect(
+        validate("0.1.0", "refs/tags/v0.1.0", {
+          access: "public",
+          registry: "https://attacker.invalid/",
+        }).status,
+      ).not.toBe(0);
     } finally {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
@@ -254,14 +290,13 @@ describe("@aihq/scan release boundary (#12)", () => {
     expect(releasing).not.toContain("NPM_BOOTSTRAP_TOKEN");
     // The replacement package and its owner-controlled first cut.
     expect(releasing).toContain("`0.1.0` is the replacement content-assessment package");
+    expect(releasing).toContain("requires the exact tag `v0.1.0`");
     expect(releasing).toContain("`v-scan-0.1.0` already exists");
     expect(releasing).toContain("tests/package-install.test.ts");
     expect(releasing).not.toContain("promotion-readiness");
     expect(releasing).not.toContain("Core/\nCatalog acceptance");
-    expect(read("VERSIONING.md")).toContain(
-      "`0.1.0` is the replacement package and the sole unreleased target",
-    );
-    expect(read("CHANGELOG.md")).toContain("## 0.1.0 (unreleased)");
+    expect(read("VERSIONING.md")).toContain("release tag `v0.1.0`");
+    expect(read("CHANGELOG.md")).toContain("## 0.1.0\n");
   });
 
   it("enforces package-bearing and repository-only release classes in CI", () => {
@@ -276,7 +311,7 @@ describe("@aihq/scan release boundary (#12)", () => {
     const manifest = JSON.parse(read("package.json")) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       name: "@aihq/scan",
-      version: "0.0.0-dev.1",
+      version: "0.1.0",
       files: [
         "dist",
         "schemas",
@@ -320,11 +355,11 @@ describe("@aihq/scan release boundary (#12)", () => {
       version: string;
       packages: Record<string, { version?: string }>;
     };
-    expect(lock.version).toBe("0.0.0-dev.1");
-    expect(lock.packages[""]?.version).toBe("0.0.0-dev.1");
+    expect(lock.version).toBe("0.1.0");
+    expect(lock.packages[""]?.version).toBe("0.1.0");
     for (const retired of ["node_modules/@sigstore/verify", "node_modules/@sigstore/bundle"])
       expect(lock.packages[retired], retired).toBeUndefined();
-    expect(read("src/public/package-identity.ts")).toContain('version: "0.0.0-dev.1"');
+    expect(read("src/public/package-identity.ts")).toContain('version: "0.1.0"');
     expect(existsSync(resolve(root, "LICENSE"))).toBe(true);
     expect(existsSync(resolve(root, "README.md"))).toBe(true);
     expect(existsSync(resolve(root, "src/index.ts"))).toBe(false);

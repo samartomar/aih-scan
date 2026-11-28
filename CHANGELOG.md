@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 `0.1.0` replaces the earlier `@aihq/scan` package with one content-assessment contract. It
 is not a compatibility extension of the historical `0.5.0` and earlier packages: nothing

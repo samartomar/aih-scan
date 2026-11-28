@@ -49,8 +49,9 @@ provisioned executables (`<env>/bin/skillspector`, `<env>/bin/skill-scanner`; on
 `AIH_SCAN_REQUIRE_REAL_ANALYZERS=1` makes a missing runtime a failure instead of a skip.
 `AIH_SCAN_TEST_SKILLSPECTOR_SOURCE` names the authenticated maintenance codeload archive and
 adds the external-builder reproducibility proof to `tests/host-v1/analyzer-pins.test.ts`. CI
-downloads that exact archive, checks its pinned SHA-256 and runs the builder proof with the
-real analyzer tests; the maintenance README records its identity and manual build command.
+and the release job use `tools/analyzers/provision-test-runtimes.sh` to download the
+archive and check its pinned SHA-256. Both run the builder proof with the real analyzer
+tests. The maintenance README records the archive identity and manual build command.
 
 To exercise the installed static parser build through CLI, prepared export, and pre-sign
 validation, run the `tests/publisher/prepared.test.ts` suite with

@@ -18,8 +18,9 @@ SARIF 2.1.0 findings, a short summary and a risk score.
 - **Results are addressed by content.** Each item's scan key is the Git tree hash of its
   folder, so identical bytes and modes share a key wherever they appear.
 
-`0.1.0` is the replacement package and the sole unreleased target. It does not read or
-produce the formats of earlier `@aihq/scan` versions (see [CHANGELOG.md](CHANGELOG.md)).
+`0.1.0` is the replacement package. Use its versioned Scan formats for new
+content assessments. [CHANGELOG.md](CHANGELOG.md) documents the replacement
+contract and links to the historical release records.
 
 ## Install
 
@@ -34,6 +35,8 @@ Without SkillSpector a scan still completes, reports SkillSpector as `not-run`
 (`unavailable`) and its coverage as `partial`.
 
 ## Command line
+
+The [candidate source list](https://github.com/samartomar/aih-scan/blob/main/docs/candidates.md) records upstream revisions and links to their inspection results.
 
 ```text
 aih-scan scan <folder> [options]
