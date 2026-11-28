@@ -36,7 +36,7 @@ Without SkillSpector a scan still completes, reports SkillSpector as `not-run`
 
 ## Command line
 
-The [candidate source list](docs/candidates.md) records upstream revisions and links to their inspection results.
+The [candidate source list](https://github.com/samartomar/aih-scan/blob/main/docs/candidates.md) records upstream revisions and links to their inspection results.
 
 ```text
 aih-scan scan <folder> [options]
