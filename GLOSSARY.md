@@ -1,6 +1,8 @@
-# Domain documentation
+# Scan
 
-## Core terms
+Scan informs; it never approves, admits or blocks an installation.
+
+## Language
 
 - **Scan key**: the Git tree hash (`git-sha1:` / `git-sha256:`) of one item folder as Scan
   read it; results are addressed by it. Not a commit, item id or tool version.
@@ -21,5 +23,3 @@
 - **Withdrawal**: an `aih-scan-withdrawn/1` document signed by the same signer, covering
   revisions 1 to `throughRevision` of one key.
 - **Advisory**: a live OSV result from `checkAdvisories`; never part of a scan or score.
-
-Scan informs; it never approves, admits or blocks an installation.
