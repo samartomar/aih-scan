@@ -3,7 +3,7 @@
 [AGENTS.md](../AGENTS.md) owns agent instructions. Use `npm ci --ignore-scripts`, focused
 tests while editing, then `npm run verify` (typecheck, lint, build, tests and
 pinned-action verification) and `npm run test:cov` (80% statement, branch, function and
-line thresholds). Resolve current commands from package.json and protected CI, not cached
+line thresholds). Resolve current commands from `package.json` and protected CI, not cached
 task notes.
 
 The package range is Node `>=24.15.0 <25 || >=26.12.1 <27`. Repository CI and release
@@ -125,14 +125,14 @@ come from Git's index or the caller's executable list where Windows cannot recor
 ## Optional navigation helpers
 
 Use source and tests directly by default. When their navigation benefit is needed,
-inspect node tools/repo-ai-tools.mjs plan and npm run repo:init -- --dry-run before
-running npm run repo:init. The setup installs pinned helpers, writes an ignored local
+inspect `node tools/repo-ai-tools.mjs plan` and `npm run repo:init -- --dry-run` before
+running `npm run repo:init`. The setup installs pinned helpers, writes an ignored local
 Codex projection, enables the repository pre-commit hook, and builds project-scoped
-indexes. npm run repo:doctor diagnoses that optional setup; it is not a product gate.
+indexes. `npm run repo:doctor` diagnoses that optional setup; it is not a product gate.
 Start a new Codex task after changing its projection.
 
 Pins, enabled tool lists, cache roots, and transport bindings are maintained only in
-tools/repo-ai-tools.mjs. Do not duplicate them in docs. Helpers do not install an
+`tools/repo-ai-tools.mjs`. Do not duplicate them in docs. Helpers do not install an
 engineering workflow. Keep local projections and caches ignored; do not commit them
 or delete shared caches to fix one project. Index data is advisory, never authority.
 Use Token Optimizer only on demand; no per-task report, coach, or graph prerequisite.
