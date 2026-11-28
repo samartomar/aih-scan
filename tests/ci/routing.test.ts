@@ -159,14 +159,19 @@ test("ordinary workflow preserves required verify, full dispatch and failure pro
     step.name?.includes("Provision the locked SkillSpector and Cisco runtimes"),
   );
   expect(provision.if).toBe("steps.route.outputs.analyzers == 'true'");
-  expect(provision.run).toContain("uv sync --project tools/analyzers/skillspector --locked");
-  expect(provision.run).toContain("uv sync --project tools/analyzers/cisco-skill-scanner --locked");
+  expect(provision.run).toBe("bash tools/analyzers/provision-test-runtimes.sh");
+  const provisioner = readFileSync(
+    join(root, "tools/analyzers/provision-test-runtimes.sh"),
+    "utf8",
+  );
+  expect(provisioner).toContain("uv sync --project tools/analyzers/skillspector --locked");
+  expect(provisioner).toContain("uv sync --project tools/analyzers/cisco-skill-scanner --locked");
   for (const variable of [
     "AIH_SCAN_TEST_SKILLSPECTOR",
     "AIH_SCAN_TEST_SKILL_SCANNER",
     "AIH_SCAN_REQUIRE_REAL_ANALYZERS=1",
   ])
-    expect(provision.run).toContain(variable);
+    expect(provisioner).toContain(variable);
   const proof = steps.find((step: { name?: string }) => step.name?.includes("real analyzers"));
   expect(proof.if).toBe("steps.route.outputs.analyzers == 'true'");
   expect(proof.run).toContain("tests/host-v1/real-analyzers.test.ts");

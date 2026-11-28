@@ -1,10 +1,12 @@
 # Releasing AIH Scan
 
-`@aihq/scan` is the Apache-2.0 Scan package. A `v-scan-X.Y.Z` tag on the
-exact current `main` commit starts `.github/workflows/release.yml`. The workflow
-uses a read-only `verify-and-pack` job to re-run repository verification, pack
-once, record the tarball SHA256 digest, smoke-install the exact tarball in a
-disposable root, and upload only that tarball. The protected `npm-publish` job
+`@aihq/scan` is the Apache-2.0 Scan package. The replacement tag `v0.1.0` and
+the established `v-scan-X.Y.Z` tags for other versions trigger
+`.github/workflows/release.yml`. The tag must identify the exact current `main`
+commit. The read-only `verify-and-pack` job checks the source, builds and packs
+once, records the tarball SHA-256, runs the tests with the locked analyzers and
+the exact tarball, smoke-installs it in a disposable root, and uploads only
+that tarball. The protected `npm-publish` job
 downloads the artifact by ID, verifies GitHub's artifact digest plus the
 original tarball digest and packed identity, and runs no Scanner package code.
 It then produces a tarball-scoped SPDX SBOM and GitHub build attestation, signs
@@ -18,15 +20,17 @@ inform the person or organization that decides whether to install.
 
 ## The 0.1.0 replacement package
 
-`0.1.0` is the replacement content-assessment package and the sole unreleased target. Its
-local candidate is one exact `npm pack` tarball whose SHA-256 and source commit are
+`0.1.0` is the replacement content-assessment package. Its local candidate is
+one exact `npm pack` tarball whose SHA-256 and source commit are
 recorded with the installed-package test (`tests/package-install.test.ts`) run against
 that tarball. Building, testing and recording a local tarball does not publish it.
 
-Before the first public `0.1.0` cut the owner must decide its release tag: the immutable
-historical tag `v-scan-0.1.0` already exists (see below) and is never moved or reused, while
-`release.yml` accepts only `v-scan-<package version>`. Publication, the tag, npm and GitHub
-Release state remain owner-controlled, separately authorized operations.
+The replacement package requires the exact tag `v0.1.0`. The immutable historical
+tag `v-scan-0.1.0` already exists and retains its original source and evidence.
+Before cutting the replacement release, verify that the `npm-publish` deployment
+policy admits the exact new tag and that a tag ruleset protects it against update
+and deletion. Retain the existing protections on historical tags and on the
+publication environment.
 
 ## Report signing
 
@@ -54,7 +58,7 @@ attestation, registry signatures/attestations, disposable install, and
 `aih-scan --help`, `aih-scan project-core-evidence --help`, and the three
 baseline command help paths. Source,
 package-manifest, or local-tarball state alone is never publication evidence;
-use the live checks in the README.
+verify each historical artifact using its original tag and source SHA.
 
 Exact `0.1.1` remains public with its bounded recovery evidence. Its authorized
 release run published the tarball, then failed because checkout-free `gh release
@@ -111,9 +115,10 @@ checksum signature.
    all-`none` train cannot be cut. Related package-bearing work accumulates in
    one release PR. Do not create an immediate release for ordinary docs, CI, or
    low-impact cleanup; [VERSIONING.md](VERSIONING.md) defines the hotfix triggers.
-2. Compute the highest package-bearing class, then ensure `package.json` and
-   `package-lock.json` name that train's exact version and the
-   public README documents the shipped behavior.
+2. For the replacement cut use the agreed `0.1.0` version and `v0.1.0` tag.
+   For later trains compute the version from the highest package-bearing class
+   and use `v-scan-X.Y.Z`. Ensure `package.json` and `package-lock.json` name the
+   exact version and the public README documents the shipped behavior.
 3. Run, sequentially:
 
    ```sh
@@ -133,14 +138,15 @@ checksum signature.
 5. Obtain full-SHA publication authorization using the exact statement:
 
    ```text
-   Authorize publishing @aihq/scan@X.Y.Z from <full-main-SHA> as v-scan-X.Y.Z.
+   Authorize publishing @aihq/scan@X.Y.Z from <full-main-SHA> as <release-tag>.
    ```
 
 6. Tag only that unchanged current-main commit, then push the tag normally:
 
    ```sh
-   git tag v-scan-X.Y.Z <full-main-SHA>
-   git push origin v-scan-X.Y.Z
+   tag=v0.1.0 # replace with v-scan-X.Y.Z for a later train
+   git tag "$tag" <full-main-SHA>
+   git push origin "refs/tags/$tag"
    ```
 
 7. Confirm the read-only `verify-and-pack` job is green, then approve the
@@ -150,13 +156,13 @@ checksum signature.
    candidate from a disposable consumer:
 
    ```sh
-   version=X.Y.Z # replace with the exact authorized release version
+   version=0.1.0 # replace with the exact authorized release version for a later train
    npm view "@aihq/scan@$version"
    npm install --save-exact "@aihq/scan@$version"
    npm audit signatures
-   gh release download "v-scan-$version" --repo samartomar/aih-scan --pattern "aihq-scan-$version.tgz"
-   release_sha="$(gh api "repos/samartomar/aih-scan/git/ref/tags/v-scan-$version" --jq .object.sha)"
-   gh attestation verify "./aihq-scan-$version.tgz" --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref "refs/tags/v-scan-$version" --source-digest "$release_sha" --deny-self-hosted-runners
+   gh release download "$tag" --repo samartomar/aih-scan --pattern "aihq-scan-$version.tgz"
+   release_sha="$(gh api "repos/samartomar/aih-scan/git/ref/tags/$tag" --jq .object.sha)"
+   gh attestation verify "./aihq-scan-$version.tgz" --repo samartomar/aih-scan --signer-workflow samartomar/aih-scan/.github/workflows/release.yml --source-ref "refs/tags/$tag" --source-digest "$release_sha" --deny-self-hosted-runners
    npx --no-install aih-scan --help
    ```
 
@@ -180,7 +186,7 @@ separate and theirs.
    ```sh
    npm dist-tag add @aihq/scan@X.Y.Z latest
    npm dist-tag rm @aihq/scan next
-   gh release edit v-scan-X.Y.Z --repo samartomar/aih-scan --prerelease=false --latest
+   gh release edit "$tag" --repo samartomar/aih-scan --prerelease=false --latest
    npm view @aihq/scan dist-tags --json
    ```
 

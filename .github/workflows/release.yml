@@ -1,4 +1,4 @@
-# Release only an exact v-scan-* tag on current main. Candidate verification
+# Release only the exact package tag on current main. Candidate verification
 # (including the installed-package test), pack, and smoke execution stay in a read-only job. The protected job receives
 # one digest-bound tarball and runs no Scanner package code. npm authentication
 # is OIDC-only through Trusted Publishing; token credentials are rejected at the
@@ -12,6 +12,7 @@ name: release
 on:
   push:
     tags:
+      - "v0.1.0"
       - "v-scan-*"
 
 permissions:
@@ -20,7 +21,7 @@ permissions:
 jobs:
   verify-and-pack:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
@@ -47,20 +48,36 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-      - run: npm ci --ignore-scripts
       - name: Assert package version matches the tag
         run: |
           set -euo pipefail
           ver="$(node -p "require('./package.json').version")"
-          tag="${GITHUB_REF_NAME#v-scan-}"
-          if [ "$ver" != "$tag" ]; then
-            echo "::error::package.json version ($ver) does not match tag $GITHUB_REF_NAME"
+          expected_tag="v-scan-$ver"
+          if [ "$ver" = "0.1.0" ]; then
+            expected_tag="v0.1.0"
+          fi
+          if [ "$GITHUB_REF" != "refs/tags/$expected_tag" ]; then
+            echo "::error::package version $ver requires refs/tags/$expected_tag"
             exit 1
           fi
-      - name: Verify exact source candidate
-        run: npm run verify
+      - run: npm ci --ignore-scripts
+      - name: Check and build the tagged source
+        run: |
+          set -euo pipefail
+          npm run typecheck
+          npm run lint
+          npm run build
+          npm run verify:workflow-action-pins
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.10"
+      - name: Provision the locked SkillSpector and Cisco runtimes outside PATH
+        run: bash tools/analyzers/provision-test-runtimes.sh
       - name: Pack exact release tarball and checksum
         id: pack
         run: |
@@ -78,6 +95,13 @@ jobs:
           printf 'tarball=%s\n' "$tarball" >> "$GITHUB_OUTPUT"
           printf 'tarball_sha256=%s\n' "$tarball_sha256" >> "$GITHUB_OUTPUT"
           printf '%s  %s\n' "$tarball_sha256" "$tarball" > SHA256SUMS.txt
+      - name: Verify the exact release candidate
+        env:
+          AIH_SCAN_PACKED_TARBALL: ${{ github.workspace }}/${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS.txt
+          npm test
       - name: Smoke-install the exact packed tarball
         run: |
           set -euo pipefail
@@ -145,6 +169,9 @@ jobs:
             exit 1
           fi
           tag="${GITHUB_REF_NAME#v-scan-}"
+          if [ "$GITHUB_REF_NAME" = "v0.1.0" ]; then
+            tag="0.1.0"
+          fi
           if [ "$TARBALL" != "aihq-scan-$tag.tgz" ]; then
             echo "::error::unexpected tarball path"
             exit 1
@@ -157,16 +184,17 @@ jobs:
       - name: Validate packed manifest identity
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME#v-scan-}"
-          node --input-type=module - "$TARBALL" "$tag" <<'NODE'
+          node --input-type=module - "$TARBALL" "$GITHUB_REF" <<'NODE'
           import { execFileSync } from "node:child_process";
 
-          const [tarball, tag] = process.argv.slice(2);
+          const [tarball, ref] = process.argv.slice(2);
           const manifest = JSON.parse(
             execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }),
           );
-          if (manifest.name !== "@aihq/scan" || manifest.version !== tag) {
-            throw new Error(`packed manifest identity does not match ${tag}`);
+          const version = manifest.version;
+          const expectedTag = version === "0.1.0" ? "v0.1.0" : `v-scan-${version}`;
+          if (manifest.name !== "@aihq/scan" || typeof version !== "string" || ref !== `refs/tags/${expectedTag}`) {
+            throw new Error(`packed manifest identity does not match ${ref}`);
           }
           const publishConfig = manifest.publishConfig;
           if (

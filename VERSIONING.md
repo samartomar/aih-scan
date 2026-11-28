@@ -10,8 +10,9 @@ exactly one of:
 - `semver:minor` — an additive public capability or a compatible result change; or
 - `semver:major` — an incompatible CLI, API, schema or format change.
 
-`0.1.0` is the replacement package and the sole unreleased target: it replaces the
-historical `0.5.0` and earlier packages and their formats rather than extending them.
+`0.1.0` introduces the replacement content-assessment contract and uses the
+release tag `v0.1.0`. Historical packages retain their original formats and
+release identities.
 
 `semver:none` work rides the open train but cannot start or bump a package cut. The
 highest package-bearing label in a coherent train determines the version. Related fixes
